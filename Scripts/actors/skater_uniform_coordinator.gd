@@ -32,8 +32,6 @@ var _upper_body_mesh: MeshInstance3D
 var _blade_mesh: MeshInstance3D
 var _blade_tape: MeshInstance3D                    # team-colored tape band, child of _blade_mesh
 var _helmet: MeshInstance3D
-var _head: MeshInstance3D                          # skin parts under the helmet shell
-var _neck: MeshInstance3D
 var _shoulder_l: MeshInstance3D
 var _shoulder_r: MeshInstance3D
 var _hip_l: MeshInstance3D
@@ -46,8 +44,6 @@ var _sock_l: MeshInstance3D
 var _sock_r: MeshInstance3D
 var _skate_l: MeshInstance3D
 var _skate_r: MeshInstance3D
-var _skate_stripe_l: MeshInstance3D                # accent band on each collar
-var _skate_stripe_r: MeshInstance3D
 var _foot_l: MeshInstance3D
 var _foot_r: MeshInstance3D
 
@@ -82,10 +78,7 @@ func setup(skater: Skater) -> void:
 	_upper_body_mesh = skater.upper_body.get_node("UpperBodyMesh") as MeshInstance3D
 	_blade_mesh = skater.blade.get_node("MeshInstance3D") as MeshInstance3D
 	_helmet = skater.upper_body.get_node("Helmet") as MeshInstance3D
-	# Created by SkaterMeshBuilder before this setup runs. Never painted
-	# (skin and steel, not kit) — resolved only so ghost fades reach them.
-	_head = _helmet.get_node_or_null("Head") as MeshInstance3D
-	_neck = _helmet.get_node_or_null("Neck") as MeshInstance3D
+	# Never painted (not kit) — resolved only so ghost fades reach them.
 	_shoulder_l = skater.upper_body.get_node("ShoulderL") as MeshInstance3D
 	_shoulder_r = skater.upper_body.get_node("ShoulderR") as MeshInstance3D
 	# Leg meshes live under per-leg pivot chains: LowerBody/Leg{L,R} carries the
@@ -101,17 +94,14 @@ func setup(skater: Skater) -> void:
 	_sock_r = skater.lower_body.get_node("LegR/ShinR/SockR") as MeshInstance3D
 	_skate_l = skater.lower_body.get_node("LegL/ShinL/SkateL") as MeshInstance3D
 	_skate_r = skater.lower_body.get_node("LegR/ShinR/SkateR") as MeshInstance3D
-	# Created by SkaterMeshBuilder before this setup runs, like the blade steel.
-	_skate_stripe_l = _skate_l.get_node_or_null("Stripe") as MeshInstance3D
-	_skate_stripe_r = _skate_r.get_node_or_null("Stripe") as MeshInstance3D
 	_foot_l = skater.lower_body.get_node("LegL/ShinL/FootL") as MeshInstance3D
 	_foot_r = skater.lower_body.get_node("LegR/ShinR/FootR") as MeshInstance3D
-	# Blade steel and laces are SURFACES of the boot mesh now, not child nodes
-	# (SkaterMeshBuilder.shared_boot_assembly). Nothing may set material_override
-	# on a merged mesh — it would erase every surface at once — so the boot's own
-	# colour lives on surface 0 alongside them.
-	# Created by SkaterMeshBuilder with a placeholder white; repainted with
-	# the gear style's lace pick on every uniform apply.
+	# MERGED MESHES: the boot carries its shell, the blade steel and the laces as
+	# three surfaces; the skate collar carries its shell and the accent stripe;
+	# the helmet carries its shell and the head/neck skin. Each of those parts
+	# used to be a child node, and each is painted through its own surface
+	# override — NEVER material_override, which overrides every surface at once
+	# and would erase the others (see SkaterMeshBuilder's merge note).
 	_create_jersey_viewport()
 	_create_shoulder_viewport()
 
@@ -213,7 +203,10 @@ func apply_uniform(colors: Dictionary) -> void:
 	_rebuild_shoulder_texture()
 
 	# Helmet — glossy hard plastic.
-	_helmet.material_override = _make_solid_mat(uniform.helmet, _ROUGH_HELMET)
+	# Surface 0 — the helmet mesh also carries the head/neck skin on surface 1,
+	# and material_override would erase it (see SkaterMeshBuilder's merge note).
+	_helmet.set_surface_override_material(SkaterMeshBuilder.HELMET_SURF_SHELL,
+			_make_solid_mat(uniform.helmet, _ROUGH_HELMET))
 
 	# Blade — matte black with the player's tape job riding it (palette picks
 	# resolve against colors.primary, so TEAM picks track the kit).
@@ -280,8 +273,10 @@ func apply_uniform(colors: Dictionary) -> void:
 	# invisible on the dark boot, TEAM resolves to the accent). Set
 	# explicitly so ghost mode never leaves a blank gray override behind.
 	var skate_mat: StandardMaterial3D = _make_solid_mat(Color(0.08, 0.08, 0.08), _ROUGH_SKATE)
-	_skate_l.material_override = skate_mat.duplicate()
-	_skate_r.material_override = skate_mat.duplicate()
+	_skate_l.set_surface_override_material(
+			SkaterMeshBuilder.SKATE_SURF_COLLAR, skate_mat.duplicate())
+	_skate_r.set_surface_override_material(
+			SkaterMeshBuilder.SKATE_SURF_COLLAR, skate_mat.duplicate())
 	# Surface 0, never material_override — the boot mesh also carries the steel
 	# and the laces (see the setup comment).
 	_foot_l.set_surface_override_material(
@@ -537,10 +532,10 @@ func _resolve_lace_color() -> Color:
 
 func _repaint_skate_stripes() -> void:
 	var stripe_mat: StandardMaterial3D = _make_solid_mat(_resolve_skate_color(), _ROUGH_SKATE)
-	if _skate_stripe_l != null:
-		_skate_stripe_l.material_override = stripe_mat.duplicate()
-	if _skate_stripe_r != null:
-		_skate_stripe_r.material_override = stripe_mat.duplicate()
+	_skate_l.set_surface_override_material(
+			SkaterMeshBuilder.SKATE_SURF_STRIPE, stripe_mat.duplicate())
+	_skate_r.set_surface_override_material(
+			SkaterMeshBuilder.SKATE_SURF_STRIPE, stripe_mat.duplicate())
 
 
 func _repaint_laces() -> void:
@@ -653,11 +648,9 @@ func apply_ghost(ghost: bool) -> void:
 			_skater.bone_visual(_skater.bottom_forearm_mesh),
 			_skater.top_elbow_sphere, _skater.top_hand_sphere,
 			_skater.bottom_elbow_sphere, _skater.bottom_hand_sphere,
-			_helmet, _head, _neck, _shoulder_l, _shoulder_r,
+			_shoulder_l, _shoulder_r,
 			_hip_l, _hip_r, _thigh_l, _thigh_r,
 			_knee_l, _knee_r, _sock_l, _sock_r,
-			_skate_l, _skate_r,
-			_skate_stripe_l, _skate_stripe_r,
 			_skater.top_cuff_mesh, _skater.bot_cuff_mesh,
 		]
 	for mesh: MeshInstance3D in meshes:
@@ -677,22 +670,18 @@ func apply_ghost(ghost: bool) -> void:
 	# one node, so they fade per-surface. They must NOT go through the loop above
 	# — writing material_override on a merged mesh overrides every surface at
 	# once and would erase the steel and the laces for the rest of the match.
-	for foot: MeshInstance3D in [_foot_l, _foot_r]:
-		if foot == null:
+	for merged: MeshInstance3D in [_foot_l, _foot_r, _skate_l, _skate_r, _helmet]:
+		if merged == null:
 			continue
-		for surface: int in foot.mesh.get_surface_count():
-			_apply_ghost_to_surface(foot, surface, ghost)
+		for surface: int in merged.mesh.get_surface_count():
+			_apply_ghost_to_surface(merged, surface, ghost)
 
 
 # Fades one surface of a merged mesh, creating the override if the surface has
 # only its shared default so far (an unpainted rig ghosting before its first
 # uniform pass — mutating the default in place would fade every skater).
 func _apply_ghost_to_surface(mesh: MeshInstance3D, surface: int, ghost: bool) -> void:
-	var mat: StandardMaterial3D = mesh.get_surface_override_material(surface) as StandardMaterial3D
-	if mat == null:
-		var shared: StandardMaterial3D = mesh.mesh.surface_get_material(surface) as StandardMaterial3D
-		mat = shared.duplicate() as StandardMaterial3D if shared != null else StandardMaterial3D.new()
-		mesh.set_surface_override_material(surface, mat)
+	var mat: StandardMaterial3D = SkaterMeshBuilder.surface_override(mesh, surface)
 	if ghost:
 		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		mat.albedo_color.a = 0.3

@@ -2218,15 +2218,15 @@ func set_jersey_info(p_name: String, number: int) -> void:
 # player's identity tone. Albedo only, preserving the current alpha so a
 # repaint landing mid-ghost doesn't snap the skin opaque.
 func set_skin_tone(index: int) -> void:
+	# Head and neck are one SURFACE of the helmet mesh, not child nodes — they
+	# always wore the same skin material, so the merge gave them a single paint
+	# target. surface_override duplicates the shared default on first use; the
+	# default lives on the mesh every skater shares, so writing it directly would
+	# give the whole roster one skin tone.
 	var skin: Color = SkinToneRegistry.color_for(index)
-	for part_name: String in ["Head", "Neck"]:
-		var mi: MeshInstance3D = helmet.get_node_or_null(part_name) as MeshInstance3D
-		if mi == null:
-			continue
-		var mat: StandardMaterial3D = mi.material_override as StandardMaterial3D
-		if mat == null:
-			continue
-		mat.albedo_color = Color(skin.r, skin.g, skin.b, mat.albedo_color.a)
+	var mat: StandardMaterial3D = SkaterMeshBuilder.surface_override(
+			helmet, SkaterMeshBuilder.HELMET_SURF_SKIN)
+	mat.albedo_color = Color(skin.r, skin.g, skin.b, mat.albedo_color.a)
 
 
 # ── HUD (delegate to SkaterHUDCoordinator) ────────────────────────────────────
