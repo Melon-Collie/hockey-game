@@ -187,35 +187,6 @@ func test_skate_blade_reaches_the_lifted_ice_depth() -> void:
 			"the boot sole should ride on the blade, clear of the ice")
 
 
-func test_apply_swaps_scene_primitives_and_keeps_default_materials() -> void:
-	# Miniature stand-in for the Skater scene hierarchy: one lathed part and
-	# one ball part with the scene's primitive meshes and default materials.
-	# The cache is cleared first because the first swap wins the right to stamp
-	# its default material on the shared mesh — a real Skater spawned by an
-	# earlier test would otherwise have claimed it already.
-	SkaterMeshBuilder._cache.clear()
-	var upper := Node3D.new()
-	add_child_autofree(upper)
-	var torso := MeshInstance3D.new()
-	torso.name = "UpperBodyMesh"
-	var cyl := CylinderMesh.new()
-	var default_mat := StandardMaterial3D.new()
-	cyl.material = default_mat
-	torso.mesh = cyl
-	upper.add_child(torso)
-	var helmet := MeshInstance3D.new()
-	helmet.name = "Helmet"
-	helmet.mesh = SphereMesh.new()
-	upper.add_child(helmet)
-
-	SkaterMeshBuilder.apply(upper)
-
-	assert_true(torso.mesh is ArrayMesh, "torso primitive should be swapped")
-	assert_true(helmet.mesh is ArrayMesh, "helmet primitive should be swapped")
-	assert_eq((torso.mesh as ArrayMesh).surface_get_material(0), default_mat,
-			"the scene default material should ride the swapped mesh")
-
-
 func _signed_volume(mesh: ArrayMesh) -> float:
 	var arrays: Array = mesh.surface_get_arrays(0)
 	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
@@ -225,15 +196,15 @@ func _signed_volume(mesh: ArrayMesh) -> float:
 	return total
 
 
-# The arm and leg rigs are only exact replacements for the nodes they replaced
+# The upper-body and leg rigs are only exact replacements for the nodes they replaced
 # because every vertex is RIGID — weight 1.0 on one bone, nothing on the other
 # three. Blended weights would make a bone pose an approximation of the node
 # transform it stands in for, and the pose diff would start reporting drift with
 # no obvious cause. Cheap to check here, invisible in a render.
 func test_skinned_rigs_are_rigidly_weighted() -> void:
 	var rigs: Array = [
-		["arm", SkaterMeshBuilder.shared_arm_skin_mesh(),
-				SkaterMeshBuilder.ARM_PART_COUNT, SkaterMeshBuilder.ARM_PART_COUNT],
+		["upper", SkaterMeshBuilder.shared_upper_skin_mesh(),
+				SkaterMeshBuilder.UPPER_SURFACE_COUNT, SkaterMeshBuilder.UPPER_BONE_COUNT],
 		["leg", SkaterMeshBuilder.shared_leg_skin_mesh(),
 				SkaterMeshBuilder.LEG_SURFACE_COUNT, SkaterMeshBuilder.LEG_BONE_COUNT],
 	]

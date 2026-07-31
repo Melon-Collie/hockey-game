@@ -248,7 +248,6 @@ var is_local_skater: bool = false
 @onready var shoulder: Marker3D = $MeshRoot/UpperBody/Shoulder
 @onready var stick_mesh: MeshInstance3D = $MeshRoot/UpperBody/StickMesh
 # Made public so SkaterUniformCoordinator can colour the head mesh.
-@onready var helmet: MeshInstance3D = $MeshRoot/UpperBody/Helmet
 
 # Cached blade MeshInstance3D (child of the Blade marker) and the curve sign
 # its procedural mesh was last built with (0 = not built yet). The tilt pass
@@ -270,11 +269,11 @@ var bottom_hand: Marker3D = null
 # ── Arm rig ───────────────────────────────────────────────────────────────────
 # Both arms — bones, elbow balls, gloved fists and wrist cuffs — are one skinned
 # mesh on one Skeleton3D, ten bones, surface index == bone index ==
-# SkaterMeshBuilder.ArmPart. See that file for why rigid weights make this an
+# SkaterMeshBuilder.UpperBone. See that file for why rigid weights make this an
 # exact replacement for the ten nodes it replaces rather than a lookalike.
 #
 # Everything outside this file addresses a part by its ArmPart: the uniform
-# coordinator paints through arm_part_material(), the appearance pass sizes
+# coordinator paints through upper_surface_material(), the appearance pass sizes
 # through set_arm_part_thickness(), and the per-frame IK poses through the
 # _pose_arm_* helpers below.
 var _arm_skeleton: Skeleton3D = null
@@ -285,11 +284,16 @@ var _arm_mesh: MeshInstance3D = null
 # transform: with nodes the thickness could live in scale X/Y and survive a
 # rotation write, and a bone pose has no such half.
 var _arm_thickness: PackedVector3Array = PackedVector3Array()
-
-# Deltoid shoulder caps (the scene's ShoulderL/R meshes), re-oriented each rig
-# update to lean toward their arm's live direction — see _orient_shoulder_cap.
-var _shoulder_cap_l: MeshInstance3D = null
-var _shoulder_cap_r: MeshInstance3D = null
+# Torso / helmet / shoulder caps: pose = basis · scale at position, each part
+# owned separately (authored rest or live rotation; sizing seam; sizing seam).
+# Same split as the leg rig — a pose write replaces the whole transform, so
+# nothing can be left to survive in a component the way node scale did.
+var _upper_basis: Array[Basis] = []
+var _upper_scale: PackedVector3Array = PackedVector3Array()
+var _upper_pos: PackedVector3Array = PackedVector3Array()
+var _upper_base_scale: PackedVector3Array = PackedVector3Array()
+var _upper_base_pos: PackedVector3Array = PackedVector3Array()
+var _helmet_base_euler: Vector3 = Vector3.ZERO
 
 # Visual forearm-bulk multiplier (the Hands attribute's arm tell), stamped by
 # SkaterAppearanceCoordinator.apply. The glove cuffs must stay proud of the
@@ -593,9 +597,6 @@ func _ready() -> void:
 	# set. Order-free relative to the coordinators below — the uniform painter
 	# overrides materials on these nodes and the appearance rig scales the
 	# nodes, so mesh identity is free to change here.
-	SkaterMeshBuilder.apply(upper_body)
-	_shoulder_cap_l = upper_body.get_node_or_null("ShoulderL") as MeshInstance3D
-	_shoulder_cap_r = upper_body.get_node_or_null("ShoulderR") as MeshInstance3D
 
 	# On-skates stance: the scene layout is standing height, so the skate
 	# stack lifts both body roots (see SkaterMeshBuilder.SKATE_LIFT_M — the
@@ -1657,8 +1658,13 @@ func set_lower_body_lean(lean_x: float, lean_z: float) -> void:
 	lower_body.rotation.z = lean_z
 
 
+# Head yaw, onto the helmet bone. `helmet.rotation.y = angle` meant "read the
+# euler, change Y, write it back", so the scene's authored X/Z survived —
+# _helmet_base_euler carries them.
 func set_head_angle(angle: float) -> void:
-	helmet.rotation.y = angle
+	_upper_basis[SkaterMeshBuilder.UpperBone.HELMET] = Basis.from_euler(
+			Vector3(_helmet_base_euler.x, angle, _helmet_base_euler.z))
+	_repose_upper_bone(SkaterMeshBuilder.UpperBone.HELMET)
 
 
 func get_upper_body_rotation() -> float:
@@ -1895,11 +1901,11 @@ func update_arm_mesh() -> void:
 	var pole_w: Vector3 = upper_body.global_transform.basis * pole_local
 	var elbow_w: Vector3 = TwoBoneIK.solve_elbow(
 			shoulder_w, hand_w, upper_arm_length, forearm_length, pole_w)
-	_pose_arm_bone(SkaterMeshBuilder.ArmPart.TOP_UPPER_ARM, shoulder_w, elbow_w)
-	_pose_arm_bone(SkaterMeshBuilder.ArmPart.TOP_FOREARM, elbow_w, hand_w)
-	_pose_arm_cuff(SkaterMeshBuilder.ArmPart.TOP_CUFF, elbow_w, hand_w)
-	_pose_arm_ball(SkaterMeshBuilder.ArmPart.TOP_ELBOW, elbow_w)
-	_pose_arm_glove(SkaterMeshBuilder.ArmPart.TOP_HAND, elbow_w, hand_w)
+	_pose_arm_bone(SkaterMeshBuilder.UpperBone.TOP_UPPER_ARM, shoulder_w, elbow_w)
+	_pose_arm_bone(SkaterMeshBuilder.UpperBone.TOP_FOREARM, elbow_w, hand_w)
+	_pose_arm_cuff(SkaterMeshBuilder.UpperBone.TOP_CUFF, elbow_w, hand_w)
+	_pose_arm_ball(SkaterMeshBuilder.UpperBone.TOP_ELBOW, elbow_w)
+	_pose_arm_glove(SkaterMeshBuilder.UpperBone.TOP_HAND, elbow_w, hand_w)
 	_orient_shoulder_cap(shoulder.position, elbow_w)
 
 
@@ -1912,11 +1918,11 @@ func update_bottom_arm_mesh() -> void:
 	var pole_w: Vector3 = upper_body.global_transform.basis * pole_local
 	var elbow_w: Vector3 = TwoBoneIK.solve_elbow(
 			shoulder_w, hand_w, upper_arm_length, forearm_length, pole_w)
-	_pose_arm_bone(SkaterMeshBuilder.ArmPart.BOTTOM_UPPER_ARM, shoulder_w, elbow_w)
-	_pose_arm_bone(SkaterMeshBuilder.ArmPart.BOTTOM_FOREARM, elbow_w, hand_w)
-	_pose_arm_cuff(SkaterMeshBuilder.ArmPart.BOTTOM_CUFF, elbow_w, hand_w)
-	_pose_arm_ball(SkaterMeshBuilder.ArmPart.BOTTOM_ELBOW, elbow_w)
-	_pose_arm_glove(SkaterMeshBuilder.ArmPart.BOTTOM_HAND, elbow_w, hand_w)
+	_pose_arm_bone(SkaterMeshBuilder.UpperBone.BOTTOM_UPPER_ARM, shoulder_w, elbow_w)
+	_pose_arm_bone(SkaterMeshBuilder.UpperBone.BOTTOM_FOREARM, elbow_w, hand_w)
+	_pose_arm_cuff(SkaterMeshBuilder.UpperBone.BOTTOM_CUFF, elbow_w, hand_w)
+	_pose_arm_ball(SkaterMeshBuilder.UpperBone.BOTTOM_ELBOW, elbow_w)
+	_pose_arm_glove(SkaterMeshBuilder.UpperBone.BOTTOM_HAND, elbow_w, hand_w)
 	_orient_shoulder_cap(bottom_shoulder.position, elbow_w)
 
 
@@ -2010,9 +2016,8 @@ const _SHOULDER_CAP_REST_POLE := Vector3(0.32, -0.93, -0.17)
 # (quaternion assignment preserves it) and their position is the scene's.
 func _orient_shoulder_cap(anchor_local: Vector3, elbow_w: Vector3) -> void:
 	var side: float = signf(anchor_local.x)
-	var cap: MeshInstance3D = _shoulder_cap_l if side < 0.0 else _shoulder_cap_r
-	if cap == null:
-		return
+	var bone: int = SkaterMeshBuilder.UpperBone.SHOULDER_L if side < 0.0 \
+			else SkaterMeshBuilder.UpperBone.SHOULDER_R
 	var arm_dir: Vector3 = upper_body.to_local(elbow_w) - anchor_local
 	if arm_dir.length_squared() < 0.0001:
 		return
@@ -2023,7 +2028,8 @@ func _orient_shoulder_cap(anchor_local: Vector3, elbow_w: Vector3) -> void:
 	if x_axis.length_squared() < 0.01:
 		return  # pole nearly along +X — keep the last stable roll
 	x_axis = x_axis.normalized()
-	cap.quaternion = Basis(x_axis, pole, x_axis.cross(pole)).get_rotation_quaternion()
+	_upper_basis[bone] = Basis(x_axis, pole, x_axis.cross(pole)).orthonormalized()
+	_repose_upper_bone(bone)
 
 
 # Glove cuff ring: its forward end sits at the hand and it extends back toward
@@ -2100,9 +2106,8 @@ func _build_leg_rig() -> void:
 		_repose_leg_bone(bone)
 	# Freed only after every offset is read — the whole point of the subtree.
 	# free() rather than queue_free(): the scene's placeholder primitives are no
-	# longer swapped out (SkaterMeshBuilder.apply skips the legs now), so a
-	# deferred free would render grey cylinders through the real legs for the
-	# frame it waited. Safe here — these are plain children whose own _ready has
+	# longer swapped for generated ones, so a deferred free would render grey
+	# cylinders through the real legs for the frame it waited. Safe here — these are plain children whose own _ready has
 	# already run, and nothing is iterating the subtree.
 	lower_body.get_node("LegL").free()
 	lower_body.get_node("LegR").free()
@@ -2169,44 +2174,93 @@ func set_leg_surface_material(surface: int, mat: Material) -> void:
 # child of the skeleton so the two share a transform space with nothing to keep
 # in sync.
 func _build_arm_rig() -> void:
+	_upper_basis.resize(SkaterMeshBuilder.UPPER_BONE_COUNT)
+	_upper_scale.resize(SkaterMeshBuilder.UPPER_BONE_COUNT)
+	_upper_pos.resize(SkaterMeshBuilder.UPPER_BONE_COUNT)
+	_upper_base_scale.resize(SkaterMeshBuilder.UPPER_BONE_COUNT)
+	_upper_base_pos.resize(SkaterMeshBuilder.UPPER_BONE_COUNT)
 	_arm_skeleton = Skeleton3D.new()
-	_arm_skeleton.name = "ArmRig"
-	for part: int in SkaterMeshBuilder.ARM_PART_COUNT:
+	_arm_skeleton.name = "UpperRig"
+	for part: int in SkaterMeshBuilder.UPPER_BONE_COUNT:
 		_arm_skeleton.add_bone(str(part))
 		_arm_skeleton.set_bone_rest(part, Transform3D.IDENTITY)
 	upper_body.add_child(_arm_skeleton)
 
 	_arm_mesh = MeshInstance3D.new()
-	_arm_mesh.name = "ArmMesh"
-	_arm_mesh.mesh = SkaterMeshBuilder.shared_arm_skin_mesh()
-	_arm_mesh.skin = SkaterMeshBuilder.shared_arm_skin()
+	_arm_mesh.name = "UpperMesh"
+	_arm_mesh.mesh = SkaterMeshBuilder.shared_upper_skin_mesh()
+	_arm_mesh.skin = SkaterMeshBuilder.shared_upper_skin()
 	_arm_mesh.skeleton = NodePath("..")
 	_arm_skeleton.add_child(_arm_mesh)
 
-	_arm_thickness.resize(SkaterMeshBuilder.ARM_PART_COUNT)
+	# Torso, helmet and the two deltoid caps: their placement is authored in the
+	# scene, so it is read out and seeded onto their bones, same as the legs.
+	for bone: int in [SkaterMeshBuilder.UpperBone.TORSO,
+			SkaterMeshBuilder.UpperBone.HELMET,
+			SkaterMeshBuilder.UpperBone.SHOULDER_L,
+			SkaterMeshBuilder.UpperBone.SHOULDER_R]:
+		var node: Node3D = upper_body.get_node(
+				SkaterMeshBuilder.UPPER_BONE_NODE[bone]) as Node3D
+		var xform: Transform3D = node.transform
+		_upper_basis[bone] = xform.basis.orthonormalized()
+		_upper_scale[bone] = xform.basis.get_scale()
+		_upper_pos[bone] = xform.origin
+		_upper_base_scale[bone] = _upper_scale[bone]
+		_upper_base_pos[bone] = _upper_pos[bone]
+		_repose_upper_bone(bone)
+		node.free()
+	_helmet_base_euler = _upper_basis[SkaterMeshBuilder.UpperBone.HELMET].get_euler()
+
+	_arm_thickness.resize(SkaterMeshBuilder.UPPER_BONE_COUNT)
 	var bone_radius: float = arm_mesh_thickness * 0.5
-	set_arm_bone_radius(SkaterMeshBuilder.ArmPart.TOP_UPPER_ARM, bone_radius)
-	set_arm_bone_radius(SkaterMeshBuilder.ArmPart.TOP_FOREARM, bone_radius)
-	set_arm_bone_radius(SkaterMeshBuilder.ArmPart.BOTTOM_UPPER_ARM, bone_radius)
-	set_arm_bone_radius(SkaterMeshBuilder.ArmPart.BOTTOM_FOREARM, bone_radius)
-	set_arm_ball_radius(SkaterMeshBuilder.ArmPart.TOP_ELBOW, elbow_sphere_radius)
-	set_arm_ball_radius(SkaterMeshBuilder.ArmPart.BOTTOM_ELBOW, elbow_sphere_radius)
-	set_arm_ball_radius(SkaterMeshBuilder.ArmPart.TOP_HAND, hand_sphere_radius)
-	set_arm_ball_radius(SkaterMeshBuilder.ArmPart.BOTTOM_HAND, hand_sphere_radius)
+	set_arm_bone_radius(SkaterMeshBuilder.UpperBone.TOP_UPPER_ARM, bone_radius)
+	set_arm_bone_radius(SkaterMeshBuilder.UpperBone.TOP_FOREARM, bone_radius)
+	set_arm_bone_radius(SkaterMeshBuilder.UpperBone.BOTTOM_UPPER_ARM, bone_radius)
+	set_arm_bone_radius(SkaterMeshBuilder.UpperBone.BOTTOM_FOREARM, bone_radius)
+	set_arm_ball_radius(SkaterMeshBuilder.UpperBone.TOP_ELBOW, elbow_sphere_radius)
+	set_arm_ball_radius(SkaterMeshBuilder.UpperBone.BOTTOM_ELBOW, elbow_sphere_radius)
+	set_arm_ball_radius(SkaterMeshBuilder.UpperBone.TOP_HAND, hand_sphere_radius)
+	set_arm_ball_radius(SkaterMeshBuilder.UpperBone.BOTTOM_HAND, hand_sphere_radius)
 	var cuff_radius: float = arm_mesh_thickness * 0.6
-	set_arm_cuff_radius(SkaterMeshBuilder.ArmPart.TOP_CUFF, cuff_radius)
-	set_arm_cuff_radius(SkaterMeshBuilder.ArmPart.BOTTOM_CUFF, cuff_radius)
+	set_arm_cuff_radius(SkaterMeshBuilder.UpperBone.TOP_CUFF, cuff_radius)
+	set_arm_cuff_radius(SkaterMeshBuilder.UpperBone.BOTTOM_CUFF, cuff_radius)
 
 
-# The per-skater material for one arm part, created from the shared mesh's
-# surface default on first use. Painters and the ghost fade both go through
-# this — material_override would repaint all ten parts at once.
-func arm_part_material(part: int) -> StandardMaterial3D:
-	return SkaterMeshBuilder.surface_override(_arm_mesh, part)
+# The per-skater material for one upper-body surface, created from the shared
+# mesh's surface default on first use. Painters and the ghost fade both go
+# through this — material_override would repaint all fifteen at once.
+func upper_surface_material(surface: int) -> StandardMaterial3D:
+	return SkaterMeshBuilder.surface_override(_arm_mesh, surface)
 
 
-func set_arm_part_material(part: int, mat: Material) -> void:
-	_arm_mesh.set_surface_override_material(part, mat)
+func set_upper_surface_material(surface: int, mat: Material) -> void:
+	_arm_mesh.set_surface_override_material(surface, mat)
+
+
+func _repose_upper_bone(bone: int) -> void:
+	_arm_skeleton.set_bone_pose(bone, Transform3D(
+			_upper_basis[bone].scaled_local(_upper_scale[bone]), _upper_pos[bone]))
+
+
+# ── Torso / helmet / shoulder sizing seam ─────────────────────────────────────
+# The four scene-authored parts. Their arm siblings are placed by IK and sized
+# through the arm seam below instead.
+func set_upper_bone_scale(bone: int, part_scale: Vector3) -> void:
+	_upper_scale[bone] = part_scale
+	_repose_upper_bone(bone)
+
+
+func set_upper_bone_position(bone: int, pos: Vector3) -> void:
+	_upper_pos[bone] = pos
+	_repose_upper_bone(bone)
+
+
+func upper_bone_base_scale(bone: int) -> Vector3:
+	return _upper_base_scale[bone]
+
+
+func upper_bone_base_position(bone: int) -> Vector3:
+	return _upper_base_pos[bone]
 
 
 # ── Arm sizing seam ───────────────────────────────────────────────────────────
@@ -2379,8 +2433,8 @@ func set_skin_tone(index: int) -> void:
 	# default lives on the mesh every skater shares, so writing it directly would
 	# give the whole roster one skin tone.
 	var skin: Color = SkinToneRegistry.color_for(index)
-	var mat: StandardMaterial3D = SkaterMeshBuilder.surface_override(
-			helmet, SkaterMeshBuilder.HELMET_SURF_SKIN)
+	var mat: StandardMaterial3D = upper_surface_material(
+			SkaterMeshBuilder.UpperSurface.HELMET_SKIN)
 	mat.albedo_color = Color(skin.r, skin.g, skin.b, mat.albedo_color.a)
 
 

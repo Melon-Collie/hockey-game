@@ -28,12 +28,8 @@ extends RefCounted
 # StickStyle; this coordinator layers the player's tape job on top.)
 
 var _skater: Skater
-var _upper_body_mesh: MeshInstance3D
 var _blade_mesh: MeshInstance3D
 var _blade_tape: MeshInstance3D                    # team-colored tape band, child of _blade_mesh
-var _helmet: MeshInstance3D
-var _shoulder_l: MeshInstance3D
-var _shoulder_r: MeshInstance3D
 
 # Cached jersey + shoulder decal inputs. Both decals are repainted whenever
 # either the uniform (apply_uniform) or the name/number (apply_jersey_info)
@@ -63,12 +59,8 @@ var _shoulder_decal: ShoulderDecal
 
 func setup(skater: Skater) -> void:
 	_skater = skater
-	_upper_body_mesh = skater.upper_body.get_node("UpperBodyMesh") as MeshInstance3D
 	_blade_mesh = skater.blade.get_node("MeshInstance3D") as MeshInstance3D
-	_helmet = skater.upper_body.get_node("Helmet") as MeshInstance3D
 	# Never painted (not kit) — resolved only so ghost fades reach them.
-	_shoulder_l = skater.upper_body.get_node("ShoulderL") as MeshInstance3D
-	_shoulder_r = skater.upper_body.get_node("ShoulderR") as MeshInstance3D
 	# Leg meshes live under per-leg pivot chains: LowerBody/Leg{L,R} carries the
 	# upper-leg meshes, and its ShinL/R child carries the lower-leg meshes. See
 	# the Skating Stride block in skater.gd for the full hierarchy.
@@ -111,7 +103,7 @@ func _create_jersey_viewport() -> void:
 	# Godot's CylinderMesh starts U=0 at +Z and increases CCW.
 	mat.uv1_offset = Vector3(0.25, 0.0, 0.0)
 	BodyRim.apply(mat)
-	_upper_body_mesh.material_override = mat
+	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperSurface.TORSO, mat)
 
 
 # Shared SubViewport + ShoulderDecal for both shoulder spheres. Sphere U=0 is
@@ -138,13 +130,13 @@ func _create_shoulder_viewport() -> void:
 	mat_l.roughness = _ROUGH_CLOTH
 	mat_l.uv1_offset = Vector3(-0.25, 0.0, 0.0)
 	BodyRim.apply(mat_l)
-	_shoulder_l.material_override = mat_l
+	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperSurface.SHOULDER_L, mat_l)
 	var mat_r := StandardMaterial3D.new()
 	mat_r.albedo_texture = tex
 	mat_r.roughness = _ROUGH_CLOTH
 	mat_r.uv1_offset = Vector3(0.25, 0.0, 0.0)
 	BodyRim.apply(mat_r)
-	_shoulder_r.material_override = mat_r
+	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperSurface.SHOULDER_R, mat_r)
 
 
 # Applies the full v2 colors dict (TeamColorRegistry.get_colors output) to
@@ -179,9 +171,8 @@ func apply_uniform(colors: Dictionary) -> void:
 	_rebuild_shoulder_texture()
 
 	# Helmet — glossy hard plastic.
-	# Surface 0 — the helmet mesh also carries the head/neck skin on surface 1,
-	# and material_override would erase it (see SkaterMeshBuilder's merge note).
-	_helmet.set_surface_override_material(SkaterMeshBuilder.HELMET_SURF_SHELL,
+	# Shell only — the head/neck skin is its own surface of the same bone.
+	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperSurface.HELMET_SHELL,
 			_make_solid_mat(uniform.helmet, _ROUGH_HELMET))
 
 	# Blade — matte black with the player's tape job riding it (palette picks
@@ -205,26 +196,26 @@ func apply_uniform(colors: Dictionary) -> void:
 	# (TEAM resolves to the kit color, i.e. no visible stripe).
 	_kit_gloves = uniform.gloves
 	var gloves_mat: StandardMaterial3D = _make_solid_mat(uniform.gloves)
-	_skater.set_arm_part_material(SkaterMeshBuilder.ArmPart.TOP_HAND, gloves_mat)
-	_skater.set_arm_part_material(
-			SkaterMeshBuilder.ArmPart.BOTTOM_HAND, gloves_mat.duplicate())
+	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperBone.TOP_HAND, gloves_mat)
+	_skater.set_upper_surface_material(
+			SkaterMeshBuilder.UpperBone.BOTTOM_HAND, gloves_mat.duplicate())
 	_paint_glove_cuffs(_resolve_glove_color())
 
 	# Arms — upper + lower bone cylinders, each painted with horizontal
 	# stripes (or solid if the stripes array is empty).
 	var arms_upper: Dictionary = uniform.arms.upper
 	var arms_lower: Dictionary = uniform.arms.lower
-	_paint_cylinder_h(SkaterMeshBuilder.ArmPart.TOP_UPPER_ARM, arms_upper)
-	_paint_cylinder_h(SkaterMeshBuilder.ArmPart.BOTTOM_UPPER_ARM, arms_upper)
-	_paint_cylinder_h(SkaterMeshBuilder.ArmPart.TOP_FOREARM, arms_lower)
-	_paint_cylinder_h(SkaterMeshBuilder.ArmPart.BOTTOM_FOREARM, arms_lower)
+	_paint_cylinder_h(SkaterMeshBuilder.UpperBone.TOP_UPPER_ARM, arms_upper)
+	_paint_cylinder_h(SkaterMeshBuilder.UpperBone.BOTTOM_UPPER_ARM, arms_upper)
+	_paint_cylinder_h(SkaterMeshBuilder.UpperBone.TOP_FOREARM, arms_lower)
+	_paint_cylinder_h(SkaterMeshBuilder.UpperBone.BOTTOM_FOREARM, arms_lower)
 
 	# Elbow spheres — paint as arms.lower.base so they read as the upper
 	# edge of the lower-arm cuff. (Hand spheres above already covered.)
 	var elbow_mat: StandardMaterial3D = _make_solid_mat(arms_lower.base)
-	_skater.set_arm_part_material(SkaterMeshBuilder.ArmPart.TOP_ELBOW, elbow_mat)
-	_skater.set_arm_part_material(
-			SkaterMeshBuilder.ArmPart.BOTTOM_ELBOW, elbow_mat.duplicate())
+	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperBone.TOP_ELBOW, elbow_mat)
+	_skater.set_upper_surface_material(
+			SkaterMeshBuilder.UpperBone.BOTTOM_ELBOW, elbow_mat.duplicate())
 
 	# Pants — vertical side stripes (pants stripe pos is U, width is column
 	# thickness; see _make_v_stripes_texture). Hips/knees match pants base.
@@ -311,11 +302,11 @@ const _ARM_STRIPE_SCALE: float = _SOCK_DESIGN_LEN / _FOREARM_DESIGN_LEN
 # trivially debuggable in the inspector.
 func _paint_cylinder_h(part: int, segment: Dictionary) -> void:
 	if segment.stripes.is_empty():
-		_skater.set_arm_part_material(part, _make_solid_mat(segment.base))
+		_skater.set_upper_surface_material(part, _make_solid_mat(segment.base))
 		return
 	var scaled: Array[Dictionary] = _scale_stripes_about_center(segment.stripes, _ARM_STRIPE_SCALE)
 	var tex: ImageTexture = make_h_stripes_texture(segment.base, scaled)
-	_skater.set_arm_part_material(part, _make_texture_material(tex))
+	_skater.set_upper_surface_material(part, _make_texture_material(tex))
 
 
 # Returns a copy of `stripes` with each band's width and its offset from the
@@ -561,14 +552,14 @@ func _rebuild_stick_knob() -> void:
 # accent refresh.)
 func _paint_glove_cuffs(gloves_color: Color) -> void:
 	var mat: StandardMaterial3D = _make_solid_mat(gloves_color)
-	_skater.set_arm_part_material(SkaterMeshBuilder.ArmPart.TOP_CUFF, mat)
-	_skater.set_arm_part_material(
-			SkaterMeshBuilder.ArmPart.BOTTOM_CUFF, mat.duplicate())
+	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperBone.TOP_CUFF, mat)
+	_skater.set_upper_surface_material(
+			SkaterMeshBuilder.UpperBone.BOTTOM_CUFF, mat.duplicate())
 	# Scaled by the Hands forearm bulk so the cuff stays proud of the forearm
 	# cylinder it wraps — equal radii z-fight (see Skater.forearm_visual_mult).
 	var cuff_radius: float = _skater.arm_mesh_thickness * 0.6 * _skater.forearm_visual_mult
-	_skater.set_arm_cuff_radius(SkaterMeshBuilder.ArmPart.TOP_CUFF, cuff_radius)
-	_skater.set_arm_cuff_radius(SkaterMeshBuilder.ArmPart.BOTTOM_CUFF, cuff_radius)
+	_skater.set_arm_cuff_radius(SkaterMeshBuilder.UpperBone.TOP_CUFF, cuff_radius)
+	_skater.set_arm_cuff_radius(SkaterMeshBuilder.UpperBone.BOTTOM_CUFF, cuff_radius)
 
 
 func apply_ghost(ghost: bool) -> void:
@@ -594,9 +585,8 @@ func apply_ghost(ghost: bool) -> void:
 		_skater.stick_mesh.material_override = _make_stick_shaft_mat()
 		_blade_mesh.material_override = StickStyle.make_blade_material()
 	var meshes: Array[MeshInstance3D] = [
-			_upper_body_mesh, _blade_tape,
+			_blade_tape,
 			_skater.stick_knob_mesh,
-			_shoulder_l, _shoulder_r,
 		]
 	for mesh: MeshInstance3D in meshes:
 		if mesh == null:
@@ -610,19 +600,17 @@ func apply_ghost(ghost: bool) -> void:
 	# one node, so they fade per-surface. They must NOT go through the loop above
 	# — writing material_override on a merged mesh overrides every surface at
 	# once and would erase the steel and the laces for the rest of the match.
-	if _helmet != null:
-		for surface: int in _helmet.mesh.get_surface_count():
-			_fade_material(SkaterMeshBuilder.surface_override(_helmet, surface), ghost)
 	# Both legs are one skinned mesh (pants, socks, skates, boots, steel, laces),
 	# so every part fades through its own surface for the same reason.
 	for surface: int in SkaterMeshBuilder.LEG_SURFACE_COUNT:
 		_fade_material(_skater.leg_surface_material(surface), ghost)
-	# Both arms are one skinned mesh, so every part fades through its own surface
-	# for the same reason — and going through the skater's seam creates the
-	# override from the shared default when a rig ghosts before its first uniform
-	# pass, rather than mutating a material the whole roster shares.
-	for part: int in SkaterMeshBuilder.ARM_PART_COUNT:
-		_fade_material(_skater.arm_part_material(part), ghost)
+	# The whole upper body is one skinned mesh (arms, torso, helmet, head skin,
+	# deltoid caps), so every part fades through its own surface for the same
+	# reason — and going through the skater's seam creates the override from the
+	# shared default when a rig ghosts before its first uniform pass, rather than
+	# mutating a material the whole roster shares.
+	for surface: int in SkaterMeshBuilder.UPPER_SURFACE_COUNT:
+		_fade_material(_skater.upper_surface_material(surface), ghost)
 
 
 func _fade_material(mat: StandardMaterial3D, ghost: bool) -> void:

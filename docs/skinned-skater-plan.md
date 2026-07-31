@@ -91,7 +91,10 @@ COUNT scattered across the tile.
 3. ~~Legs (the gait chain).~~ Done. Sixteen nodes → sixteen bones on one
    skeleton, twelve of them carrying eighteen surfaces. Skater is **45 nodes**
    (from 67 with cuffs before this work started).
-4. Torso, helmet, shoulders.
+4. ~~Torso, helmet, shoulders.~~ Done — folded into the ARM skeleton rather
+   than given their own, since they are siblings in `UpperBody`'s frame. Four
+   more bones, five more surfaces, zero extra nodes. Skater is **41 nodes**
+   (from 67). `SkaterMeshBuilder.apply()` is gone with them.
 5. Goalie, same pattern.
 
 Each step is its own diffable commit. Do not batch them.

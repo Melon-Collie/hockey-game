@@ -1,17 +1,19 @@
 class_name SkaterMeshBuilder
 extends RefCounted
 
-# Low-poly faceted replacements for the skater's part meshes: shaped torso,
-# helmeted head, deltoid shoulder caps, hip/knee balls, thighs, socks, skate
-# cuffs, and boots with a blade runner (swapped in during Skater._ready()),
-# plus the shared_* meshes the code-created arm rig builds from (bone prisms,
-# joint balls, glove cuffs, stick knob). Cosmetic only — gameplay reads the
-# Marker3D anchors and collision shapes, never these meshes.
+# Low-poly faceted geometry for the skater: shaped torso, helmeted head, deltoid
+# shoulder caps, arm bone prisms, joint balls, glove fists and cuffs, hip/knee
+# balls, thighs, socks, skate collars, boots with a blade runner, and the stick
+# knob. Cosmetic only — gameplay reads the Marker3D anchors and collision
+# shapes, never these meshes.
 #
-# The arm-rig meshes are baked at UNIT radius and resized by the scale in their
-# bone's pose (per-attribute sizing in SkaterAppearanceCoordinator, composed
-# into the pose by Skater) — never by mesh mutation, so every skater can share
-# one cached mesh.
+# The skater renders as TWO skinned meshes, not as a tree of MeshInstance3Ds:
+# shared_upper_skin_mesh (UpperBone / UpperSurface) and shared_leg_skin_mesh
+# (LegBone / LegSurface). Both are cached and shared by every skater on the ice —
+# per-skater colour is a surface override and per-build sizing rides the scale in
+# each bone's pose, so nothing here is ever mutated per instance. The goalie and
+# the puck still hang meshes on nodes and subclass this builder for the geometry
+# helpers (see _swap_instance).
 #
 # UV layouts replicate the Godot primitives they replace, because
 # SkaterUniformCoordinator paints against those exact conventions:
@@ -24,16 +26,20 @@ extends RefCounted
 # Change a painter convention there and the matching generator here together.
 #
 # Everything is flat-shaded (smooth_group(-1)) — the faceting IS the art
-# style; per-face normals are what make the shaped silhouettes read. Meshes
-# build once into a static cache shared by every skater: per-skater color is a
-# material override and body-build sizing is node scale, so sharing is safe.
+# style; per-face normals are what make the shaped silhouettes read.
 #
-# Several parts are MERGED assemblies — the boot carries its blade steel and
-# laces, the skate collar its accent stripe, the helmet the head/neck skin —
-# because a part that never moves relative to its parent does not need to be a
-# node, only its own material. On a merged mesh nothing may set
-# material_override: it overrides every surface at once. Paint through
-# surface_override() instead.
+# NORMALS UNDER SKINNING: Godot transforms a skinned normal by the bone matrix
+# itself, not by its inverse transpose, so a bone whose pose carries non-uniform
+# scale renders with skewed normals. _radial_side_normals fixes that where the
+# anisotropy is extreme (the arm bones, ~4:1). Do not reach for it elsewhere —
+# on a part scaled near 1:1 it costs more than it buys (see the note there).
+#
+# Some parts contribute SEVERAL surfaces to one bone — the boot carries its blade
+# steel and laces, the skate collar its accent stripe, the helmet the head/neck
+# skin — because a part that never moves relative to another does not need its
+# own bone, only its own material. Nothing may ever set material_override on
+# either skinned mesh: it overrides every surface at once. Paint through
+# surface_override() / the Skater seams instead.
 
 # Profiles are (y, radius) stations top→bottom in the part's mesh-local frame,
 # spanning the same envelope as the primitive each replaces (heights and radii
@@ -245,18 +251,10 @@ static var _cache: Dictionary = {}
 # Swaps every scene-primitive part mesh under the two body roots for its
 # cached low-poly build. Idempotent; safe before or after the coordinators
 # run (they touch material_override and node scale, never mesh identity).
-static func apply(upper_body: Node3D) -> void:
-	_swap(upper_body, "UpperBodyMesh", "torso", _build_torso)
-	# Helmet shell + the head/neck skin as surfaces (shared_helmet_assembly).
-	_swap(upper_body, "Helmet", "helmet_assembly", _build_helmet_assembly)
-	_swap(upper_body, "ShoulderL", "shoulder", _build_shoulder)
-	_swap(upper_body, "ShoulderR", "shoulder", _build_shoulder)
-	# The leg parts are not swapped here — they are surfaces of the leg rig's
-	# skinned mesh (shared_leg_skin_mesh), built once and shared. The scene's
-	# LowerBody subtree survives only long enough for Skater._build_leg_rig to
-	# read the segment offsets out of it.
-
-
+# Swaps a scene primitive for a generated build, in place. The skater no longer
+# uses this — every one of its parts is a surface of a skinned rig — but the
+# goalie and the puck still hang their meshes on nodes, and they subclass this
+# builder for the geometry helpers.
 static func _swap(root: Node3D, path: String, key: String, builder: Callable) -> void:
 	_swap_instance(root.get_node_or_null(path) as MeshInstance3D, key, builder)
 
@@ -549,13 +547,14 @@ static func shared_arm_bone_z() -> ArrayMesh:
 		return st.commit())
 
 
-# ── The arm rig: one skinned mesh, one bone per part ─────────────────────────
-# Ten parts that used to be ten MeshInstance3D children of UpperBody, each
-# carrying a shared unit mesh and its own per-frame transform. They are now ten
-# bones of one Skeleton3D driving one mesh, which is how an articulated body is
-# supposed to be built — and it takes the per-frame cost from ten Node3D
-# transform writes (each dirtying a subtree and pushing a global to the
-# RenderingServer) down to ten entries in the skeleton's pose array.
+# ── The upper-body rig: one skinned mesh, one Skeleton3D ─────────────────────
+# Fourteen parts that used to be fourteen MeshInstance3D children of UpperBody —
+# both arms, the torso, the helmet/head unit and the two deltoid caps — each
+# carrying a shared mesh and its own per-frame transform. They are now fourteen
+# bones of one skeleton driving one mesh, which is how an articulated body is
+# supposed to be built, and it takes the per-frame cost from a Node3D transform
+# write each (dirtying a subtree and pushing a global to the RenderingServer)
+# down to entries in the skeleton's pose array.
 #
 # WHY IT IS EXACT, not merely close: every vertex is weighted 1.0 to a single
 # bone, the bone rests are identity, and the skin binds are identity. A skinned
@@ -566,13 +565,10 @@ static func shared_arm_bone_z() -> ArrayMesh:
 # `node.transform = X` took, and the pose diff can hold the renderer to it.
 #
 # The flat bone list (no parents) is deliberate and matches the old layout: all
-# ten were siblings under UpperBody, each posed independently in that space. A
-# hierarchy would compose transforms the old rig never composed.
-#
-# Surface index == ArmPart, one surface per part. Merging the parts that share a
-# material would cut draw calls, but it is a different change with a different
-# risk (crossed paint), so it stays separate — see skater_matrix.gd.
-enum ArmPart {
+# fourteen were siblings under UpperBody, each posed independently in that space.
+# A hierarchy would compose transforms the old rig never composed. (The legs are
+# the opposite case — see LegBone.)
+enum UpperBone {
 	TOP_UPPER_ARM,
 	TOP_FOREARM,
 	BOTTOM_UPPER_ARM,
@@ -583,43 +579,86 @@ enum ArmPart {
 	BOTTOM_HAND,
 	TOP_CUFF,
 	BOTTOM_CUFF,
+	TORSO,
+	HELMET,
+	SHOULDER_L,
+	SHOULDER_R,
 }
-const ARM_PART_COUNT: int = 10
+const UPPER_BONE_COUNT: int = 14
+
+# Surfaces. One per bone for the first thirteen; the helmet is the exception,
+# carrying the shell and the head/neck skin as two surfaces of one bone (they
+# never moved relative to each other, only needed separate materials). Merging
+# the arm parts that share a material would cut draw calls further, but that is a
+# different change with a different risk (crossed paint) — see skater_matrix.gd.
+enum UpperSurface {
+	TOP_UPPER_ARM,
+	TOP_FOREARM,
+	BOTTOM_UPPER_ARM,
+	BOTTOM_FOREARM,
+	TOP_ELBOW,
+	BOTTOM_ELBOW,
+	TOP_HAND,
+	BOTTOM_HAND,
+	TOP_CUFF,
+	BOTTOM_CUFF,
+	TORSO,
+	HELMET_SHELL,
+	HELMET_SKIN,
+	SHOULDER_L,
+	SHOULDER_R,
+}
+const UPPER_SURFACE_COUNT: int = 15
+# Scene node name per bone for the four parts whose placement is authored in
+# Scenes/Skater.tscn rather than derived (the arm parts are placed by IK). Read
+# by Skater._build_upper_rig, which then frees them — same deal as LEG_BONE_NODE.
+# Indices 0-9 are unused; the arm parts have no scene node.
+const UPPER_BONE_NODE: Array[String] = [
+	"", "", "", "", "", "", "", "", "", "",
+	"UpperBodyMesh", "Helmet", "ShoulderL", "ShoulderR",
+]
 
 
-static func shared_arm_skin_mesh() -> ArrayMesh:
-	return _shared("arm_skin", func() -> ArrayMesh:
+static func shared_upper_skin_mesh() -> ArrayMesh:
+	return _shared("upper_skin", func() -> ArrayMesh:
 		var m := ArrayMesh.new()
 		var bone: ArrayMesh = shared_arm_bone_z()
 		var ball: ArrayMesh = shared_joint_ball()
 		var fist: ArrayMesh = shared_glove_fist()
 		var cuff: ArrayMesh = shared_cuff()
-		# Appended in ArmPart order — the enum IS the surface index and the bone
-		# index, so painting, sizing and posing all key off one number.
-		_append_skinned_surface(m, bone, ArmPart.TOP_UPPER_ARM)
-		_append_skinned_surface(m, bone, ArmPart.TOP_FOREARM)
-		_append_skinned_surface(m, bone, ArmPart.BOTTOM_UPPER_ARM)
-		_append_skinned_surface(m, bone, ArmPart.BOTTOM_FOREARM)
-		_append_skinned_surface(m, ball, ArmPart.TOP_ELBOW)
-		_append_skinned_surface(m, ball, ArmPart.BOTTOM_ELBOW)
-		_append_skinned_surface(m, fist, ArmPart.TOP_HAND)
-		_append_skinned_surface(m, fist, ArmPart.BOTTOM_HAND)
-		_append_skinned_surface(m, cuff, ArmPart.TOP_CUFF)
-		_append_skinned_surface(m, cuff, ArmPart.BOTTOM_CUFF)
+		var helmet: ArrayMesh = shared_helmet_assembly()
+		var shoulder: ArrayMesh = _shared("shoulder", _build_shoulder)
+		# Appended in UpperSurface order. For the ten arm parts the surface index
+		# and the bone index coincide, which is why they can share a number.
+		_append_skinned_surface(m, bone, UpperBone.TOP_UPPER_ARM)
+		_append_skinned_surface(m, bone, UpperBone.TOP_FOREARM)
+		_append_skinned_surface(m, bone, UpperBone.BOTTOM_UPPER_ARM)
+		_append_skinned_surface(m, bone, UpperBone.BOTTOM_FOREARM)
+		_append_skinned_surface(m, ball, UpperBone.TOP_ELBOW)
+		_append_skinned_surface(m, ball, UpperBone.BOTTOM_ELBOW)
+		_append_skinned_surface(m, fist, UpperBone.TOP_HAND)
+		_append_skinned_surface(m, fist, UpperBone.BOTTOM_HAND)
+		_append_skinned_surface(m, cuff, UpperBone.TOP_CUFF)
+		_append_skinned_surface(m, cuff, UpperBone.BOTTOM_CUFF)
+		_append_skinned_surface(m, _shared("torso", _build_torso), UpperBone.TORSO)
+		_append_skinned_surface(m, helmet, UpperBone.HELMET, HELMET_SURF_SHELL)
+		_append_skinned_surface(m, helmet, UpperBone.HELMET, HELMET_SURF_SKIN)
+		_append_skinned_surface(m, shoulder, UpperBone.SHOULDER_L)
+		_append_skinned_surface(m, shoulder, UpperBone.SHOULDER_R)
 		return m)
 
 
 # Identity binds, so the skinned vertex is the bone pose alone. Shared by every
 # skater: Godot builds a per-instance SkinReference from one Skin resource.
-static func shared_arm_skin() -> Skin:
-	if _arm_skin == null:
-		_arm_skin = Skin.new()
-		for i: int in ARM_PART_COUNT:
-			_arm_skin.add_bind(i, Transform3D.IDENTITY)
-	return _arm_skin
+static func shared_upper_skin() -> Skin:
+	if _upper_skin == null:
+		_upper_skin = Skin.new()
+		for i: int in UPPER_BONE_COUNT:
+			_upper_skin.add_bind(i, Transform3D.IDENTITY)
+	return _upper_skin
 
 
-static var _arm_skin: Skin = null
+static var _upper_skin: Skin = null
 
 
 # Copies a single-surface mesh into `target` verbatim, adding the bone/weight
