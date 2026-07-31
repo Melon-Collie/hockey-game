@@ -218,9 +218,10 @@ func _rebuild_text_decal() -> void:
 	_text_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 
-# Paints a Node3D arm bone wrapper (has a "Cylinder" MeshInstance3D child).
+# Paints an arm bone. The bone IS the MeshInstance3D now (Goalie._make_arm_bone);
+# it used to be a wrapper with a "Cylinder" child.
 func _paint_cylinder_h(bone: Node3D, segment: Dictionary) -> void:
-	var visual: MeshInstance3D = bone.get_node_or_null("Cylinder") as MeshInstance3D
+	var visual: MeshInstance3D = bone as MeshInstance3D
 	if visual == null:
 		return
 	_paint_mesh_h(visual, segment)

@@ -372,13 +372,21 @@ func _update_arm_ik(upper: Node3D, forearm_bone: Node3D,
 func _update_arm_bone(bone: Node3D, a_local: Vector3, b_local: Vector3) -> void:
 	if bone == null:
 		return
-	var length: float = (b_local - a_local).length()
-	bone.position = (a_local + b_local) * 0.5
-	bone.scale = Vector3(1.0, 1.0, maxf(length, 0.001))
-	var a_world: Vector3 = to_global(a_local)
-	var b_world: Vector3 = to_global(b_local)
-	if (b_world - a_world).length() > 0.0001:
-		bone.look_at(b_world, _up_for_look_at(b_world - a_world))
+	var span: Vector3 = b_local - a_local
+	var length: float = span.length()
+	var center: Vector3 = (a_local + b_local) * 0.5
+	if length < 0.0001:
+		bone.position = center
+		return
+	# One local transform write, not position + scale + look_at. look_at costs
+	# six transform operations, two of which resolve the global chain; the prism
+	# is rotationally symmetric so the up vector only has to dodge colinearity.
+	# X/Y carry the arm thickness and stay as the sizing seam left them.
+	var bone_scale: Vector3 = bone.scale
+	bone_scale.z = length
+	bone.transform = Transform3D(
+			Basis.looking_at(span / length, _up_for_look_at(span)).scaled_local(bone_scale),
+			center)
 
 
 static func _up_for_look_at(direction: Vector3) -> Vector3:
@@ -387,23 +395,19 @@ static func _up_for_look_at(direction: Vector3) -> Vector3:
 	return Vector3.UP
 
 
-# Node3D wrapper with the shared unit bone prism as a "Cylinder" child (name
-# kept for the painter seam), rotated 90° around X so the prism's local Y
-# maps to the wrapper's look_at forward axis (Z). scale.z on the wrapper is
-# set per tick to the bone's length by _update_arm_bone(); the child's own
-# X/Z scale is the arm thickness (unit-radius mesh) — same rig contract as
-# Skater._resolve_or_create_bone_mesh.
+# ONE MeshInstance3D per bone, carrying the prism whose long axis is already
+# local Z (shared_arm_bone_z bakes the rotation a child node used to apply).
+# X/Y are the arm THICKNESS; Z is the length _update_arm_bone() rewrites per
+# tick — each writer reads the other's components back rather than overwriting
+# the whole vector. Same rig contract as Skater._resolve_or_create_bone_mesh,
+# which is where this collapse was proven.
 func _make_arm_bone() -> Node3D:
-	var wrapper := Node3D.new()
 	var mi := MeshInstance3D.new()
-	mi.name = "Cylinder"
-	mi.mesh = SkaterMeshBuilder.shared_arm_bone()
+	mi.mesh = SkaterMeshBuilder.shared_arm_bone_z()
 	var radius: float = _ARM_RADIUS * 0.5
-	mi.scale = Vector3(radius, 1.0, radius)
-	mi.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	mi.scale = Vector3(radius, radius, 1.0)
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	wrapper.add_child(mi)
-	return wrapper
+	return mi
 
 
 func _make_sphere_mesh(radius: float) -> MeshInstance3D:
