@@ -16,18 +16,14 @@ extends Control
 # top. For a nameplate that is the conventional choice — the label exists to be
 # read — but it is a change, not a port.
 #
-# Size still tracks camera distance rather than being fixed: the anchor and a
-# point one text-height above it are both projected, and the pixel gap between
-# them IS the font size. That reproduces what pixel_size gave the Label3D, so
-# names grow and shrink with zoom exactly as before.
-
-# World height of the text, matching the Label3D it replaces: font_size 40 at
-# pixel_size 0.005.
-const _TEXT_WORLD_HEIGHT: float = 0.20
-# Below this the plate is unreadable anyway, and tiny text at distance reads as
-# noise around the rink.
-const _MIN_FONT_PX: float = 7.0
-const _MAX_FONT_PX: float = 64.0
+# FIXED size, deliberately not scaled by camera distance. The Label3D grew and
+# shrank with zoom because pixel_size made it world-sized, and reproducing that
+# in 2D looked worse than the original did: font sizes are integers, so a
+# continuously changing scale steps between them and the text visibly jitters as
+# the camera breathes. A name plate is HUD, not scenery — it should read the same
+# whatever the camera is doing, which is also what the sibling 2D overlay
+# (OffScreenPlayerIndicators) already does with its jersey numbers.
+const _FONT_SIZE: int = 16
 
 var _font: Font = MenuStyle.UI_FONT
 
@@ -49,7 +45,6 @@ func _draw() -> void:
 	var camera: Camera3D = get_viewport().get_camera_3d()
 	if camera == null:
 		return
-	var up: Vector3 = camera.global_transform.basis.y * _TEXT_WORLD_HEIGHT
 	var color: Color = Color(MenuStyle.HUD_ICE.r, MenuStyle.HUD_ICE.g,
 			MenuStyle.HUD_ICE.b, MenuStyle.HUD_OPACITY)
 	for node: Node in get_tree().get_nodes_in_group("skaters"):
@@ -65,14 +60,7 @@ func _draw() -> void:
 		if camera.is_position_behind(anchor):
 			continue
 		var origin: Vector2 = camera.unproject_position(anchor)
-		# The projected height of a fixed world height IS the perspective scale,
-		# so this needs no distance maths of its own.
-		var font_px: float = absf(camera.unproject_position(anchor + up).y - origin.y)
-		if font_px < _MIN_FONT_PX:
-			continue
-		font_px = minf(font_px, _MAX_FONT_PX)
-		var size: int = int(font_px)
 		var width: float = _font.get_string_size(
-				text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, size).x
+				text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, _FONT_SIZE).x
 		draw_string(_font, origin - Vector2(width * 0.5, 0.0), text,
-				HORIZONTAL_ALIGNMENT_LEFT, -1.0, size, color)
+				HORIZONTAL_ALIGNMENT_LEFT, -1.0, _FONT_SIZE, color)

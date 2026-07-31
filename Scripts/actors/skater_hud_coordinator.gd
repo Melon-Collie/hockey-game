@@ -225,11 +225,8 @@ func setup(skater: Skater) -> void:
 	_stamina_ring_mat = _make_stamina_ring_material()
 	_stamina_ring_mesh.material_override = _stamina_ring_mat
 	_stamina_ring_mesh.visible = false
+	_skater.add_child(_stamina_ring_mesh)
 
-
-	# Player name. Single billboarded Label3D, top-level so its world
-	# transform isn't tied to the skater's rotation. Position is rewritten
-	# each tick from camera screen-down so it always sits below the ring.
 	# Overhead self-beacon. Built once and hidden until the ring-relation
 	# resolver reports SELF. top_level so its world transform is rewritten each
 	# tick independent of the skater's body rotation (mirrors the name label).
