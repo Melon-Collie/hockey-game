@@ -458,7 +458,7 @@ func test_missing_high_is_a_real_outcome() -> void:
 	var full: ShotMechanics.ShotResult = _wrister_at(cfg, 2, FULL_SWEEP)
 	assert_gt(_crossing_height(full, 8.0), GameRules.NET_HEIGHT + 0.03,
 			"full-charge MID from 8 m sails over the bar")
-	var eased: ShotMechanics.ShotResult = _wrister_at(cfg, 2, 4.0)
+	var eased: ShotMechanics.ShotResult = _wrister_at(cfg, 2, 2.5)
 	assert_lt(_crossing_height(eased, 8.0), GameRules.NET_HEIGHT,
 			"an eased charge on the same rung stays under the bar")
 
@@ -497,7 +497,7 @@ func test_quick_pass_flip_is_gear_free() -> void:
 	# mechanics never read the shot ladder, so every blade sauces and flips
 	# identically.
 	var cfg := _wrister_cfg()
-	cfg.loft_tan_high = 0.57735   # an M28 shot ladder changes nothing here
+	cfg.loft_tan_high = 0.53171   # an M28 shot ladder changes nothing here
 	for level: int in [2, 3]:
 		var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
 				Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
@@ -511,8 +511,8 @@ func test_direction_y_under_host_clamp_everywhere() -> void:
 	# charge stays under the host's forged-direction clamp.
 	var cfg := _wrister_cfg()
 	cfg.loft_tan_low = 0.14945
-	cfg.loft_tan_mid = 0.28675
-	cfg.loft_tan_high = 0.57735
+	cfg.loft_tan_mid = 0.34433
+	cfg.loft_tan_high = 0.53171
 	for level: int in 4:
 		for sweep: float in [0.0, 4.0, FULL_SWEEP]:
 			var r: ShotMechanics.ShotResult = _wrister_at(cfg, level, sweep)

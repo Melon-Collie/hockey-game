@@ -475,9 +475,9 @@ const DEFAULT_QUICK_PASS_POWER_M_S: float = 14.0
 # rungs as tan(angle) — the defaults everywhere a build isn't known (AI
 # league-average reads, unwired configs). Arrival height is emergent from
 # angle × charge × range; missing high is a real outcome.
-const DEFAULT_LOFT_TAN_LOW: float = 0.1405   # tan 8°  — saucer / point snipe
-const DEFAULT_LOFT_TAN_MID: float = 0.2679   # tan 15° — the slot snipe
-const DEFAULT_LOFT_TAN_HIGH: float = 0.4877  # tan 26° — the in-tight roof
+const DEFAULT_LOFT_TAN_LOW: float = 0.1405   # tan 8°    — saucer / point snipe
+const DEFAULT_LOFT_TAN_MID: float = 0.3153   # tan 17.5° — the slot snipe
+const DEFAULT_LOFT_TAN_HIGH: float = 0.4452  # tan 24°   — the in-tight roof
 #
 # QUICK PASSES keep the fixed vertical-speed table (ShotMechanics.loft_y —
 # pass mechanics must not solve toward a net that isn't their target):

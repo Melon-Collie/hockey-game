@@ -274,7 +274,7 @@ const GRAVITY_M_S2: float = 9.8   # engine default the airborne puck falls under
 const HIGH_BAND_CEILING_M: float = 1.17
 # The M92 (league-neutral) ladder — the default wherever a build isn't known
 # (defensive reads of opponents, unwired tests).
-const DEFAULT_LOFT_TANS: Vector3 = Vector3(0.1405, 0.2679, 0.4877)
+const DEFAULT_LOFT_TANS: Vector3 = Vector3(0.1405, 0.3153, 0.4452)
 
 
 # Arrival height (m above launch) of a set-angle arc at `dist`:

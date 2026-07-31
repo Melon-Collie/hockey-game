@@ -261,14 +261,16 @@ const _FLEX_RUNWAY_LEAN: Array[float] = [0.90, 1.00, 1.12]  # wrister full-strok
 # open toe hook). The ANGLE LADDER is the elevation lever (the manual
 # contact-point model — docs/elevation-rework-plan.md v3): each loft level is
 # a set launch angle from this pattern's ladder, steeper on the open blade at
-# every rung. At full wrister charge the top-shelf bands land: LOW = the
-# point snipe (M92 ~13–21 m; M28 ~10–14 m then clips iron; M88 arrives
-# under-the-arm and can NEVER sail — its flattest ladder apexes at
-# crossbar-ping height even off a max slapper), MID = the slot snipe
-# (~4–5 m), HIGH = the in-tight roof (only the M28's 30° tops the shelf from
-# the crease; the M88's 22° roofs from ~2.7–3.1 m and no closer). The M28 is
-# the close-range weapon and the worst at range at every rung; the M88 is
-# the safe blade that cannot miss the net high.
+# every rung. MID chases HIGH's band end so adjacent full-charge bands nearly
+# touch (the 2026-07 retune closed the just-off-the-doorstep dead ring). At
+# full wrister charge the top-shelf bands land: LOW = the point snipe (M92
+# ~13–21 m; M28 ~10–14 m then clips iron; M88 arrives under-the-arm and can
+# NEVER sail — its flattest ladder apexes at crossbar-ping height even off a
+# max slapper), MID = the slot snipe (M92 ~2.9–4.0 m), HIGH = the in-tight
+# roof (M92 ~2.0–2.7 m; only the M28's 28° tops the shelf from the crease —
+# doorstep floors 2.24/1.93/1.62 m by gear). The M28 is the close-range
+# weapon and the worst at range at every rung; the M88 is the safe blade
+# that cannot miss the net high, and fills its long range at slapper pace.
 #
 # The rest of the identity triangle, all lateral trades about the M92:
 #   M88 — the playmaker/point blade: best backhand, +3% slapper (a flatter
@@ -284,8 +286,8 @@ const _FLEX_RUNWAY_LEAN: Array[float] = [0.90, 1.00, 1.12]  # wrister full-strok
 # pickup_max_speed, so soft passes settle on every blade and the client's
 # provisional-pickup gate stays build-independent.
 const _CURVE_LOFT_LOW_DEG: Array[float] = [7.0, 8.0, 8.5]      # M88 / M92 / M28
-const _CURVE_LOFT_MID_DEG: Array[float] = [14.0, 15.0, 16.0]
-const _CURVE_LOFT_HIGH_DEG: Array[float] = [22.0, 26.0, 30.0]
+const _CURVE_LOFT_MID_DEG: Array[float] = [15.5, 17.5, 19.0]
+const _CURVE_LOFT_HIGH_DEG: Array[float] = [21.0, 24.0, 28.0]
 const _CURVE_RUNWAY_LEAN: Array[float] = [1.00, 1.00, 0.90]
 const _CURVE_BACKHAND_LEAN: Array[float] = [1.08, 1.00, 0.90]
 const _CURVE_SLAP_LEAN: Array[float] = [1.03, 1.00, 0.97]

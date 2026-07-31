@@ -26,8 +26,8 @@ class ShotResult:
 #   0 = FLAT — heel. The puck stays on the ice.
 #   1 = LOW  — mid-blade partial roll (7°/8°/8.5° by gear): the saucer at pass
 #              pace, the point snipe at full wrister charge.
-#   2 = MID  — toe-side (14°/15°/16°): the slot snipe (~4–5 m at full charge).
-#   3 = HIGH — the toe (22°/26°/30°): the in-tight roof; the flattest ladder
+#   2 = MID  — toe-side (15.5°/17.5°/19°): the slot snipe (~3–4 m at full).
+#   3 = HIGH — the toe (21°/24°/28°): the in-tight roof; the flattest ladder
 #              (M88) cannot roof the doorstep but also can never sail — its
 #              worst outcome at any charge is a crossbar ping — while the M28
 #              roofs from the crease and pays for it everywhere else.
@@ -42,7 +42,7 @@ const ELEVATION_HIGH: int = 3
 
 # Universal cap on the pre-normalization Y/XZ ratio of a lofted direction:
 # 1.0 = 45°. Pure anti-forgery guard — the steepest authored ladder rung (M28
-# HIGH, 30°) sits well under it. Keeps every legit direction under
+# HIGH, 28°) sits well under it. Keeps every legit direction under
 # ShotReleaseRules.MAX_DIRECTION_Y (normalized y at 45° is ~0.707 vs the 0.75
 # clamp) so the host's forged-direction clamp never touches an honest shot.
 const MAX_LOFT_RATIO: float = 1.0

@@ -34,16 +34,22 @@ Per-gear ladders (degrees; tan enters the release math):
 |---|---|---|---|
 | 0 FLAT (heel) | 0 | 0 | 0 |
 | 1 LOW (mid-blade) | 7 | 8 | 8.5 |
-| 2 MID (toe-side) | 14 | 15 | 16 |
-| 3 HIGH (toe) | 22 | 26 | 30 |
+| 2 MID (toe-side) | 15.5 | 17.5 | 19 |
+| 3 HIGH (toe) | 21 | 24 | 28 |
+
+(Retuned from the original 14/15/16 MID and 22/26/30 HIGH: HIGH came down a
+touch and MID up to chase its band end, collapsing the "awkward middle" dead
+ring just outside the doorstep to slivers that fill at honest pace. Costs:
+doorstep floors moved out to ~2.24/1.93/1.62 m, and M92's mid-range gap
+(~4.0–8.5 m) fills at slightly softer MID pace.)
 
 Top-shelf bands at full wrister charge (33 m/s), over-the-bar beyond them:
 
 | level | M88 | M92 | M28 |
 |---|---|---|---|
 | LOW | ~0.8–0.9 m arrival from the point — **never sails** (max-slap apex ~1.23 m = iron at worst) | ~13–21 m: the textbook point snipe | ~10–14 m; clips iron beyond ~14 |
-| MID | ~4.6–5.3 m | ~4.2–4.9 m | ~3.9–4.5 m |
-| HIGH | ~2.7–3.1 m | ~2.2–2.5 m | ~1.9–2.1 m |
+| MID | ~3.3–4.6 m (and from range at slapper pace) | ~2.9–4.0 m | ~2.6–3.6 m |
+| HIGH | ~2.3–3.2 m | ~2.0–2.7 m | ~1.7–2.3 m |
 
 Backing off the charge slides every band toward the net; each blade's HIGH is
 a distinct "roof pocket" rather than strictly better/worse. The identities:
