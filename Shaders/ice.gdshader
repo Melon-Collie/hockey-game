@@ -36,6 +36,29 @@ uniform vec2 rink_size = vec2(26.0, 60.0);
 uniform vec4 ring_pos[12];
 uniform vec4 ring_col[12];
 uniform int ring_count = 0;
+// Elevation chevrons — the stacked "^" marks beside a skater. Same deal as the
+// rings: xy = world (x, z) of the FIRST apex, z = how many are stacked (1-3).
+// They share one colour (the neutral HUD stroke) rather than carrying their own.
+uniform vec4 chevron_pos[12];
+uniform int chevron_count = 0;
+uniform vec4 chevron_col = vec4(0.1, 0.12, 0.15, 0.85);
+// Screen-down in world XZ. The chevrons point screen-UP and stack screen-up from
+// each other, so their whole orientation comes from this one vector — which is
+// why they can be uniforms at all instead of nodes carrying a camera-derived
+// rotation each.
+uniform vec2 hud_screen_down = vec2(0.0, 1.0);
+uniform float chevron_leg_len = 0.098;
+uniform float chevron_half_thickness = 0.015;
+uniform float chevron_stack_gap = 0.11;
+
+
+// Distance from p to the segment a->b. The chevron is two of these.
+float seg_dist(vec2 p, vec2 a, vec2 b) {
+	vec2 pa = p - a;
+	vec2 ba = b - a;
+	float h = clamp(dot(pa, ba) / max(dot(ba, ba), 0.000001), 0.0, 1.0);
+	return length(pa - ba * h);
+}
 // Color the lines fade toward at grazing. Default to the ice color itself so
 // lines blend into the surrounding ice; nudge cooler/lighter for more drama.
 uniform vec3 ice_fog_color : source_color = vec3(0.9, 0.95, 1.0);
@@ -113,6 +136,26 @@ void fragment() {
 		float band = smoothstep(ring_pos[i].w - aa, ring_pos[i].w + aa, d)
 				* (1.0 - smoothstep(ring_pos[i].z - aa, ring_pos[i].z + aa, d));
 		albedo = mix(albedo, ring_col[i].rgb, band * ring_col[i].a);
+	}
+
+	// Elevation chevrons. Legs run 45 degrees either side of screen-down from a
+	// shared apex, so the mark reads as "^" pointing screen-up; each extra one
+	// stacks screen-up from the last.
+	vec2 sd = normalize(hud_screen_down);
+	vec2 sd_right = vec2(sd.y, -sd.x);
+	vec2 leg_a = normalize(sd + sd_right) * chevron_leg_len;
+	vec2 leg_b = normalize(sd - sd_right) * chevron_leg_len;
+	for (int i = 0; i < chevron_count; i++) {
+		int stack = int(chevron_pos[i].z);
+		for (int k = 0; k < stack; k++) {
+			vec2 apex = chevron_pos[i].xy - sd * (chevron_stack_gap * float(k));
+			float d = min(seg_dist(ice_xz, apex, apex + leg_a),
+					seg_dist(ice_xz, apex, apex + leg_b));
+			float aa = max(fwidth(d), 0.0001);
+			float mark = 1.0 - smoothstep(chevron_half_thickness - aa,
+					chevron_half_thickness + aa, d);
+			albedo = mix(albedo, chevron_col.rgb, mark * chevron_col.a);
+		}
 	}
 
 	ALBEDO = albedo;

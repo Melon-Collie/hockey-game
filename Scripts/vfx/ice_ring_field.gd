@@ -34,11 +34,15 @@ var _material: ShaderMaterial = null
 # full-length (the shader reads only the first ring_count entries).
 var _positions: PackedVector4Array = PackedVector4Array()
 var _colors: PackedVector4Array = PackedVector4Array()
+# Elevation chevrons ride along: xy = first apex, z = how many are stacked. The
+# shader stacks the rest itself, so a skater at HIGH loft is still one entry.
+var _chevrons: PackedVector4Array = PackedVector4Array()
 
 
 func _init() -> void:
 	_positions.resize(MAX_RINGS)
 	_colors.resize(MAX_RINGS)
+	_chevrons.resize(MAX_RINGS)
 
 
 func setup(material: ShaderMaterial) -> void:
@@ -49,12 +53,24 @@ func _process(_delta: float) -> void:
 	if _material == null:
 		return
 	var count: int = 0
+	var chevron_count: int = 0
+	# Screen-down is a property of the CAMERA, not of any skater — every skater's
+	# copy is the same value. Taken from whichever is seen first rather than
+	# recomputed here, so the camera-change check that maintains it stays in one
+	# place (SkaterHUDCoordinator) instead of being duplicated.
+	var screen_down: Vector2 = Vector2(0.0, 1.0)
 	for node: Node in get_tree().get_nodes_in_group("skaters"):
 		if count >= MAX_RINGS:
 			break
 		var skater: Skater = node as Skater
 		if skater == null or not skater.ring_field_visible():
 			continue
+		screen_down = skater.hud_screen_down()
+		var stack: int = skater.chevron_field_stack()
+		if stack > 0 and chevron_count < MAX_RINGS:
+			var apex: Vector2 = skater.chevron_field_apex()
+			_chevrons[chevron_count] = Vector4(apex.x, apex.y, float(stack), 0.0)
+			chevron_count += 1
 		# Interpolation-correct read, so the ring tracks the RENDERED skater
 		# rather than the post-tick physics pose — the same reason IceScratchMap
 		# uses it. As a child node the ring inherited this for free; driving it
@@ -70,3 +86,6 @@ func _process(_delta: float) -> void:
 	_material.set_shader_parameter(&"ring_pos", _positions)
 	_material.set_shader_parameter(&"ring_col", _colors)
 	_material.set_shader_parameter(&"ring_count", count)
+	_material.set_shader_parameter(&"chevron_pos", _chevrons)
+	_material.set_shader_parameter(&"chevron_count", chevron_count)
+	_material.set_shader_parameter(&"hud_screen_down", screen_down)

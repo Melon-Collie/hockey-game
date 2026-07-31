@@ -2228,6 +2228,18 @@ func ring_field_color() -> Color:
 	return _hud.ring_color()
 
 
+func chevron_field_stack() -> int:
+	return _hud.chevron_stack()
+
+
+func chevron_field_apex() -> Vector2:
+	return _hud.chevron_apex()
+
+
+func hud_screen_down() -> Vector2:
+	return _hud.screen_down()
+
+
 func set_skin_tone(index: int) -> void:
 	# Head and neck are one SURFACE of the helmet mesh, not child nodes — they
 	# always wore the same skin material, so the merge gave them a single paint

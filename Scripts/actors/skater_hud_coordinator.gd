@@ -121,10 +121,6 @@ var _skater: Skater
 
 var _stamina_ring_mesh: MeshInstance3D
 var _stamina_ring_mat: ShaderMaterial
-var _chevron_mesh: MeshInstance3D
-# Second stacked chevron, visible only at HIGH loft (level 2).
-var _chevron_mesh2: MeshInstance3D
-var _chevron_mesh3: MeshInstance3D
 var _name_label: Label3D
 
 # Overhead self-beacon. `_self_beacon` is top_level (world transform rewritten
@@ -226,34 +222,7 @@ func setup(skater: Skater) -> void:
 	_stamina_ring_mat = _make_stamina_ring_material()
 	_stamina_ring_mesh.material_override = _stamina_ring_mat
 	_stamina_ring_mesh.visible = false
-	_skater.add_child(_stamina_ring_mesh)
 
-	_chevron_mesh = MeshInstance3D.new()
-	_chevron_mesh.name = "ElevatedChevron"
-	_chevron_mesh.top_level = true
-	_chevron_mesh.mesh = _create_chevron_mesh()
-	_chevron_mesh.material_override = _make_hud_ice_material()
-	_chevron_mesh.visible = false
-	_skater.add_child(_chevron_mesh)
-
-	_chevron_mesh2 = MeshInstance3D.new()
-	_chevron_mesh2.name = "ElevatedChevronMid"
-	_chevron_mesh2.top_level = true
-	_chevron_mesh2.mesh = _chevron_mesh.mesh
-	_chevron_mesh2.material_override = _chevron_mesh.material_override
-	_chevron_mesh2.visible = false
-	_skater.add_child(_chevron_mesh2)
-
-	# One chevron per elevated rung (LOW/MID/HIGH). At four levels this
-	# readout is at its limit — the eventual replacement is the contact-point
-	# tell (plan doc v3 §4).
-	_chevron_mesh3 = MeshInstance3D.new()
-	_chevron_mesh3.name = "ElevatedChevronHigh"
-	_chevron_mesh3.top_level = true
-	_chevron_mesh3.mesh = _chevron_mesh.mesh
-	_chevron_mesh3.material_override = _chevron_mesh.material_override
-	_chevron_mesh3.visible = false
-	_skater.add_child(_chevron_mesh3)
 
 	# Player name. Single billboarded Label3D, top-level so its world
 	# transform isn't tied to the skater's rotation. Position is rewritten
@@ -342,9 +311,6 @@ func update(delta: float) -> void:
 			_hidden_for_replay = true
 			_ring_visible = false
 			if _stamina_ring_mesh != null: _stamina_ring_mesh.visible = false
-			if _chevron_mesh != null: _chevron_mesh.visible = false
-			if _chevron_mesh2 != null: _chevron_mesh2.visible = false
-			if _chevron_mesh3 != null: _chevron_mesh3.visible = false
 			if _name_label != null: _name_label.visible = false
 			if _slapper_indicator != null: _slapper_indicator.visible = false
 			if _slapper_ring_mesh != null: _slapper_ring_mesh.visible = false
@@ -355,7 +321,7 @@ func update(delta: float) -> void:
 		return
 	if _hidden_for_replay:
 		_hidden_for_replay = false
-		# Restore the always-visible nodes. _stamina_ring_mesh, _chevron_mesh,
+		# Restore the always-visible nodes. _stamina_ring_mesh,
 		# _slapper_indicator children, and _slapper_ring_mesh are gated by
 		# their own show logic (driven from skater / stamina state) and will
 		# re-enable themselves as needed.
@@ -410,33 +376,8 @@ func update(delta: float) -> void:
 			_ping_label.modulate.a = bubble_a
 			_ping_label.outline_modulate.a = _PING_BUBBLE_OUTLINE_A * bubble_a
 
-	if _chevron_mesh != null:
-		var chevron_should_show: bool = _skater.elevation_level > 0 and not _skater.is_ghost
-		var chevron2_should_show: bool = _skater.elevation_level >= 2 and not _skater.is_ghost
-		var chevron3_should_show: bool = _skater.elevation_level >= 3 and not _skater.is_ghost
-		if _chevron_mesh.visible != chevron_should_show:
-			_chevron_mesh.visible = chevron_should_show
-		if _chevron_mesh2.visible != chevron2_should_show:
-			_chevron_mesh2.visible = chevron2_should_show
-		if _chevron_mesh3.visible != chevron3_should_show:
-			_chevron_mesh3.visible = chevron3_should_show
-		if chevron_should_show:
-			_chevron_mesh.global_position = Vector3(
-					_skater.global_position.x + _cached_chevron_dir.x * _CHEVRON_RADIUS,
-					0.05,
-					_skater.global_position.z + _cached_chevron_dir.z * _CHEVRON_RADIUS)
-		if chevron2_should_show:
-			# Stack each further "^" screen-up from the last (the chevron
-			# points screen-up, so -screen_down is "above" it on screen).
-			_chevron_mesh2.global_position = Vector3(
-					_chevron_mesh.global_position.x - _cached_screen_down.x * _CHEVRON_STACK_GAP,
-					0.05,
-					_chevron_mesh.global_position.z - _cached_screen_down.y * _CHEVRON_STACK_GAP)
-		if chevron3_should_show:
-			_chevron_mesh3.global_position = Vector3(
-					_chevron_mesh2.global_position.x - _cached_screen_down.x * _CHEVRON_STACK_GAP,
-					0.05,
-					_chevron_mesh2.global_position.z - _cached_screen_down.y * _CHEVRON_STACK_GAP)
+	# Elevation chevrons are drawn by the ice shader (IceRingField reads
+	# chevron_stack() / chevron_apex()), so nothing is placed here.
 
 	_update_stamina_ring()
 
@@ -530,9 +471,6 @@ func _refresh_screen_down_cache_if_camera_changed() -> void:
 	var side_sign: float = 1.0 if _skater.is_left_handed else -1.0
 	var chevron_angle: float = _cached_arc_base_angle + side_sign * deg_to_rad(_CHEVRON_OFFSET_DEG)
 	_cached_chevron_dir = Vector3(sin(chevron_angle), 0.0, cos(chevron_angle))
-	if _chevron_mesh != null:
-		_chevron_mesh.rotation = Vector3(0.0, _cached_arc_base_angle, 0.0)
-		_chevron_mesh2.rotation = _chevron_mesh.rotation
 
 
 func set_player_name(p_name: String) -> void:
@@ -688,9 +626,6 @@ func set_world_hud_hidden(hidden: bool) -> void:
 		_hidden_for_replay = true
 		_ring_visible = false
 		if _stamina_ring_mesh != null: _stamina_ring_mesh.visible = false
-		if _chevron_mesh != null: _chevron_mesh.visible = false
-		if _chevron_mesh2 != null: _chevron_mesh2.visible = false
-		if _chevron_mesh3 != null: _chevron_mesh3.visible = false
 		if _name_label != null: _name_label.visible = false
 		if _slapper_indicator != null: _slapper_indicator.visible = false
 		if _slapper_ring_mesh != null: _slapper_ring_mesh.visible = false
@@ -746,6 +681,26 @@ func set_slapper_indicator_ready(_is_ready: bool) -> void:
 
 func update_slapper_indicator_window(_t: float) -> void:
 	pass
+
+
+# How many chevrons this skater shows (0-3) and where the first apex sits. The
+# ice shader stacks the rest screen-up from it, so only the first is sent.
+func chevron_stack() -> int:
+	if not _ring_visible or _skater.is_ghost:
+		return 0
+	return clampi(_skater.elevation_level, 0, 3)
+
+
+func chevron_apex() -> Vector2:
+	return Vector2(
+			_skater.global_position.x + _cached_chevron_dir.x * _CHEVRON_RADIUS,
+			_skater.global_position.z + _cached_chevron_dir.z * _CHEVRON_RADIUS)
+
+
+# The camera's screen-down in world XZ. Cached here because this is where the
+# camera-change check already lives; one value serves the whole rink.
+func screen_down() -> Vector2:
+	return _cached_screen_down
 
 
 # Read by IceRingField each frame. Colour is the cached relation colour, so the
@@ -913,43 +868,6 @@ func _create_ring_mesh_with_uv(inner_r: float, outer_r: float, segments: int) ->
 	arrays[Mesh.ARRAY_VERTEX] = verts
 	arrays[Mesh.ARRAY_NORMAL] = normals
 	arrays[Mesh.ARRAY_TEX_UV] = uvs
-	arrays[Mesh.ARRAY_INDEX] = indices
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return mesh
-
-
-# Upward-pointing "^" chevron drawn flat on the ice.
-func _create_chevron_mesh() -> ArrayMesh:
-	var size: float = 0.14
-	var leg_len: float = size * 0.7
-	var thickness: float = MenuStyle.HUD_LINE_THIN
-	var verts := PackedVector3Array()
-	var normals := PackedVector3Array()
-	var indices := PackedInt32Array()
-	var legs: Array = [
-		{ "rot": deg_to_rad(135.0), "anchor": Vector3.ZERO },
-		{ "rot": deg_to_rad(-135.0), "anchor": Vector3.ZERO },
-	]
-	for leg: Dictionary in legs:
-		var rot_y: float = leg.rot
-		var anchor: Vector3 = leg.anchor
-		var dir := Vector3(sin(rot_y), 0.0, -cos(rot_y))
-		var perp := Vector3(cos(rot_y), 0.0, sin(rot_y))
-		var half_t: float = thickness * 0.5
-		var p0: Vector3 = anchor + perp * half_t
-		var p1: Vector3 = anchor - perp * half_t
-		var p2: Vector3 = anchor + dir * leg_len + perp * half_t
-		var p3: Vector3 = anchor + dir * leg_len - perp * half_t
-		var base: int = verts.size()
-		verts.append(p0); verts.append(p1); verts.append(p2); verts.append(p3)
-		for _n: int in 4:
-			normals.append(Vector3.UP)
-		indices.append_array([base, base + 1, base + 2, base + 1, base + 3, base + 2])
-	var arrays: Array = []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = normals
 	arrays[Mesh.ARRAY_INDEX] = indices
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
