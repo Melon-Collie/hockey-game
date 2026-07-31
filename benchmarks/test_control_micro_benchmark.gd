@@ -159,6 +159,14 @@ func test_control_tick_costs() -> void:
 	# The intent-stamping preamble: a dozen property writes onto the Skater plus
 	# two predicate calls. Individually trivial, but it is the one block that
 	# runs unconditionally for every skater every tick regardless of state.
+	_bench("[I] intent stamping preamble", func() -> void:
+		_skater.move_intent = _input.move_vector
+		_skater.brake_intent = _input.brake
+		_skater.elevation_level = _input.elevation_level
+		_skater.deflect_intent = false
+		_skater.blade_up = _skater.is_forced_lift_active()
+		_skater.current_shot_state = 0)
+
 	# The suspect the remainder pointed at. Skater.set_blade_position reads as a
 	# setter at every call site but is not one: it does two to_global conversions
 	# and a look_at to re-aim the blade marker along the shaft. look_at resolves
@@ -183,12 +191,5 @@ func test_control_tick_costs() -> void:
 	_bench("_process_input (WHOLE TICK, re-measured last)", func() -> void:
 		_controller._process_input(_input, delta))
 
-	_bench("[I] intent stamping preamble", func() -> void:
-		_skater.move_intent = _input.move_vector
-		_skater.brake_intent = _input.brake
-		_skater.elevation_level = _input.elevation_level
-		_skater.deflect_intent = false
-		_skater.blade_up = _skater.is_forced_lift_active()
-		_skater.current_shot_state = 0)
-
 	assert_true(_results.size() > 0, "benchmark produced results")
+
