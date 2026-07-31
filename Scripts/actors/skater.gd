@@ -267,11 +267,11 @@ var bottom_shoulder: Marker3D = null
 # Bottom hand: the reactive IK output for the bottom grip on the stick shaft.
 var bottom_hand: Marker3D = null
 
-# Arm visual meshes (shoulder → elbow → top_hand). Each is a Node3D wrapper
-# that gets position/scale/look_at applied by _update_bone_mesh(); the child
-# "Cylinder" MeshInstance3D holds the actual geometry (rotated 90° around X
-# so the prism's Y axis aligns with the wrapper's Z axis — see
-# _resolve_or_create_bone_mesh()).
+# Arm visual meshes (shoulder → elbow → top_hand). One MeshInstance3D each,
+# rewritten by _update_bone_mesh(): the aim goes in the basis, the length in
+# scale Z, the thickness in scale X/Y. Typed Node3D because that is all the rig
+# math needs; SkaterUniformCoordinator takes the MeshInstance3D via
+# bone_visual().
 var upper_arm_mesh: Node3D = null
 var forearm_mesh: Node3D = null
 var bottom_upper_arm_mesh: Node3D = null
@@ -1939,12 +1939,15 @@ func _update_bone_mesh(bone: Node3D, a_world: Vector3, b_world: Vector3) -> void
 		bone.position = center
 		return
 	var dir: Vector3 = span / length
+	# X/Y carry the bone thickness and belong to the sizing seam, so they are read
+	# back rather than reset; only Z (the length) is this function's to write.
+	var bone_scale: Vector3 = bone.scale
+	bone_scale.z = length
 	# scaled_local is basis·S, matching how set_scale composes rotation and
 	# scale. The plain scaled() is S·basis and would put the length on the wrong
 	# axes once the bone tilts — the same trap _update_cuff_transform documents.
 	bone.transform = Transform3D(
-			Basis.looking_at(dir, _up_for_look_at(dir)).scaled_local(
-					Vector3(1.0, 1.0, length)),
+			Basis.looking_at(dir, _up_for_look_at(dir)).scaled_local(bone_scale),
 			center)
 
 
@@ -2048,31 +2051,27 @@ static func _up_for_look_at(direction: Vector3) -> Vector3:
 	return Vector3.UP
 
 
-# Bone "rig" pattern: the public node is a Node3D wrapper that gets positioned,
-# scaled, and look_at'd by _update_bone_mesh(). The child MeshInstance3D named
-# "Cylinder" (name kept for the painter seam) holds the shared unit-height
-# bone prism, pre-rotated 90° around X so the prism's local Y axis maps to the
-# wrapper's local Z (the look_at forward axis). The wrapper's Z scale
-# stretches it to the bone length; the child's own X/Z scale is the bone
-# THICKNESS (unit-radius mesh — SkaterAppearanceCoordinator resizes it there,
-# never by mesh mutation, so all skaters share one mesh).
-# SkaterUniformCoordinator drills into this child to set material_override
-# (see bone_visual()).
+# Bone rig: ONE MeshInstance3D per bone, carrying the shared prism whose long
+# axis is already local Z (shared_arm_bone_z bakes the rotation the old child
+# node used to apply). _update_bone_mesh writes the aim into the basis and the
+# length into scale Z; SkaterAppearanceCoordinator writes the THICKNESS into
+# scale X/Y — a unit-radius mesh sized by node scale, never by mesh mutation, so
+# all skaters share one mesh. The two writers never collide because each reads
+# the other's components back rather than overwriting the whole vector.
 func _resolve_or_create_bone_mesh(node_name: String) -> Node3D:
 	var existing: Node3D = upper_body.get_node_or_null(node_name) as Node3D
 	if existing != null:
 		return existing
-	var wrapper := Node3D.new()
-	wrapper.name = node_name
-	upper_body.add_child(wrapper)
 	var mesh_instance := MeshInstance3D.new()
-	mesh_instance.name = "Cylinder"
-	mesh_instance.mesh = SkaterMeshBuilder.shared_arm_bone()
+	mesh_instance.name = node_name
+	mesh_instance.mesh = SkaterMeshBuilder.shared_arm_bone_z()
 	var radius: float = arm_mesh_thickness * 0.5
-	mesh_instance.scale = Vector3(radius, 1.0, radius)
-	mesh_instance.rotation_degrees = Vector3(90.0, 0.0, 0.0)
-	wrapper.add_child(mesh_instance)
-	return wrapper
+	# X/Y are the bone THICKNESS (SkaterAppearanceCoordinator's to change); Z is
+	# the length _update_bone_mesh rewrites every frame. The two never collide
+	# because that function reads x/y back rather than overwriting them.
+	mesh_instance.scale = Vector3(radius, radius, 1.0)
+	upper_body.add_child(mesh_instance)
+	return mesh_instance
 
 
 # Returns the MeshInstance3D child of a bone wrapper so callers can set
@@ -2080,7 +2079,7 @@ func _resolve_or_create_bone_mesh(node_name: String) -> Node3D:
 func bone_visual(bone: Node3D) -> MeshInstance3D:
 	if bone == null:
 		return null
-	return bone.get_node_or_null("Cylinder") as MeshInstance3D
+	return bone as MeshInstance3D
 
 
 # Joint balls share the unit-radius faceted mesh; the node's scale IS the

@@ -294,6 +294,25 @@ static func shared_arm_bone() -> ArrayMesh:
 		return _build_lathe(profile, _LEG_SIDES, 1.0, 1.0))
 
 
+# The same prism with the wrapper's old 90°-about-X baked into the vertices, so
+# its long axis is local Z — the axis _update_bone_mesh's looking_at basis aims.
+#
+# This is what lets an arm bone be ONE node instead of two. The rig used to be a
+# Node3D wrapper carrying (1, 1, length) around a MeshInstance3D child carrying
+# (radius, 1, radius) and a 90° rotation, purely because the mesh's long axis
+# disagreed with the aiming axis. With the rotation baked, a single instance
+# carries (radius, radius, length) and the wrapper disappears: four fewer nodes
+# per skater, and — since these are written every frame by the IK — one less
+# level of transform propagation on each write.
+static func shared_arm_bone_z() -> ArrayMesh:
+	return _shared("arm_bone_z", func() -> ArrayMesh:
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		st.append_from(shared_arm_bone(), 0,
+				Transform3D(Basis(Vector3.RIGHT, PI * 0.5), Vector3.ZERO))
+		return st.commit())
+
+
 # Elbow ball, unit radius.
 static func shared_joint_ball() -> ArrayMesh:
 	return _shared("joint_ball", func() -> ArrayMesh:

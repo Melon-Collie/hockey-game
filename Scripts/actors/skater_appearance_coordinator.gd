@@ -230,9 +230,14 @@ func _set_bone_radius(bone: Node3D, radius: float) -> void:
 	var mi: MeshInstance3D = _skater.bone_visual(bone)
 	if mi == null:
 		return
-	# Cross-section only: the visual's local Y is the bone's length axis,
-	# owned by the wrapper's per-frame Z scale (see _resolve_or_create_bone_mesh).
-	mi.scale = Vector3(radius, 1.0, radius)
+	# Cross-section only. The bone's long axis is local Z (the mesh is built
+	# pre-rotated — SkaterMeshBuilder.shared_arm_bone_z), and Z is rewritten with
+	# the live length every frame by Skater._update_bone_mesh, so preserve it
+	# here instead of writing a whole scale vector.
+	var s: Vector3 = mi.scale
+	s.x = radius
+	s.y = radius
+	mi.scale = s
 
 
 func _set_cuff_radius(mi: MeshInstance3D, radius: float) -> void:
