@@ -195,10 +195,15 @@ var _ring_relation_resolver: Callable = Callable()
 # now that IceRingField reads state instead of the tree. Starts false: the field
 # only includes a skater once update() has run and established a relation, so a
 # freshly spawned skater cannot flash an UNKNOWN-coloured ring for a frame.
-var _ring_visible: bool = false
+# TRUE by default, and that matters: these replaced a MeshInstance3D and a
+# Label3D, both of which are born `visible = true`. Only the replay/spectator
+# latch and the ghost pass ever set them, and neither runs on an ordinary
+# skater — so defaulting them false left the ring and the name plate hidden
+# from spawn until the first goal replay restored them.
+var _ring_visible: bool = true
 # Mirrors what the name Label3D's `visible` flag used to hold, now that
 # PlayerNameOverlay reads state instead of walking the tree.
-var _name_visible: bool = false
+var _name_visible: bool = true
 var _player_name: String = ""
 var _ring_relation_cached: int = -2
 var _ring_color_cached: Color = Color(0, 0, 0, 0)  # unreachable sentinel; forces first refresh
@@ -499,9 +504,9 @@ func set_ring_relation_resolver(resolver: Callable) -> void:
 
 
 # Re-resolves the relationship and rewrites the slot-ring tint only when it
-# changes. Opacity is preserved from HUD_OPACITY; the ring material is a
-# per-skater StandardMaterial3D (see _make_hud_ice_material) so mutating its
-# albedo here never bleeds into other skaters' rings.
+# changes. The colour is read per frame by IceRingField and handed to the ice
+# shader as a uniform, so there is no per-skater material to bleed through —
+# what this caches IS the ring.
 func _refresh_ring_color() -> void:
 	if not _ring_relation_resolver.is_valid():
 		return
