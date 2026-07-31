@@ -153,12 +153,14 @@ func _capture_baselines() -> void:
 		_capture_position(path)
 	for path: String in _FOOT_PATHS:
 		_capture_position(path)
-	# All four arm bones are created in Skater._ready() from the same
-	# arm_mesh_thickness; joint balls carry their radius as node scale on the
-	# shared unit-radius mesh (see _resolve_or_create_joint_sphere).
+	# The arm rig is seeded from the @exports in Skater._build_arm_rig, and every
+	# part is a unit-radius shared mesh whose size rides its bone pose scale — so
+	# the baselines come off the rig rather than off a node.
 	_base_arm_radius = _skater.arm_mesh_thickness * 0.5
-	_base_elbow_sphere_radius = _sphere_radius(_skater.top_elbow_sphere)
-	_base_hand_sphere_radius  = _sphere_radius(_skater.top_hand_sphere)
+	_base_elbow_sphere_radius = _skater.arm_ball_radius(
+			SkaterMeshBuilder.ArmPart.TOP_ELBOW)
+	_base_hand_sphere_radius = _skater.arm_ball_radius(
+			SkaterMeshBuilder.ArmPart.TOP_HAND)
 	_captured = true
 
 
@@ -198,62 +200,27 @@ func _apply_position(path: String, x_mult: float, y_mult: float) -> void:
 func _apply_arm_thickness(forearm_mult: float, upper_mult: float) -> void:
 	var fore_radius:  float = _base_arm_radius * forearm_mult
 	var upper_radius: float = _base_arm_radius * upper_mult
-	_set_bone_radius(_skater.upper_arm_mesh,        upper_radius)
-	_set_bone_radius(_skater.bottom_upper_arm_mesh, upper_radius)
-	_set_bone_radius(_skater.forearm_mesh,          fore_radius)
-	_set_bone_radius(_skater.bottom_forearm_mesh,   fore_radius)
+	_skater.set_arm_bone_radius(SkaterMeshBuilder.ArmPart.TOP_UPPER_ARM, upper_radius)
+	_skater.set_arm_bone_radius(SkaterMeshBuilder.ArmPart.BOTTOM_UPPER_ARM, upper_radius)
+	_skater.set_arm_bone_radius(SkaterMeshBuilder.ArmPart.TOP_FOREARM, fore_radius)
+	_skater.set_arm_bone_radius(SkaterMeshBuilder.ArmPart.BOTTOM_FOREARM, fore_radius)
 	# The elbow ball is Shot's joint, but it must stay proud of BOTH adjoining
 	# cylinders — a thick-forearm / thin-bicep build (high Hands, low Shot)
 	# otherwise leaves the forearm cylinder's flat end cap poking out around a
 	# smaller sphere. maxf keeps the joint reading as a bulge on every combo.
 	var elbow_mult: float = maxf(upper_mult, forearm_mult)
-	_set_sphere_radius(_skater.top_elbow_sphere,    _base_elbow_sphere_radius * elbow_mult)
-	_set_sphere_radius(_skater.bottom_elbow_sphere, _base_elbow_sphere_radius * elbow_mult)
-	_set_sphere_radius(_skater.top_hand_sphere,     _base_hand_sphere_radius * forearm_mult)
-	_set_sphere_radius(_skater.bottom_hand_sphere,  _base_hand_sphere_radius * forearm_mult)
+	var elbow_radius: float = _base_elbow_sphere_radius * elbow_mult
+	var hand_radius: float = _base_hand_sphere_radius * forearm_mult
+	_skater.set_arm_ball_radius(SkaterMeshBuilder.ArmPart.TOP_ELBOW, elbow_radius)
+	_skater.set_arm_ball_radius(SkaterMeshBuilder.ArmPart.BOTTOM_ELBOW, elbow_radius)
+	_skater.set_arm_ball_radius(SkaterMeshBuilder.ArmPart.TOP_HAND, hand_radius)
+	_skater.set_arm_ball_radius(SkaterMeshBuilder.ArmPart.BOTTOM_HAND, hand_radius)
 	# Glove cuffs ride the forearm coaxially, so their radius must scale with
 	# it — at Hands 4 the fixed cuff radius exactly equaled the scaled forearm
 	# radius (coaxial cylinders, identical radii → z-fighting at the wrist).
-	# Stamp the mult on the skater so _rebuild_glove_cuffs (uniform re-applies
-	# recreate the cuffs) sizes fresh cuffs the same way, then resize any live
-	# ones for the attrs-after-uniform order.
+	# Stamp the mult on the skater so the uniform pass sizes the cuff the same
+	# way whichever of the two runs last.
 	_skater.forearm_visual_mult = forearm_mult
 	var cuff_radius: float = _skater.arm_mesh_thickness * 0.6 * forearm_mult
-	_set_cuff_radius(_skater.top_cuff_mesh, cuff_radius)
-	_set_cuff_radius(_skater.bot_cuff_mesh, cuff_radius)
-
-
-# Arm-rig meshes are shared unit-radius builds (SkaterMeshBuilder.shared_*),
-# so all resizing below is node scale — never mesh mutation, which would leak
-# one skater's build into every other skater on the ice.
-func _set_bone_radius(bone: Node3D, radius: float) -> void:
-	var mi: MeshInstance3D = _skater.bone_visual(bone)
-	if mi == null:
-		return
-	# Cross-section only. The bone's long axis is local Z (the mesh is built
-	# pre-rotated — SkaterMeshBuilder.shared_arm_bone_z), and Z is rewritten with
-	# the live length every frame by Skater._update_bone_mesh, so preserve it
-	# here instead of writing a whole scale vector.
-	var s: Vector3 = mi.scale
-	s.x = radius
-	s.y = radius
-	mi.scale = s
-
-
-func _set_cuff_radius(mi: MeshInstance3D, radius: float) -> void:
-	if mi == null or not is_instance_valid(mi):
-		return
-	# Height stays baked (CUFF_HEIGHT_M — the wrist placement offsets by it).
-	mi.scale = Vector3(radius, 1.0, radius)
-
-
-func _set_sphere_radius(mi: MeshInstance3D, radius: float) -> void:
-	if mi == null:
-		return
-	mi.scale = Vector3.ONE * radius
-
-
-static func _sphere_radius(mi: MeshInstance3D) -> float:
-	if mi == null:
-		return 0.0
-	return mi.scale.x
+	_skater.set_arm_cuff_radius(SkaterMeshBuilder.ArmPart.TOP_CUFF, cuff_radius)
+	_skater.set_arm_cuff_radius(SkaterMeshBuilder.ArmPart.BOTTOM_CUFF, cuff_radius)

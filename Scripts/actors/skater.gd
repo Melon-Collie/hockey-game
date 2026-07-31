@@ -267,41 +267,37 @@ var bottom_shoulder: Marker3D = null
 # Bottom hand: the reactive IK output for the bottom grip on the stick shaft.
 var bottom_hand: Marker3D = null
 
-# Arm visual meshes (shoulder → elbow → top_hand). One MeshInstance3D each,
-# rewritten by _update_bone_mesh(): the aim goes in the basis, the length in
-# scale Z, the thickness in scale X/Y. Typed Node3D because that is all the rig
-# math needs; SkaterUniformCoordinator takes the MeshInstance3D via
-# bone_visual().
-var upper_arm_mesh: Node3D = null
-var forearm_mesh: Node3D = null
-var bottom_upper_arm_mesh: Node3D = null
-var bottom_forearm_mesh: Node3D = null
-
-# Joint meshes positioned per-tick at the IK elbow / hand points — elbow-pad
-# balls, and beveled-cube gloved fists aligned to the forearm.
-var top_elbow_sphere: MeshInstance3D = null
-var top_hand_sphere: MeshInstance3D = null
-var bottom_elbow_sphere: MeshInstance3D = null
-var bottom_hand_sphere: MeshInstance3D = null
+# ── Arm rig ───────────────────────────────────────────────────────────────────
+# Both arms — bones, elbow balls, gloved fists and wrist cuffs — are one skinned
+# mesh on one Skeleton3D, ten bones, surface index == bone index ==
+# SkaterMeshBuilder.ArmPart. See that file for why rigid weights make this an
+# exact replacement for the ten nodes it replaces rather than a lookalike.
+#
+# Everything outside this file addresses a part by its ArmPart: the uniform
+# coordinator paints through arm_part_material(), the appearance pass sizes
+# through set_arm_part_thickness(), and the per-frame IK poses through the
+# _pose_arm_* helpers below.
+var _arm_skeleton: Skeleton3D = null
+var _arm_mesh: MeshInstance3D = null
+# Per-part cross-section scale, owned by the sizing seam (build proportions) and
+# composed into every pose write. It is a stored vector rather than something
+# read back off the current pose because a pose write replaces the whole
+# transform: with nodes the thickness could live in scale X/Y and survive a
+# rotation write, and a bone pose has no such half.
+var _arm_thickness: PackedVector3Array = PackedVector3Array()
 
 # Deltoid shoulder caps (the scene's ShoulderL/R meshes), re-oriented each rig
 # update to lean toward their arm's live direction — see _orient_shoulder_cap.
 var _shoulder_cap_l: MeshInstance3D = null
 var _shoulder_cap_r: MeshInstance3D = null
 
-# Glove cuff cylinders just past the wrist. Created by SkaterUniformCoordinator
-# when the uniform is applied; consumed by _update_cuff_transform() here so
-# they stay perpendicular to the forearm bone as the arm moves.
-var top_cuff_mesh: MeshInstance3D = null
-var bot_cuff_mesh: MeshInstance3D = null
 # Visual forearm-bulk multiplier (the Hands attribute's arm tell), stamped by
 # SkaterAppearanceCoordinator.apply. The glove cuffs must stay proud of the
 # scaled forearm cylinder: with a fixed cuff radius, Hands 4's forearm
 # (0.055 × 1.20) landed EXACTLY on the cuff's 0.11 × 0.6 — two coaxial
 # cylinders with identical radii, z-fighting along the whole wrist — and
-# Hands 5 poked clean through it. Both writers read this: the appearance pass
-# resizes live cuffs when attributes change, and _rebuild_glove_cuffs sizes
-# fresh ones on uniform apply (either order works).
+# Hands 5 poked clean through it. Read by both the appearance pass and the
+# uniform pass, which size the cuff independently and in either order.
 var forearm_visual_mult: float = 1.0
 
 # Butt-end knob cylinder at the top of the shaft (just past the top hand).
@@ -665,15 +661,7 @@ func _ready() -> void:
 	_slapper_zone_area.add_child(zone_shape)
 	add_child(_slapper_zone_area)
 
-	upper_arm_mesh = _resolve_or_create_bone_mesh("UpperArmMesh")
-	forearm_mesh = _resolve_or_create_bone_mesh("ForearmMesh")
-	bottom_upper_arm_mesh = _resolve_or_create_bone_mesh("BottomUpperArmMesh")
-	bottom_forearm_mesh = _resolve_or_create_bone_mesh("BottomForearmMesh")
-
-	top_elbow_sphere = _resolve_or_create_joint_sphere("TopElbowSphere", elbow_sphere_radius)
-	top_hand_sphere = _resolve_or_create_hand_glove("TopHandSphere", hand_sphere_radius)
-	bottom_elbow_sphere = _resolve_or_create_joint_sphere("BottomElbowSphere", elbow_sphere_radius)
-	bottom_hand_sphere = _resolve_or_create_hand_glove("BottomHandSphere", hand_sphere_radius)
+	_build_arm_rig()
 
 	_uniform = SkaterUniformCoordinator.new()
 	_uniform.setup(self)
@@ -1886,11 +1874,11 @@ func update_arm_mesh() -> void:
 	var pole_w: Vector3 = upper_body.global_transform.basis * pole_local
 	var elbow_w: Vector3 = TwoBoneIK.solve_elbow(
 			shoulder_w, hand_w, upper_arm_length, forearm_length, pole_w)
-	_update_bone_mesh(upper_arm_mesh, shoulder_w, elbow_w)
-	_update_bone_mesh(forearm_mesh, elbow_w, hand_w)
-	_update_cuff_transform(top_cuff_mesh, elbow_w, hand_w)
-	_update_joint_sphere(top_elbow_sphere, elbow_w)
-	_update_hand_glove(top_hand_sphere, elbow_w, hand_w)
+	_pose_arm_bone(SkaterMeshBuilder.ArmPart.TOP_UPPER_ARM, shoulder_w, elbow_w)
+	_pose_arm_bone(SkaterMeshBuilder.ArmPart.TOP_FOREARM, elbow_w, hand_w)
+	_pose_arm_cuff(SkaterMeshBuilder.ArmPart.TOP_CUFF, elbow_w, hand_w)
+	_pose_arm_ball(SkaterMeshBuilder.ArmPart.TOP_ELBOW, elbow_w)
+	_pose_arm_glove(SkaterMeshBuilder.ArmPart.TOP_HAND, elbow_w, hand_w)
 	_orient_shoulder_cap(shoulder.position, elbow_w)
 
 
@@ -1903,23 +1891,22 @@ func update_bottom_arm_mesh() -> void:
 	var pole_w: Vector3 = upper_body.global_transform.basis * pole_local
 	var elbow_w: Vector3 = TwoBoneIK.solve_elbow(
 			shoulder_w, hand_w, upper_arm_length, forearm_length, pole_w)
-	_update_bone_mesh(bottom_upper_arm_mesh, shoulder_w, elbow_w)
-	_update_bone_mesh(bottom_forearm_mesh, elbow_w, hand_w)
-	_update_cuff_transform(bot_cuff_mesh, elbow_w, hand_w)
-	_update_joint_sphere(bottom_elbow_sphere, elbow_w)
-	_update_hand_glove(bottom_hand_sphere, elbow_w, hand_w)
+	_pose_arm_bone(SkaterMeshBuilder.ArmPart.BOTTOM_UPPER_ARM, shoulder_w, elbow_w)
+	_pose_arm_bone(SkaterMeshBuilder.ArmPart.BOTTOM_FOREARM, elbow_w, hand_w)
+	_pose_arm_cuff(SkaterMeshBuilder.ArmPart.BOTTOM_CUFF, elbow_w, hand_w)
+	_pose_arm_ball(SkaterMeshBuilder.ArmPart.BOTTOM_ELBOW, elbow_w)
+	_pose_arm_glove(SkaterMeshBuilder.ArmPart.BOTTOM_HAND, elbow_w, hand_w)
 	_orient_shoulder_cap(bottom_shoulder.position, elbow_w)
 
 
-# One local-space transform write per bone, deliberately NOT position/scale/
-# look_at. That trio costs six transform operations, two of which resolve the
-# global chain: look_at() reads get_global_transform(), writes back through
-# set_global_transform() (which re-derives the local transform via the parent's
-# inverse), then restores scale through a get_scale()/set_scale() pair. Doing it
-# once in the parent's own space is a single assignment with no global
-# round-trip, and at four bones per skater it is the densest such site in the
-# rig. This is what the freeze sweep priced: the write COUNT dominates, not the
-# arithmetic feeding it.
+# One pose write per part, each a whole Transform3D built in upper-body space —
+# the space the skeleton lives in, so a pose IS the local transform its node
+# carried. Deliberately NOT position/scale/look_at: that trio costs six transform
+# operations, two of which resolve the global chain (look_at reads
+# get_global_transform, writes back through set_global_transform, then restores
+# scale through a get_scale/set_scale pair). Building the basis and assigning
+# once has no global round-trip, and at ten parts per skater this is the densest
+# such site in the rig.
 #
 # Orientation is built from the LOCAL span rather than the world one. The two
 # agree whenever upper_body's basis is a rotation, and the local form is the
@@ -1927,50 +1914,55 @@ func update_bottom_arm_mesh() -> void:
 # endpoints the position term already uses (which were always local). The up
 # vector only has to avoid colinearity: the bone prism is rotationally
 # symmetric about its long axis, so roll is unobservable (see _up_for_look_at).
-func _update_bone_mesh(bone: Node3D, a_world: Vector3, b_world: Vector3) -> void:
-	if bone == null:
-		return
+#
+# scaled_local is basis·S throughout, matching how a Node3D composed rotation and
+# scale. The plain scaled() is S·basis and would put the size on the wrong axes
+# once a part tilts.
+func _pose_arm_bone(part: int, a_world: Vector3, b_world: Vector3) -> void:
 	var a_local: Vector3 = upper_body.to_local(a_world)
 	var b_local: Vector3 = upper_body.to_local(b_world)
 	var span: Vector3 = b_local - a_local
 	var length: float = span.length()
 	var center: Vector3 = (a_local + b_local) * 0.5
+	var bone_scale: Vector3 = _arm_thickness[part]
 	if length < 0.0001:
-		bone.position = center
+		# Degenerate span: move it, hold the orientation it already had. A pose
+		# write replaces the whole transform, so "leave the basis alone" has to be
+		# spelled out — with a node it was what writing only `position` did.
+		var held: Transform3D = _arm_skeleton.get_bone_pose(part)
+		held.origin = center
+		_arm_skeleton.set_bone_pose(part, held)
 		return
 	var dir: Vector3 = span / length
-	# X/Y carry the bone thickness and belong to the sizing seam, so they are read
-	# back rather than reset; only Z (the length) is this function's to write.
-	var bone_scale: Vector3 = bone.scale
+	# X/Y are the thickness the sizing seam owns; Z is the live bone length.
 	bone_scale.z = length
-	# scaled_local is basis·S, matching how set_scale composes rotation and
-	# scale. The plain scaled() is S·basis and would put the length on the wrong
-	# axes once the bone tilts — the same trap _update_cuff_transform documents.
-	bone.transform = Transform3D(
+	_arm_skeleton.set_bone_pose(part, Transform3D(
 			Basis.looking_at(dir, _up_for_look_at(dir)).scaled_local(bone_scale),
-			center)
+			center))
 
 
-func _update_joint_sphere(sphere: MeshInstance3D, world_pos: Vector3) -> void:
-	if sphere == null:
-		return
-	sphere.position = upper_body.to_local(world_pos)
+func _pose_arm_ball(part: int, world_pos: Vector3) -> void:
+	_arm_skeleton.set_bone_pose(part, Transform3D(
+			Basis.IDENTITY.scaled(_arm_thickness[part]),
+			upper_body.to_local(world_pos)))
 
 
-# Positions the gloved fist at the hand and aligns its long (local Y) axis
-# with the forearm so the beveled cube's faces track the arm — same
-# quaternion composition as the cuff (quaternion writes preserve the node
-# scale the sizing seams own).
-func _update_hand_glove(mesh: MeshInstance3D, elbow_w: Vector3, hand_w: Vector3) -> void:
-	if mesh == null:
-		return
-	mesh.position = upper_body.to_local(hand_w)
+# Positions the gloved fist at the hand and aligns its long (local Y) axis with
+# the forearm so the beveled cube's faces track the arm — same rotation
+# composition as the cuff.
+func _pose_arm_glove(part: int, elbow_w: Vector3, hand_w: Vector3) -> void:
+	var pos: Vector3 = upper_body.to_local(hand_w)
+	var scale_v: Vector3 = _arm_thickness[part]
 	var dir: Vector3 = hand_w - elbow_w
 	if dir.length_squared() < 0.0001:
+		var held: Transform3D = _arm_skeleton.get_bone_pose(part)
+		held.origin = pos
+		_arm_skeleton.set_bone_pose(part, held)
 		return
 	var dir_l: Vector3 = (upper_body.global_transform.basis.inverse() * dir).normalized()
-	mesh.quaternion = (Basis.looking_at(dir_l, _up_for_look_at(dir_l))
-			* Basis(Vector3.RIGHT, PI * 0.5)).get_rotation_quaternion()
+	var basis := Basis.looking_at(dir_l, _up_for_look_at(dir_l)) \
+			* Basis(Vector3.RIGHT, PI * 0.5)
+	_arm_skeleton.set_bone_pose(part, Transform3D(basis.scaled_local(scale_v), pos))
 
 
 # Fraction of the way the cap's pole leans from its rest hang toward the live
@@ -2013,31 +2005,30 @@ func _orient_shoulder_cap(anchor_local: Vector3, elbow_w: Vector3) -> void:
 	cap.quaternion = Basis(x_axis, pole, x_axis.cross(pole)).get_rotation_quaternion()
 
 
-func _update_cuff_transform(mesh: MeshInstance3D, elbow_w: Vector3, hand_w: Vector3) -> void:
-	if mesh == null or not is_instance_valid(mesh):
-		return
+# Glove cuff ring: its forward end sits at the hand and it extends back toward
+# the elbow by its mesh height (no overlap past the hand). The ring's long axis
+# is local Y: looking_at puts -Z on the bone, and the post-multiplied X(+90°)
+# twist maps local Y onto it. The scale is composed AFTER that rotation
+# (scaled_local, R·S) because the cuff's radius is non-uniform on a unit mesh —
+# composing it the other way lands the radius on the wrong mesh axes and renders
+# metre-wide flickering fins at the wrist.
+func _pose_arm_cuff(part: int, elbow_w: Vector3, hand_w: Vector3) -> void:
+	var scale_v: Vector3 = _arm_thickness[part]
 	var bone_dir: Vector3 = hand_w - elbow_w
 	var bone_len: float = bone_dir.length()
 	if bone_len < 0.0001:
-		mesh.position = upper_body.to_local(hand_w)
+		var held: Transform3D = _arm_skeleton.get_bone_pose(part)
+		held.origin = upper_body.to_local(hand_w)
+		_arm_skeleton.set_bone_pose(part, held)
 		return
 	var bone_dir_n: Vector3 = bone_dir / bone_len
-	# Glove cuff ring: its forward end sits at the hand and it extends back
-	# toward the elbow by its mesh height (no overlap past the hand). The
-	# ring's long axis is local Y: looking_at puts -Z on the bone, and the
-	# post-multiplied X(+90°) twist maps local Y onto it. The rotation is
-	# written via `quaternion` — NOT look_at + rotate_object_local — because
-	# the cuff's radius rides non-uniform node scale on the unit mesh, and
-	# rotate_object_local composes the twist AFTER the stored basis's scale,
-	# landing the radius on the wrong mesh axes (metre-wide flickering fins
-	# at the wrist). The quaternion property recomposes basis = R·S with the
-	# scale safely in the mesh frame.
 	var cuff_height: float = SkaterMeshBuilder.CUFF_HEIGHT_M
 	var cuff_center_w: Vector3 = hand_w - bone_dir_n * (cuff_height * 0.5 + cuff_wrist_offset)
-	mesh.position = upper_body.to_local(cuff_center_w)
 	var dir_l: Vector3 = (upper_body.global_transform.basis.inverse() * bone_dir_n).normalized()
-	mesh.quaternion = (Basis.looking_at(dir_l, _up_for_look_at(dir_l))
-			* Basis(Vector3.RIGHT, PI * 0.5)).get_rotation_quaternion()
+	var basis := Basis.looking_at(dir_l, _up_for_look_at(dir_l)) \
+			* Basis(Vector3.RIGHT, PI * 0.5)
+	_arm_skeleton.set_bone_pose(part, Transform3D(
+			basis.scaled_local(scale_v), upper_body.to_local(cuff_center_w)))
 
 
 # Returns an up vector that's safely non-colinear with `direction`. Falls back
@@ -2051,65 +2042,71 @@ static func _up_for_look_at(direction: Vector3) -> Vector3:
 	return Vector3.UP
 
 
-# Bone rig: ONE MeshInstance3D per bone, carrying the shared prism whose long
-# axis is already local Z (shared_arm_bone_z bakes the rotation the old child
-# node used to apply). _update_bone_mesh writes the aim into the basis and the
-# length into scale Z; SkaterAppearanceCoordinator writes the THICKNESS into
-# scale X/Y — a unit-radius mesh sized by node scale, never by mesh mutation, so
-# all skaters share one mesh. The two writers never collide because each reads
-# the other's components back rather than overwriting the whole vector.
-func _resolve_or_create_bone_mesh(node_name: String) -> Node3D:
-	var existing: Node3D = upper_body.get_node_or_null(node_name) as Node3D
-	if existing != null:
-		return existing
-	var mesh_instance := MeshInstance3D.new()
-	mesh_instance.name = node_name
-	mesh_instance.mesh = SkaterMeshBuilder.shared_arm_bone_z()
-	var radius: float = arm_mesh_thickness * 0.5
-	# X/Y are the bone THICKNESS (SkaterAppearanceCoordinator's to change); Z is
-	# the length _update_bone_mesh rewrites every frame. The two never collide
-	# because that function reads x/y back rather than overwriting them.
-	mesh_instance.scale = Vector3(radius, radius, 1.0)
-	upper_body.add_child(mesh_instance)
-	return mesh_instance
+# Ten bones, no parents, all identity rest — the flat sibling layout the parts
+# had as nodes, so a pose write means exactly what it meant then. The mesh is a
+# child of the skeleton so the two share a transform space with nothing to keep
+# in sync.
+func _build_arm_rig() -> void:
+	_arm_skeleton = Skeleton3D.new()
+	_arm_skeleton.name = "ArmRig"
+	for part: int in SkaterMeshBuilder.ARM_PART_COUNT:
+		_arm_skeleton.add_bone(str(part))
+		_arm_skeleton.set_bone_rest(part, Transform3D.IDENTITY)
+	upper_body.add_child(_arm_skeleton)
+
+	_arm_mesh = MeshInstance3D.new()
+	_arm_mesh.name = "ArmMesh"
+	_arm_mesh.mesh = SkaterMeshBuilder.shared_arm_skin_mesh()
+	_arm_mesh.skin = SkaterMeshBuilder.shared_arm_skin()
+	_arm_mesh.skeleton = NodePath("..")
+	_arm_skeleton.add_child(_arm_mesh)
+
+	_arm_thickness.resize(SkaterMeshBuilder.ARM_PART_COUNT)
+	var bone_radius: float = arm_mesh_thickness * 0.5
+	set_arm_bone_radius(SkaterMeshBuilder.ArmPart.TOP_UPPER_ARM, bone_radius)
+	set_arm_bone_radius(SkaterMeshBuilder.ArmPart.TOP_FOREARM, bone_radius)
+	set_arm_bone_radius(SkaterMeshBuilder.ArmPart.BOTTOM_UPPER_ARM, bone_radius)
+	set_arm_bone_radius(SkaterMeshBuilder.ArmPart.BOTTOM_FOREARM, bone_radius)
+	set_arm_ball_radius(SkaterMeshBuilder.ArmPart.TOP_ELBOW, elbow_sphere_radius)
+	set_arm_ball_radius(SkaterMeshBuilder.ArmPart.BOTTOM_ELBOW, elbow_sphere_radius)
+	set_arm_ball_radius(SkaterMeshBuilder.ArmPart.TOP_HAND, hand_sphere_radius)
+	set_arm_ball_radius(SkaterMeshBuilder.ArmPart.BOTTOM_HAND, hand_sphere_radius)
+	var cuff_radius: float = arm_mesh_thickness * 0.6
+	set_arm_cuff_radius(SkaterMeshBuilder.ArmPart.TOP_CUFF, cuff_radius)
+	set_arm_cuff_radius(SkaterMeshBuilder.ArmPart.BOTTOM_CUFF, cuff_radius)
 
 
-# Returns the MeshInstance3D child of a bone wrapper so callers can set
-# material_override and adjust transparency without knowing the wrapper layout.
-func bone_visual(bone: Node3D) -> MeshInstance3D:
-	if bone == null:
-		return null
-	return bone as MeshInstance3D
+# The per-skater material for one arm part, created from the shared mesh's
+# surface default on first use. Painters and the ghost fade both go through
+# this — material_override would repaint all ten parts at once.
+func arm_part_material(part: int) -> StandardMaterial3D:
+	return SkaterMeshBuilder.surface_override(_arm_mesh, part)
 
 
-# Joint balls share the unit-radius faceted mesh; the node's scale IS the
-# radius (SkaterAppearanceCoordinator resizes it there — see the bone-rig
-# note above).
-func _resolve_or_create_joint_sphere(node_name: String, radius: float) -> MeshInstance3D:
-	var existing: MeshInstance3D = upper_body.get_node_or_null(node_name) as MeshInstance3D
-	if existing != null:
-		return existing
-	var mesh_instance := MeshInstance3D.new()
-	mesh_instance.name = node_name
-	mesh_instance.mesh = SkaterMeshBuilder.shared_joint_ball()
-	mesh_instance.scale = Vector3.ONE * radius
-	upper_body.add_child(mesh_instance)
-	return mesh_instance
+func set_arm_part_material(part: int, mat: Material) -> void:
+	_arm_mesh.set_surface_override_material(part, mat)
 
 
-# Gloved fists: the shared beveled-cube glove mesh under the same uniform
-# node-scale contract as the joint balls (node names kept — the painter and
-# appearance seams resolve these by name).
-func _resolve_or_create_hand_glove(node_name: String, radius: float) -> MeshInstance3D:
-	var existing: MeshInstance3D = upper_body.get_node_or_null(node_name) as MeshInstance3D
-	if existing != null:
-		return existing
-	var mesh_instance := MeshInstance3D.new()
-	mesh_instance.name = node_name
-	mesh_instance.mesh = SkaterMeshBuilder.shared_glove_fist()
-	mesh_instance.scale = Vector3.ONE * radius
-	upper_body.add_child(mesh_instance)
-	return mesh_instance
+# ── Arm sizing seam ───────────────────────────────────────────────────────────
+# Three setters because the three geometries have three scaling contracts, the
+# same split the node rig had. The stored vector is the part's whole pose scale
+# except for a bone's Z, which is its live length.
+func set_arm_bone_radius(part: int, radius: float) -> void:
+	_arm_thickness[part] = Vector3(radius, radius, 1.0)
+
+
+func set_arm_ball_radius(part: int, radius: float) -> void:
+	_arm_thickness[part] = Vector3.ONE * radius
+
+
+# The cuff ring's height is baked at its real size (the wrist placement offsets
+# by it), so only its radius scales.
+func set_arm_cuff_radius(part: int, radius: float) -> void:
+	_arm_thickness[part] = Vector3(radius, 1.0, radius)
+
+
+func arm_ball_radius(part: int) -> float:
+	return _arm_thickness[part].x
 
 
 # ── Coordinate Helpers ────────────────────────────────────────────────────────

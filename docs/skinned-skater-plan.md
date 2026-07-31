@@ -84,15 +84,42 @@ COUNT scattered across the tile.
 1. ~~**Pose-coverage capture tool** + baseline.~~ Done — `tools/pose_capture.gd`.
    Baselines live in `user://`, so record one from the pre-change tree before
    starting each step rather than expecting a committed reference.
-2. **Spike: arm rig only.** Twelve nodes per skater, purely cosmetic, already
-   isolated behind `Skater.bone_visual()`. Convert just those to bones and diff
-   across the pose set. If that lands clean the pattern is proven on real code
-   and everything after it is repetition.
+2. ~~**Spike: arm rig only.**~~ Done. Ten nodes (four bones, two elbow balls,
+   two gloved fists, two wrist cuffs) → one `Skeleton3D` + one skinned mesh.
+   Every pose byte-identical to the node rig bar one edge pixel; the build
+   matrix identical outside the ghosted column. **The pattern is proven.**
 3. Legs (the gait chain — `LegL/R`, `ShinL/R`, hips/thighs/knees/socks/skates).
 4. Torso, helmet, shoulders.
 5. Goalie, same pattern.
 
 Each step is its own diffable commit. Do not batch them.
+
+## What the spike learned (steps 3-5 must respect these)
+
+- **Godot skins normals with the bone matrix, NOT its inverse transpose.** An
+  ordinary `MeshInstance3D` gets a proper normal matrix; a skinned one does not.
+  So any bone whose pose carries non-uniform scale renders with skewed normals,
+  the wrong way and by the axis ratio. On the arm bones' `(r, r, length)` (~4:1)
+  a 6.8° taper shaded as a 27° cone, and the shading changed as the arm
+  stretched on an over-reach. This was the ONLY thing the pose diff caught, and
+  it was 700-1900 px per pose — invisible to a rest-pose check, obvious here.
+  The fix is to give the affected faces normals with no component along the
+  scaled axis (`SkaterMeshBuilder._radial_side_normals`); such a normal is
+  invariant under that scale. Legs will hit this on the thigh and shin.
+- **Merging transparent parts changes ghost-mode compositing.** Ten alpha
+  meshes sorted independently against the body; one mesh sorts once. The build
+  matrix's ghosted column moved by up to 36/255 over ~1000 px and reads
+  identically by eye. Expect the same on every later step and do not chase it.
+- **A pose write replaces the whole transform.** Node code that wrote only
+  `position` (leaving rotation alone) or only `quaternion` (leaving scale alone)
+  has no equivalent — every such site has to say what it means. The degenerate
+  branches in `_pose_arm_*` read the current pose back to preserve exactly what
+  the node write preserved.
+- **Sizing moved out of the transform.** With nodes, thickness lived in scale
+  X/Y and survived a rotation write, which is why two writers could share one
+  scale vector. Bones have no such half, so the per-build size is stored
+  (`Skater._arm_thickness`) and composed into every pose. This is simpler than
+  what it replaced — the two-writer read-back dance is gone.
 
 ## State at time of writing
 
@@ -109,8 +136,8 @@ Rules established during that pass that this work must respect:
   lives on the cached mesh every skater shares, so writing it directly repaints
   the whole roster).
 - **Two writers can share a scale vector** if each reads the other's components
-  back rather than overwriting the whole thing — the arm bones do this (IK owns
-  Z, the sizing seam owns X/Y).
+  back rather than overwriting the whole thing. This does NOT survive the
+  conversion — see the sizing note above.
 - **`look_at` is six transform operations**, two of which resolve the global
   chain. Build the basis and assign `transform` once instead.
 - `scaled_local` (basis·S) matches how `set_scale` composes; plain `scaled`

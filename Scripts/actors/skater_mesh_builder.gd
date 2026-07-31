@@ -8,10 +8,10 @@ extends RefCounted
 # joint balls, glove cuffs, stick knob). Cosmetic only — gameplay reads the
 # Marker3D anchors and collision shapes, never these meshes.
 #
-# The arm-rig meshes are baked at UNIT radius and resized by node scale
-# (creation sites in Skater, per-attribute resizing in
-# SkaterAppearanceCoordinator) — never by mesh mutation, so every skater can
-# share one cached mesh.
+# The arm-rig meshes are baked at UNIT radius and resized by the scale in their
+# bone's pose (per-attribute sizing in SkaterAppearanceCoordinator, composed
+# into the pose by Skater) — never by mesh mutation, so every skater can share
+# one cached mesh.
 #
 # UV layouts replicate the Godot primitives they replace, because
 # SkaterUniformCoordinator paints against those exact conventions:
@@ -299,19 +299,47 @@ static func _shared(key: String, builder: Callable) -> ArrayMesh:
 static func shared_arm_bone() -> ArrayMesh:
 	return _shared("arm_bone", func() -> ArrayMesh:
 		var profile: Array[Vector2] = [Vector2(0.5, 1.0), Vector2(-0.5, _ARM_TAPER)]
-		return _build_lathe(profile, _LEG_SIDES, 1.0, 1.0))
+		return _radial_side_normals(_build_lathe(profile, _LEG_SIDES, 1.0, 1.0)))
 
 
-# The same prism with the wrapper's old 90°-about-X baked into the vertices, so
-# its long axis is local Z — the axis _update_bone_mesh's looking_at basis aims.
+# Rewrites a lathe's SIDE normals to be purely radial — no component along the
+# lathe axis — leaving the caps alone. Only the arm bones need this, and they
+# need it because they are the one part whose scale is strongly non-uniform.
 #
-# This is what lets an arm bone be ONE node instead of two. The rig used to be a
-# Node3D wrapper carrying (1, 1, length) around a MeshInstance3D child carrying
-# (radius, 1, radius) and a 90° rotation, purely because the mesh's long axis
-# disagreed with the aiming axis. With the rotation baked, a single instance
-# carries (radius, radius, length) and the wrapper disappears: four fewer nodes
-# per skater, and — since these are written every frame by the IK — one less
-# level of transform propagation on each write.
+# Godot's skinning transforms a normal by the bone matrix itself, not by its
+# inverse transpose (an ordinary MeshInstance3D gets the proper normal matrix).
+# Under a bone scale of (r, r, length) that skews any normal with an axial
+# component the WRONG way and by the ratio length/r — about 4:1 on an arm — so
+# the 6.8° taper cone shaded as a 27° one, and worse, the shading then changed
+# with the bone's length as the arm stretched on an over-reach.
+#
+# A normal with no axial component is immune: scaling it by (r, r, length)
+# multiplies it by r and normalizes back to itself.
+#
+# Baking the sides radial is not the art compromise it looks like. The proper
+# normal matrix divides the axial component by length while dividing the radial
+# one by r, so at an arm's r/length (~0.23) it was ALREADY flattening the 6.8°
+# taper to 1.6° off radial before this change — the node rig rendered these as
+# near-cylinders too. What baking it buys is that the shading no longer depends
+# on r/length at all, so an over-reach that stretches the forearm can no longer
+# change how it is lit. The pose diff holds this to the letter: every pose is
+# byte-identical to the node rig apart from one edge pixel.
+static func _radial_side_normals(src: ArrayMesh) -> ArrayMesh:
+	var arrays: Array = src.surface_get_arrays(0)
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	for i: int in normals.size():
+		var n: Vector3 = normals[i]
+		# Caps point straight up the axis; flattening them would zero them.
+		if absf(n.y) > 0.99:
+			continue
+		n.y = 0.0
+		normals[i] = n.normalized()
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	var out := ArrayMesh.new()
+	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return out
+
+
 # ── Merged assemblies ────────────────────────────────────────────────────────
 # Parts that never move relative to their parent do not need to be nodes. Each
 # one used to be a MeshInstance3D child purely because it needed its OWN
@@ -430,6 +458,11 @@ static func _append_surface(target: ArrayMesh, src: ArrayMesh,
 	st.commit(target)
 
 
+# The same prism with the old wrapper's 90°-about-X baked into the vertices, so
+# its long axis is local Z — the axis the arm rig's looking_at basis aims. The
+# mesh's long axis used to disagree with the aiming axis, which is the only
+# reason each bone needed a rotated child; baking the rotation let one transform
+# carry (radius, radius, length).
 static func shared_arm_bone_z() -> ArrayMesh:
 	return _shared("arm_bone_z", func() -> ArrayMesh:
 		var st := SurfaceTool.new()
@@ -437,6 +470,103 @@ static func shared_arm_bone_z() -> ArrayMesh:
 		st.append_from(shared_arm_bone(), 0,
 				Transform3D(Basis(Vector3.RIGHT, PI * 0.5), Vector3.ZERO))
 		return st.commit())
+
+
+# ── The arm rig: one skinned mesh, one bone per part ─────────────────────────
+# Ten parts that used to be ten MeshInstance3D children of UpperBody, each
+# carrying a shared unit mesh and its own per-frame transform. They are now ten
+# bones of one Skeleton3D driving one mesh, which is how an articulated body is
+# supposed to be built — and it takes the per-frame cost from ten Node3D
+# transform writes (each dirtying a subtree and pushing a global to the
+# RenderingServer) down to ten entries in the skeleton's pose array.
+#
+# WHY IT IS EXACT, not merely close: every vertex is weighted 1.0 to a single
+# bone, the bone rests are identity, and the skin binds are identity. A skinned
+# vertex is then `bone_pose * v`, which is precisely what a child node with that
+# local transform produced. The parts' geometry is left in its own local space
+# (untransformed) for the same reason — it is already the space the shared
+# meshes were authored in. So `set_bone_pose(part, X)` takes the SAME X the old
+# `node.transform = X` took, and the pose diff can hold the renderer to it.
+#
+# The flat bone list (no parents) is deliberate and matches the old layout: all
+# ten were siblings under UpperBody, each posed independently in that space. A
+# hierarchy would compose transforms the old rig never composed.
+#
+# Surface index == ArmPart, one surface per part. Merging the parts that share a
+# material would cut draw calls, but it is a different change with a different
+# risk (crossed paint), so it stays separate — see skater_matrix.gd.
+enum ArmPart {
+	TOP_UPPER_ARM,
+	TOP_FOREARM,
+	BOTTOM_UPPER_ARM,
+	BOTTOM_FOREARM,
+	TOP_ELBOW,
+	BOTTOM_ELBOW,
+	TOP_HAND,
+	BOTTOM_HAND,
+	TOP_CUFF,
+	BOTTOM_CUFF,
+}
+const ARM_PART_COUNT: int = 10
+
+
+static func shared_arm_skin_mesh() -> ArrayMesh:
+	return _shared("arm_skin", func() -> ArrayMesh:
+		var m := ArrayMesh.new()
+		var bone: ArrayMesh = shared_arm_bone_z()
+		var ball: ArrayMesh = shared_joint_ball()
+		var fist: ArrayMesh = shared_glove_fist()
+		var cuff: ArrayMesh = shared_cuff()
+		# Appended in ArmPart order — the enum IS the surface index and the bone
+		# index, so painting, sizing and posing all key off one number.
+		_append_skinned_surface(m, bone, ArmPart.TOP_UPPER_ARM)
+		_append_skinned_surface(m, bone, ArmPart.TOP_FOREARM)
+		_append_skinned_surface(m, bone, ArmPart.BOTTOM_UPPER_ARM)
+		_append_skinned_surface(m, bone, ArmPart.BOTTOM_FOREARM)
+		_append_skinned_surface(m, ball, ArmPart.TOP_ELBOW)
+		_append_skinned_surface(m, ball, ArmPart.BOTTOM_ELBOW)
+		_append_skinned_surface(m, fist, ArmPart.TOP_HAND)
+		_append_skinned_surface(m, fist, ArmPart.BOTTOM_HAND)
+		_append_skinned_surface(m, cuff, ArmPart.TOP_CUFF)
+		_append_skinned_surface(m, cuff, ArmPart.BOTTOM_CUFF)
+		return m)
+
+
+# Identity binds, so the skinned vertex is the bone pose alone. Shared by every
+# skater: Godot builds a per-instance SkinReference from one Skin resource.
+static func shared_arm_skin() -> Skin:
+	if _arm_skin == null:
+		_arm_skin = Skin.new()
+		for i: int in ARM_PART_COUNT:
+			_arm_skin.add_bind(i, Transform3D.IDENTITY)
+	return _arm_skin
+
+
+static var _arm_skin: Skin = null
+
+
+# Copies a single-surface mesh into `target` verbatim, adding the bone/weight
+# attributes that make every one of its vertices rigid to `bone`.
+#
+# Goes through surface_get_arrays rather than SurfaceTool because SurfaceTool
+# re-processes what it is given — it would re-index and could re-derive normals,
+# and this mesh has to be vertex-for-vertex what the unskinned one was or the
+# pose diff is comparing two different models. Copying the arrays and adding two
+# more changes nothing else.
+static func _append_skinned_surface(target: ArrayMesh, src: ArrayMesh, bone: int) -> void:
+	var arrays: Array = src.surface_get_arrays(0)
+	var vertex_count: int = (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	var bones := PackedInt32Array()
+	bones.resize(vertex_count * 4)
+	var weights := PackedFloat32Array()
+	weights.resize(vertex_count * 4)
+	# resize() zero-fills, so influences 1-3 are already bone 0 at weight 0.
+	for i: int in vertex_count:
+		bones[i * 4] = bone
+		weights[i * 4] = 1.0
+	arrays[Mesh.ARRAY_BONES] = bones
+	arrays[Mesh.ARRAY_WEIGHTS] = weights
+	target.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 
 
 # Elbow ball, unit radius.
