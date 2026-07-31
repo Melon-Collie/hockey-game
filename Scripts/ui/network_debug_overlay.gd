@@ -205,7 +205,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		# broken, so it must not be one stray keypress away during normal play.
 		# Available in exported builds too — a debug build inflates GDScript
 		# specifically, so the honest version of this measurement is a release one.
+		PerfProbe.auto_cycle = false
 		_toast.text = "Cosmetic freeze: %s" % PerfProbe.cycle()
+		_toast.show()
+		_toast_timer = TOAST_SECONDS
+	elif event.keycode == KEY_F7 and _showing:
+		var on: bool = not PerfProbe.auto_cycle
+		PerfProbe.set_auto_cycle(on)
+		_toast.text = ("Freeze sweep RUNNING — play normally for ~2 min"
+				if on else "Freeze sweep stopped")
 		_toast.show()
 		_toast_timer = TOAST_SECONDS
 
@@ -282,6 +290,9 @@ func _copy_session_digest() -> void:
 			"nodes": int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)),
 			"physics_active_objects": int(Performance.get_monitor(Performance.PHYSICS_3D_ACTIVE_OBJECTS)),
 		},
+		# The whole freeze A/B, so one paste carries the comparison instead of
+		# five separate captures that each measured a different moment.
+		"freeze_sweep": _freeze_sweep_dict(),
 		"metrics": t.session.to_dict(),
 	}
 	DisplayServer.clipboard_set(JSON.stringify(digest, "\t"))
@@ -356,6 +367,17 @@ func _sample_frame_cost(delta: float) -> void:
 	# Raw, unsmoothed — already 1 Hz aggregates (see the field doc-block).
 	_peak_process_ms = float(Performance.get_monitor(Performance.TIME_PROCESS)) * 1000.0
 	_peak_physics_ms = float(Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS)) * 1000.0
+
+	# Feed the freeze sweep from RAW per-frame values, not the EMAs above: the
+	# sweep's own per-mode mean is the smoothing, and pre-smoothed input would
+	# carry cost across a mode switch — blurring the difference it exists to find.
+	PerfProbe.tick(delta)
+	var raw_frame_ms: float = delta * 1000.0
+	var raw_gpu_ms: float = RenderingServer.viewport_get_measured_render_time_gpu(_vp_rid)
+	var raw_render_ms: float = maxf(raw_gpu_ms,
+			RenderingServer.viewport_get_measured_render_time_cpu(_vp_rid))
+	PerfProbe.record(raw_frame_ms, maxf(raw_frame_ms - raw_render_ms, 0.0), raw_gpu_ms,
+			int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)))
 
 
 func _refresh() -> void:
@@ -596,13 +618,42 @@ func _render_frame_cost() -> void:
 		"3v3 is 6, 5v5 is 10. Node count matters on its own: every per-frame transform write crosses the script/engine boundary and dirties the chain, so it drives main-thread cost the same way it drives draw calls")
 	_info("Bound by", _frame_bound_verdict(frame_ms, main_ms),
 		"the cost that is actually capping the frame rate — optimize this one, the others are free wins on paper only")
-	# Loud when engaged: every number above is measuring a deliberately crippled
-	# frame, and a freeze left latched would quietly poison the next reading.
-	if PerfProbe.mode != PerfProbe.Mode.NONE:
-		_lines.append("[color=#%s]%s Cosmetic freeze: %s[/color]  [color=#%s](F6 cycles — numbers above are NOT a shippable frame; read the DIFFERENCE vs off)[/color]" % [
+	_render_freeze_sweep()
+
+
+# The cosmetic-freeze A/B. Everything here is a MEAN over many frames per mode,
+# collected while auto-cycle interleaves the modes — see perf_probe.gd for why
+# the obvious protocol (hold one mode, take a reading, move on) measures the
+# moment instead of the mode and produced a self-contradicting result.
+func _render_freeze_sweep() -> void:
+	if PerfProbe.mode != PerfProbe.Mode.NONE and not PerfProbe.auto_cycle:
+		_lines.append("[color=#%s]%s Cosmetic freeze: %s[/color]  [color=#%s](held manually — the frame above is NOT shippable. F7 runs the proper interleaved sweep)[/color]" % [
 			COL_BAD, DOT, PerfProbe.mode_name(), COL_DIM])
-	else:
-		_lines.append("[color=#%s]· F6 cycles a cosmetic freeze (rig / HUD / VFX) to price each against this frame[/color]" % COL_DIM)
+		return
+	if not PerfProbe.auto_cycle and PerfProbe.sample_count(PerfProbe.Mode.NONE) == 0:
+		_lines.append("[color=#%s]· F7 runs the cosmetic-freeze sweep (rig / HUD / VFX priced against each other) · F6 steps one mode by hand[/color]" % COL_DIM)
+		return
+
+	_section("Cosmetic freeze sweep (mean per mode)")
+	if PerfProbe.auto_cycle:
+		_lines.append("[color=#%s]%s Sweep RUNNING — now: %s. Play normally; every mode needs %d frames.[/color]" % [
+			COL_WARN, DOT, PerfProbe.mode_name(), PerfProbe.MIN_SAMPLES_PER_MODE])
+	var base_main: float = PerfProbe.mean_main_ms(PerfProbe.Mode.NONE)
+	for m: int in PerfProbe.MODE_COUNT:
+		var n: int = PerfProbe.sample_count(m)
+		if n == 0:
+			continue
+		var delta_txt: String = ""
+		if m != PerfProbe.Mode.NONE and PerfProbe.sample_count(PerfProbe.Mode.NONE) > 0:
+			delta_txt = "  [color=#%s]%+.2f ms main[/color]" % [
+				COL_OK, PerfProbe.mean_main_ms(m) - base_main]
+		_lines.append("[color=#%s]·[/color] %-11s [color=#%s]%.2f ms frame · %.2f main · %.2f gpu · %.0f draws[/color]%s [color=#%s](n=%d)[/color]" % [
+			COL_DIM, PerfProbe.MODE_NAMES[m], COL_VAL,
+			PerfProbe.mean_frame_ms(m), PerfProbe.mean_main_ms(m),
+			PerfProbe.mean_gpu_ms(m), PerfProbe.mean_draws(m), delta_txt, COL_DIM, n])
+	if not PerfProbe.comparison_ready():
+		_lines.append("[color=#%s]%s Not enough frames yet — differences this early are noise, not findings.[/color]" % [
+			COL_WARN, DOT])
 	# A debug build does NOT bias the three terms equally, so the split is
 	# readable but the verdict can be wrong. GDScript carries debug
 	# instrumentation (Script reads high), and an editor run shares the machine
@@ -647,6 +698,29 @@ func _frame_bound_verdict(frame_ms: float, main_ms: float) -> String:
 
 func _frac(part: float, whole: float) -> float:
 	return part / maxf(whole, 0.001)
+
+
+# Per-mode means for the digest. `ready` states outright whether the sample
+# counts justify reading a difference off these numbers, so a pasted digest
+# can't be over-read the way the first hand-run sweep was.
+func _freeze_sweep_dict() -> Dictionary:
+	var modes: Dictionary = {}
+	for m: int in PerfProbe.MODE_COUNT:
+		if PerfProbe.sample_count(m) == 0:
+			continue
+		modes[PerfProbe.MODE_NAMES[m]] = {
+			"samples": PerfProbe.sample_count(m),
+			"frame_ms": PerfProbe.mean_frame_ms(m),
+			"main_thread_ms": PerfProbe.mean_main_ms(m),
+			"gpu_ms": PerfProbe.mean_gpu_ms(m),
+			"draw_calls": PerfProbe.mean_draws(m),
+		}
+	return {
+		"running": PerfProbe.auto_cycle,
+		"ready": PerfProbe.comparison_ready(),
+		"min_samples_per_mode": PerfProbe.MIN_SAMPLES_PER_MODE,
+		"modes": modes,
+	}
 
 
 # Watch metrics: shown only when they leave the healthy band, so the client view
