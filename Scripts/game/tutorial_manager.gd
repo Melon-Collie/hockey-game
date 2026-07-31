@@ -270,6 +270,15 @@ const _TARGET_FRONT_OFFSET: float = 0.10  # float the bullseyes just in front of
 # Saucer wave wall: across the shooting lane, this far in front of the shooter.
 const _TARGET_WALL_SIZE:  Vector3 = Vector3(2.0, 0.12, 0.08)
 const _TARGET_WALL_AHEAD: float   = 2.2
+# Where the HIGH wave restages the shooter. The top rung is an IN-TIGHT tool,
+# so it gets its own station rather than sharing the slot: from SLOT_DIST_M a
+# HIGH shot needs ~10.6 m/s to drop onto the 0.95 m targets — under the 10 m/s
+# wrister floor, i.e. only makeable by bottoming out the power band — while
+# from here it wants ~15 m/s and a full rip still crests at 1.07 m, under the
+# 1.22 m crossbar, so the doorstep roof cannot sail. The same geometry is what
+# makes the pairing teach range: MID tops out at 0.79 m from here and cannot
+# reach these targets at any charge, having just cleared them from the slot.
+const _DOORSTEP_DIST_M: float = 2.5
 
 # Team 0 attacks toward -Z; the shot-resolution helpers project puck travel onto
 # this axis (matches PenaltyShotRules' attack_dir convention).
@@ -308,7 +317,9 @@ var _shot_air_time:      float = 0.0
 var _targets:          Array[Vector2] = []
 var _target_hit:       Array[bool]    = []
 var _targets_remaining: int = 0
-var _targets_phase:     int = 0           # 0 flat wave, 1 saucer wave, 2 high wave, 3 toggle-off beat
+# 0 flat wave, 1 saucer wave, 2 MID slot wave, 3 HIGH doorstep wave,
+# 4 toggle-off beat.
+var _targets_phase:     int = 0
 var _target_noun:       String = "Targets hit"
 var _target_node: TutorialTargets = null
 var _wall_node:   TutorialWall    = null
@@ -1094,7 +1105,7 @@ func _process(delta: float) -> void:
 	# match below, so handle them here and return.
 	if _shooting_active:
 		_shooting_tick(delta)
-		if _current_step_id() == STEP_SHOOT_TARGETS and _targets_phase == 3 \
+		if _current_step_id() == STEP_SHOOT_TARGETS and _targets_phase == 4 \
 				and _skater.elevation_level == 0:
 			_complete_step()
 		return
@@ -1489,6 +1500,11 @@ func _slot_z() -> float:
 	return -(GameRules.GOAL_LINE_Z - GameRules.SLOT_DIST_M)
 
 
+# Player's shooting spot for the HIGH wave — in tight on the same lane.
+func _doorstep_z() -> float:
+	return -(GameRules.GOAL_LINE_Z - _DOORSTEP_DIST_M)
+
+
 # Shared setup for every shooting drill: stand the player at start_z facing the
 # net, put the puck on the stick, and listen for shots.
 func _setup_shooting_drill(start_z: float) -> void:
@@ -1567,7 +1583,8 @@ func _expected_elevation() -> int:
 		STEP_SHOOT_TARGETS:
 			match _targets_phase:
 				1: return ShotMechanics.ELEVATION_LOW
-				2: return ShotMechanics.ELEVATION_HIGH
+				2: return ShotMechanics.ELEVATION_MID
+				3: return ShotMechanics.ELEVATION_HIGH
 				_: return ShotMechanics.ELEVATION_FLAT
 		STEP_DEFLECT, STEP_SAUCER_PASS:
 			return ShotMechanics.ELEVATION_LOW
@@ -1729,12 +1746,12 @@ func _begin_restage() -> void:
 func _on_targets_wave_cleared() -> bool:
 	match _current_step_id():
 		STEP_SHOOT_TARGETS:
-			if _targets_phase == 0 or _targets_phase == 1:
+			if _targets_phase < 3:
 				_show_targets_wave(_targets_phase + 1)
 				return false
 			# High wave cleared → the toggle-off beat. Completion happens in
 			# _process once the player scrolls elevation back off.
-			_targets_phase = 3
+			_targets_phase = 4
 			_targets = []
 			if _target_node != null and is_instance_valid(_target_node):
 				_target_node.clear()
@@ -1749,7 +1766,9 @@ func _on_targets_wave_cleared() -> bool:
 
 # Sets the copy + target set for one wave of the Pick Your Spot drill.
 # Wave 0: flat shots at the low holes. Wave 1: same holes, but a board in the
-# lane forces the LOW saucer. Wave 2: full loft at the top corners.
+# lane forces the LOW saucer. Wave 2: MID at the top corners from the slot.
+# Wave 3: the same corners from the doorstep, where only HIGH reaches them —
+# the pairing is the range lesson (see _DOORSTEP_DIST_M).
 func _show_targets_wave(phase: int) -> void:
 	_targets_phase = phase
 	_target_noun = "Targets hit"
@@ -1775,8 +1794,22 @@ func _show_targets_wave(phase: int) -> void:
 		2:
 			_set_live_copy(
 				"Pick Your Spot",
-				"Up top. Tap {elevation_up} twice more for full loft, and put both away in the top corners over his shoulders.",
-				"Loft buys the height, pace picks where the arc peaks — from here an easy shot crests right at the bar.")
+				"Up top. Tap {elevation_up} once more to MID, and put both away in the top corners over his shoulders.",
+				"Loft buys the height, pace picks where the arc peaks — from out here an easy shot crests right at the bar.")
+			_clear_wall()
+			_show_target_set(_HIGH_TARGETS)
+		3:
+			# Same corners, in tight — MID can't climb to them from here, so the
+			# player has to reach for the top rung. Restaged rather than left in
+			# the slot: HIGH is an in-tight tool and the drill should stand them
+			# where it works (see _DOORSTEP_DIST_M).
+			_local_controller.teleport_to(
+					Vector3(0.0, 1.0, _doorstep_z()), Vector2(0.0, -1.0))
+			_stage_puck_for_player()
+			_set_live_copy(
+				"Pick Your Spot",
+				"Now you're on the doorstep — and MID can't climb this fast. Tap {elevation_up} once more to HIGH and roof both corners from in tight.",
+				"Every rung has a range. From here HIGH gets over him in a stride and can't sail — out in the slot it'd be over the glass.")
 			_clear_wall()
 			_show_target_set(_HIGH_TARGETS)
 

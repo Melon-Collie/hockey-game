@@ -27,7 +27,8 @@ const _STAMINA_TRACK_COLOR := Color(0.06, 0.08, 0.11, 0.55)
 const _NAME_RADIUS: float   = RING_OUTER_R + 0.10
 const _CHEVRON_RADIUS: float = RING_OUTER_R + 0.10
 const _CHEVRON_OFFSET_DEG: float = 60.0
-# Screen-up gap between the stacked chevrons: one "^" = LOW loft, "^^" = HIGH.
+# Screen-up gap between the stacked chevrons — one per loft rung above flat:
+# "^" = LOW, "^^" = MID, "^^^" = HIGH.
 const _CHEVRON_STACK_GAP: float = 0.11
 
 # Overhead self-beacon. A billboarded downward-arrow that floats above ONLY the
@@ -119,7 +120,7 @@ var _ring_mesh: MeshInstance3D
 var _stamina_ring_mesh: MeshInstance3D
 var _stamina_ring_mat: ShaderMaterial
 var _chevron_mesh: MeshInstance3D
-# Second stacked chevron, visible only at HIGH loft (level 2).
+# Stacked chevrons 2 and 3, shown from MID and HIGH loft respectively.
 var _chevron_mesh2: MeshInstance3D
 var _chevron_mesh3: MeshInstance3D
 var _name_label: Label3D
