@@ -256,6 +256,10 @@ func _ready() -> void:
 	process_physics_priority = 1  # Run after Skater.move_and_slide so blade world pos is current
 	_build_deaden_cfg()
 
+	# Swap the scene's cylinder for the shared beveled low-poly puck
+	# (cosmetic — the puck's physics radius is GameRules', not this mesh's).
+	PuckMeshBuilder.apply_puck(self)
+
 	var vfx := PuckVFX.new()
 	vfx.name = "VFX"
 	add_child(vfx)

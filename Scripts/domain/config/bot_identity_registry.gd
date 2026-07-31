@@ -141,4 +141,8 @@ static func normalize_entry(entry: Dictionary) -> Dictionary:
 	out["number"] = int(entry.get("number", 0))
 	out["is_left_handed"] = bool(entry.get("is_left_handed", false))
 	out["position"] = position
+	# Optional identity skin tone (SkinToneRegistry index); omitted → the
+	# spawn path derives a stable one from the bot's name.
+	if entry.has("skin"):
+		out["skin"] = SkinToneRegistry.clamp_index(int(entry.get("skin", 0)))
 	return out

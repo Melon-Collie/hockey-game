@@ -15,9 +15,8 @@ var _lobby_slots: Dictionary = {}
 
 var _slot_grid: SlotGridPanel = null
 var _backdrop: LobbyArenaBackdrop = null
-# The lobby content panel. Held so a modal opened over it (Edit Build, the
-# confirm dialogs) can wall controller focus off from it — see
-# ControllerNav.open_modal.
+# The lobby content panel. Held so a modal opened over it (the confirm
+# dialogs) can wall controller focus off from it — see ControllerNav.open_modal.
 var _panel: PanelContainer = null
 # Latches once a teardown starts — leaving for free play, or the match starting.
 # Both end this scene, and the node stays alive until the deferred scene change
@@ -34,7 +33,6 @@ var _kick_confirm: ConfirmDialog = null
 var _kick_pending_peer: int = -1
 var _start_btn: Button = null
 var _ready_btn: Button = null
-var _build_popup: LobbyBuildPopup = null
 var _settings_panel: LobbySettingsPanel = null
 var _spectator_list_label: Label = null
 var _spectator_join_btn: Button = null
@@ -149,8 +147,13 @@ func _ready() -> void:
 		_on_lobby_roster_synced(NetworkManager.pending_lobby_roster)
 		NetworkManager.pending_lobby_roster = []
 	elif NetworkManager.is_host:
-		_assign_slot(1, 0, 0, NetworkManager.local_player_name, NetworkManager.local_is_left_handed, NetworkManager.local_jersey_number)
-		_broadcast_confirm(1, 0, 0)
+		# The host seats itself at its preferred position (an empty lobby, so
+		# the seat is always free).
+		var host_slot: int = PlayerRules.preferred_slot(
+				NetworkManager.get_peer_position(1), _team_size)
+		_assign_slot(1, 0, host_slot, NetworkManager.local_player_name,
+				NetworkManager.local_is_left_handed, NetworkManager.local_jersey_number)
+		_broadcast_confirm(1, 0, host_slot)
 	# Initial Start-button state. The button is constructed disabled; nothing
 	# else fires _update_start_btn until a peer joins/readies, so without this
 	# the host-alone case stays disabled forever.
@@ -251,10 +254,6 @@ func _build_ui() -> void:
 	back_btn.pressed.connect(_on_back_pressed)
 	btn_box.add_child(back_btn)
 
-	var build_btn := _btn("Edit Build")
-	build_btn.pressed.connect(_on_edit_build_pressed)
-	btn_box.add_child(build_btn)
-
 	if NetworkManager.is_host:
 		_start_btn = _btn("Start Game")
 		MenuStyle.apply_primary_cta(_start_btn)
@@ -268,19 +267,8 @@ func _build_ui() -> void:
 		_ready_btn.pressed.connect(_on_ready_pressed)
 		btn_box.add_child(_ready_btn)
 
-	_build_popup = LobbyBuildPopup.new()
-	root.add_child(_build_popup)
-	# Controller: while the build editor is up, focus is walled off from the lobby
-	# behind it and returns to Edit Build on close.
-	_build_popup.set_focus_scope(panel, build_btn)
-
 	_refresh_grid()
 	_refresh_spectator_panel()
-
-
-func _on_edit_build_pressed() -> void:
-	if _build_popup != null:
-		_build_popup.open()
 
 
 # Host-only one-shot button tucked under the slot grid (see _fill_bots_btn).
@@ -756,7 +744,10 @@ func _assign_slot(peer_id: int, team_id: int, slot: int, player_name: String, is
 		if NetworkManager.pending_bot_slots.get(bot_key, false):
 			NetworkManager.send_bot_slot(bot_key, false)
 
-func _find_balanced_slot(_peer_id: int) -> Array:
+# Seat a peer: team by balance first (fairness beats position), then their
+# preferred position's slot for the current mode (PlayerRules.preferred_slot —
+# 3v3 merges the wing/defense pairs onto their side), then any open slot.
+func _find_balanced_slot(peer_id: int) -> Array:
 	var team0: int = 0
 	var team1: int = 0
 	for k: int in _lobby_slots:
@@ -765,7 +756,11 @@ func _find_balanced_slot(_peer_id: int) -> Array:
 		if LobbySlotKey.team_id(k) == 0: team0 += 1
 		else: team1 += 1
 	var preferred_team: int = 0 if team0 <= team1 else 1
+	var want: int = PlayerRules.preferred_slot(
+			NetworkManager.get_peer_position(peer_id), _team_size)
 	for attempt_team: int in [preferred_team, 1 - preferred_team]:
+		if want < _team_size and not _lobby_slots.has(LobbySlotKey.encode(attempt_team, want)):
+			return [attempt_team, want]
 		for s: int in _team_size:
 			if not _lobby_slots.has(LobbySlotKey.encode(attempt_team, s)):
 				return [attempt_team, s]
@@ -1132,6 +1127,13 @@ func _on_settings_panel_changed(num_periods: int, period_duration: float, ot_ena
 	_bot_difficulty = bot_difficulty
 	_goalie_difficulty = goalie_difficulty
 	_apply_team_size(team_size)
+	# Remember the mode across sessions — an authored HOST pick only, which
+	# this local-panel path is (the synced receive path deliberately doesn't
+	# save: a joined lobby's mode is the host's choice, not yours). Gated on
+	# an actual change so period/OT tweaks don't rewrite the prefs file.
+	if NetworkManager.is_host and team_size != PlayerPrefs.preferred_team_size:
+		PlayerPrefs.preferred_team_size = team_size
+		PlayerPrefs.save()
 	NetworkManager.send_lobby_settings(num_periods, period_duration, ot_enabled, rule_set, team_size,
 			bot_difficulty, goalie_difficulty)
 

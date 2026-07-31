@@ -182,7 +182,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 				carrier_pos, c, ctx.attacking_goal_pos,
 				AIActionScoring.feed_keeper_pos, GameRules.NET_HALF_WIDTH,
 				opp_positions, pass_speed, AIActionScoring.feed_keeper_unsettled,
-				-1.0, AIActionScoring.feed_keeper_hands)
+				-1.0, AIActionScoring.feed_keeper_hands, Vector4.INF,
+				ctx.scratch_opp_caps)
 		var counter_cost: float = AIActionScoring.counter_rush_cost(
 				carrier_pos, turnover_prior, our_net, our_goalie,
 				GameRules.NET_HALF_WIDTH, teammate_positions, c,

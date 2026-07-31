@@ -213,12 +213,24 @@ const PAD_DEFAULT_BUTTONS: Dictionary = {
 var player_name: String = "Player"
 var jersey_number: int = 10
 var is_left_handed: bool = true
+# Preferred position (PlayerRules.POSITION_NAMES index: C/LW/RW/LD/RD) — the
+# lobby seats you here when you join, with the 3v3 wing/defense merge
+# (PlayerRules.preferred_slot). A taken seat falls back to the first open one.
+var preferred_position: int = 0
+# Preferred lobby mode (team size: 3 or 5) — remembered from the last mode
+# picked while HOSTING (a joined lobby's mode is the host's choice, so the
+# client-side settings sync never writes it) and seeds the next hosted lobby.
+var preferred_team_size: int = GameRules.DEFAULT_TEAM_SIZE
+# Index into SkinToneRegistry.TONES — identity next to name/number, picked in
+# the edit-player popup and carried through the join handshake like the rest.
+var skin_tone: int = SkinToneRegistry.DEFAULT_INDEX
 var preferred_color_slot: int = -1  # team color preset slot index; -1 → use team default at lobby join
 # Packed StickTapeConfig code (blade tape color + coverage + knob color +
-# handle style). Rides the build presets — each preset carries its own tape
-# job, and this flat field mirrors the ACTIVE preset exactly like the flat
-# attr_* fields mirror its build (the wire/join paths read the mirror).
+# handle style).
 var stick_tape_code: int = StickTapeConfig.DEFAULT_CODE
+# Packed GearStyleConfig code (skate + glove color) — the Equipment section's
+# gear cosmetics, carried through the join handshake like the tape job.
+var gear_style_code: int = GearStyleConfig.DEFAULT_CODE
 
 # Per-player build (attributes v4, body + gear): a free HEIGHT in inches
 # (5'7"..6'8"), a free WEIGHT in lbs (clamped to the height's BMI band), and
@@ -232,19 +244,6 @@ var attr_curve:   int = PlayerAttributes.GEAR_BALANCED
 var attr_flex:    int = PlayerAttributes.GEAR_BALANCED
 var attr_length:  int = PlayerAttributes.GEAR_BALANCED
 
-# Named attribute-build presets. The player keeps up to MAX_PRESETS builds and
-# switches which one is ACTIVE; the flat attr_* fields above always mirror the
-# active preset, so everything that reads get_player_attributes() (the online
-# join handshake, the free-play live apply) is unaffected by the presets layer —
-# it always sees the active build. Each entry is {"name": String,
-# "attrs": PlayerAttributes}. A save without a stored presets array (fresh
-# install or a pre-presets save) is migrated to a single "Default" preset
-# carrying the flat build, in _finalize_presets().
-const MAX_PRESETS: int = 4
-const PRESET_NAME_MAX_LEN: int = 16
-const DEFAULT_PRESET_NAME: String = "Default"
-var attr_presets: Array[Dictionary] = []
-var attr_active_preset: int = 0
 var master_volume: float = 0.5
 var sfx_volume: float = 1.0
 var ui_volume: float = 1.0
@@ -507,8 +506,12 @@ func save() -> void:
 	cfg.set_value("player", "name", player_name)
 	cfg.set_value("player", "jersey_number", jersey_number)
 	cfg.set_value("player", "left_handed", is_left_handed)
+	cfg.set_value("player", "preferred_position", preferred_position)
+	cfg.set_value("player", "preferred_team_size", preferred_team_size)
 	cfg.set_value("player", "preferred_color_slot", preferred_color_slot)
 	cfg.set_value("player", "stick_tape", stick_tape_code)
+	cfg.set_value("player", "gear_style", gear_style_code)
+	cfg.set_value("player", "skin_tone", skin_tone)
 	cfg.set_value("player", "attr_height",  attr_height)
 	cfg.set_value("player", "attr_weight",  attr_weight)
 	cfg.set_value("player", "attr_profile", attr_profile)
@@ -518,17 +521,6 @@ func save() -> void:
 	# Marks the values above as already on the v4 body+gear model so _load()
 	# doesn't re-run the tier / six-attribute migrations on them.
 	cfg.set_value("player", "attr_scale_version", 5)
-	# Presets are stored in the same version-5 native format. The flat attr_* keys
-	# above remain the active build's mirror for backward compat.
-	var stored_presets: Array = []
-	for p: Dictionary in attr_presets:
-		var a: PlayerAttributes = p["attrs"]
-		var stored: Dictionary = a.to_dict()
-		stored["name"] = p["name"]
-		stored["tape"] = int(p.get("tape", StickTapeConfig.DEFAULT_CODE))
-		stored_presets.append(stored)
-	cfg.set_value("player", "attr_presets", stored_presets)
-	cfg.set_value("player", "attr_active_preset", attr_active_preset)
 	cfg.set_value("audio", "master_volume", master_volume)
 	cfg.set_value("audio", "sfx_volume", sfx_volume)
 	cfg.set_value("audio", "ui_volume", ui_volume)
@@ -1087,6 +1079,13 @@ func _load() -> void:
 		player_name = cfg.get_value("player", "name", "Player").substr(0, 10)
 		jersey_number = clamp(cfg.get_value("player", "jersey_number", 10), 0, 99)
 		is_left_handed = cfg.get_value("player", "left_handed", true)
+		preferred_position = clampi(int(cfg.get_value("player", "preferred_position", 0)),
+				0, PlayerRules.POSITION_NAMES.size() - 1)
+		# Only the two shipped modes are representable; anything else falls
+		# back to the default rather than seeding an unfieldable lobby.
+		var stored_size: int = int(cfg.get_value(
+				"player", "preferred_team_size", GameRules.DEFAULT_TEAM_SIZE))
+		preferred_team_size = 5 if stored_size == 5 else GameRules.DEFAULT_TEAM_SIZE
 		# Reads as int; any legacy fruit-name string under the old "preferred_color_id"
 		# key is ignored — hard break, no migration. -1 falls back to the default at
 		# next lobby join.
@@ -1095,6 +1094,10 @@ func _load() -> void:
 		# code coerces to a legal tape job instead of riding raw into the wire.
 		stick_tape_code = StickTapeConfig.from_code(int(cfg.get_value(
 				"player", "stick_tape", StickTapeConfig.DEFAULT_CODE))).to_code()
+		gear_style_code = GearStyleConfig.from_code(int(cfg.get_value(
+				"player", "gear_style", GearStyleConfig.DEFAULT_CODE))).to_code()
+		skin_tone = SkinToneRegistry.clamp_index(int(cfg.get_value(
+				"player", "skin_tone", SkinToneRegistry.DEFAULT_INDEX)))
 		var attr_ver: int = int(cfg.get_value("player", "attr_scale_version", 1))
 		if attr_ver >= 5:
 			# Native v4 body+gear model. Funnel through set_player_attributes so
@@ -1152,15 +1155,10 @@ func _load() -> void:
 			set_player_attributes(PlayerAttributes.migrate_legacy(sp, ag, ha, sz, ph, sh))
 		# One choke point: whichever branch ran above, the flat build re-coerces
 		# through the constructor (weight into the height's band, gear into range)
-		# before anything reads it. Runs BEFORE the presets load so a pre-presets
-		# save seeds its Default preset from the already-repaired build.
+		# before anything reads it. (A preset-era save is covered too: its flat
+		# attr_*/stick_tape keys always mirrored the active preset, so loading
+		# just the flat fields IS the presets→single-build migration.)
 		_enforce_attr_legal()
-		# Load the preset list (validated + clamped). If the save predates presets
-		# the array is empty here; _finalize_presets() seeds a Default from the flat
-		# build below. When presets ARE present they are authoritative for the
-		# active build, so _finalize_presets() re-syncs the flat fields from them.
-		attr_presets = _parse_stored_presets(cfg.get_value("player", "attr_presets", []))
-		attr_active_preset = int(cfg.get_value("player", "attr_active_preset", 0))
 		master_volume = clampf(cfg.get_value("audio", "master_volume", 0.5), 0.0, 1.0)
 		sfx_volume = clampf(cfg.get_value("audio", "sfx_volume", 1.0), 0.0, 1.0)
 		ui_volume = clampf(cfg.get_value("audio", "ui_volume", 1.0), 0.0, 1.0)
@@ -1294,10 +1292,6 @@ func _load() -> void:
 	for action: String in PAD_REBINDABLE_ACTIONS:
 		if not pad_bindings.has(action):
 			pad_bindings[action] = int(PAD_DEFAULT_BUTTONS[action])
-	# Runs whether or not a config file loaded (fresh installs skip the OK block
-	# above entirely), so there is always at least one preset and the flat build
-	# matches the active one.
-	_finalize_presets()
 	apply_locale()
 	apply_audio()
 	apply_bindings()
@@ -1324,188 +1318,10 @@ func set_player_attributes(attrs: PlayerAttributes) -> void:
 	attr_curve   = attrs.curve
 	attr_flex    = attrs.flex
 	attr_length  = attrs.length
-	# The active preset IS the flat build — editing the live build (free-play
-	# picker Apply) edits the active preset. Guarded for the pre-_finalize window.
-	if attr_active_preset >= 0 and attr_active_preset < attr_presets.size():
-		attr_presets[attr_active_preset]["attrs"] = _copy_attrs(attrs)
-
-
-# ── Presets API ──────────────────────────────────────────────────────────────
-# Mutators update in-memory state only; callers persist with save() afterward,
-# exactly like set_player_attributes (see the free-play picker Apply path). This
-# keeps the presets layer disk-side-effect-free and unit-testable.
-
-# The live preset list. Callers read entry["name"] / entry["attrs"]; they must
-# not mutate entries in place — use the mutators below.
-func get_presets() -> Array[Dictionary]:
-	return attr_presets
-
-
-func get_active_preset_index() -> int:
-	return attr_active_preset
-
-
-# Switch which preset is active. Copies its build into the flat fields so
-# get_player_attributes() (and thus the join handshake / free-play apply) sees it.
-func set_active_preset(index: int) -> void:
-	if index < 0 or index >= attr_presets.size() or index == attr_active_preset:
-		return
-	attr_active_preset = index
-	_sync_flat_from_active()
-
-
-# Overwrite the build (and optionally the name) of an existing preset. If it is
-# the active preset the flat mirror is refreshed too.
-func save_preset(index: int, attrs: PlayerAttributes, preset_name: String = "") -> void:
-	if attrs == null or index < 0 or index >= attr_presets.size():
-		return
-	attr_presets[index]["attrs"] = _copy_attrs(attrs)
-	if preset_name != "":
-		attr_presets[index]["name"] = _sanitize_preset_name(preset_name)
-	if index == attr_active_preset:
-		_sync_flat_from_active()
-
-
-# Append a new preset (up to MAX_PRESETS). Defaults to a copy of the current
-# active build. Returns the new index, or -1 if the cap is reached.
-func add_preset(attrs: PlayerAttributes = null, preset_name: String = "") -> int:
-	if attr_presets.size() >= MAX_PRESETS:
-		return -1
-	var a: PlayerAttributes = attrs if attrs != null else get_player_attributes()
-	var nm: String = preset_name if preset_name != "" else _default_preset_name()
-	# A new preset copies the current tape job too (a copy of the active build).
-	attr_presets.append(_make_preset(nm, a, stick_tape_code))
-	return attr_presets.size() - 1
-
-
-# Remove a preset. The last surviving preset can't be deleted. Keeps the active
-# index pointing at a valid build and re-syncs the flat mirror if it moved.
-func delete_preset(index: int) -> void:
-	if attr_presets.size() <= 1 or index < 0 or index >= attr_presets.size():
-		return
-	attr_presets.remove_at(index)
-	if attr_active_preset >= attr_presets.size():
-		attr_active_preset = attr_presets.size() - 1
-	elif attr_active_preset > index:
-		attr_active_preset -= 1
-	_sync_flat_from_active()
-
-
-# Bulk-replace the whole preset list and active index in one shot — the commit
-# path for the picker panel, which edits a working copy and pushes it back on
-# Apply. Each entry is {"name": String, "levels": Array[int]} in the order
-# [height, weight, profile, curve, flex, length], plus the preset's packed
-# tape code under "tape". Ignores entries that don't carry usable levels and
-# never leaves the list empty (a no-op if nothing usable is supplied).
-# Callers persist with save() afterward.
-func set_all_presets(entries: Array, active: int) -> void:
-	var out: Array[Dictionary] = []
-	for entry: Variant in entries:
-		if not (entry is Dictionary):
-			continue
-		var lv: Array = (entry as Dictionary).get("levels", [])
-		if lv.size() < 2:
-			continue
-		# Canonical levels order: [height, weight, profile, curve, flex, length].
-		# Missing gear entries (a short array) default to balanced.
-		var attrs := PlayerAttributes.from_levels(
-				int(lv[0]), int(lv[1]),
-				int(lv[2]) if lv.size() > 2 else PlayerAttributes.GEAR_BALANCED,
-				int(lv[3]) if lv.size() > 3 else PlayerAttributes.GEAR_BALANCED,
-				int(lv[4]) if lv.size() > 4 else PlayerAttributes.GEAR_BALANCED,
-				int(lv[5]) if lv.size() > 5 else PlayerAttributes.GEAR_BALANCED)
-		out.append(_make_preset(String((entry as Dictionary).get("name", DEFAULT_PRESET_NAME)), attrs,
-				int((entry as Dictionary).get("tape", StickTapeConfig.DEFAULT_CODE))))
-		if out.size() >= MAX_PRESETS:
-			break
-	if out.is_empty():
-		return
-	attr_presets = out
-	attr_active_preset = clampi(active, 0, out.size() - 1)
-	_sync_flat_from_active()
 
 
 func _clamp_1to5(v: int) -> int:
 	return clampi(v, 1, 5)
-
-
-# Guarantees at least one preset exists and the flat build matches the active
-# one. When presets loaded from disk they are authoritative (flat ← active);
-# when none were stored (fresh / pre-presets save) seeds a Default from the flat
-# build (a no-op re-sync afterward).
-func _finalize_presets() -> void:
-	if attr_presets.is_empty():
-		attr_presets = [_make_preset(DEFAULT_PRESET_NAME, get_player_attributes(),
-				stick_tape_code)]
-		attr_active_preset = 0
-	attr_active_preset = clampi(attr_active_preset, 0, attr_presets.size() - 1)
-	_sync_flat_from_active()
-
-
-func _sync_flat_from_active() -> void:
-	if attr_active_preset < 0 or attr_active_preset >= attr_presets.size():
-		return
-	var a: PlayerAttributes = attr_presets[attr_active_preset]["attrs"]
-	attr_height  = a.height
-	attr_weight  = a.weight
-	attr_profile = a.profile
-	attr_curve   = a.curve
-	attr_flex    = a.flex
-	attr_length  = a.length
-	stick_tape_code = int(attr_presets[attr_active_preset].get(
-			"tape", StickTapeConfig.DEFAULT_CODE))
-
-
-func _make_preset(preset_name: String, attrs: PlayerAttributes,
-		tape_code: int = StickTapeConfig.DEFAULT_CODE) -> Dictionary:
-	return {
-		"name": _sanitize_preset_name(preset_name),
-		"attrs": _copy_attrs(attrs),
-		"tape": StickTapeConfig.from_code(tape_code).to_code(),
-	}
-
-
-# Independent copy so a preset never shares a PlayerAttributes instance with a
-# caller (which could mutate it out from under us).
-func _copy_attrs(attrs: PlayerAttributes) -> PlayerAttributes:
-	return PlayerAttributes.from_levels(attrs.height, attrs.weight,
-			attrs.profile, attrs.curve, attrs.flex, attrs.length)
-
-
-func _default_preset_name() -> String:
-	return "Build %d" % (attr_presets.size() + 1)
-
-
-func _sanitize_preset_name(preset_name: String) -> String:
-	var n: String = preset_name.strip_edges()
-	if n.is_empty():
-		n = DEFAULT_PRESET_NAME
-	return n.substr(0, PRESET_NAME_MAX_LEN)
-
-
-# Rebuilds the runtime preset list from the stored array-of-dicts, capping at
-# MAX_PRESETS. Native entries (height/skating/skill/checking) are read directly;
-# a legacy six-attribute preset dict is migrated via PlayerAttributes.from_dict.
-# An illegal build resets to all-average. Tolerates malformed entries (skips
-# non-dicts) so a corrupt save degrades to fewer presets rather than crashing.
-func _parse_stored_presets(raw: Variant) -> Array[Dictionary]:
-	var out: Array[Dictionary] = []
-	if not (raw is Array):
-		return out
-	for entry: Variant in (raw as Array):
-		if not (entry is Dictionary):
-			continue
-		var d: Dictionary = entry
-		# from_dict migrates tier-era and six-attribute preset dicts and the
-		# constructor coerces every axis, so no legality pass is needed.
-		var attrs := PlayerAttributes.from_dict(d)
-		# Pre-per-preset saves carry no "tape" key; seed from the flat field
-		# (loaded before presets) so an existing tape job lands on every build.
-		out.append(_make_preset(String(d.get("name", DEFAULT_PRESET_NAME)), attrs,
-				int(d.get("tape", stick_tape_code))))
-		if out.size() >= MAX_PRESETS:
-			break
-	return out
 
 
 # Remaps a legacy 1..3 attribute level onto the 1..5 scale (medium 2 → 3). Used
@@ -1519,8 +1335,7 @@ func _migrate_legacy_level(old: int) -> int:
 # the height's BMI band, gear into 0..2). A hand-edited / corrupt cfg could
 # carry out-of-band values, which unchecked would let an offline or HOSTING
 # player field them (the joiner gate in NetworkManager only coerces REMOTE
-# peers). Funnel through set_player_attributes so the active preset mirror
-# stays in sync.
+# peers).
 func _enforce_attr_legal() -> void:
 	set_player_attributes(get_player_attributes())
 

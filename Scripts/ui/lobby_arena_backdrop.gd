@@ -130,27 +130,81 @@ func _rebuild_dummies() -> void:
 
 
 # One seated figure. Positions are relative to the seat-surface center under
-# the pelvis; -X faces the ice. Proportions echo Skater.tscn's primitives:
-# torso cylinder, helmet sphere, shoulder spheres, horizontal thighs (knees
-# toward the ice), hanging shins, skates just off the tread, and a stick
-# held upright in front — the classic waiting-on-the-bench posture.
+# the pelvis; -X faces the ice. Parts are the skater's own shared low-poly
+# meshes (SkaterMeshBuilder), so the bench wears exactly the in-game bodies:
+# shaped torso, helmet shell over a head ball, deltoid caps, thighs, socks,
+# boots on steel, and a stick held upright in front — the classic
+# waiting-on-the-bench posture.
 func _build_dummy(meshes: Dictionary, mats: Dictionary) -> Node3D:
 	var d := Node3D.new()
-	# Cylinder axes are local Y; this basis lays a thigh along X.
+	# Lathe axes are local Y; this basis lays a thigh along X.
 	var thigh_rot := Basis(Vector3(0, 0, 1), PI / 2.0)
 	var stick_lean := Basis(Vector3(0, 0, 1), deg_to_rad(-8.0))
+	# Boot frame (see SkaterMeshBuilder._BOOT_STATIONS): local -Y is the toe,
+	# local +Z is down. Toe toward the ice (-X), sole down: +Y -> +X, +Z -> -Y,
+	# and X = cross closes the right-handed basis (-Z).
+	var boot_rot := Basis(Vector3(0, 0, -1), Vector3(1, 0, 0), Vector3(0, -1, 0))
 	_add_part(d, meshes.torso, mats.jersey, Vector3(-0.02, 0.32, 0.0))
 	_add_part(d, meshes.helmet, mats.helmet, Vector3(0.0, 0.68, 0.0))
+	_add_part(d, meshes.head, mats.skin, Vector3(0.0, 0.68, 0.0))
 	_add_part(d, meshes.shoulder, mats.shoulder, Vector3(0.0, 0.50, -0.20))
 	_add_part(d, meshes.shoulder, mats.shoulder, Vector3(0.0, 0.50, 0.20))
 	_add_part(d, meshes.thigh, mats.pants, Vector3(-0.16, 0.10, -0.12), thigh_rot)
 	_add_part(d, meshes.thigh, mats.pants, Vector3(-0.16, 0.10, 0.12), thigh_rot)
 	_add_part(d, meshes.shin, mats.socks, Vector3(-0.33, -0.15, -0.12))
 	_add_part(d, meshes.shin, mats.socks, Vector3(-0.33, -0.15, 0.12))
-	_add_part(d, meshes.skate, mats.skate, Vector3(-0.36, -0.36, -0.12))
-	_add_part(d, meshes.skate, mats.skate, Vector3(-0.36, -0.36, 0.12))
+	_add_part(d, meshes.skate, mats.skate, Vector3(-0.36, -0.36, -0.12), boot_rot)
+	_add_part(d, meshes.skate, mats.skate, Vector3(-0.36, -0.36, 0.12), boot_rot)
+	_add_part(d, meshes.blade, mats.steel, Vector3(-0.36, -0.36, -0.12), boot_rot)
+	_add_part(d, meshes.blade, mats.steel, Vector3(-0.36, -0.36, 0.12), boot_rot)
 	_add_part(d, meshes.stick, mats.stick, Vector3(-0.38, 0.18, 0.04), stick_lean)
+	# Arms: both hands stacked up on the stick — the classic bench lean. Pose
+	# is baked (furniture runs no IK); segment lengths sit near the skater's
+	# 0.35 m bones so the proportions match the rig they echo.
+	_add_dummy_arm(d, mats,
+			Vector3(0.0, 0.50, -0.20), Vector3(-0.19, 0.25, -0.17), Vector3(-0.40, 0.55, -0.045))
+	_add_dummy_arm(d, mats,
+			Vector3(0.0, 0.50, 0.20), Vector3(-0.19, 0.25, 0.17), Vector3(-0.40, 0.55, 0.045))
 	return d
+
+
+# Static two-segment arm from the skater's shared meshes: tapered bone prisms
+# shoulder→elbow→hand, an elbow-pad ball, and a gloved fist gripping toward
+# the stick. Radii mirror the live rig (arm 0.065, elbow 0.082, glove 0.064).
+func _add_dummy_arm(d: Node3D, mats: Dictionary,
+		shoulder: Vector3, elbow: Vector3, hand: Vector3) -> void:
+	_add_bone(d, mats.arms, shoulder, elbow)
+	_add_bone(d, mats.arms, elbow, hand)
+	_add_part(d, SkaterMeshBuilder.shared_joint_ball(), mats.arms, elbow,
+			Basis.from_scale(Vector3.ONE * 0.082))
+	# Glove fist: local +Y points back toward the elbow, same convention the
+	# live rig orients it with.
+	var grip: Basis = _basis_along((elbow - hand).normalized()).scaled(Vector3.ONE * 0.064)
+	_add_part(d, SkaterMeshBuilder.shared_glove_fist(), mats.gloves, hand, grip)
+
+
+# Unit bone prism stretched between two joints; +Y (the wide end) lands on
+# the proximal joint to match the mesh's distal taper.
+func _add_bone(d: Node3D, mat: StandardMaterial3D, proximal: Vector3, distal: Vector3) -> void:
+	var dir: Vector3 = proximal - distal
+	var length: float = dir.length()
+	if length < 0.001:
+		return
+	var b: Basis = _basis_along(dir / length)
+	b = Basis(b.x * 0.065, b.y * length, b.z * 0.065)
+	var mi := MeshInstance3D.new()
+	mi.mesh = SkaterMeshBuilder.shared_arm_bone()
+	mi.material_override = mat
+	mi.transform = Transform3D(b, (proximal + distal) * 0.5)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	d.add_child(mi)
+
+
+# Right-handed orthonormal basis with +Y along `y_axis`.
+func _basis_along(y_axis: Vector3) -> Basis:
+	var ref: Vector3 = Vector3.FORWARD if absf(y_axis.dot(Vector3.UP)) < 0.99 else Vector3.RIGHT
+	var x_axis: Vector3 = ref.cross(y_axis).normalized()
+	return Basis(x_axis, y_axis, x_axis.cross(y_axis))
 
 
 func _add_part(parent: Node3D, mesh: Mesh, mat: StandardMaterial3D,
@@ -164,44 +218,23 @@ func _add_part(parent: Node3D, mesh: Mesh, mat: StandardMaterial3D,
 	parent.add_child(mi)
 
 
-# Shared mesh resources for every dummy in a rebuild (materials carry the
-# per-team tint via material_override, so meshes stay color-free).
+# The skater's shared low-poly part meshes (materials carry the per-team tint
+# via material_override, so the shared meshes stay color-free). The torso's
+# cylinder-convention UVs are what let the jersey stripe/yoke texture land
+# exactly as it does in-game.
 func _dummy_meshes() -> Dictionary:
-	var torso := CylinderMesh.new()
-	torso.top_radius = 0.19
-	torso.bottom_radius = 0.22
-	torso.height = 0.5
-	torso.radial_segments = 12
-	var helmet := SphereMesh.new()
-	helmet.radius = 0.15
-	helmet.height = 0.3
-	helmet.radial_segments = 16
-	helmet.rings = 8
-	var shoulder := SphereMesh.new()
-	shoulder.radius = 0.11
-	shoulder.height = 0.22
-	shoulder.radial_segments = 12
-	shoulder.rings = 6
-	var thigh := CylinderMesh.new()
-	thigh.top_radius = 0.13
-	thigh.bottom_radius = 0.12
-	thigh.height = 0.34
-	thigh.radial_segments = 10
-	var shin := CylinderMesh.new()
-	shin.top_radius = 0.09
-	shin.bottom_radius = 0.085
-	shin.height = 0.38
-	shin.radial_segments = 10
-	var skate := SphereMesh.new()
-	skate.radius = 0.08
-	skate.height = 0.16
-	skate.radial_segments = 12
-	skate.rings = 6
 	var stick := BoxMesh.new()
 	stick.size = Vector3(0.04, 1.05, 0.04)
 	return {
-		"torso": torso, "helmet": helmet, "shoulder": shoulder,
-		"thigh": thigh, "shin": shin, "skate": skate, "stick": stick,
+		"torso": SkaterMeshBuilder.shared_torso(),
+		"helmet": SkaterMeshBuilder.shared_helmet_shell(),
+		"head": SkaterMeshBuilder.shared_head_ball(),
+		"shoulder": SkaterMeshBuilder.shared_shoulder_cap(),
+		"thigh": SkaterMeshBuilder.shared_thigh(),
+		"shin": SkaterMeshBuilder.shared_sock(),
+		"skate": SkaterMeshBuilder.shared_boot(),
+		"blade": SkaterMeshBuilder.shared_skate_blade(),
+		"stick": stick,
 	}
 
 
@@ -239,6 +272,10 @@ func _dummy_materials(colors: Dictionary) -> Dictionary:
 		"pants":    _matte(uniform.pants.base),
 		"socks":    socks_mat,
 		"skate":    _matte(Color(0.08, 0.08, 0.08), 0.42),
+		"steel":    _matte(Color(0.82, 0.85, 0.88), 0.25),
+		"arms":     _matte(uniform.arms.upper.base),
+		"gloves":   _matte(uniform.gloves),
+		"skin":     _matte(SkinToneRegistry.color_for(SkinToneRegistry.DEFAULT_INDEX)),
 		"stick":    _matte(Color(0.06, 0.06, 0.07), 0.4),
 	}
 

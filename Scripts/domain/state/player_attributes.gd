@@ -207,12 +207,10 @@ const _AGILITY_H: Array[float] = [1.065, 1.020, 1.000, 0.960, 0.920]
 # leverage a long frame loads into a shot. Wind-up derives inversely.
 const _SHOT_H: Array[float] = [0.880, 0.940, 1.000, 1.050, 1.103]
 
-# Hitbox cylinder radius — frame width. Height sets the skeleton's breadth…
-const _RADIUS: Array[float] = [0.9375, 0.975, 1.00, 1.05, 1.117]
-# …and the frame widens it (a heavy body IS wider — matches the visual frame
-# bulk, so the hitbox tracks the silhouette): bigger poke target and net-front
-# screen for the heavy build, slimmer profile for the lean one.
-const _RADIUS_F: Array[float] = [0.96, 0.98, 1.00, 1.03, 1.06]
+# Hitbox cylinder radius — girth_mult(), the same grounded lateral width the
+# silhouette wears (hitbox tracks the visual body exactly): bigger poke
+# target and net-front screen for the wide build, slimmer profile for the
+# lean one. See girth_mult() for the model.
 
 # Body height (mesh Y-scale, arm/ROM length, hand heights). Mesh-native 5'10"
 # is row 1, so the 1.0 identity sits there (NOT the 6'1" gameplay neutral).
@@ -316,13 +314,14 @@ const _STAMINA_DRAIN_F: Array[float] = [1.15, 1.07, 1.00, 0.92, 0.85]
 # The pair: lean = short repeatable bursts, heavy = one long drive, slow refill.
 const _STAMINA_REGEN_F: Array[float] = [1.25, 1.12, 1.00, 0.90, 0.82]
 
-# ── Visual-only tables ────────────────────────────────────────────────────────
-# Silhouette = body (v4): height drives overall scale + torso/head; frame
-# drives uniform limb/shoulder bulk (replacing the v3 per-tier limb tells).
-# Gear reads from the rendered equipment itself, not the body.
-const _TORSO_BULK: Array[float] = [0.87, 0.96, 1.00, 1.07, 1.163]  # height
+# ── Visual tables ─────────────────────────────────────────────────────────────
+# Silhouette = body (v4): height drives overall Y scale; every LATERAL body
+# multiplier (torso, shoulders, limbs — and the hitbox radius, which tracks
+# the silhouette) is the single grounded girth_mult() below, so there are no
+# authored width curves left to drift. The head is the one part that keeps a
+# (mild) authored table — real adult heads are nearly constant across
+# statures, so it moves a few percent, not with the body.
 const _HEAD_BULK: Array[float] = [0.935, 0.98, 1.00, 1.03, 1.07]   # height
-const _FRAME_BULK: Array[float] = [0.90, 0.95, 1.00, 1.07, 1.14]  # frame lean→heavy
 
 # ── Sprint / carry constants ──────────────────────────────────────────────────
 # The normalization span is the FULL v3 speed-lever span (weak-small .. strong-
@@ -514,9 +513,20 @@ func check_delivery_mult() -> float: return 1.0
 func brace_mult() -> float:          return 1.0
 
 # Geometry
-# Hitbox radius = skeleton breadth (height) × frame width (weight) — tracks
-# the visual silhouette.
-func radius_mult() -> float:    return _h(_RADIUS, height) * _f(_RADIUS_F)
+# Lateral body girth — a grounded model, not an authored curve: body density
+# is ~constant, so cross-section area is mass/height and lateral girth is
+# sqrt(mass / height), normalized to the 6'1"/201 neutral. What falls out for
+# free: at a fixed BMI mass rides height², so a taller body is absolutely
+# broader yet RELATIVELY narrower than its height (the elongated tall
+# silhouette); a short max-frame build carries near-neutral absolute width on
+# a shorter body (the hydrant). BMI band + mass floor bound it to ~[0.93, 1.10].
+func girth_mult() -> float:
+	return sqrt(mass_mult() / (float(height) / float(HEIGHT_MEDIUM)))
+
+
+# Hitbox radius = the same girth the silhouette wears (hitbox tracks the
+# visual body exactly).
+func radius_mult() -> float:    return girth_mult()
 func height_mult() -> float:    return _h(_HEIGHT, height)
 # Height band center × the length gear lean (see _LENGTH_LEAN; `length` is
 # constructor-clamped to 0..2, so the direct index is safe).
@@ -569,13 +579,15 @@ func carry_speed_mult() -> float:
 
 
 # Visual
-func torso_bulk_mult() -> float: return _h(_TORSO_BULK, height) * _f(_FRAME_BULK)
+# Every lateral body part wears the one grounded girth (see girth_mult) —
+# the accessor seams stay so the appearance rig remains table-agnostic.
+func torso_bulk_mult() -> float: return girth_mult()
 func head_bulk_mult() -> float:  return _h(_HEAD_BULK, height)
-func shoulder_bulk_mult() -> float:  return _f(_FRAME_BULK)
-func thigh_mult() -> float:          return _f(_FRAME_BULK)
-func calf_mult() -> float:           return _f(_FRAME_BULK)
-func forearm_bulk_mult() -> float:   return _f(_FRAME_BULK)
-func upper_arm_bulk_mult() -> float: return _f(_FRAME_BULK)
+func shoulder_bulk_mult() -> float:  return girth_mult()
+func thigh_mult() -> float:          return girth_mult()
+func calf_mult() -> float:           return girth_mult()
+func forearm_bulk_mult() -> float:   return girth_mult()
+func upper_arm_bulk_mult() -> float: return girth_mult()
 
 
 # ── Serialization ─────────────────────────────────────────────────────────────

@@ -72,10 +72,13 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 				continue
 			# The seam look: can the carrier feed me here (lane_clear at a
 			# real pass speed), and can I shoot from here (lane to the net)?
+			# Each lane defender priced at his own reach/close (scratch caps).
 			var feed: float = AIActionScoring.lane_clear(
-					carrier_pos, c, opp_positions, pass_speed_ref)
+					carrier_pos, c, opp_positions, pass_speed_ref,
+					AIActionScoring.EMPTY_VEC3, ctx.scratch_opp_caps)
 			var shot: float = AIActionScoring.lane_clear(
-					c, opp_net, opp_positions, ctx.self_wrister_shot_speed)
+					c, opp_net, opp_positions, ctx.self_wrister_shot_speed,
+					AIActionScoring.EMPTY_VEC3, ctx.scratch_opp_caps)
 			var score: float = feed * shot + AIRoleHelpers.incumbent_bonus(ctx, c)
 			if score > best_score:
 				best_score = score

@@ -183,7 +183,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var bases: Array[float] = ctx.scratch_option_bases
 	AIRoleHelpers.carrier_option_bases(
 			carrier_pos, our_net, our_goalie_pos,
-			our_team_excluding_self, opp_teammates, bases)
+			our_team_excluding_self, opp_teammates, bases,
+			ctx.scratch_teammate_caps)
 
 	# Candidate set. ENGAGED (within the inner-ring range of the cut-off):
 	# the full polar ring incl. half-step samples — a pressurer standing at
@@ -240,7 +241,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		# for us (lower for the carrier).
 		var pressure_score: float = -AIRoleHelpers.carrier_best_option(
 				c, carrier_pos, our_net, our_goalie_pos,
-				our_team_excluding_self, opp_teammates, bases) \
+				our_team_excluding_self, opp_teammates, bases,
+				ctx.scratch_teammate_caps, ctx.caps_by_peer.get(ctx.peer_id)) \
 				+ AIRoleHelpers.incumbent_bonus(ctx, c)
 		if pressure_score > best_score:
 			best_score = pressure_score

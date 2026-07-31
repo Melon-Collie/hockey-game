@@ -32,6 +32,12 @@ var _upper_body_mesh: MeshInstance3D
 var _blade_mesh: MeshInstance3D
 var _blade_tape: MeshInstance3D                    # team-colored tape band, child of _blade_mesh
 var _helmet: MeshInstance3D
+var _head: MeshInstance3D                          # skin parts under the helmet shell
+var _neck: MeshInstance3D
+var _blade_steel_l: MeshInstance3D                 # steel blade children of the boots
+var _blade_steel_r: MeshInstance3D
+var _laces_l: MeshInstance3D                       # drawn-on lace rungs, boot children
+var _laces_r: MeshInstance3D
 var _shoulder_l: MeshInstance3D
 var _shoulder_r: MeshInstance3D
 var _hip_l: MeshInstance3D
@@ -44,6 +50,8 @@ var _sock_l: MeshInstance3D
 var _sock_r: MeshInstance3D
 var _skate_l: MeshInstance3D
 var _skate_r: MeshInstance3D
+var _skate_stripe_l: MeshInstance3D                # accent band on each collar
+var _skate_stripe_r: MeshInstance3D
 var _foot_l: MeshInstance3D
 var _foot_r: MeshInstance3D
 
@@ -64,6 +72,9 @@ var _text_outline_color: Color = Color.BLACK
 # Team accent (colors.primary) from the last apply_uniform — what TEAM-palette
 # tape picks resolve to, cached so a live tape change repaints without one.
 var _team_accent: Color = Color.WHITE
+# Kit glove color (uniform.gloves) from the last apply_uniform — what a TEAM
+# glove pick resolves to, cached for the same live-repaint reason.
+var _kit_gloves: Color = Color.BLACK
 var _jersey_viewport: SubViewport
 var _jersey_decal: JerseyDecal
 var _shoulder_viewport: SubViewport
@@ -75,6 +86,10 @@ func setup(skater: Skater) -> void:
 	_upper_body_mesh = skater.upper_body.get_node("UpperBodyMesh") as MeshInstance3D
 	_blade_mesh = skater.blade.get_node("MeshInstance3D") as MeshInstance3D
 	_helmet = skater.upper_body.get_node("Helmet") as MeshInstance3D
+	# Created by SkaterMeshBuilder before this setup runs. Never painted
+	# (skin and steel, not kit) — resolved only so ghost fades reach them.
+	_head = _helmet.get_node_or_null("Head") as MeshInstance3D
+	_neck = _helmet.get_node_or_null("Neck") as MeshInstance3D
 	_shoulder_l = skater.upper_body.get_node("ShoulderL") as MeshInstance3D
 	_shoulder_r = skater.upper_body.get_node("ShoulderR") as MeshInstance3D
 	# Leg meshes live under per-leg pivot chains: LowerBody/Leg{L,R} carries the
@@ -90,8 +105,17 @@ func setup(skater: Skater) -> void:
 	_sock_r = skater.lower_body.get_node("LegR/ShinR/SockR") as MeshInstance3D
 	_skate_l = skater.lower_body.get_node("LegL/ShinL/SkateL") as MeshInstance3D
 	_skate_r = skater.lower_body.get_node("LegR/ShinR/SkateR") as MeshInstance3D
+	# Created by SkaterMeshBuilder before this setup runs, like the blade steel.
+	_skate_stripe_l = _skate_l.get_node_or_null("Stripe") as MeshInstance3D
+	_skate_stripe_r = _skate_r.get_node_or_null("Stripe") as MeshInstance3D
 	_foot_l = skater.lower_body.get_node("LegL/ShinL/FootL") as MeshInstance3D
 	_foot_r = skater.lower_body.get_node("LegR/ShinR/FootR") as MeshInstance3D
+	_blade_steel_l = _foot_l.get_node_or_null("Blade") as MeshInstance3D
+	_blade_steel_r = _foot_r.get_node_or_null("Blade") as MeshInstance3D
+	# Created by SkaterMeshBuilder with a placeholder white; repainted with
+	# the gear style's lace pick on every uniform apply.
+	_laces_l = _foot_l.get_node_or_null("Laces") as MeshInstance3D
+	_laces_r = _foot_r.get_node_or_null("Laces") as MeshInstance3D
 	_create_jersey_viewport()
 	_create_shoulder_viewport()
 
@@ -211,13 +235,16 @@ func apply_uniform(colors: Dictionary) -> void:
 	# Butt-end knob — recreated here so the tape color tracks the kit.
 	_rebuild_stick_knob()
 
-	# Gloves (hand spheres + cuffs, single solid color).
+	# Gloves: the hands wear the kit's glove color; the gear style's glove
+	# pick paints only the wrist CUFF rings — the glove's accent stripe
+	# (TEAM resolves to the kit color, i.e. no visible stripe).
+	_kit_gloves = uniform.gloves
 	var gloves_mat: StandardMaterial3D = _make_solid_mat(uniform.gloves)
 	if _skater.top_hand_sphere != null:
 		_skater.top_hand_sphere.material_override = gloves_mat.duplicate()
 	if _skater.bottom_hand_sphere != null:
 		_skater.bottom_hand_sphere.material_override = gloves_mat.duplicate()
-	_rebuild_glove_cuffs(uniform.gloves)
+	_rebuild_glove_cuffs(_resolve_glove_color())
 
 	# Arms — upper + lower bone cylinders, each painted with horizontal
 	# stripes (or solid if the stripes array is empty).
@@ -252,13 +279,17 @@ func apply_uniform(colors: Dictionary) -> void:
 	_sock_l.material_override = sock_mat
 	_sock_r.material_override = sock_mat.duplicate()
 
-	# Skates — fixed dark, set explicitly so ghost mode never leaves a blank
-	# gray override behind.
+	# Skates — the boot and collar stay fixed dark; the gear style's skate
+	# pick paints only the collar's accent stripe band (BLACK by default ≈
+	# invisible on the dark boot, TEAM resolves to the accent). Set
+	# explicitly so ghost mode never leaves a blank gray override behind.
 	var skate_mat: StandardMaterial3D = _make_solid_mat(Color(0.08, 0.08, 0.08), _ROUGH_SKATE)
 	_skate_l.material_override = skate_mat.duplicate()
 	_skate_r.material_override = skate_mat.duplicate()
 	_foot_l.material_override = skate_mat.duplicate()
 	_foot_r.material_override = skate_mat.duplicate()
+	_repaint_skate_stripes()
+	_repaint_laces()
 
 
 # Repaints the jersey + shoulder decals with the new name/number using the
@@ -303,7 +334,7 @@ func _rebuild_shoulder_texture() -> void:
 # the thinner arm — the "arm stripes are too big" mismatch. Shrink the arm
 # pattern about its center by the length ratio so an authored width renders at
 # the same physical band height on arms as on socks.
-const _FOREARM_DESIGN_LEN: float = 0.35   # Skater.forearm_length / upper_arm_length default
+const _FOREARM_DESIGN_LEN: float = 0.33   # Skater.forearm_length / upper_arm_length default
 const _SOCK_DESIGN_LEN: float = 0.30      # SockL/R CylinderMesh height (Skater.tscn)
 const _ARM_STRIPE_SCALE: float = _SOCK_DESIGN_LEN / _FOREARM_DESIGN_LEN
 
@@ -490,6 +521,45 @@ func _rebuild_blade() -> void:
 	_blade_mesh.add_child(_blade_tape)
 
 
+func _resolve_glove_color() -> Color:
+	if _skater.gear_style.glove_color == TapeColorRegistry.TEAM_INDEX:
+		return _kit_gloves
+	return TapeColorRegistry.resolve(_skater.gear_style.glove_color, _kit_gloves)
+
+
+func _resolve_skate_color() -> Color:
+	return TapeColorRegistry.resolve(_skater.gear_style.skate_color, _team_accent)
+
+
+func _resolve_lace_color() -> Color:
+	return TapeColorRegistry.resolve(_skater.gear_style.lace_color, _team_accent)
+
+
+func _repaint_skate_stripes() -> void:
+	var stripe_mat: StandardMaterial3D = _make_solid_mat(_resolve_skate_color(), _ROUGH_SKATE)
+	if _skate_stripe_l != null:
+		_skate_stripe_l.material_override = stripe_mat.duplicate()
+	if _skate_stripe_r != null:
+		_skate_stripe_r.material_override = stripe_mat.duplicate()
+
+
+func _repaint_laces() -> void:
+	var lace_mat: StandardMaterial3D = _make_solid_mat(_resolve_lace_color())
+	if _laces_l != null:
+		_laces_l.material_override = lace_mat.duplicate()
+	if _laces_r != null:
+		_laces_r.material_override = lace_mat.duplicate()
+
+
+# Repaints the gear-style accents (glove cuff rings, skate collar bands,
+# laces) for a live gear-color change without touching the rest of the
+# uniform. Same live-cosmetic contract as refresh_tape below.
+func refresh_gear_style() -> void:
+	_rebuild_glove_cuffs(_resolve_glove_color())
+	_repaint_skate_stripes()
+	_repaint_laces()
+
+
 # Re-renders the tape-colored pieces (blade wrap, knob, handle-wrap paint) for
 # a live tape-job change without touching the rest of the uniform. Safe before
 # the first apply_uniform — the accent default just gets repainted when it
@@ -516,12 +586,7 @@ func _rebuild_stick_knob() -> void:
 	_skater.stick_knob_mesh = null
 	var m := MeshInstance3D.new()
 	m.name = "StickKnob"
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = 0.035
-	cyl.bottom_radius = 0.03
-	cyl.height = 0.05
-	cyl.radial_segments = 12
-	m.mesh = cyl
+	m.mesh = SkaterMeshBuilder.shared_knob()
 	m.material_override = _make_solid_mat(color, _ROUGH_CLOTH)
 	_skater.stick_knob_mesh = m
 	_skater.upper_body.add_child(m)
@@ -539,21 +604,20 @@ func _rebuild_glove_cuffs(gloves_color: Color) -> void:
 	# Scaled by the Hands forearm bulk so the cuff stays proud of the forearm
 	# cylinder it wraps — equal radii z-fight (see Skater.forearm_visual_mult).
 	var cuff_radius: float = _skater.arm_mesh_thickness * 0.6 * _skater.forearm_visual_mult
-	_skater.top_cuff_mesh = _make_glove_cuff_mesh(cuff_radius, 0.06, gloves_color, "CuffTop")
+	_skater.top_cuff_mesh = _make_glove_cuff_mesh(cuff_radius, gloves_color, "CuffTop")
 	_skater.upper_body.add_child(_skater.top_cuff_mesh)
-	_skater.bot_cuff_mesh = _make_glove_cuff_mesh(cuff_radius, 0.06, gloves_color, "CuffBot")
+	_skater.bot_cuff_mesh = _make_glove_cuff_mesh(cuff_radius, gloves_color, "CuffBot")
 	_skater.upper_body.add_child(_skater.bot_cuff_mesh)
 
 
-func _make_glove_cuff_mesh(radius: float, height: float, color: Color, mesh_name: String) -> MeshInstance3D:
+# The shared cuff ring is unit-radius with its height baked (the wrist
+# placement in Skater._update_cuff_transform reads CUFF_HEIGHT_M), so the
+# radius rides node scale — same contract as the rest of the arm rig.
+func _make_glove_cuff_mesh(radius: float, color: Color, mesh_name: String) -> MeshInstance3D:
 	var m := MeshInstance3D.new()
 	m.name = mesh_name
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = radius
-	cyl.bottom_radius = radius
-	cyl.height = height
-	cyl.radial_segments = 16
-	m.mesh = cyl
+	m.mesh = SkaterMeshBuilder.shared_cuff()
+	m.scale = Vector3(radius, 1.0, radius)
 	m.material_override = _make_solid_mat(color)
 	return m
 
@@ -589,10 +653,13 @@ func apply_ghost(ghost: bool) -> void:
 			_skater.bone_visual(_skater.bottom_forearm_mesh),
 			_skater.top_elbow_sphere, _skater.top_hand_sphere,
 			_skater.bottom_elbow_sphere, _skater.bottom_hand_sphere,
-			_helmet, _shoulder_l, _shoulder_r,
+			_helmet, _head, _neck, _shoulder_l, _shoulder_r,
 			_hip_l, _hip_r, _thigh_l, _thigh_r,
 			_knee_l, _knee_r, _sock_l, _sock_r,
 			_skate_l, _skate_r, _foot_l, _foot_r,
+			_skate_stripe_l, _skate_stripe_r,
+			_blade_steel_l, _blade_steel_r,
+			_laces_l, _laces_r,
 			_skater.top_cuff_mesh, _skater.bot_cuff_mesh,
 		]
 	for mesh: MeshInstance3D in meshes:

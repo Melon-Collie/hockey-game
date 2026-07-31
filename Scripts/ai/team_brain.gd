@@ -67,8 +67,10 @@ var threat_assignments: Dictionary[int, int] = {}    # defender peer -> opp peer
 # Empty whenever no MARK slot is live, so consumers fall back to the exact
 # local computation (tests / brainless contexts included).
 var threat_shoot_base_by_opp: Dictionary[int, float] = {}
-# Scratch defender list for the memo fill (reused per tick, no allocation).
+# Scratch defender list + index-matched caps for the memo fill (reused per
+# tick, no allocation).
 var _memo_defenders: Array[Vector3] = []
+var _memo_defender_caps: Array[AISkaterCaps] = []
 
 # The team's shared transition-defense read (docs/transition-defense-plan.md
 # §4): who is genuinely attacking, who is back, the numbers, backpressure, and
@@ -462,15 +464,17 @@ func _refresh_threat_base_memo(snapshot: WorldSnapshot) -> void:
 	var our_net := Vector3(0.0, 0.0, _own_goal_z)
 	var our_goalie_pos: Vector3 = _resolve_our_goalie_pos(snapshot)
 	_memo_defenders.clear()
+	_memo_defender_caps.clear()
 	for pid: int in snapshot.skater_states:
 		if _team_id_by_peer.get(pid, -1) == team_id:
 			_memo_defenders.append(snapshot.skater_states[pid].position)
+			_memo_defender_caps.append(_caps_by_peer.get(pid))
 	for pid: int in snapshot.skater_states:
 		if _team_id_by_peer.get(pid, -1) == team_id:
 			continue
 		threat_shoot_base_by_opp[pid] = AIActionScoring.threat_surface_shoot(
 				snapshot.skater_states[pid].position, our_net, our_goalie_pos,
-				GameRules.NET_HALF_WIDTH, _memo_defenders)
+				GameRules.NET_HALF_WIDTH, _memo_defenders, _memo_defender_caps)
 
 
 # Our goalie's current world position, or the goal mouth as a first-frame

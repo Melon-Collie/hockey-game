@@ -170,6 +170,11 @@ signal local_identity_changed(player_name: String, jersey_number: int, is_left_h
 # Fires after a local tape-job edit lands in the peer map (apply_local_tape).
 # Cosmetic — carries the packed StickTapeConfig code.
 signal local_tape_changed(tape_code: int)
+signal local_skin_changed(skin_tone: int)
+# Fires after a local gear-style edit (skate/glove color) lands in the peer
+# map (apply_local_gear_style). Cosmetic — carries the packed GearStyleConfig
+# code.
+signal local_gear_style_changed(gear_style_code: int)
 
 # Local player picked a different attribute spread (Speed/Agility/Size/Skill).
 # Fires after the new picks land in PlayerPrefs and _peer_attributes[1] is
@@ -273,6 +278,11 @@ var _peer_shot_sensitivity: Dictionary[int, float] = {}
 # pattern as _peer_attributes; absent peers (bots, older payloads) read as the
 # default team-taped look.
 var _peer_tape_codes: Dictionary[int, int] = {}
+var _peer_skin_tones: Dictionary[int, int] = {}
+var _peer_gear_styles: Dictionary[int, int] = {}
+# Preferred position (PlayerRules.POSITION_NAMES index) — read by the lobby's
+# host-side seat assignment, never by spawn.
+var _peer_positions: Dictionary[int, int] = {}
 var _peer_ping_ms: Dictionary[int, int] = {}  # peer_id -> latest RTT in ms (all peers)
 # Host-only: EMA of the host's OWN round-trip measurement to each peer
 # (host_ping/host_pong). Backs _peer_ping_ms on the host — the trusted RTT that
@@ -415,17 +425,28 @@ func _ready() -> void:
 	local_is_left_handed = PlayerPrefs.is_left_handed
 	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
 	_peer_tape_codes[1] = PlayerPrefs.stick_tape_code
+	_peer_skin_tones[1] = SkinToneRegistry.clamp_index(PlayerPrefs.skin_tone)
+	_peer_gear_styles[1] = GearStyleConfig.from_code(PlayerPrefs.gear_style_code).to_code()
+	_peer_positions[1] = PlayerPrefs.preferred_position
 
 # ── Connection ────────────────────────────────────────────────────────────────
 func start_offline() -> void:
 	is_host = true
 	game_initiated = true
 	is_offline_mode = true
+	# Seed the hosted lobby's mode from the saved preference (the last mode
+	# picked while hosting). Free play / tutorial / drills also pass through
+	# here but never read pending_team_size — their configs below carry the
+	# team size directly — so the seed only reaches the unified lobby.
+	pending_team_size = PlayerPrefs.preferred_team_size
 	_peer_handedness[1] = local_is_left_handed
 	_peer_names[1] = local_player_name
 	_peer_numbers[1] = local_jersey_number
 	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
 	_peer_tape_codes[1] = PlayerPrefs.stick_tape_code
+	_peer_skin_tones[1] = SkinToneRegistry.clamp_index(PlayerPrefs.skin_tone)
+	_peer_gear_styles[1] = GearStyleConfig.from_code(PlayerPrefs.gear_style_code).to_code()
+	_peer_positions[1] = PlayerPrefs.preferred_position
 	pending_game_config = {"num_periods": 1, "period_duration": 0.0, "ot_enabled": false, "ot_duration": 0.0,
 			"rule_set": GameRules.DEFAULT_RULE_SET,
 			"team_size": GameRules.DEFAULT_TEAM_SIZE}
@@ -667,6 +688,9 @@ func _on_peer_disconnected(id: int) -> void:
 	_peer_numbers.erase(id)
 	_peer_attributes.erase(id)
 	_peer_tape_codes.erase(id)
+	_peer_skin_tones.erase(id)
+	_peer_gear_styles.erase(id)
+	_peer_positions.erase(id)
 	pending_color_votes.erase(id)
 	# NOTE: _peer_steam_ids is deliberately NOT erased before the emit below —
 	# GameManager.on_player_disconnected (a synchronous listener) reads
@@ -703,12 +727,17 @@ func _on_connected_to_server() -> void:
 	# correct. Valid here — the unique id is assigned before connected_to_server.
 	_peer_attributes[local_peer_id()] = local_attrs
 	_peer_tape_codes[local_peer_id()] = PlayerPrefs.stick_tape_code
+	_peer_skin_tones[local_peer_id()] = SkinToneRegistry.clamp_index(PlayerPrefs.skin_tone)
+	_peer_gear_styles[local_peer_id()] = GearStyleConfig.from_code(
+			PlayerPrefs.gear_style_code).to_code()
+	_peer_positions[local_peer_id()] = PlayerPrefs.preferred_position
 	request_join.rpc_id(1, local_is_left_handed, local_player_name, local_jersey_number,
 			local_attrs.height, local_attrs.weight, local_attrs.profile,
 			local_attrs.curve, local_attrs.flex, local_attrs.length,
 			SteamManager.steam_id, BuildInfo.PROTOCOL_VERSION,
 			SteamManager.get_app_build_id(), PlayerPrefs.shot_power_sensitivity,
-			PlayerPrefs.stick_tape_code)
+			PlayerPrefs.stick_tape_code, PlayerPrefs.skin_tone,
+			PlayerPrefs.gear_style_code, PlayerPrefs.preferred_position)
 	client_connected.emit()
 
 func _on_connection_failed() -> void:
@@ -812,6 +841,12 @@ func reset() -> void:
 	_peer_attributes[1] = PlayerPrefs.get_player_attributes()
 	_peer_tape_codes.clear()
 	_peer_tape_codes[1] = PlayerPrefs.stick_tape_code
+	_peer_skin_tones.clear()
+	_peer_skin_tones[1] = SkinToneRegistry.clamp_index(PlayerPrefs.skin_tone)
+	_peer_gear_styles.clear()
+	_peer_gear_styles[1] = GearStyleConfig.from_code(PlayerPrefs.gear_style_code).to_code()
+	_peer_positions.clear()
+	_peer_positions[1] = PlayerPrefs.preferred_position
 	pending_game_config = {}
 	pending_lobby_slots = {}
 	pending_lobby_roster = []
@@ -1054,7 +1089,10 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 		attr_length: int = PlayerAttributes.GEAR_BALANCED,
 		steam_id: int = 0, protocol_version: int = 0, build_id: int = 0,
 		shot_power_sensitivity: float = 1.0,
-		tape_code: int = StickTapeConfig.DEFAULT_CODE) -> void:
+		tape_code: int = StickTapeConfig.DEFAULT_CODE,
+		skin_tone: int = SkinToneRegistry.DEFAULT_INDEX,
+		gear_style_code: int = GearStyleConfig.DEFAULT_CODE,
+		preferred_position: int = 0) -> void:
 	if not is_host:
 		return
 	var sender_id: int = multiplayer.get_remote_sender_id()
@@ -1098,6 +1136,12 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 	_peer_shot_sensitivity[sender_id] = clampf(shot_power_sensitivity, 0.25, 4.0)
 	# Cosmetic tape job — round-trip coerces a forged code to a legal one.
 	_peer_tape_codes[sender_id] = StickTapeConfig.from_code(tape_code).to_code()
+	# Cosmetic skin tone — same coercion discipline (clamp to the palette).
+	_peer_skin_tones[sender_id] = SkinToneRegistry.clamp_index(skin_tone)
+	# Cosmetic gear style — round-trip coerces a forged code to a legal one.
+	_peer_gear_styles[sender_id] = GearStyleConfig.from_code(gear_style_code).to_code()
+	_peer_positions[sender_id] = clampi(preferred_position, 0,
+			PlayerRules.POSITION_NAMES.size() - 1)
 	# (ENet per-peer disconnect-timeout tuning lived here; SteamMultiplayerPeer
 	# manages its own keepalive over Steam's relay, so there's nothing to set.)
 	# Seed the host-measured RTT immediately instead of waiting up to a full
@@ -1201,6 +1245,38 @@ func get_peer_shot_sensitivity(peer_id: int) -> float:
 func get_peer_tape_code(peer_id: int) -> int:
 	return _peer_tape_codes.get(peer_id, StickTapeConfig.DEFAULT_CODE)
 
+
+func get_peer_skin_tone(peer_id: int) -> int:
+	return _peer_skin_tones.get(peer_id, SkinToneRegistry.DEFAULT_INDEX)
+
+
+func set_peer_skin_tone(peer_id: int, skin_tone: int) -> void:
+	_peer_skin_tones[peer_id] = SkinToneRegistry.clamp_index(skin_tone)
+
+
+# A peer's replicated gear style (packed GearStyleConfig code). Bots and absent
+# peers read as the default kit look.
+func get_peer_gear_style(peer_id: int) -> int:
+	return _peer_gear_styles.get(peer_id, GearStyleConfig.DEFAULT_CODE)
+
+
+func set_peer_gear_style(peer_id: int, gear_style_code: int) -> void:
+	_peer_gear_styles[peer_id] = GearStyleConfig.from_code(gear_style_code).to_code()
+
+
+# A peer's preferred position (PlayerRules.POSITION_NAMES index). Absent
+# peers read as C — the pre-preference seating order.
+func get_peer_position(peer_id: int) -> int:
+	return _peer_positions.get(peer_id, 0)
+
+
+# Local position edit. No signal: the preference is only read at seat time
+# (lobby join / re-seat), never live.
+func apply_local_position(position: int) -> void:
+	var coerced: int = clampi(position, 0, PlayerRules.POSITION_NAMES.size() - 1)
+	_peer_positions[1] = coerced
+	_peer_positions[local_peer_id()] = coerced
+
 # Client-side stash of a roster-synced peer's tape code (the host's own path
 # is request_join). Coerced like every other wire entry point.
 func set_peer_tape_code(peer_id: int, tape_code: int) -> void:
@@ -1215,6 +1291,24 @@ func apply_local_tape(tape_code: int) -> void:
 	_peer_tape_codes[1] = coerced
 	_peer_tape_codes[local_peer_id()] = coerced
 	local_tape_changed.emit(coerced)
+
+
+# Live skin-tone edit, mirroring apply_local_tape: cosmetic and local-only —
+# remote peers keep rendering the tone from this session's join handshake.
+func apply_local_skin(skin_tone: int) -> void:
+	var coerced: int = SkinToneRegistry.clamp_index(skin_tone)
+	_peer_skin_tones[1] = coerced
+	_peer_skin_tones[local_peer_id()] = coerced
+	local_skin_changed.emit(coerced)
+
+
+# Live gear-style edit (skate/glove color), same cosmetic-and-local-only
+# contract as the tape and skin paths above.
+func apply_local_gear_style(gear_style_code: int) -> void:
+	var coerced: int = GearStyleConfig.from_code(gear_style_code).to_code()
+	_peer_gear_styles[1] = coerced
+	_peer_gear_styles[local_peer_id()] = coerced
+	local_gear_style_changed.emit(coerced)
 
 # Host-side override of a peer's locked attributes. Used by the reconnect path
 # to restore the build the player held at their original join, so a mid-match
@@ -1239,68 +1333,6 @@ func apply_local_attributes(attrs: PlayerAttributes) -> void:
 	_peer_attributes[1] = attrs
 	local_attributes_changed.emit(attrs)
 
-
-# Lobby-time build change. Distinct from apply_local_attributes (free-play live
-# re-apply): here we're in the pre-match lobby, no skater exists yet, so this
-# only updates the value the host spawns from at game start. We stamp the local
-# peer's own entry (host = 1) so the local spawn path reads it directly; a
-# client also forwards the build to the host, which coerce-validates it (v4
-# lateral axes — clamp/BMI-band, no budget) before storing it as authority.
-# No live re-apply, no reconcile.
-func update_lobby_attributes(attrs: PlayerAttributes) -> void:
-	if attrs == null:
-		return
-	_peer_attributes[local_peer_id()] = attrs
-	if not is_host:
-		request_update_attributes.rpc_id(1, attrs.height, attrs.weight,
-				attrs.profile, attrs.curve, attrs.flex, attrs.length)
-
-
-# Client → host: update the sender's locked build from the lobby. The host
-# re-validates the legal shape (a modified client can send an illegal all-strong
-# build) and ignores a peer that never completed the join handshake.
-#
-# No match-in-progress gate: _peer_attributes is consulted only at spawn, so a
-# stray mid-match edit can't perturb a live simulation, and a mid-match
-# reconnect restores the original build via set_peer_attributes regardless.
-# (game_initiated is unusable as a gate here — it's set true at start_offline /
-# start_client_lobby, i.e. throughout the pre-match lobby, not just in-game.)
-@rpc("any_peer", "reliable")
-func request_update_attributes(attr_height: int, attr_weight: int, attr_profile: int,
-		attr_curve: int, attr_flex: int, attr_length: int) -> void:
-	if not is_host:
-		return
-	var sender_id: int = multiplayer.get_remote_sender_id()
-	if not _peer_names.has(sender_id):
-		return
-	# Coerce-construct — same lateral-axes validation as request_join.
-	_peer_attributes[sender_id] = PlayerAttributes.new(attr_height, attr_weight,
-			attr_profile, attr_curve, attr_flex, attr_length)
-
-
-# Lobby-time tape edit, mirroring update_lobby_attributes: stamp the local
-# entry the spawn path reads, and forward to the host (which coerces) when
-# we're a client — the join handshake already carried the old code.
-func update_lobby_tape(tape_code: int) -> void:
-	var coerced: int = StickTapeConfig.from_code(tape_code).to_code()
-	_peer_tape_codes[local_peer_id()] = coerced
-	if is_host:
-		_peer_tape_codes[1] = coerced
-	else:
-		request_update_tape.rpc_id(1, coerced)
-
-
-# Client → host: update the sender's tape job from the lobby. Cosmetic;
-# consulted only at spawn, so no match-in-progress gate is needed (see
-# request_update_attributes).
-@rpc("any_peer", "reliable")
-func request_update_tape(tape_code: int) -> void:
-	if not is_host:
-		return
-	var sender_id: int = multiplayer.get_remote_sender_id()
-	if not _peer_names.has(sender_id):
-		return
-	_peer_tape_codes[sender_id] = StickTapeConfig.from_code(tape_code).to_code()
 
 # Cap on inputs per RPC. Matches the host queue depth in RemoteController so a
 # malicious peer can't force the loop into hundreds of failed decode iterations
@@ -1810,11 +1842,15 @@ func spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey_colo
 		attr_curve: int = PlayerAttributes.GEAR_BALANCED,
 		attr_flex: int = PlayerAttributes.GEAR_BALANCED,
 		attr_length: int = PlayerAttributes.GEAR_BALANCED,
-		tape_code: int = StickTapeConfig.DEFAULT_CODE) -> void:
+		tape_code: int = StickTapeConfig.DEFAULT_CODE,
+		skin_tone: int = SkinToneRegistry.DEFAULT_INDEX,
+		gear_style_code: int = GearStyleConfig.DEFAULT_CODE) -> void:
 	var attrs := PlayerAttributes.new(attr_height, attr_weight,
 			attr_profile, attr_curve, attr_flex, attr_length)
 	_peer_attributes[peer_id] = attrs
 	_peer_tape_codes[peer_id] = StickTapeConfig.from_code(tape_code).to_code()
+	_peer_skin_tones[peer_id] = SkinToneRegistry.clamp_index(skin_tone)
+	_peer_gear_styles[peer_id] = GearStyleConfig.from_code(gear_style_code).to_code()
 	remote_skater_spawn_requested.emit(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number, attrs)
 
 @rpc("authority", "reliable")
@@ -2041,7 +2077,8 @@ func send_spawn_remote_skater(peer_id: int, team_slot: int, team_id: int, jersey
 	var attrs: PlayerAttributes = attributes if attributes != null else PlayerAttributes.all_average()
 	spawn_remote_skater.rpc(peer_id, team_slot, team_id, jersey_color, helmet_color, pants_color, is_left_handed, player_name, jersey_number,
 			attrs.height, attrs.weight, attrs.profile, attrs.curve, attrs.flex, attrs.length,
-			get_peer_tape_code(peer_id))
+			get_peer_tape_code(peer_id), get_peer_skin_tone(peer_id),
+			get_peer_gear_style(peer_id))
 
 func send_sync_existing_players(peer_id: int, player_data: Array) -> void:
 	sync_existing_players.rpc_id(peer_id, player_data)

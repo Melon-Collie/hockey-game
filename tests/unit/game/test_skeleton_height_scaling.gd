@@ -5,6 +5,9 @@ extends GutTest
 # (height_mult − 1) × FACEOFF_SPAWN_HEIGHT and every leg-chain Y offset
 # scales by height_mult, so a point at world height Y maps to Y × mult and
 # the skate contact at y = 0 stays planted. The physics origin never moves.
+# The roots' baseline is the on-skates stance: Skater._ready lifts both by
+# SkaterMeshBuilder.SKATE_LIFT_M before the defaults are captured, so every
+# expected root position sits on top of that lift.
 # Pins: root offsets, leg pivot scaling, hand-height scaling on the
 # controller, idempotency (re-applies never compound), and composition with
 # the cosmetic skating-crouch drop (shared _apply_body_height writer).
@@ -56,8 +59,10 @@ func test_skeleton_scales_about_ice_plane() -> void:
 	var h: float = attrs.height_mult()
 	controller.apply_attributes(attrs)
 
-	# Roots rise by (h − 1) × their mesh-native ice height.
-	var expected_root: float = (h - 1.0) * GameRules.FACEOFF_SPAWN_HEIGHT
+	# Roots rise by (h − 1) × their mesh-native ice height, on top of the
+	# on-skates stance lift.
+	var expected_root: float = SkaterMeshBuilder.SKATE_LIFT_M \
+			+ (h - 1.0) * GameRules.FACEOFF_SPAWN_HEIGHT
 	var upper: Node3D = skater.get_node("MeshRoot/UpperBody") as Node3D
 	var lower: Node3D = skater.get_node("MeshRoot/LowerBody") as Node3D
 	assert_almost_eq(upper.position.y, expected_root, 0.0001, "upper root rises")
@@ -70,13 +75,15 @@ func test_skeleton_scales_about_ice_plane() -> void:
 	assert_almost_eq(leg_l.position.x, -0.13, 0.0001, "stance width untouched")
 	assert_almost_eq(shin_l.position.y, SHIN_PIVOT_Y * h, 0.0001, "knee pivot scales")
 
-	# Ice-plane fixed point: a chain point at mesh-native world height Y sits
-	# at Y × h — the knee (0.56 above ice natively) lands at 0.56 × h, so the
-	# skate contact at 0 stays at 0.
+	# Fixed-point check: the skeleton scales about the TOP of the skate stack
+	# (the lift is a fixed, unscaled spacer under it), so a chain point at
+	# mesh-native world height Y lands at Y × h + SKATE_LIFT_M — the knee
+	# (0.56 above ice natively) at 0.56 × h plus the stack.
 	var knee_above_ice: float = GameRules.FACEOFF_SPAWN_HEIGHT \
 			+ expected_root + leg_l.position.y + shin_l.position.y
 	var native_knee: float = GameRules.FACEOFF_SPAWN_HEIGHT + LEG_PIVOT_Y + SHIN_PIVOT_Y
-	assert_almost_eq(knee_above_ice, native_knee * h, 0.0001, "knee height proportional")
+	assert_almost_eq(knee_above_ice, native_knee * h + SkaterMeshBuilder.SKATE_LIFT_M,
+			0.0001, "knee height proportional")
 
 	# Hand heights and the gait's leg scale ride the same multiplier.
 	assert_almost_eq(controller.hand_rest_y, -0.10 * h, 0.0001, "hand rest scales")
@@ -84,8 +91,9 @@ func test_skeleton_scales_about_ice_plane() -> void:
 	assert_almost_eq(controller._skating.leg_scale, h, 0.0001, "gait leg scale set")
 
 	# Derived backhand ROM: whole chain (arm + drop) scales by h, so the
-	# solved reach is exactly h × the mesh-native solve.
-	var arm_eff: float = 0.70 * h * controller.rom_arm_extension
+	# solved reach is exactly h × the mesh-native solve. 0.66 = the two
+	# 0.33 arm bones (Skater exports).
+	var arm_eff: float = 0.66 * h * controller.rom_arm_extension
 	var drop: float = skater.shoulder_height - controller.hand_rest_y
 	assert_almost_eq(drop, 0.50 * h, 0.0001, "shoulder-to-hand drop proportional")
 	assert_almost_eq(controller.rom_backhand_reach_max,
@@ -128,7 +136,8 @@ func test_root_offset_composes_with_crouch_drop() -> void:
 	var attrs: PlayerAttributes = _size_attrs(PlayerAttributes.HEIGHT_MAX)
 	var h: float = attrs.height_mult()
 	controller.apply_attributes(attrs)
-	var root: float = (h - 1.0) * GameRules.FACEOFF_SPAWN_HEIGHT
+	var root: float = SkaterMeshBuilder.SKATE_LIFT_M \
+			+ (h - 1.0) * GameRules.FACEOFF_SPAWN_HEIGHT
 	var upper: Node3D = skater.get_node("MeshRoot/UpperBody") as Node3D
 
 	# Crouch after scaling: both offsets share _apply_body_height.

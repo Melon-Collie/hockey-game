@@ -1,21 +1,20 @@
 class_name StickEditorPopup
 extends Control
 
-# The stick workbench: every stick-related pick in one modal — the three gear
-# slots (LENGTH / CURVE / FLEX, the stick rows that used to sit in
-# AttributePickerPanel) and the tape job (blade tape color + coverage, knob
-# color, handle wrap style) — arranged as compact dropdown rows around a live
-# turntable preview assembled from the real in-game pieces: the procedural
-# blade mesh at the picked pattern, the wrapped tape band, the flex shader
-# pulsing a load-and-release bow scaled by the picked flex (and painting the
-# picked handle wrap), and the shaft cut to the picked length.
+# The stick workbench: every stick-related pick in one modal — the three
+# stick gear slots (LENGTH / CURVE / FLEX) and the tape job (blade tape color
+# + coverage, knob color, handle wrap style) — arranged as compact dropdown
+# rows around a live turntable preview assembled from the real in-game pieces:
+# the procedural blade mesh at the picked pattern, the wrapped tape band, the
+# flex shader pulsing a load-and-release bow scaled by the picked flex (and
+# painting the picked handle wrap), and the shaft cut to the picked length.
 #
 # Rows whose pick changes gameplay (the gear) carry a gold asterisk; tape rows
 # are cosmetic and never lock. A sub-editor, not a committer: opened by
-# PlayerSettingsPopup or LobbyBuildPopup over their own modal, it edits
-# pending values and hands them back through `stick_edited` on Done — the HOST
-# owns snapshot/commit/revert, so Cancel here just discards this dialog's
-# edits and the host's Cancel still reverts an applied Done.
+# PlayerSettingsPopup (the player screen's Equipment section) over its own
+# modal, it edits pending values and hands them back through `stick_edited`
+# on Done — the HOST owns snapshot/commit/revert, so Cancel here just discards
+# this dialog's edits and the host's Cancel still reverts an applied Done.
 
 signal stick_edited(curve: int, flex: int, length: int, tape_code: int)
 
@@ -94,7 +93,7 @@ var _knob: MeshInstance3D = null
 var _floor_disc: MeshInstance3D = null
 var _pulse_t: float = 0.0
 
-# Focus scope (see LobbyBuildPopup.set_focus_scope).
+# Focus scope (see ControllerNav.open_modal).
 var _focus_background: Control = null
 var _focus_restore: Control = null
 
@@ -217,7 +216,7 @@ func _build() -> void:
 	vbox.add_child(action_row)
 
 	var done_btn := Button.new()
-	done_btn.text = tr(&"STICK_EDITOR_DONE")
+	done_btn.text = tr(&"EDITOR_DONE")
 	MenuStyle.apply_primary_cta(done_btn, 18)
 	done_btn.custom_minimum_size = Vector2(140, 44)
 	done_btn.pressed.connect(_done)
@@ -225,7 +224,7 @@ func _build() -> void:
 	action_row.add_child(done_btn)
 
 	var cancel_btn := Button.new()
-	cancel_btn.text = tr(&"STICK_EDITOR_CANCEL")
+	cancel_btn.text = tr(&"EDITOR_CANCEL")
 	cancel_btn.custom_minimum_size = Vector2(140, 44)
 	cancel_btn.add_theme_font_size_override("font_size", 18)
 	cancel_btn.pressed.connect(_cancel)

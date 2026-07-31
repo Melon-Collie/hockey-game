@@ -663,14 +663,15 @@ const BOT_WRISTER_LOOKAHEAD_S: float = (
 # flipped (backhand-side) windup sweeps the other way and reads backhand.
 const BOT_WRISTER_SIDE_OFFSET_M: float = 0.15
 
-# Side-selection for wrister wind-up — defender within this radius
+# Side-selection for wrister wind-up — defender within poke reach
 # AND clearly on the forehand side flips the wind-up to backhand.
 # Models the OPPONENT defender's stick-reach for a poke check
-# (stick + small overhang). The lateral threshold ensures we only
-# flip when the defender is laterally on the forehand side, not
-# directly in front (where the forehand still clears their stick).
-# League default rather than the threatening defender's own stick length,
-# so a long-stick defender's real reach is not modelled here.
+# (stick + small overhang), resolved per defender from _caps_by_peer
+# so a long-stick threat flips the wind-up at his real reach; this
+# constant is the league fallback for unresolvable peers. The lateral
+# threshold ensures we only flip when the defender is laterally on
+# the forehand side, not directly in front (where the forehand still
+# clears their stick).
 const BOT_POKE_REACH_BUFFER_M: float = 0.2
 const BOT_FOREHAND_STICK_REACH_M: float = (
 		GameRules.DEFAULT_STICK_LENGTH_M + BOT_POKE_REACH_BUFFER_M)
@@ -1154,8 +1155,10 @@ const ONE_TIMER_ANCHOR_ARRIVE_M: float = 0.6
 const RECEIVE_GIVE_CEILING_M_S: float = 21.5
 # Opponent-position scratch for the shot-quality check in _try_shot_reception.
 # Separate from _scratch_opponents (owned by _apply_steering) so the reception
-# eval doesn't clobber steering's list mid-tick.
+# eval doesn't clobber steering's list mid-tick. Caps index-matched (null for
+# unwired peers) so the gate prices each lane defender's real reach.
 var _scratch_shot_opponents: Array[Vector3] = []
+var _scratch_shot_opponent_caps: Array[AISkaterCaps] = []
 
 # Tick counter for ONE_TIMER_PRESSED — the bot holds slap_held (the REAL
 # slapper one-timer charge) until the puck reaches the slapper zone / attaches
@@ -3038,13 +3041,13 @@ func _try_shot_reception(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# Budget this bot's own shot spread like every scored shot — a one-timer is
 	# the WORST-controlled release there is, so a wobbly-handed tier demands a
 	# wider opening before committing to fire-on-contact.
-	_gather_opponents(snapshot, _scratch_shot_opponents)
+	_gather_opponents(snapshot, _scratch_shot_opponents, _scratch_shot_opponent_caps)
 	var goalie_now: Vector3 = _goalie_now(snapshot)
 	var shot_score: float = AIActionScoring.score_shoot(
 			perp_foot, _attacking_goal_pos, goalie_now,
 			GameRules.NET_HALF_WIDTH, _scratch_shot_opponents,
-			AIActionScoring.PASS_SPEED_M_S, 0.0, [], -1.0, false, 0.0, false,
-			_shot_aim_error_rad)
+			AIActionScoring.PASS_SPEED_M_S, 0.0, _scratch_shot_opponent_caps,
+			-1.0, false, 0.0, false, _shot_aim_error_rad)
 	if shot_score < SHOT_RECEPTION_SCORE_GATE:
 		return _RECV_NONE
 	# Net-forward geometry. Anchor = the catch point pulled back one blade-reach
@@ -3114,13 +3117,16 @@ func _try_shot_reception(input: InputState, snapshot: WorldSnapshot, self_pos: V
 
 # Fills `out` with opposing-team skater positions. Cheap (≤3 opponents); used by
 # the shot-quality check in _try_shot_reception.
-func _gather_opponents(snapshot: WorldSnapshot, out: Array[Vector3]) -> void:
+func _gather_opponents(snapshot: WorldSnapshot, out: Array[Vector3],
+		out_caps: Array[AISkaterCaps]) -> void:
 	out.clear()
+	out_caps.clear()
 	for pid: int in snapshot.skater_states:
 		if pid == _peer_id:
 			continue
 		if _team_id_by_peer.get(pid, -1) != _team_id:
 			out.append(snapshot.skater_states[pid].position)
+			out_caps.append(_caps_by_peer.get(pid))
 
 
 func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3, have_puck: bool) -> void:
@@ -3702,7 +3708,6 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 			_shoot_side_sign = 1.0 if offset_side_dot >= 0.0 else -1.0
 		else:
 			_shoot_side_sign = 1.0
-			var reach_sq: float = BOT_FOREHAND_STICK_REACH_M * BOT_FOREHAND_STICK_REACH_M
 			for peer_id: int in snapshot.skater_states:
 				if peer_id == _peer_id:
 					continue
@@ -3712,7 +3717,12 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 				var rel_x: float = opp_pos.x - self_pos.x
 				var rel_z: float = opp_pos.z - self_pos.z
 				var rel_len_sq: float = rel_x * rel_x + rel_z * rel_z
-				if rel_len_sq > reach_sq:
+				# THIS defender's poke reach — his real stick + the overhang
+				# buffer, league fallback when his build isn't wired.
+				var opp_caps: AISkaterCaps = _caps_by_peer.get(peer_id)
+				var reach: float = BOT_FOREHAND_STICK_REACH_M if opp_caps == null \
+						else opp_caps.stick_reach + BOT_POKE_REACH_BUFFER_M
+				if rel_len_sq > reach * reach:
 					continue
 				var forehand_dot: float = rel_x * forehand_perp_init.x + rel_z * forehand_perp_init.z
 				if forehand_dot > BOT_FOREHAND_LATERAL_THRESHOLD_M:

@@ -30,6 +30,23 @@ static func position_name(team_slot: int) -> String:
 static func is_defense_slot(team_slot: int) -> bool:
 	return team_slot >= FIRST_DEFENSE_SLOT
 
+
+# The lobby slot a player's preferred position (a POSITION_NAMES index) maps
+# to at a given team size. 5v5 seats the position directly; 3v3 fields no D
+# slots, so the wing/defense pairs merge onto their side — LW and LD hold the
+# left, RW and RD the right — and the C keeps the middle.
+static func preferred_slot(position: int, team_size: int) -> int:
+	var p: int = clampi(position, 0, POSITION_NAMES.size() - 1)
+	if team_size >= 5:
+		return p
+	match p:
+		1, 3:
+			return 1
+		2, 4:
+			return 2
+		_:
+			return 0
+
 # Returns team_id (0 or 1). Balances by count; ties are broken randomly.
 static func assign_team(team0_count: int, team1_count: int) -> int:
 	if team0_count < team1_count:
