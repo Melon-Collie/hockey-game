@@ -1284,14 +1284,55 @@ static func loose_puck_race_lost(
 			self_pid, best_opp_meet, own_goal_dir)
 
 
-# Is a live teammate (not me, not ghosted) at least a stride goal-side of the
-# pickup point? own_goal_dir 0.0 means the caller has no rink geometry to give
-# us, so no containment can be claimed.
+# Is someone else covering the counter, so that leaving to chase is free?
+#
+# TWO reads, OR'd, because each is structurally unobtainable in the regime the
+# other answers. A live teammate qualifies if he is either:
+#   GOAL-SIDE of the pickup — the plain support read. Right when the pickup is
+#     far from our net (a dump into their corner puts our whole team goal-side
+#     of it), and what makes the forecheck work.
+#   HOLDING THE HOUSE — able to reach the top of the circles in front of our own
+#     net inside the window an arrival there still matters. Right when the
+#     pickup is at our own net, where nothing can be goal-side of it.
+#
+# The goal-side test alone leaves a hole exactly where declining costs the most.
+# When the puck is the DEEPEST object in our own end — rimmed into our corner or
+# around behind our own goal line, past everybody — no teammate CAN be goal-side
+# of it. The valve read "nobody is covering" when the truth was "everybody is
+# covering, the puck is just behind us", every eligible bot declined, and the
+# puck sat in our own corner untouched: measured on the engagement harness at 93
+# of 98 idle ticks, puck loose 0.8 s at 8.1 m/s, nearest man 13.4 m and closing,
+# all three bots parked in OFF_PUCK. Only ONE bot per team is even eligible to
+# chase (the election), so a single unearned decline is a whole-team no-show.
+#
+# Re-phrasing it as a race — "can a teammate beat the collector home?" — does not
+# fix it, and the reason is worth keeping: the race runs to `best_opp_meet`, and
+# when the puck caroms behind our own goal line that point IS our net, so the
+# collector is already home and nobody can beat him there. Any guard that
+# measures against the pickup dies the same way. The house read measures against
+# OUR NET instead, which is why it survives.
+#
+# Doctrine (researched): "don't chase" in hockey means do not pursue a puck
+# CARRIER into a low-danger area and turn your back on the slot. A LOOSE puck in
+# our end is always pressured — "the nearest player pressures, and everyone else
+# adjusts their support so the house stays covered". So the question is never
+# "may I go?" but "if I go, is the house still covered?", which is a numbers
+# read. The case the decline was built for survives it: the genuine last man,
+# with his mates caught up-ice, has nobody who can hold the house, so he still
+# declines and covers the net front instead of chasing into the corner.
+#
+# own_goal_dir 0.0 means the caller has no rink geometry to give us, so no
+# containment can be claimed.
 static func _has_containment_behind(snapshot: WorldSnapshot, team_id: int,
 		team_id_by_peer: Dictionary, self_pid: int, pickup: Vector3,
 		own_goal_dir: float) -> bool:
 	if own_goal_dir == 0.0:
 		return false
+	# The house gate: tops of the circles off our own goal line — the researched
+	# depth where a recovering defender stops, and so the honest finish line for
+	# "is he back in time to matter".
+	var gate := Vector3(0.0, 0.0, own_goal_dir
+			* (GameRules.GOAL_LINE_Z - AIZoneCoverage.HOUSE_TOP_DEPTH_M))
 	for pid: int in snapshot.skater_states:
 		if pid == self_pid or team_id_by_peer.get(pid, -1) != team_id:
 			continue
@@ -1300,5 +1341,8 @@ static func _has_containment_behind(snapshot: WorldSnapshot, team_id: int,
 			continue
 		if own_goal_dir * (mate.position.z - pickup.z) \
 				> AIActionScoring.CHASE_CONTEST_MARGIN_M:
+			return true
+		if AIActionScoring.time_to_arrive(mate.position, gate, mate.velocity) \
+				<= AIRushRead.LATE_MAN_WINDOW_S:
 			return true
 	return false
