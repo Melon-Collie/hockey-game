@@ -4704,22 +4704,48 @@ static func best_evade_point_toward(
 			env, opponents, opponent_vels, opponent_caps, objective)
 
 
-# WHERE ON THE BLADE to hold the puck under pressure: the point in the carrier's
+# WHERE ON THE BLADE to hold the puck under pressure: a point in the carrier's
 # handling envelope ALONE (no body-maneuver term — the body keeps doing whatever
-# steering wants; this is pure stick work) with the most clearance from every
-# defender's momentum-reach. Returned as an OFFSET from the body (y = 0), so the
-# consumer re-applies it to the live body position every tick — pull the puck back
-# to the protected hip when the presented forward spot is covered, and the body
-# becomes the shield. The envelope is intersected with the playing surface, so
-# the protected side is never through a wall (the escape runs along the boards).
+# steering wants; this is pure stick work), safe from every defender's
+# momentum-reach. Returned as an OFFSET from the body (y = 0), so the consumer
+# re-applies it to the live body position every tick — pull the puck off the
+# presented forward spot when that spot is covered, and the body becomes the
+# shield. The envelope is intersected with the playing surface, so the protected
+# side is never through a wall (the escape runs along the boards).
+#
+# Called TWICE by the carrier, for two different questions, and the distinction
+# is the point of the `objective` parameter:
+#
+#   HOW MUCH to shield reads the MAX-clearance seam (no objective) — the safety
+#     the best available shield buys, which is what the consumer's blend weight
+#     needs. Unchanged.
+#   WHERE to put the puck reads the DIRECTED seam (objective = the presented
+#     forward spot), exactly like best_evade_point_toward: among samples with a
+#     blade of real air (EVADE_SAFE_CLEAR_MIN_M) take the one CLOSEST to that
+#     spot, falling back to max clearance only when nothing in the envelope is
+#     safe.
+#
+# Aiming with the max-clearance point was the bug. It is the point diametrically
+# opposite the checker, and a checker only makes shielding necessary by being in
+# FRONT — so the puck went to the BACK hip every time the shield engaged, and
+# stayed there for as long as the man was live. Measured: against any defender
+# the carrier was skating toward, the seam came back 120-180 deg off the carry
+# line at full gain. That is the "slips through traffic, then keeps carrying it
+# behind him" look, and a puck on the back hip is not on a shot or a pass.
+# Directed, the seam grades with the checker's bearing (180 -> 90 -> 0 deg as he
+# steps off the line), so the shield goes exactly as deep as it must — and under
+# a real jam, where nothing is safe, the fallback restores the full far-hip
+# shield.
 static func best_handle_protect_point(
 		carrier_pos: Vector3, carrier_vel: Vector3,
 		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		handle_reach: float, opponent_caps: Array = []) -> Vector3:
+		handle_reach: float, opponent_caps: Array = [],
+		objective: Vector3 = Vector3.INF) -> Vector3:
 	var proj_x: float = carrier_pos.x + carrier_vel.x * EVADE_HORIZON_S
 	var proj_z: float = carrier_pos.z + carrier_vel.z * EVADE_HORIZON_S
 	var best: Vector3 = _best_clear_point(
-			proj_x, proj_z, handle_reach, opponents, opponent_vels, opponent_caps)
+			proj_x, proj_z, handle_reach, opponents, opponent_vels, opponent_caps,
+			objective)
 	return Vector3(best.x - proj_x, 0.0, best.z - proj_z)
 
 

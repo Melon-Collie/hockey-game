@@ -2360,20 +2360,30 @@ func test_open_ice_carrier_feels_no_protect_gain() -> void:
 
 
 func test_frontal_stick_threat_pulls_the_puck_behind_the_body() -> void:
-	# A defender's stick parked right on the forward carry spot (2 m toward the
-	# attacking net, -Z): full protect pressure, and the protect offset pulls
-	# the puck to the far side of the body (+Z — back hip, body as the shield).
+	# A defender's stick parked right on the forward carry spot: full protect
+	# pressure, and the protect offset pulls the puck to the far side of the body
+	# (+Z — back hip, body as the shield).
+	#
+	# Re-pinned at 1.6 m rather than 2.2 m when the AIM seam became DIRECTED (see
+	# best_handle_protect_point). The GAIN model is untouched — it still reads the
+	# max-clearance seam — but the aim is now the least-committal SAFE point
+	# instead of the emptiest one, so the distance at which a stick genuinely
+	# takes the puck off the play line is a real boundary rather than a constant.
+	# At 2.2 m the directed seam returns ~the body itself: the presented spot is
+	# close enough to safe that no swing is warranted, which is the whole point of
+	# the change. 1.6 m is a stick actually ON the presented puck, which is what
+	# this test's name and doctrine are about.
 	var self_pos := Vector3(0, 0, 5)
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
-			[3, 1, self_pos + Vector3(0, 0, -2.2)],   # stick on the presented puck
+			[3, 1, self_pos + Vector3(0, 0, -1.6)],   # stick on the presented puck
 	]
 	var ctx := _make_ctx(self_pos, skaters)
 	var c := AIRoleCarrier.new()
 	c.decide(ctx)
 	assert_gt(c.protect_gain, 0.5,
 			"a stick on the presented spot, with a safe hip to hide it, is a strong shield")
-	assert_gt(c.protect_offset.z, 0.5, "the puck pulls to the protected side of the body")
+	assert_gt(c.protect_offset.z, 0.4, "the puck pulls to the protected side of the body")
 
 
 func test_protect_read_is_gated_by_the_cognition_tier() -> void:
@@ -2423,6 +2433,47 @@ func test_beaten_defender_behind_does_not_hold_the_shield() -> void:
 	assert_gt(cf.protect_gain, 0.5,
 			"a stick on the forward puck still earns a strong shield; got %f"
 			% cf.protect_gain)
+
+
+func test_the_shield_goes_only_as_far_off_the_play_line_as_it_must() -> void:
+	# The seam is DIRECTED at the presented-forward spot, not a max-clearance
+	# read. Asked for pure max clearance it returns the point diametrically
+	# opposite the checker — and a checker only makes shielding necessary by
+	# being in FRONT, so that point is behind the carrier. Measured on the old
+	# read: against any defender the carrier was skating toward, the seam came
+	# back 120-180 deg off the carry line at full gain, and the blade sat on the
+	# back hip for as long as the man was live. That is the "beats his man, then
+	# keeps carrying it behind him" look, and a puck on the back hip is not on a
+	# shot or a pass.
+	#
+	# What has to hold is that the shield GRADES: as the same defender moves off
+	# the carry line, the seam walks back toward it rather than staying pinned
+	# behind. Carrier driving at the -Z net at 7 m/s, containing defender ahead,
+	# swept laterally.
+	var self_pos := Vector3(0, 0, -2)
+	var vel := Vector3(0, 0, -7)
+	var angles: Array[float] = []
+	for dx: float in [0.0, 1.0, 2.0]:
+		var ctx: RoleContext = _make_ctx(self_pos, [
+				[1, TEAM_ID, self_pos, false, vel],
+				[3, 1, Vector3(dx, 0, -5.0), false, Vector3(0, 0, -3)]])
+		ctx.self_velocity = vel
+		var c := AIRoleCarrier.new()
+		c.decide(ctx)
+		# Signed angle of the seam off the carry line; 0 = on the play line,
+		# +/-180 = straight behind the body.
+		var off: Vector3 = c.protect_offset
+		var deg: float = absf(rad_to_deg(
+				Vector2(0, -1).angle_to(Vector2(off.x, off.z))))
+		angles.append(deg)
+		gut.p("  D %.1f m off the line: gain %.3f, seam %.0f deg off the carry"
+				% [dx, c.protect_gain, deg])
+	assert_gt(angles[0], 150.0,
+			"a checker dead on the carry line leaves only the back hip")
+	assert_lt(angles[1], angles[0],
+			"…step him off the line and the puck comes back toward it")
+	assert_lt(angles[2], 60.0,
+			"…and a checker well off the line barely moves the puck at all")
 
 
 func test_beaten_side_defender_still_shields() -> void:

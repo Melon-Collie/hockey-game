@@ -1034,7 +1034,10 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 				AIActionScoring.reach_clearance(fwd_spot, horizon,
 						_scratch_protect_opponents, _scratch_protect_vels,
 						_scratch_protect_caps))
-		protect_offset = AIActionScoring.best_handle_protect_point(
+		# HOW MUCH to shield and WHERE to put the puck are two questions answered
+		# by two seams (see best_handle_protect_point). The WEIGHT reads the
+		# MAX-clearance seam — the safety the best available shield buys.
+		var max_seam: Vector3 = AIActionScoring.best_handle_protect_point(
 				self_pos, ctx.self_velocity, _scratch_protect_opponents,
 				_scratch_protect_vels, ctx.self_handle_reach, _scratch_protect_caps)
 		# Shield WEIGHT = the safety the shield actually buys. best_handle_protect_point
@@ -1046,12 +1049,20 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 		# grounded alternative to a pressure floor, which would gate a raw coverage
 		# read by a hand-picked number and shield pre-emptively against near
 		# defenders who aren't actually threatening the puck.
-		var seam_world: Vector3 = self_pos + ctx.self_velocity * horizon + protect_offset
+		var seam_world: Vector3 = self_pos + ctx.self_velocity * horizon + max_seam
 		var seam_safety: float = AIActionScoring.clearance_to_safety(
 				AIActionScoring.reach_clearance(seam_world, horizon,
 						_scratch_protect_opponents, _scratch_protect_vels,
 						_scratch_protect_caps))
 		protect_gain = clampf(seam_safety - fwd_safety, 0.0, 1.0)
+		# …and the DIRECTION is the least-committal seam that is still safe,
+		# directed at the presented-forward spot. Shield strength is unchanged
+		# (that is the weight above); this only stops the blade going further off
+		# the play line than the safety actually requires.
+		protect_offset = AIActionScoring.best_handle_protect_point(
+				self_pos, ctx.self_velocity, _scratch_protect_opponents,
+				_scratch_protect_vels, ctx.self_handle_reach,
+				_scratch_protect_caps, fwd_spot)
 	else:
 		protect_gain = 0.0
 		protect_offset = Vector3.ZERO
