@@ -105,6 +105,35 @@ func test_power_negative_and_nan_zeroed() -> void:
 	assert_almost_eq(ShotReleaseRules.clamp_power(NAN, 34.0), 0.0, 0.001)
 
 
+# ── one_timer_claim_blocked ───────────────────────────────────────────────────
+
+func test_one_timer_claim_allowed_when_nothing_objects() -> void:
+	assert_false(ShotReleaseRules.one_timer_claim_blocked(false, false, false, false, false),
+			"a loose puck, live phase, healthy shooter off cooldown — the claim stands")
+
+
+func test_one_timer_claim_blocked_by_each_reason_alone() -> void:
+	assert_true(ShotReleaseRules.one_timer_claim_blocked(true, false, false, false, false),
+			"someone already carries the puck")
+	assert_true(ShotReleaseRules.one_timer_claim_blocked(false, true, false, false, false),
+			"pickup is locked (dead-puck phase)")
+	assert_true(ShotReleaseRules.one_timer_claim_blocked(false, false, true, false, false),
+			"movement is locked")
+	assert_true(ShotReleaseRules.one_timer_claim_blocked(false, false, false, true, false),
+			"the shooter is a ghost")
+
+
+# The regression this clause exists for. When the host's own sim of the shooter
+# already fired this swing as a carried slapshot, the puck it released is LOOSE
+# again — so the carrier check passes and, without the cooldown, the very same
+# swing's claim fires the puck a second time. The releasing skater's reattach
+# cooldown is the only surviving evidence that the shot already happened.
+func test_one_timer_claim_blocked_after_the_shooter_just_released() -> void:
+	assert_true(
+			ShotReleaseRules.one_timer_claim_blocked(false, false, false, false, true),
+			"a shooter inside their own reattach cooldown cannot re-fire the puck they just released")
+
+
 # ── one_timer_in_range ────────────────────────────────────────────────────────
 
 func test_one_timer_puck_in_zone_accepted() -> void:

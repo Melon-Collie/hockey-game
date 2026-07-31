@@ -131,6 +131,23 @@ static func clamp_origin(client_origin: Vector3, shooter_pos: Vector3, max_reach
 	return Vector3(shooter_pos.x + off.x, client_origin.y, shooter_pos.z + off.y)
 
 
+# One-timer eligibility, as one question. A one-timer claim is a possession-less
+# grab — the host teleports the puck onto the claimant's blade and fires it — so
+# every reason an ordinary corral would be refused refuses this too.
+#
+# `shooter_on_cooldown` is the load-bearing one and the least obvious: it is this
+# claim's IDEMPOTENCY guard. `has_carrier` alone cannot see a concurrent
+# host-side resolution of the SAME swing, because that resolution ends with the
+# puck loose — carrier back to null, claim waved through, puck fired twice. The
+# release that resolved it stamps the shooter's reattach cooldown, so "did this
+# skater just put this puck in flight" is the question that actually discriminates.
+# It doubles as the self-rebound rule the ordinary corral already applies.
+static func one_timer_claim_blocked(has_carrier: bool, pickup_locked: bool,
+		movement_locked: bool, shooter_is_ghost: bool, shooter_on_cooldown: bool) -> bool:
+	return has_carrier or pickup_locked or movement_locked \
+			or shooter_is_ghost or shooter_on_cooldown
+
+
 # One-timer range gate: the (rewound) puck the shooter saw must be within the
 # slapper zone radius plus speed leniency — the same formula the client's
 # `_effective_one_timer_leniency` uses — plus server-side slack.
