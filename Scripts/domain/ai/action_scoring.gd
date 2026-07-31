@@ -1497,11 +1497,6 @@ static func best_shot_loft(
 			loft_tans, _xz_dist(shooter, goalie_pos), goalie_down)
 
 
-# (best_shot_power_t is gone: under the contact-point solve EVERY hole fires
-# full power — the launch angle is what adapts, so pace only buys flight time
-# and clamp relief. Callers commit power_t = 1.0 directly.)
-
-
 # The world aim POINT (on the net plane, y = 0) of the CHOSEN hole — the exact
 # target the loft was picked for, so aim and loft always describe the same hole.
 # The state machine locks this as the wrister aim at charge start. Falls back to

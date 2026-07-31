@@ -1,7 +1,7 @@
 # Elevation Rework — Design Doc (issue #585)
 
-Status: **agreed design, v3 (manual angle ladder)** — implementation follows
-the CLAUDE.md workflow: this doc is the plan; deviations get discussed first.
+Status: **v3 (manual angle ladder) IMPLEMENTED** — the §1 ladder values are
+the live playtest tuning surface.
 Supersedes the elevation half of `docs/attributes-v4-plan.md` §5.2.
 
 Version history (full writeups in git):
@@ -178,15 +178,7 @@ pass). Benchmarks after (rung iteration is 3× the v2 solve — still trivial).
 
 1. Playtest the ladder values (§1 table is the tuning surface).
 2. The goalie high-game complement (pre-arm read) if mastered static snipes
-   still feel free.
+   still feel free — issue #597.
 3. The contact-point visual tell (puck rides heel→toe) — replaces chevrons
-   eventually, makes the level readable to the defense.
-4. Crossbar corner-arc collision if not done in this pass.
-5. Docs pass: gameplay-design.md, ARCHITECTURE.md elevation + deflect
-   sections, area CLAUDE.mds, tutorial/drill audit (tutorial steps reference
-   LOW tips / HIGH lobs — remap to the new modes).
-
-## 7. Out-of-scope flags (carried from earlier phases)
-
-- `docs/attributes-v4-plan.md` §5.2 still describes the 23°/5.2 m face-angle
-  model (twice superseded).
+   eventually, makes the level readable to the defense — issue #596.
+4. Crossbar corner-arc collision + drill-target audit — issue #598.

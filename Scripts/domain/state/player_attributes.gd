@@ -23,7 +23,7 @@ extends RefCounted
 #     stamina metabolism fork (lean = shallow pool / fast regen).
 #   • GEAR — four discrete slots, three options each, ALL LIVE and all
 #     LATERAL (no net power): SKATE PROFILE (top-end/glide ↔ first-step/
-#     cornering incl. grip), BLADE CURVE (toe cap gates the roof ↔
+#     cornering incl. grip), BLADE CURVE (loft-ladder steepness ↔
 #     backhand honesty, + runway lean), STICK FLEX (shot ceiling ↔ load
 #     time + runway), STICK LENGTH (reach/sweep ↔ snap/inner-circle — the
 #     blade-cap lever).

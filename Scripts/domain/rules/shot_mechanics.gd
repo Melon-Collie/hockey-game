@@ -249,15 +249,15 @@ static func release_wrister(
 		# blade's lateral carry-side offset (the puck sits off to the forehand
 		# side), which pulled the pass off the cursor line — this reads blade→cursor
 		# directly. Falls back to player→cursor only when the cursor sits on the
-		# blade (degenerate, no direction). Loft rides the same level table as
-		# charged shots: level 1 at pass power is the saucer pass, level 2 the flip.
+		# blade (degenerate, no direction). Loft rides the fixed-vy pass table
+		# (NOT the shot ladder): LOW at pass power is the saucer, MID+ the flip.
 		var blade_xz := Vector3(blade_world_pos.x, 0.0, blade_world_pos.z)
 		var pass_dir: Vector3 = (target - blade_xz).normalized()
 		if pass_dir.length_squared() < 0.0001:
 			pass_dir = (target - player_xz).normalized()
-		# Quick passes ride the fixed-speed table under the UNIVERSAL cap only —
-		# the toe cap is a shot lever (you flip a pass off the mid-blade, not
-		# the toe), and at pass power no honest curve ever bound here anyway.
+		# Quick passes are deliberately GEAR-FREE under the universal cap only —
+		# the angle ladder is a shot lever; the saucer and flip stay calibrated
+		# across blades so pass mechanics never vary by build.
 		var tap_y: float = loft_y(cfg.quick_pass_power,
 				_loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high))
 		return ShotResult.make(

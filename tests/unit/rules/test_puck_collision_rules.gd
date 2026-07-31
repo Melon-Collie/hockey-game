@@ -132,13 +132,9 @@ func test_zero_velocity_yields_zero() -> void:
 	assert_almost_eq(result.length(), 0.0, 0.001, "no input energy, no output")
 
 # ── deflect_loft_speed ───────────────────────────────────────────────────────
-# Args: (elevation_level, puck_y, blade_y, up_speed, down_speed, deadband).
-# Grounded plane (FLAT/LOW) takes its direction from the level; the lifted plane
-# (HIGH) takes it from blade-vs-puck geometry.
 
 const _UP: float = 3.8
 const _DOWN: float = 3.5
-# Contact points that matter: blade_height 0.03 + blade_lift_height 0.52.
 
 func _loft(level: int) -> float:
 	return PuckCollisionRules.deflect_loft_speed(level, _UP, _DOWN)

@@ -496,7 +496,7 @@ func test_flex_is_a_power_release_seesaw() -> void:
 	assert_lt(tall.shot_charge_mult(), 1.0, "big frame still threatens sooner at medium flex")
 
 
-func test_curve_trades_toe_cap_and_release_for_backhand() -> void:
+func test_curve_trades_loft_ladder_and_release_for_backhand() -> void:
 	var m88 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
 	var m92 := PlayerAttributes.all_average()
 	var m28 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1)
