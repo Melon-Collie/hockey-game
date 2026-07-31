@@ -156,7 +156,10 @@ static func _pin_carried_puck(
 	if record == null or record.controller == null \
 			or record.skater == null or not is_instance_valid(record.skater):
 		return false
-	if record.skater.current_shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK:
+	# The one-timer's retention hold keeps the same slapshot pin, so it is excluded
+	# for the same reason as the wind-up it continues.
+	if record.skater.current_shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK \
+			or record.skater.current_shot_state == SkaterStateMachine.State.ONE_TIMER_RETENTION:
 		return false
 	var contact: Vector3 = record.skater.get_blade_contact_global()
 	contact.y = puck.ice_height

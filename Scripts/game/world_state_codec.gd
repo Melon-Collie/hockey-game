@@ -447,7 +447,8 @@ static func _write_skater_quantized(b: PackedByteArray, o: int, s: SkaterNetwork
 	b.encode_s16(o, clampi(roundi(s.facing_angular_velocity / (PI * 10.0) * 32767.0), -32768, 32767)); o += 2
 	b.encode_s16(o, clampi(roundi(s.upper_body_angular_velocity / (PI * 10.0) * 32767.0), -32768, 32767)); o += 2
 	b.encode_u32(o, roundi(maxf(s.last_processed_host_timestamp, 0.0) * Constants.TIME_WIRE_SCALE)); o += 4
-	# Flags byte: bits 0-2 shot_state (7 SkaterStateMachine.State values),
+	# Flags byte: bits 0-2 shot_state (8 SkaterStateMachine.State values — FULL;
+	# a ninth costs a repack),
 	# bits 3-4 elevation_level (0..2), bit 5 ghost, bit 6 blade_up,
 	# bit 7 sprint_locked. Repacked at PROTOCOL_VERSION 11 (shot_state gave a
 	# bit to the 2-bit loft level).

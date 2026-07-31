@@ -105,6 +105,58 @@ func test_power_negative_and_nan_zeroed() -> void:
 	assert_almost_eq(ShotReleaseRules.clamp_power(NAN, 34.0), 0.0, 0.001)
 
 
+# ── one_timer_claim_blocked ───────────────────────────────────────────────────
+
+func test_one_timer_claim_allowed_when_nothing_objects() -> void:
+	assert_false(ShotReleaseRules.one_timer_claim_blocked(false, false, false, false, false),
+			"a loose puck, live phase, healthy shooter off cooldown — the claim stands")
+
+
+func test_one_timer_claim_blocked_by_each_reason_alone() -> void:
+	assert_true(ShotReleaseRules.one_timer_claim_blocked(true, false, false, false, false),
+			"someone already carries the puck")
+	assert_true(ShotReleaseRules.one_timer_claim_blocked(false, true, false, false, false),
+			"pickup is locked (dead-puck phase)")
+	assert_true(ShotReleaseRules.one_timer_claim_blocked(false, false, true, false, false),
+			"movement is locked")
+	assert_true(ShotReleaseRules.one_timer_claim_blocked(false, false, false, true, false),
+			"the shooter is a ghost")
+
+
+# The regression this clause exists for. When the host's own sim of the shooter
+# already fired this swing as a carried slapshot, the puck it released is LOOSE
+# again — so the carrier check passes and, without the cooldown, the very same
+# swing's claim fires the puck a second time. The releasing skater's reattach
+# cooldown is the only surviving evidence that the shot already happened.
+func test_one_timer_claim_blocked_after_the_shooter_just_released() -> void:
+	assert_true(
+			ShotReleaseRules.one_timer_claim_blocked(false, false, false, false, true),
+			"a shooter inside their own reattach cooldown cannot re-fire the puck they just released")
+
+
+# ── one_timer_claim_is_stale ──────────────────────────────────────────────────
+
+func test_one_timer_claim_fresh_when_the_puck_was_last_played_before_the_swing() -> void:
+	# The feed that set this one-timer up IS a release, and it necessarily
+	# predates the swing that answers it. The common case must not be rejected.
+	assert_false(ShotReleaseRules.one_timer_claim_is_stale(10.0, 9.4),
+			"the pass being one-timed was played before the claim was stamped")
+
+
+func test_one_timer_claim_fresh_when_the_puck_has_never_been_played() -> void:
+	assert_false(ShotReleaseRules.one_timer_claim_is_stale(10.0, -1.0),
+			"an untouched puck (faceoff drop) blocks nothing")
+
+
+# The second double-fire shape: two shooters commit on the same feed, the first
+# claim to land fires the puck and leaves it LOOSE, so the carrier check cannot
+# see that the contest is already resolved. The loser must whiff rather than drag
+# the puck back out of its flight and re-fire it.
+func test_one_timer_claim_stale_once_the_puck_is_already_in_flight() -> void:
+	assert_true(ShotReleaseRules.one_timer_claim_is_stale(10.0, 10.05),
+			"someone played the puck after this swing committed — the swing missed")
+
+
 # ── one_timer_in_range ────────────────────────────────────────────────────────
 
 func test_one_timer_puck_in_zone_accepted() -> void:

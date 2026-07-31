@@ -3215,7 +3215,28 @@ func on_remote_one_timer_release(direction: Vector3, _power: float, peer_id: int
 	# dropping is correct for both. Without these checks a client could fire
 	# `release_puck_one_timer` at any moment and `puck.set_carrier` would
 	# teleport the puck off anyone's stick to the shooter's blade.
-	if puck.carrier != null or puck.pickup_locked or is_movement_locked() or record.skater.is_ghost:
+	# The cooldown clause is what stops the SAME swing firing twice. Host and
+	# client can disagree about whether a one-timer had the puck: the host's own
+	# pickup detection may grant the feed DURING the retention hold while that
+	# grant is still in flight to the shooter. The host's sim then fires the swing
+	# as a carried slapshot (_on_remote_derived_release) while the client, still
+	# seeing a loose puck when its hold ends, sends this claim for the same swing.
+	# The derived release lands first and leaves carrier == null, so the carrier
+	# check alone waves the claim through and the puck is yanked back onto the
+	# blade and fired again. release() stamps the ex-carrier's reattach cooldown,
+	# which is exactly "this skater just put this puck in flight". (The reverse
+	# arrival order was already safe: this handler sets the carrier before
+	# releasing, so the derived path then sees carrier == null and drops.)
+	if ShotReleaseRules.one_timer_claim_blocked(
+			puck.carrier != null, puck.pickup_locked, is_movement_locked(),
+			record.skater.is_ghost, puck.is_on_cooldown(record.skater)):
+		return
+	# ...and the same double-fire from the other direction: somebody ELSE (or this
+	# shooter's own host-side sim) already played the puck after this claim was
+	# stamped, so the loose puck the carrier check sees is one already in flight.
+	# The rewound range gate below cannot catch that — it re-derives the claimant's
+	# own view, where the puck was on their blade.
+	if ShotReleaseRules.one_timer_claim_is_stale(host_timestamp, puck.last_played_time):
 		return
 	var controller: SkaterController = record.controller
 	var safe_rtt_ms: float = ShotReleaseRules.clamp_rtt_ms(
@@ -3243,7 +3264,8 @@ func on_remote_one_timer_release(direction: Vector3, _power: float, peer_id: int
 	var puck_speed: float = Vector2(puck.linear_velocity.x, puck.linear_velocity.z).length()
 	if not ShotReleaseRules.one_timer_in_range(
 			zone_xz, view_puck_xz,
-			controller.slapper_zone_radius, puck_speed, controller.one_timer_leniency_time):
+			controller.slapper_zone_radius, puck_speed,
+			controller.one_timer_effective_leniency_time()):
 		return
 	# HOST-AUTHORITATIVE direction: fire along the shooter's OWN locked slapper aim,
 	# which the host's RemoteController derived from the replayed wind-up — not the

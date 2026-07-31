@@ -131,6 +131,45 @@ static func clamp_origin(client_origin: Vector3, shooter_pos: Vector3, max_reach
 	return Vector3(shooter_pos.x + off.x, client_origin.y, shooter_pos.z + off.y)
 
 
+# One-timer eligibility, as one question. A one-timer claim is a possession-less
+# grab — the host teleports the puck onto the claimant's blade and fires it — so
+# every reason an ordinary corral would be refused refuses this too.
+#
+# `shooter_on_cooldown` is the load-bearing one and the least obvious: it is this
+# claim's IDEMPOTENCY guard. `has_carrier` alone cannot see a concurrent
+# host-side resolution of the SAME swing, because that resolution ends with the
+# puck loose — carrier back to null, claim waved through, puck fired twice. The
+# release that resolved it stamps the shooter's reattach cooldown, so "did this
+# skater just put this puck in flight" is the question that actually discriminates.
+# It doubles as the self-rebound rule the ordinary corral already applies.
+static func one_timer_claim_blocked(has_carrier: bool, pickup_locked: bool,
+		movement_locked: bool, shooter_is_ghost: bool, shooter_on_cooldown: bool) -> bool:
+	return has_carrier or pickup_locked or movement_locked \
+			or shooter_is_ghost or shooter_on_cooldown
+
+
+# Has the puck been played out from under this claim? The range gate rewinds to
+# the claimant's own stamp, so it necessarily passes against the puck they saw —
+# it cannot notice that the puck has since been fired somewhere else, and
+# applying the claim anyway drags it back out of that flight and re-fires it.
+#
+# The case: two shooters commit one-timers on the same feed. The first claim to
+# arrive sets the carrier, releases, and leaves the puck loose again — so the
+# second claim finds `carrier == null`, rewinds to its own view where the puck
+# was right on its blade, and passes every other gate. Same shape when the loser
+# is the shooter's own host-side sim (a carried release the client didn't know
+# about). A release can only happen while somebody possessed the puck, so a
+# release AFTER the claimant committed means the puck was corralled out of their
+# swing — the swing genuinely missed, whoever ends up with it.
+#
+# Simultaneous claims are therefore arbitrated by arrival order, matching the
+# poke / stick-lift / hit doctrine (Scripts/game/CLAUDE.md) rather than the
+# contested-pickup one — a one-timer that loses the race whiffs, it does not
+# split the puck.
+static func one_timer_claim_is_stale(claim_host_timestamp: float, puck_last_played_time: float) -> bool:
+	return puck_last_played_time > claim_host_timestamp
+
+
 # One-timer range gate: the (rewound) puck the shooter saw must be within the
 # slapper zone radius plus speed leniency — the same formula the client's
 # `_effective_one_timer_leniency` uses — plus server-side slack.

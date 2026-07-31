@@ -1774,7 +1774,9 @@ func _update_stick_knob(stick_origin: Vector3, to_shaft_end: Vector3) -> void:
 # so the whip is continuous at the release instant. Slapshot: straight
 # through the wind-up (real shafts load at CONTACT, not at the top of the
 # swing), then a quick contact spike at the start of the follow-through's
-# downswing that converts into the same whip. Every input is replicated
+# downswing that converts into the same whip. One-timer: the retention hold is
+# the contact, so the bow ramps in there and HOLDS loaded until the shot leaves.
+# Every input is replicated
 # (current_shot_state, shot_charge, carry side), so local, bot, and remote
 # skaters render the identical flex with zero network additions.
 func _update_stick_flex(delta: float) -> void:
@@ -1788,8 +1790,19 @@ func _update_stick_flex(delta: float) -> void:
 	var side: float = (1.0 if _carry_side_smoothed >= 0.0 else -1.0) \
 			* (-1.0 if is_left_handed else 1.0)
 	if state != _flex_prev_state:
-		if state == SkaterStateMachine.State.FOLLOW_THROUGH:
-			if _flex_prev_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK \
+		if state == SkaterStateMachine.State.ONE_TIMER_RETENTION:
+			# The one-timer's committed hold IS the load: the blade catches the
+			# puck and the shaft bows against it for the whole beat. Same ramp the
+			# plain slapshot's contact spike uses, but it HOLDS at the apex (see
+			# the spike branch) until the shot actually leaves.
+			_slap_spike_t = 0.0
+		elif state == SkaterStateMachine.State.FOLLOW_THROUGH:
+			if _flex_prev_state == SkaterStateMachine.State.ONE_TIMER_RETENTION:
+				# Retention already loaded the shaft — release it straight into the
+				# whip from wherever the bow got to, rather than re-ramping.
+				_slap_spike_t = -1.0
+				_start_stick_whip(_stick_flex)
+			elif _flex_prev_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK \
 					or _flex_prev_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK:
 				_slap_spike_t = 0.0
 			else:
@@ -1808,6 +1821,12 @@ func _update_stick_flex(delta: float) -> void:
 		_slap_spike_t += delta
 		if _slap_spike_t < _SLAP_SPIKE_SECONDS:
 			_stick_flex = stick_flex_slap_m * (_slap_spike_t / _SLAP_SPIKE_SECONDS) * side
+		elif state == SkaterStateMachine.State.ONE_TIMER_RETENTION:
+			# Loaded and waiting on the release — hold the bow at the apex. The
+			# transition out of retention starts the whip, not this timer, so a
+			# retention longer than the ramp reads as a stick straining against a
+			# puck it has caught instead of springing early.
+			_stick_flex = stick_flex_slap_m * side
 		else:
 			_start_stick_whip(_stick_flex)
 			_slap_spike_t = -1.0

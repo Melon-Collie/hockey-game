@@ -675,6 +675,16 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # catch rolls into a plain slapshot charge instead: keep winding up, release when
 # ready. Feel floor, deliberately small so genuine early one-timers still window.
 @export var one_timer_min_windup_time: float = 0.15
+# Retention: seconds the committed one-timer swing holds before the puck leaves.
+# A real one-timer is not instant — the blade travels down onto the puck, the
+# shaft loads against it, and the shot comes off the recoil. This is that beat:
+# the shooter is locked in (no cancel), the shaft bows to full load, and the
+# release + range check fire at the END of it. Sized to the slapper
+# follow-through's own downswing (slapper_follow_through_duration ×
+# slapper_follow_through_contact_frac ≈ 0.11 s) so the puck leaves on the beat
+# the finish animation already treats as blade contact, instead of a tenth of a
+# second before the stick gets there.
+@export var one_timer_retention_time: float = 0.11
 
 var show_one_timer_indicator: bool = false
 
@@ -1007,7 +1017,8 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	_cb.release_wrister = _release_wrister
 	_cb.fire_quick_pass = _fire_quick_pass
 	_cb.release_slapper = _release_slapper
-	_cb.try_one_timer_release = _try_one_timer_release
+	_cb.enter_one_timer_retention = _enter_one_timer_retention
+	_cb.release_retained_one_timer = _release_retained_one_timer
 	_cb.update_wrister_charge = _update_wrister_charge
 	_cb.update_slapper_charge = _update_slapper_charge
 	_cb.apply_slapper_velocity_drag = _apply_slapper_velocity_drag
@@ -1502,7 +1513,7 @@ func _process_input(input: InputState, delta: float) -> void:
 	# clamp never validated — so a stick reaching from behind/beside could drag
 	# the pinned puck into the net even with the blade reading legal. Runs after
 	# _apply_state so it sees this tick's final blade pose.
-	_clamp_carry_pin_from_net()
+	_clamp_pinned_puck_from_net()
 	# Mirror the state machine into the replicated field on every simulated
 	# tick, AFTER _apply_state so same-tick transitions are visible to the
 	# cosmetic consumers below (gait shot stance) and to Skater._process (stick
@@ -1523,7 +1534,8 @@ func _process_input(input: InputState, delta: float) -> void:
 	var pre_state: SkaterStateMachine.State = _sm.get_state()
 	var is_slapper_charge: bool = (
 			pre_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK
-			or pre_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK)
+			or pre_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK
+			or pre_state == SkaterStateMachine.State.ONE_TIMER_RETENTION)
 	var blade_world_pre: Vector3
 	var hand_world_pre: Vector3
 	if not is_slapper_charge:
@@ -1748,24 +1760,63 @@ signal one_timer_release_requested(direction: Vector3, power: float)
 func _do_release(direction: Vector3, power: float) -> void:
 	if is_replaying:
 		return
-	var slapper: bool = _sm.get_state() == State.SLAPPER_CHARGE_WITH_PUCK
+	# The retention hold is the tail of a slapper swing, so a shot leaving from it
+	# is a slapper too — without this the one-timer's crack and replay tag would
+	# come out as a wrister's.
+	var slapper: bool = _sm.get_state() == State.SLAPPER_CHARGE_WITH_PUCK \
+			or _sm.get_state() == State.ONE_TIMER_RETENTION
 	puck_release_requested.emit(direction, power, slapper)
 
 
-# Net exclusion for the CARRIED PUCK. The blade net-clamp keeps the blade out of
-# the net, but the puck pins to a carry offset off the blade (get_carry_target_
-# global) — a separate point. This clamps that pin the same way, so a carried
-# puck can only be inside the net box via a legit FRONT-mouth path (a wraparound
-# tuck rides in; a reach from behind/beside is pushed out and the puck knocked
-# loose). It is the physical invariant the goal check can then simply trust:
-# a puck in the net got there legally. Mirrors the slapshot-pin clamp, which
-# already guards its own pin — this covers the plain-carry and wrister-aim states
-# (SLAPPER_CHARGE_WITH_PUCK still uses its stricter allow_front=false clamp in
-# _update_slapper_charge, so skip it here to avoid fighting it).
-func _clamp_carry_pin_from_net() -> void:
-	if not has_puck or _sm.get_state() == State.SLAPPER_CHARGE_WITH_PUCK:
+# Net exclusion for the CARRIED PUCK, routed to whichever pin is live. The blade
+# net-clamp keeps the BLADE out of the net, but the puck rides a pin off the
+# blade (get_carry_target_global) — a separate point that needs its own guard, so
+# that "a puck in the net got there legally" is an invariant the goal check can
+# simply trust.
+#
+# Which rule applies is a fact about the PIN, not about the state name: dispatch
+# on is_slapshot_pinning() rather than enumerating states, so any state that
+# adopts that pin is covered the day it does (the one-timer's retention hold
+# continues the wind-up's pin and was the case that exposed this — it inherited
+# the permissive carry rule for the length of the hold because it is not
+# SLAPPER_CHARGE_WITH_PUCK).
+#
+# Exactly one of the two runs per tick, which is the point: they disagree on
+# allow_front and would fight over the same pin.
+func _clamp_pinned_puck_from_net() -> void:
+	if not has_puck:
 		_has_prev_carry_pin = false
 		return
+	if skater.is_slapshot_pinning():
+		# No carry pin history survives a wind-up — re-seed on the way back out.
+		_has_prev_carry_pin = false
+		_clamp_slapshot_pin_from_net()
+		return
+	_clamp_carry_pin_from_net()
+
+
+# Fixed skater-local ice offset (the wind-up / retention pin). allow_front=false:
+# a wind-up never tucks the puck into the mouth, so ANY entry into the net box
+# knocks it loose. Stricter than the carry rule below, which must let a genuine
+# wraparound ride in.
+func _clamp_slapshot_pin_from_net() -> void:
+	var pin: Vector3 = skater.get_carry_target_global()
+	var clamped: Vector3 = NetClampRules.clamp_out_of_net(
+			pin, pin, GameRules.GOAL_LINE_Z, GameRules.NET_HALF_WIDTH,
+			GameRules.NET_POST_RADIUS, GameRules.NET_PUCK_BUFFER,
+			GameRules.NET_DEPTH, GameRules.NET_HEIGHT, false)
+	if clamped == pin:
+		return
+	var away: Vector3 = clamped - pin
+	if away.length() > 0.001:
+		_do_release(away.normalized(), goalie_strip_power)
+
+
+# Ordinary carry off the blade (plain carry and wrister aim). allow_front=true:
+# a puck can be inside the net box only via a legit FRONT-mouth path — a
+# wraparound tuck rides in; a reach from behind or beside is pushed out and the
+# puck knocked loose.
+func _clamp_carry_pin_from_net() -> void:
 	var pin: Vector3 = skater.get_carry_target_global()
 	# First carry tick: no legal prior pin to induct from. Seed from the pin so a
 	# genuine front entry next tick is judged against a real position; a puck
@@ -1817,6 +1868,20 @@ func _nudge() -> void:
 # ── Puck Signals ──────────────────────────────────────────────────────────────
 func on_puck_picked_up_network() -> void:
 	has_puck = true
+	if _sm.get_state() == State.ONE_TIMER_RETENTION:
+		# The feed landed during the committed hold — the swing caught it. Pin it
+		# to the slapper spot (same setup as the wind-up entry, or the puck snaps
+		# up to the raised blade) and let the hold run out; the release at the end
+		# is now the carried slapshot rather than the leniency redirect. Arm the
+		# window if the wind-up didn't already, so the graded centre bonus applies
+		# to a catch made during the hold exactly as to one made during the charge.
+		skater.set_slapper_zone(false)
+		skater.set_slapper_mode(true)
+		var side_sign: float = -1.0 if skater.is_left_handed else 1.0
+		skater.enter_slapshot_pinning(side_sign * slapper_zone_offset_x, slapper_zone_offset_z)
+		if _aiming.one_timer_window_timer <= 0.0:
+			_aiming.one_timer_window_timer = one_timer_window_duration
+		return
 	if _sm.get_state() == State.SLAPPER_CHARGE_WITHOUT_PUCK:
 		# Puck arrived during a puckless slapper wind-up. Pin it to the ice and
 		# switch into the with-puck charge — same setup as the carry → slapshot
@@ -1846,6 +1911,11 @@ func on_puck_released_network() -> void:
 	if not has_puck:
 		return
 	has_puck = false
+	if _sm.get_state() == State.ONE_TIMER_RETENTION:
+		# Poked/lifted off the blade mid-hold. The swing is already committed, so
+		# don't snap out of it — let the hold run down and whiff through the full
+		# follow-through, the same read a missed leniency one-timer gives.
+		return
 	_transition_to_skating()
 
 func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
@@ -2032,7 +2102,8 @@ func _render_approach_pose(facing: Vector2, delta: float) -> void:
 func _cancel_active_charge() -> void:
 	var s: int = _sm.get_state()
 	if s != State.WRISTER_AIM and s != State.SLAPPER_CHARGE_WITH_PUCK \
-			and s != State.SLAPPER_CHARGE_WITHOUT_PUCK:
+			and s != State.SLAPPER_CHARGE_WITHOUT_PUCK \
+			and s != State.ONE_TIMER_RETENTION:
 		return
 	_aiming.reset_slapper()
 	_transition_to_skating()
@@ -2309,39 +2380,48 @@ func _fire_quick_pass(input: InputState) -> void:
 	_sm.follow_through_timer = quick_pass_follow_through_duration
 	_sm.follow_through_duration_total = quick_pass_follow_through_duration
 
-func _release_slapper(input: InputState) -> void:
-	if has_puck:
-		# Direction is locked at the moment slap was pressed — no mid-swing steering.
-		last_release_hand = ""
-		last_release_stroke_travel = -1.0
-		var locked_dir_3d := Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
-		var cfg: ShotMechanics.SlapperConfig = _slapper_config()
-		# One-timers (puck arrived mid-charge) ride the same timer as a normal
-		# release — power is whatever wind-up was actually built.
-		var charge: float = _aiming.slapper_charge_timer
-		var result := ShotMechanics.release_slapper(
-				skater.upper_body_to_global(skater.get_blade_position()),
-				input.mouse_world_pos,
-				_elevation_level,
-				charge,
-				cfg,
-				locked_dir_3d)
-		# One-timer (puck arrived mid-charge → window armed): apply the SAME graded
-		# centre-timing bonus the leniency-release path uses, so the ±10% is one
-		# mechanic on both release paths — reachable however the shot fires, graded
-		# by how centred the puck is. A one-timer that attaches on the pinned zone
-		# spot is a clean, well-timed catch and earns it; a normal carried slapshot
-		# has no window armed and is untouched.
-		if _aiming.one_timer_window_timer > 0.0:
-			var zone_world: Vector3 = skater.get_slapper_zone_global_position()
-			var zone_xz := Vector2(zone_world.x, zone_world.z)
-			var puck_xz := Vector2(puck.global_position.x, puck.global_position.z)
-			result.power = ShotReleaseRules.one_timer_power(
-					result.power, one_timer_center_power_bonus,
-					zone_xz, puck_xz, slapper_zone_radius)
-		_sm.shot_dir = result.direction
-		_do_release(result.direction, result.power)
+# The slapshot's shot half — everything up to and including the release emit,
+# with no state transition. Split out of _release_slapper so the retained
+# one-timer can fire the identical shot at the end of its hold while owning its
+# own follow-through hand-off. Returns whether a puck actually left.
+func _fire_slapper_shot(input: InputState) -> bool:
+	if not has_puck:
+		return false
+	# Direction is locked at the moment slap was pressed — no mid-swing steering.
+	last_release_hand = ""
+	last_release_stroke_travel = -1.0
+	var locked_dir_3d := Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
+	var cfg: ShotMechanics.SlapperConfig = _slapper_config()
+	# One-timers (puck arrived mid-charge) ride the same timer as a normal
+	# release — power is whatever wind-up was actually built.
+	var charge: float = _aiming.slapper_charge_timer
+	var result := ShotMechanics.release_slapper(
+			skater.upper_body_to_global(skater.get_blade_position()),
+			input.mouse_world_pos,
+			_elevation_level,
+			charge,
+			cfg,
+			locked_dir_3d)
+	# One-timer (puck arrived mid-charge → window armed): apply the SAME graded
+	# centre-timing bonus the leniency-release path uses, so the ±10% is one
+	# mechanic on both release paths — reachable however the shot fires, graded
+	# by how centred the puck is. A one-timer that attaches on the pinned zone
+	# spot is a clean, well-timed catch and earns it; a normal carried slapshot
+	# has no window armed and is untouched.
+	if _aiming.one_timer_window_timer > 0.0:
+		var zone_world: Vector3 = skater.get_slapper_zone_global_position()
+		var zone_xz := Vector2(zone_world.x, zone_world.z)
+		var puck_xz := Vector2(puck.global_position.x, puck.global_position.z)
+		result.power = ShotReleaseRules.one_timer_power(
+				result.power, one_timer_center_power_bonus,
+				zone_xz, puck_xz, slapper_zone_radius)
+	_sm.shot_dir = result.direction
+	_do_release(result.direction, result.power)
+	return true
 
+
+func _release_slapper(input: InputState) -> void:
+	_fire_slapper_shot(input)
 	_sm.follow_through_is_slapper = true
 	# A slap swing is always full-bodied — power gates the finish only for wristers.
 	_sm.follow_through_power = 1.0
@@ -2470,24 +2550,10 @@ func _update_slapper_charge(delta: float) -> void:
 			skater.predicted_shot_velocity = pred.direction * pred.power
 	if show_one_timer_indicator:
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
-	# Net exclusion for the slapshot PIN. While charging with the puck, the puck
-	# is pinned to a body-relative ice offset (Skater.get_carry_target_global's
-	# slapshot branch) instead of the blade contact, so the blade-contact net
-	# clamp never sees it — a carrier winding up while skating behind or across
-	# a net would otherwise drag the pinned puck straight through the mesh (and
-	# across the goal line). Mirror the blade path's rule: the moment the pin
-	# would enter the net's exclusion box, the net knocks the puck loose.
-	# allow_front=false — a wind-up never tucks the puck into the mouth.
-	if has_puck and skater.is_slapshot_pinning():
-		var pin: Vector3 = skater.get_carry_target_global()
-		var clamped: Vector3 = NetClampRules.clamp_out_of_net(
-				pin, pin, GameRules.GOAL_LINE_Z, GameRules.NET_HALF_WIDTH,
-				GameRules.NET_POST_RADIUS, GameRules.NET_PUCK_BUFFER,
-				GameRules.NET_DEPTH, GameRules.NET_HEIGHT, false)
-		if clamped != pin:
-			var away: Vector3 = clamped - pin
-			if away.length() > 0.001:
-				_do_release(away.normalized(), goalie_strip_power)
+	# (The slapshot pin's own net exclusion lives in _clamp_pinned_puck_from_net,
+	# which runs after _apply_state for every pin type — a carrier winding up
+	# while skating behind or across a net would otherwise drag the pinned puck
+	# straight through the mesh and over the goal line.)
 
 # Normalized wind-up progress (0..1) over the FULL charge time. With the charge
 # ring gone the wind-up pose is the charge gauge, so every pose consumer (blade
@@ -2508,6 +2574,34 @@ func _apply_slapper_velocity_drag(delta: float) -> void:
 	slapper_vel = slapper_vel.move_toward(Vector2.ZERO, drag * delta)
 	skater.velocity.x = slapper_vel.x
 	skater.velocity.z = slapper_vel.y
+
+# Arms the committed catch-and-load hold. Called on the slap-release edge of
+# either one-timer wind-up (puck already caught mid-charge, or still inbound);
+# the state machine flips to ONE_TIMER_RETENTION and the shot fires when this
+# timer runs out. The one-timer window timer is deliberately left running-but-
+# unticked through the hold so the graded centre bonus still applies at the
+# release — the catch that earned it already happened.
+func _enter_one_timer_retention() -> void:
+	_aiming.one_timer_retention_timer = one_timer_retention_time
+
+
+# End of the hold: fire whichever one-timer path the puck's actual whereabouts
+# select. Caught (pinned on the blade through the beat) fires the ordinary
+# carried slapshot; still loose fires the leniency redirect. Both were already
+# the two one-timer releases — retention only moved WHEN they run.
+func _release_retained_one_timer(input: InputState) -> Dictionary:
+	if not has_puck:
+		return _try_one_timer_release(input)
+	var fired: bool = _fire_slapper_shot(input)
+	# A slap swing is always full-bodied — power gates the finish only for wristers.
+	_sm.follow_through_power = 1.0
+	_hide_slapshot_hud()
+	return {
+		fired = fired,
+		direction = _sm.shot_dir,
+		follow_through_duration = slapper_follow_through_duration,
+	}
+
 
 func _try_one_timer_release(input: InputState) -> Dictionary:
 	# Use XZ distance from the slapper zone center (ground level) — this matches
@@ -2554,7 +2648,18 @@ func _apply_block_movement(_input: InputState, delta: float) -> void:
 
 func _effective_one_timer_leniency() -> float:
 	var puck_xz_speed: float = Vector2(puck.linear_velocity.x, puck.linear_velocity.z).length()
-	return slapper_zone_radius + puck_xz_speed * one_timer_leniency_time
+	return slapper_zone_radius + puck_xz_speed * one_timer_effective_leniency_time()
+
+
+# Seconds of puck travel the leniency ring forgives. The range check now runs at
+# the END of the retention hold rather than on the button edge, so the puck has
+# already carried `one_timer_retention_time` further along its line by the time
+# it is judged: without folding the hold in, a dead-centre commit on a hard feed
+# would sail clean past the zone during the beat and read as a whiff. Public so
+# the host's authoritative gate (GameManager.on_remote_one_timer_release ->
+# ShotReleaseRules.one_timer_in_range) measures the identical ring.
+func one_timer_effective_leniency_time() -> float:
+	return one_timer_leniency_time + one_timer_retention_time
 
 func _is_in_slapper_state() -> bool:
 	var s: SkaterStateMachine.State = _sm.get_state()
@@ -2590,7 +2695,8 @@ func _apply_movement(input: InputState, delta: float) -> void:
 	# stamina still ticks (you can't sprint, so it regenerates). Computing it
 	# before the early-return keeps the bar honest through those states.
 	var locomotion_suppressed: bool = \
-			move_state == State.SLAPPER_CHARGE_WITH_PUCK or move_state == State.SHOT_BLOCKING
+			move_state == State.SLAPPER_CHARGE_WITH_PUCK or move_state == State.SHOT_BLOCKING \
+			or move_state == State.ONE_TIMER_RETENTION
 	var is_moving: bool = not input.brake and input.move_vector.length() > move_deadzone
 	sprint_active = not locomotion_suppressed and StaminaRules.sprint_active(
 			stamina, input.sprint_held, is_moving, _sprint_locked)
