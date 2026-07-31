@@ -47,6 +47,20 @@ func _init() -> void:
 
 func setup(material: ShaderMaterial) -> void:
 	_material = material
+	# Every chevron shares the neutral HUD stroke, so it is a uniform written
+	# once rather than a per-frame array like the rings.
+	_material.set_shader_parameter(&"chevron_col", _linear_rgba(MenuStyle.HUD_ICE))
+
+
+# The shader's colour uniforms are LINEAR — see the note on ring_col in
+# ice.gdshader. A `source_color` hint would normally handle this, but the
+# conversion is not applied elementwise when the value arrives as a packed
+# array, and doing it here keeps the two colour paths (per-ring array, single
+# chevron uniform) converting identically. Alpha is not a colour and is left as
+# authored.
+static func _linear_rgba(c: Color) -> Vector4:
+	var lin: Color = c.srgb_to_linear()
+	return Vector4(lin.r, lin.g, lin.b, MenuStyle.HUD_OPACITY)
 
 
 func _process(_delta: float) -> void:
@@ -78,8 +92,7 @@ func _process(_delta: float) -> void:
 		var pos: Vector3 = skater.get_global_transform_interpolated().origin
 		_positions[count] = Vector4(pos.x, pos.z,
 				SkaterHUDCoordinator.RING_OUTER_R, SkaterHUDCoordinator.RING_INNER_R)
-		var col: Color = skater.ring_field_color()
-		_colors[count] = Vector4(col.r, col.g, col.b, MenuStyle.HUD_OPACITY)
+		_colors[count] = _linear_rgba(skater.ring_field_color())
 		count += 1
 	# Unused tail entries are left stale on purpose: the shader never reads past
 	# ring_count, and zeroing them would be work to hide data nothing looks at.

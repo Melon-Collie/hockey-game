@@ -32,7 +32,14 @@ uniform vec2 rink_size = vec2(26.0, 60.0);
 // be, and it is sized for the largest roster); ring_count says how much of it is
 // live, so a 3v3 pays for three rings and an empty rink pays for none.
 //   ring_pos: xy = world (x, z) centre, z = OUTER radius, w = INNER radius
-//   ring_col: rgba, alpha is the ring's opacity over the ice
+//   ring_col: LINEAR rgb, alpha is the ring's opacity over the ice
+//
+// Colours arrive already converted to linear. `source_color` would normally do
+// that, but the hint's conversion is not applied elementwise to a packed array,
+// so the caller (IceRingField) linearises instead — see the note there. Getting
+// this wrong is not subtle: the self ring's sRGB (0.20, 0.95, 0.40) read as
+// linear is (0.20, 0.95, 0.40) instead of (0.03, 0.89, 0.13), a washed-out
+// mint where a saturated green belongs.
 uniform vec4 ring_pos[12];
 uniform vec4 ring_col[12];
 uniform int ring_count = 0;
@@ -41,7 +48,10 @@ uniform int ring_count = 0;
 // They share one colour (the neutral HUD stroke) rather than carrying their own.
 uniform vec4 chevron_pos[12];
 uniform int chevron_count = 0;
-uniform vec4 chevron_col = vec4(0.1, 0.12, 0.15, 0.85);
+// Linear, like ring_col. IceRingField writes MenuStyle.HUD_ICE here once at
+// setup; the default is only what the editor preview shows before that runs, so
+// do not treat it as the source of truth for the HUD stroke colour.
+uniform vec4 chevron_col = vec4(0.04, 0.07, 0.15, 0.85);
 // Screen-down in world XZ. The chevrons point screen-UP and stack screen-up from
 // each other, so their whole orientation comes from this one vector — which is
 // why they can be uniforms at all instead of nodes carrying a camera-derived
@@ -120,11 +130,18 @@ void fragment() {
 	// IceRingField). Each used to be a 48-segment alpha-blended mesh with its own
 	// node and its own per-frame transform; here they are a distance test, so ten
 	// skaters cost ten uniforms instead of ten nodes and ten transparent draws.
-	// Composited after the scratches so a ring reads over a scuffed patch, and
-	// last before ALBEDO so it sits on top of every ice feature — the layering the
-	// floating mesh got from being physically above the surface.
+	// Composited after the scratches so a ring reads over a scuffed patch.
 	// Sampled in WORLD space rather than UV: it needs no assumption about the ice
 	// plane's UV convention, and a ring is defined in metres.
+	//
+	// The HUD accumulates into its OWN layer instead of writing `albedo`, because
+	// the meshes it replaced were SHADING_MODE_UNSHADED: their colour was the
+	// literal pixel, not a reflectance the rink's eight spotlights then modulated.
+	// Folded into ALBEDO the marks pick up the lighting AND the Beer-Lambert fade,
+	// so they read darker and shift hue depending on which light you stand under.
+	// The layer is resolved at the bottom of fragment() — see the ALBEDO write.
+	vec3 hud_rgb = vec3(0.0);
+	float hud_cover = 0.0;
 	vec2 ice_xz = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xz;
 	for (int i = 0; i < ring_count; i++) {
 		float d = distance(ice_xz, ring_pos[i].xy);
@@ -135,7 +152,9 @@ void fragment() {
 		float aa = max(fwidth(d), 0.0001);
 		float band = smoothstep(ring_pos[i].w - aa, ring_pos[i].w + aa, d)
 				* (1.0 - smoothstep(ring_pos[i].z - aa, ring_pos[i].z + aa, d));
-		albedo = mix(albedo, ring_col[i].rgb, band * ring_col[i].a);
+		float a = band * ring_col[i].a;
+		hud_rgb = hud_rgb * (1.0 - a) + ring_col[i].rgb * a;
+		hud_cover = hud_cover * (1.0 - a) + a;
 	}
 
 	// Elevation chevrons. Legs run 45 degrees either side of screen-down from a
@@ -154,12 +173,20 @@ void fragment() {
 			float aa = max(fwidth(d), 0.0001);
 			float mark = 1.0 - smoothstep(chevron_half_thickness - aa,
 					chevron_half_thickness + aa, d);
-			albedo = mix(albedo, chevron_col.rgb, mark * chevron_col.a);
+			float a = mark * chevron_col.a;
+			hud_rgb = hud_rgb * (1.0 - a) + chevron_col.rgb * a;
+			hud_cover = hud_cover * (1.0 - a) + a;
 		}
 	}
 
-	ALBEDO = albedo;
+	// Resolve the unshaded HUD layer over the lit ice. The engine computes
+	// ALBEDO * lighting + EMISSION, so scaling the ice's contribution by
+	// (1 - cover) and putting the flat HUD colour in EMISSION reproduces exactly
+	// what the unshaded meshes blended: hud * a + lit_ice * (1 - a). SPECULAR
+	// scales the same way — the highlight was part of what the mesh covered.
+	ALBEDO = albedo * (1.0 - hud_cover);
+	EMISSION = hud_rgb;
 	METALLIC = 0.0;
-	SPECULAR = specular_strength;
+	SPECULAR = specular_strength * (1.0 - hud_cover);
 	ROUGHNESS = rough;
 }
