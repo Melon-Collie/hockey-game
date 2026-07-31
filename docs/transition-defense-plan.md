@@ -18,9 +18,11 @@ needed no changes to them. See §5.2.
 - **3v3 runs the compressed three-role set** (`RUSH_D1` / `TRACK_PUCK` / `TRACK_MID`),
   no dedicated `RUSH_D2`. Two bodies on the puck is affordable because transition is
   bounded — see §5.2.
-- **`numbers` gets hysteresis** — enter/hold margins on the same pattern as
-  `AIPossessionState.retrieval_read`, so one body crossing the puck line can't flip the
-  whole team's aggression mid-rush.
+- **`numbers` gets hysteresis** — enter/hold margins (as landed:
+  `AIRushRead.TRACK_ENTER_MARGIN_S` / `TRACK_HOLD_MARGIN_S`; the
+  `AIPossessionState.retrieval_read` this was patterned on has since been removed with
+  the RETRIEVAL shape), so one body crossing the puck line can't flip the whole team's
+  aggression mid-rush.
 - **DZONE entry is gated on coverage readiness** (§9) — the team stays in the rush /
   recovery shape until the coverage it would switch to actually makes sense.
 
@@ -440,8 +442,7 @@ if raw_state == DZONE and not coverage_read(rush_read, was_set):
 ```
 
 with enter/hold margins so the boundary can't flicker (`COVERAGE_SET_ENTER` /
-`COVERAGE_SET_HOLD`, hysteresis in the same direction as `retrieval_read`: harder to
-declare set than to stay set).
+`COVERAGE_SET_HOLD`, asymmetric hysteresis: harder to declare set than to stay set).
 
 Symmetrically, once set the team **holds** coverage until the rush-over conditions
 genuinely fail — a re-entering rush after a failed clear shouldn't dump a set structure

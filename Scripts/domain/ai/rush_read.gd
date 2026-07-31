@@ -59,9 +59,8 @@ const LATE_MAN_WINDOW_S: float = 1.5
 # still do: take away the shooter's hands and time. Past it he is a spectator.
 const BACKCHECK_WINDOW_S: float = 0.6
 
-# Recovery-race hysteresis (same enter/hold shape as
-# AIPossessionState.retrieval_read): a peer must make the window by ENTER to
-# newly count as TRACKING, and only has to stay within HOLD to keep counting.
+# Recovery-race hysteresis: a peer must make the window by ENTER to newly count
+# as TRACKING, and only has to stay within HOLD to keep counting.
 # Putting the hysteresis on the CONTINUOUS race — rather than on the integer
 # `numbers` it feeds — is what keeps a body drifting across the boundary from
 # flipping the whole team's posture mid-rush.
