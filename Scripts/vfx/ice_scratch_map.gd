@@ -92,6 +92,27 @@ func set_enabled(enabled: bool) -> void:
 		process_mode = Node.PROCESS_MODE_DISABLED
 
 func _process(_delta: float) -> void:
+	# Measurement freeze (see perf_probe.gd). Both halves of the per-frame cost
+	# have to stop or the number is meaningless: the skater sweep below AND the
+	# SubViewport repaint, which is the larger suspect — UPDATE_ALWAYS on a
+	# ~5.6 MP target with CLEAR_MODE_NEVER re-binds and re-stores the whole
+	# render target every frame whether or not a stroke was painted.
+	# Deliberately NOT set_enabled(false): that wipes the accumulated scratches,
+	# and a sweep toggling every 2 s would then be pricing repeated clears rather
+	# than the steady-state cost a player's Options toggle actually removes.
+	# Restores itself on the first unfrozen frame, so the probe needs no teardown
+	# hook. When the player already has scratches off this never runs at all
+	# (set_enabled parks process_mode DISABLED) — correctly measuring nothing,
+	# because there is nothing left to save.
+	if PerfProbe.freeze_scratches:
+		if _viewport.render_target_update_mode != SubViewport.UPDATE_DISABLED:
+			_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+			_pending_segments.clear()
+			_prev_state.clear()
+		return
+	if _viewport.render_target_update_mode == SubViewport.UPDATE_DISABLED:
+		_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+
 	# Freeze accumulation during goal replays. The cinematic rewinds skater
 	# state, and painting their replayed motion onto the live texture would
 	# leave fake marks behind once the replay ends. Clearing _prev_state

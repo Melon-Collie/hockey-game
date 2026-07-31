@@ -42,14 +42,17 @@ extends Object
 
 enum Mode {
 	NONE,
-	RIG,   # marker-driven stick + arm mesh rebuild, render rate, ~20 transform writes/skater/frame
-	HUD,   # per-skater world HUD (ring, name, chevrons, beacon) — currently PHYSICS rate
-	VFX,   # SkaterVFX per-frame emitter bookkeeping
+	RIG,      # marker-driven stick + arm mesh rebuild, render rate, ~20 transform writes/skater/frame
+	HUD,      # per-skater world HUD (ring, name, chevrons, beacon) — currently PHYSICS rate
+	VFX,      # SkaterVFX per-frame emitter bookkeeping
+	SCRATCH,  # IceScratchMap: per-frame skater sweep AND its 5.6 MP SubViewport repaint
 	ALL,
 }
 
-const MODE_COUNT: int = 5
-const MODE_NAMES: Array[String] = ["off", "RIG frozen", "HUD frozen", "VFX frozen", "ALL frozen"]
+const MODE_COUNT: int = 6
+const MODE_NAMES: Array[String] = [
+	"off", "RIG frozen", "HUD frozen", "VFX frozen", "SCRATCH frozen", "ALL frozen",
+]
 
 # Read directly on hot paths, so they are plain bools rather than a mode compare
 # or an accessor call — checked once per skater per frame (RIG/VFX) or per tick
@@ -57,6 +60,14 @@ const MODE_NAMES: Array[String] = ["off", "RIG frozen", "HUD frozen", "VFX froze
 static var freeze_rig: bool = false
 static var freeze_hud: bool = false
 static var freeze_vfx: bool = false
+# Unlike the other three, this one has a player-facing equivalent (Options →
+# Video → Ice Scratches), so its measurement answers a shipping question and not
+# just an internal one: what that switch is actually worth. The probe path is
+# separate from the pref's set_enabled() on purpose — set_enabled wipes the
+# accumulated scratches, and a sweep toggling every 2 s would pay for repeated
+# clears that a player flipping the option once never would, pricing teardown
+# churn instead of the steady-state cost.
+static var freeze_scratches: bool = false
 
 # Typed int rather than Mode: cycling assigns an arithmetic result, and casting
 # that back to the enum trips Godot's INT_AS_ENUM analyzer warning for no gain.
@@ -80,11 +91,27 @@ static var _since_switch: float = 0.0
 # Per-mode running totals, indexed by Mode. Float64 because a long session
 # accumulates millions of milliseconds and float32 would quietly stop adding
 # small samples.
-static var _samples: PackedInt64Array = PackedInt64Array([0, 0, 0, 0, 0])
-static var _sum_frame_ms: PackedFloat64Array = PackedFloat64Array([0, 0, 0, 0, 0])
-static var _sum_main_ms: PackedFloat64Array = PackedFloat64Array([0, 0, 0, 0, 0])
-static var _sum_gpu_ms: PackedFloat64Array = PackedFloat64Array([0, 0, 0, 0, 0])
-static var _sum_draws: PackedFloat64Array = PackedFloat64Array([0, 0, 0, 0, 0])
+# One slot per Mode — these MUST stay MODE_COUNT long. A short array does not
+# fail loudly here: the out-of-range mode silently records nothing and reports a
+# mean of zero, which reads as "that mode was free" rather than as an error.
+# Sized from MODE_COUNT via resize() so adding a mode cannot leave them behind.
+static var _samples: PackedInt64Array = _new_int_bins()
+static var _sum_frame_ms: PackedFloat64Array = _new_float_bins()
+static var _sum_main_ms: PackedFloat64Array = _new_float_bins()
+static var _sum_gpu_ms: PackedFloat64Array = _new_float_bins()
+static var _sum_draws: PackedFloat64Array = _new_float_bins()
+
+
+static func _new_int_bins() -> PackedInt64Array:
+	var a := PackedInt64Array()
+	a.resize(MODE_COUNT)
+	return a
+
+
+static func _new_float_bins() -> PackedFloat64Array:
+	var a := PackedFloat64Array()
+	a.resize(MODE_COUNT)
+	return a
 
 
 # Advances to the next mode and returns its label for the caller to surface.
@@ -98,6 +125,7 @@ static func _set_mode(m: int) -> void:
 	freeze_rig = mode == Mode.RIG or mode == Mode.ALL
 	freeze_hud = mode == Mode.HUD or mode == Mode.ALL
 	freeze_vfx = mode == Mode.VFX or mode == Mode.ALL
+	freeze_scratches = mode == Mode.SCRATCH or mode == Mode.ALL
 	_since_switch = 0.0
 
 
@@ -198,3 +226,6 @@ static func reset() -> void:
 	auto_cycle = false
 	_set_mode(Mode.NONE)
 	reset_stats()
+	# IceScratchMap restores its own viewport update mode on the first unfrozen
+	# _process, so clearing the flag here is the whole restore — nothing to undo
+	# on a node that may already be gone at teardown.

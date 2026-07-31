@@ -635,6 +635,13 @@ func _render_freeze_sweep() -> void:
 		return
 
 	_section("Cosmetic freeze sweep (mean per mode)")
+	# The GPU column covers the ROOT viewport only — SubViewports carry their own
+	# RID and are timed separately, so the ice scratch map's render cost is
+	# invisible there and falls into the residual instead. A large SCRATCH saving
+	# in the main column therefore does NOT prove the saving was CPU work; it may
+	# be that 5.6 MP repaint. Every other mode is genuinely main-thread.
+	if PerfProbe.sample_count(PerfProbe.Mode.SCRATCH) > 0:
+		_lines.append("[color=#%s]· SCRATCH's saving lands in the main column whether it was CPU or GPU — its SubViewport is outside the root viewport's GPU timer[/color]" % COL_DIM)
 	if PerfProbe.auto_cycle:
 		_lines.append("[color=#%s]%s Sweep RUNNING — now: %s. Play normally; every mode needs %d frames.[/color]" % [
 			COL_WARN, DOT, PerfProbe.mode_name(), PerfProbe.MIN_SAMPLES_PER_MODE])
@@ -672,7 +679,8 @@ func _render_freeze_sweep() -> void:
 		_info("Scene spread", "%.0f%% draw-call range" % (spread * 100.0),
 			"how much the scene varied across modes. Expect this to stay HIGH and don't chase it — the camera follows the play, so there is no steady state to sample. Interleaving handles that: it makes the variance unbiased, not absent. Context only")
 		var parts: float = 0.0
-		for m: int in [PerfProbe.Mode.RIG, PerfProbe.Mode.HUD, PerfProbe.Mode.VFX]:
+		for m: int in [PerfProbe.Mode.RIG, PerfProbe.Mode.HUD, PerfProbe.Mode.VFX,
+				PerfProbe.Mode.SCRATCH]:
 			parts += base_main - PerfProbe.mean_main_ms(m)
 		var whole: float = base_main - PerfProbe.mean_main_ms(PerfProbe.Mode.ALL)
 		# The real validity test, and the only one that survives a scene which
