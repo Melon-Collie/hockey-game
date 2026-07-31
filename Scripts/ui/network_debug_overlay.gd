@@ -80,14 +80,19 @@ var _measuring: bool = false
 const FRAME_COST_EMA_TAU: float = 0.30
 var _ema_gpu_ms: float = 0.0
 var _ema_cpu_render_ms: float = 0.0
-var _ema_process_ms: float = 0.0
-var _ema_physics_ms: float = 0.0
 var _ema_frame_ms: float = 0.0
-# A term has to own this much of the frame before it is named as the bound. A
-# frame is not a clean sum of its parts (GPU and CPU overlap by a frame, the
-# render thread pipelines), so "the biggest term is 40% of the frame" means
-# nothing is saturated — the cap is vsync or the FPS limiter.
-const FRAME_COST_BOUND_FRACTION: float = 0.60
+# Performance.TIME_PROCESS / TIME_PHYSICS_PROCESS are NOT per-frame averages and
+# must not be smoothed or compared against the EMAs above. The engine publishes
+# them once per second, holding one value for that whole second, and the value is
+# the MAXIMUM single step observed in it (Main::iteration's process_max /
+# physics_process_max). Verified against 4.6.2: the monitor reads identically on
+# every frame for ~1 s, then jumps. Smoothing a held 1 Hz value just reproduces
+# the value; ranking a worst-case step against mean per-frame render times says
+# nothing. They are read raw and reported as what they are — peaks.
+# Main-thread cost is instead derived as the frame's unexplained residual, which
+# IS a true per-frame number on the same footing as the render terms.
+var _peak_process_ms: float = 0.0
+var _peak_physics_ms: float = 0.0
 
 # Built fresh each frame: collected metric lines + the worst health seen, which
 # rolls up into the header verdict.
@@ -238,15 +243,24 @@ func _copy_session_digest() -> void:
 		# Skater count makes the digest self-describing about roster size, which
 		# every per-actor cost scales with.
 		"frame_cost": {
+			# Explicit rather than inferred from game_version's "dev" convention:
+			# every absolute number below means something different in a debug
+			# build, and a pasted digest has to carry that on its face.
+			"debug_build": OS.is_debug_build(),
 			"skaters": get_tree().get_nodes_in_group("skaters").size(),
 			"frame_ms": _ema_frame_ms,
 			"gpu_ms": _ema_gpu_ms,
 			"cpu_render_ms": _ema_cpu_render_ms,
-			"process_ms": _ema_process_ms,
-			"physics_ms": _ema_physics_ms,
+			"main_thread_ms": _main_thread_ms(_ema_frame_ms),
+			# Named "peak" deliberately: these are the engine's worst single step
+			# in the last second, not per-frame averages like the three above.
+			"peak_process_ms": _peak_process_ms,
+			"peak_physics_ms": _peak_physics_ms,
 			"draw_calls": int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
 			"objects": int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)),
 			"primitives": int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)),
+			"nodes": int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)),
+			"physics_active_objects": int(Performance.get_monitor(Performance.PHYSICS_3D_ACTIVE_OBJECTS)),
 		},
 		"metrics": t.session.to_dict(),
 	}
@@ -292,9 +306,9 @@ func _set_measuring(on: bool) -> void:
 	# the panel was open would blend into the first seconds of the new reading.
 	_ema_gpu_ms = 0.0
 	_ema_cpu_render_ms = 0.0
-	_ema_process_ms = 0.0
-	_ema_physics_ms = 0.0
 	_ema_frame_ms = 0.0
+	_peak_process_ms = 0.0
+	_peak_physics_ms = 0.0
 
 
 func _exit_tree() -> void:
@@ -311,11 +325,10 @@ func _sample_frame_cost(delta: float) -> void:
 			RenderingServer.viewport_get_measured_render_time_gpu(_vp_rid), a)
 	_ema_cpu_render_ms = lerpf(_ema_cpu_render_ms,
 			RenderingServer.viewport_get_measured_render_time_cpu(_vp_rid), a)
-	_ema_process_ms = lerpf(_ema_process_ms,
-			float(Performance.get_monitor(Performance.TIME_PROCESS)) * 1000.0, a)
-	_ema_physics_ms = lerpf(_ema_physics_ms,
-			float(Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS)) * 1000.0, a)
 	_ema_frame_ms = lerpf(_ema_frame_ms, delta * 1000.0, a)
+	# Raw, unsmoothed — already 1 Hz aggregates (see the field doc-block).
+	_peak_process_ms = float(Performance.get_monitor(Performance.TIME_PROCESS)) * 1000.0
+	_peak_physics_ms = float(Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS)) * 1000.0
 
 
 func _refresh() -> void:
@@ -521,47 +534,81 @@ func _render_frame_cost() -> void:
 		_info("Measuring", "…", "sampling starts when this panel opens; give it a second")
 		return
 	var frame_ms: float = _ema_frame_ms
-	var script_ms: float = _ema_process_ms + _ema_physics_ms
+	var main_ms: float = _main_thread_ms(frame_ms)
 	_info("Frame", "%.2f ms (%.0f fps)" % [frame_ms, 1000.0 / maxf(frame_ms, 0.001)],
-		"wall-clock per rendered frame; the costs below are slices of it, and they overlap (GPU and CPU run a frame apart)")
+		"wall-clock per rendered frame; the three costs below run CONCURRENTLY (the GPU and render thread trail the main thread by a frame), so the frame is set by the largest, not their sum")
 	_context(_band(_frac(_ema_gpu_ms, frame_ms), 0.60, 0.85), "GPU",
 		"%.2f ms (%.0f%% of frame)" % [_ema_gpu_ms, _frac(_ema_gpu_ms, frame_ms) * 100.0],
 		"drawing cost — resolution, MSAA, shadow maps, transparent overdraw, post FX")
 	_context(_band(_frac(_ema_cpu_render_ms, frame_ms), 0.60, 0.85), "CPU render",
 		"%.2f ms (%.0f%% of frame)" % [_ema_cpu_render_ms, _frac(_ema_cpu_render_ms, frame_ms) * 100.0],
 		"render thread building draw commands; scales with the draw-call count below, not with pixels")
-	_context(_band(_frac(script_ms, frame_ms), 0.60, 0.85), "Script",
-		"%.2f ms (process %.2f · physics %.2f)" % [script_ms, _ema_process_ms, _ema_physics_ms],
-		"your _process + _physics_process; physics is per-tick work charged to the frame it ran in")
+	_context(_band(_frac(main_ms, frame_ms), 0.60, 0.85), "Main thread",
+		"%.2f ms (%.0f%% of frame)" % [main_ms, _frac(main_ms, frame_ms) * 100.0],
+		"the frame MINUS the render terms — your _process/_physics_process, Jolt, and engine work. Not measured directly: it is what neither the GPU nor the render thread accounts for, so an idle wait on vsync lands here too (the verdict rules that out first)")
+	_info("Peak step (last 1 s)", "process %.2f ms · physics %.2f ms" % [_peak_process_ms, _peak_physics_ms],
+		"engine's WORST single step in the last second, not an average — a peak above the frame budget is a hitch you feel, but it does not mean the typical step costs this")
 	_info("Scene", "%d draws · %d objects · %.1f M prims" % [
 			int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
 			int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)),
 			Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME) / 1_000_000.0],
 		"what the frame submits, engine-wide (includes shadow passes and every SubViewport); draw calls are the CPU render driver")
-	_info("Skaters on ice", "%d" % get_tree().get_nodes_in_group("skaters").size(),
-		"3v3 is 6, 5v5 is 10 — the multiplier on every per-skater mesh, particle system and shadow caster")
-	_info("Bound by", _frame_bound_verdict(frame_ms, script_ms),
+	# Jolt's own load. Skaters integrate analytically (CharacterBody3D, no
+	# move_and_slide) and the puck is custom-integrated, so nothing should be
+	# under simulation — active bodies above ~0 means a body slipped back into
+	# the solver, and the number separates "the physics SERVER is expensive" from
+	# "our _physics_process is expensive", which the frame residual cannot.
+	_info("Physics 3D", "%d active · %d pairs · %d islands" % [
+			int(Performance.get_monitor(Performance.PHYSICS_3D_ACTIVE_OBJECTS)),
+			int(Performance.get_monitor(Performance.PHYSICS_3D_COLLISION_PAIRS)),
+			int(Performance.get_monitor(Performance.PHYSICS_3D_ISLAND_COUNT))],
+		"bodies Jolt is actually simulating; expected ~0 here — everything is analytic, so a nonzero count is a regression, not a cost centre")
+	_info("Skaters on ice", "%d · %d nodes in tree" % [
+			get_tree().get_nodes_in_group("skaters").size(),
+			int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT))],
+		"3v3 is 6, 5v5 is 10. Node count matters on its own: every per-frame transform write crosses the script/engine boundary and dirties the chain, so it drives main-thread cost the same way it drives draw calls")
+	_info("Bound by", _frame_bound_verdict(frame_ms, main_ms),
 		"the cost that is actually capping the frame rate — optimize this one, the others are free wins on paper only")
+	# A debug build does NOT bias the three terms equally, so the split is
+	# readable but the verdict can be wrong. GDScript carries debug
+	# instrumentation (Script reads high), and an editor run shares the machine
+	# with the editor process (everything reads high). The counts below Frame are
+	# scene composition and are exact in any build — as is the DIFFERENCE between
+	# two runs of the same build, which is why a 3v3-vs-5v5 A/B is trustworthy
+	# here even when the absolute numbers are not.
+	if OS.is_debug_build():
+		_lines.append("[color=#%s]%s[/color] [color=#%s]Debug build — Script is inflated by GDScript debug instrumentation and the editor shares the machine. Draw/object counts are exact; compare runs, not absolutes.[/color]" % [
+			COL_WARN, DOT, COL_DIM])
 
 
-# Names the cost that owns the frame, or says nothing does. A frame is not a sum
-# of its parts (the render thread pipelines a frame behind, GPU overlaps CPU), so
-# a term has to clear FRAME_COST_BOUND_FRACTION before it can be called the
-# bound. Below that the frame is idle-waiting and the ceiling is vsync or the FPS
-# cap — reporting a "bound" there would send tuning after the wrong number.
-func _frame_bound_verdict(frame_ms: float, script_ms: float) -> String:
-	var worst: float = maxf(_ema_gpu_ms, maxf(_ema_cpu_render_ms, script_ms))
-	if worst < frame_ms * FRAME_COST_BOUND_FRACTION:
-		var cap: String = "vsync" if DisplayServer.window_get_vsync_mode() \
-				!= DisplayServer.VSYNC_DISABLED else "the FPS cap"
-		if Engine.max_fps > 0 and 1000.0 / maxf(frame_ms, 0.001) >= float(Engine.max_fps) * 0.95:
-			cap = "the %d fps cap" % Engine.max_fps
-		return "nothing is saturated — waiting on %s, or on main-thread work outside _process" % cap
-	if is_equal_approx(worst, _ema_gpu_ms):
+# Main-thread cost, derived rather than measured: the part of the frame that
+# neither the GPU nor the render thread explains. The three run concurrently
+# (Godot's render thread and the GPU each trail the main thread by a frame), so
+# the frame length is set by the LARGEST of them, not their sum — which makes
+# `frame - max(render terms)` a sound lower bound on what the main thread cost.
+# It is a lower bound, not an exact figure: when the frame rate is capped, the
+# idle wait is charged here too, which is why the verdict rules the cap out
+# before naming this.
+func _main_thread_ms(frame_ms: float) -> float:
+	return maxf(frame_ms - maxf(_ema_gpu_ms, _ema_cpu_render_ms), 0.0)
+
+
+# Names the cost that owns the frame. Order matters: a capped frame rate inflates
+# the main-thread residual with pure idle wait, so the cap has to be ruled out
+# before any cost is blamed, or every vsynced session reads as main-thread bound.
+func _frame_bound_verdict(frame_ms: float, main_ms: float) -> String:
+	var fps: float = 1000.0 / maxf(frame_ms, 0.001)
+	if Engine.max_fps > 0 and fps >= float(Engine.max_fps) * 0.95:
+		return "nothing — sitting at the %d fps cap, so these costs are upper bounds" % Engine.max_fps
+	var refresh: float = DisplayServer.screen_get_refresh_rate()
+	if DisplayServer.window_get_vsync_mode() != DisplayServer.VSYNC_DISABLED \
+			and refresh > 0.0 and fps >= refresh * 0.95:
+		return "nothing — sitting at the display's %.0f Hz vsync ceiling, so these costs are upper bounds" % refresh
+	if main_ms >= maxf(_ema_gpu_ms, _ema_cpu_render_ms):
+		return "Main thread — script + Jolt + engine, NOT rendering; graphics settings cannot help this"
+	if _ema_gpu_ms >= _ema_cpu_render_ms:
 		return "GPU — cut resolution / MSAA / shadow-casting lights / transparent overdraw"
-	if is_equal_approx(worst, _ema_cpu_render_ms):
-		return "CPU render — cut VISIBLE MESH COUNT (draws), not polygons; shadow-casting lights multiply it"
-	return "Script — per-tick simulation cost; profile _physics_process"
+	return "CPU render — cut VISIBLE MESH COUNT (draws), not polygons; shadow-casting lights multiply it"
 
 
 func _frac(part: float, whole: float) -> float:
