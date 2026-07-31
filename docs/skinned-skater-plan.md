@@ -95,7 +95,9 @@ COUNT scattered across the tile.
    than given their own, since they are siblings in `UpperBody`'s frame. Four
    more bones, five more surfaces, zero extra nodes. Skater is **41 nodes**
    (from 67). `SkaterMeshBuilder.apply()` is gone with them.
-5. Goalie, same pattern.
+5. ~~Goalie, same pattern.~~ **Deliberately NOT the same pattern** — see below.
+   The rigid-merge win was taken instead: goalie **41 nodes** (from 46), five
+   fewer draw calls.
 
 Each step is its own diffable commit. Do not batch them.
 
@@ -165,6 +167,31 @@ Rules established during that pass that this work must respect:
   chain. Build the basis and assign `transform` once instead.
 - `scaled_local` (basis·S) matches how `set_scale` composes; plain `scaled`
   (S·basis) puts the scale on the wrong axes once a node rotates.
+
+## The goalie does not get a skeleton, and that is not an oversight
+
+Its moving parts are `StaticBody3D`s carrying real colliders — the puck bounces
+off the pads, the glove and the stick, and the poke geometry reads the blade
+collider's world position. `Goalie.apply_body_config` moves six of them per tick
+and their meshes ride along as children, so one transform write moves collider
+and mesh together.
+
+Bones would not replace those writes. The bodies still have to move for
+collision, so a bone pose per mesh is pure addition: six writes would become six
+writes plus eleven bone poses, to save nine nodes. That is the same principle
+that kept the skater's `blade` and `top_hand` markers as nodes — **what is being
+moved is gameplay, so it stays a node.** The skater's parts were the opposite:
+pure cosmetics riding markers that stayed.
+
+What did apply is the older merge pattern (the boot and its steel and laces).
+The glove's rim, pocket and cuff; the stick's shaft, paddle and blade; the
+blocker's board and hand — each group never moves relative to itself AND already
+shared one material, so each collapsed to one node, one mesh and one draw call.
+All four `goalie_capture.gd` angles came back with zero changed pixels.
+
+The only route to a goalie skeleton is making its collision analytic the way
+skater-vs-skater already is. That is a gameplay change with its own risk, and a
+separate piece of work.
 
 ## Tools
 

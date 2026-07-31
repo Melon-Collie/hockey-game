@@ -152,11 +152,91 @@ static func apply_goalie(goalie: Goalie) -> void:
 	_ensure_extras(goalie)
 	_swap_instance(goalie.left_pad_mesh, "goalie_pad", _build_pad)
 	_swap_instance(goalie.right_pad_mesh, "goalie_pad", _build_pad)
-	_swap_instance(goalie.glove_ring_mesh, "goalie_glove_ring", _build_glove_ring)
-	_swap_instance(goalie.glove_main_mesh, "goalie_glove_pocket", _build_glove_pocket)
-	_swap_instance(goalie.glove_detail_mesh, "goalie_glove_cuff", _build_glove_cuff)
-	_swap_instance(goalie.blocker_mesh, "goalie_blocker", _build_blocker)
-	_swap_instance(goalie.blocker_hand_mesh, "goalie_blocker_hand", _build_blocker_hand)
+	_merge_glove(goalie)
+	_merge_stick(goalie)
+	_merge_blocker(goalie)
+
+
+# ── Rigid merges ─────────────────────────────────────────────────────────────
+# The goalie does NOT get the skater's skinned-rig treatment, and the reason is
+# worth stating where someone would otherwise try it: its moving parts are
+# StaticBody3Ds carrying real colliders (the puck bounces off the pads, the
+# glove and the stick, and the poke geometry reads the blade collider's world
+# position). apply_body_config moves six of them per tick, and their meshes are
+# children that ride along for free. Bones would not replace those writes — the
+# bodies still have to move for collision — they would ADD one per mesh.
+#
+# What DOES apply is the merge the boot and helmet already use: several meshes
+# that never move relative to each other, and here also share one material, do
+# not need to be separate nodes. Each group collapses to one node, one mesh and
+# one draw call.
+#
+# The absorbed nodes are resolved by path rather than kept as Goalie fields:
+# they are freed here, so a field would be left dangling for anyone who reached
+# for it later.
+#
+# The part transforms are read off the scene and BAKED into a mesh that every
+# goalie shares. That is safe because every goalie is the same scene, but it
+# does mean the first goalie built decides the cached geometry — moving one of
+# these nodes in the editor changes every goalie, which is what you want, and
+# changing it at runtime would not take, which nothing does.
+static func _merge_glove(goalie: Goalie) -> void:
+	var ring: MeshInstance3D = goalie.get_node("Glove/Ring") as MeshInstance3D
+	var detail: MeshInstance3D = goalie.get_node("Glove/MeshInstance3D2") as MeshInstance3D
+	_merge_rigid(goalie.glove_main_mesh, "goalie_glove_assembly", [
+		[_shared("goalie_glove_ring", _build_glove_ring), ring.transform],
+		[_shared("goalie_glove_pocket", _build_glove_pocket),
+				goalie.glove_main_mesh.transform],
+		[_shared("goalie_glove_cuff", _build_glove_cuff), detail.transform],
+	])
+	ring.free()
+	detail.free()
+
+
+static func _merge_stick(goalie: Goalie) -> void:
+	var paddle: MeshInstance3D = goalie.get_node(
+			"BlockArm/Stick/StickPaddleMesh") as MeshInstance3D
+	var blade: MeshInstance3D = goalie.get_node(
+			"BlockArm/Stick/StickBladeMesh") as MeshInstance3D
+	# The stick's three boxes are the only goalie parts still rendering the
+	# scene's own primitives — there is no low-poly build to swap in, so the
+	# merge bakes what the nodes are already carrying.
+	_merge_rigid(goalie.stick_shaft_mesh, "goalie_stick_assembly", [
+		[goalie.stick_shaft_mesh.mesh, goalie.stick_shaft_mesh.transform],
+		[paddle.mesh, paddle.transform],
+		[blade.mesh, blade.transform],
+	])
+	paddle.free()
+	blade.free()
+
+
+# The hand is a sibling of the blocker BODY, not of its mesh, so its transform
+# is re-expressed in that body's frame before baking.
+static func _merge_blocker(goalie: Goalie) -> void:
+	var hand: MeshInstance3D = goalie.get_node("BlockArm/BlockerHand") as MeshInstance3D
+	var body: Node3D = goalie.blocker_mesh.get_parent() as Node3D
+	_merge_rigid(goalie.blocker_mesh, "goalie_blocker_assembly", [
+		[_shared("goalie_blocker", _build_blocker), goalie.blocker_mesh.transform],
+		[_shared("goalie_blocker_hand", _build_blocker_hand),
+				body.transform.affine_inverse() * hand.transform],
+	])
+	hand.free()
+
+
+# Bakes several meshes into one and hands it to `survivor`, whose own transform
+# is cleared because the parts' placements now live in the vertices. `parts`
+# entries are [source mesh, transform in the survivor's PARENT frame].
+static func _merge_rigid(survivor: MeshInstance3D, key: String, parts: Array) -> void:
+	var built: ArrayMesh = _cache.get(key)
+	if built == null:
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		for part: Array in parts:
+			st.append_from(part[0] as Mesh, 0, part[1] as Transform3D)
+		built = st.commit()
+		_cache[key] = built
+	survivor.mesh = built
+	survivor.transform = Transform3D.IDENTITY
 
 
 # Unit-radius, unit-height straight tube for the hip connectors (the arm

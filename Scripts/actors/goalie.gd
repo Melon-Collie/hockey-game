@@ -25,14 +25,9 @@ extends Node3D
 @onready var head_mesh: MeshInstance3D = $Head/MeshInstance3D
 @onready var left_pad_mesh: MeshInstance3D = $LeftPad/MeshInstance3D
 @onready var right_pad_mesh: MeshInstance3D = $RightPad/MeshInstance3D
-@onready var glove_ring_mesh: MeshInstance3D = $Glove/Ring
 @onready var glove_main_mesh: MeshInstance3D = $Glove/Main
-@onready var glove_detail_mesh: MeshInstance3D = $Glove/MeshInstance3D2
 @onready var blocker_mesh: MeshInstance3D = $BlockArm/Blocker/BlockerPadMesh
-@onready var blocker_hand_mesh: MeshInstance3D = $BlockArm/BlockerHand
 @onready var stick_shaft_mesh: MeshInstance3D = $BlockArm/Stick/StickShaftMesh
-@onready var stick_paddle_mesh: MeshInstance3D = $BlockArm/Stick/StickPaddleMesh
-@onready var stick_blade_mesh: MeshInstance3D = $BlockArm/Stick/StickBladeMesh
 
 # Arm-to-glove segments. 0.76 per side is ~104% wingspan-equivalent on the
 # ~1.92 m frame (torso box + standing pose in goalie_body_config_builder) —
