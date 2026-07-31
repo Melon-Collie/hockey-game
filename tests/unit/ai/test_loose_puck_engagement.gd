@@ -22,9 +22,30 @@ const Harness := preload("res://tests/unit/ai/duel_harness.gd")
 # machine; the harness exposes the live agents, so read the ordinal.
 const CHASE_PUCK := 1
 
+# Ticks at the START of each loose window that are not counted. A bot cannot be
+# in CHASE_PUCK over a puck that came free less than one dispatch ago — it has
+# not been asked yet — so those ticks measure the dispatch cadence rather than
+# apathy, and the pathology this file exists to bound (a puck lying loose while
+# both teams stand and watch it) cannot occur inside one.
+#
+# It matters because the denominator is loose TICKS, not loose EPISODES, and the
+# two come apart whenever a change makes possession stickier: the same number of
+# scrambles resolve faster, which shrinks the denominator while the fixed
+# per-episode latency stays put, so the ratio climbs on an improvement. Measured
+# while chasing exactly that on the OZ-rebound fixture — loose episodes 28 -> 31
+# (flat) but their mean length 6.8 -> 2.8 ticks, i.e. windows averaging 23 ms,
+# most of which no bot had been dispatched in yet.
+#
+# Netting the head out is what makes the number mean what the thresholds were
+# written about. It also TIGHTENS them: on the fixtures as they stand the four
+# team readings fall from ~15% to 0-1%, so a real case of nobody going now has
+# the whole band to show up in instead of sharing it with the read latency.
+const DISPATCH_LATENCY_TICKS: int = SkaterAgentStateMachine.DISPATCH_PERIOD_TICKS + 1
+
 
 # Runs the sim and returns team_id -> percent of live-loose ticks with nobody
-# on that team in CHASE_PUCK.
+# on that team in CHASE_PUCK. Ticks inside a loose window's dispatch head are
+# excluded (see DISPATCH_LATENCY_TICKS).
 func _idle_chase_pct(spots: Array, puck: Vector3, puck_vel: Vector3,
 		secs: float) -> Dictionary:
 	var h = Harness.new()
@@ -36,9 +57,14 @@ func _idle_chase_pct(spots: Array, puck: Vector3, puck_vel: Vector3,
 	h.puck_vel = puck_vel
 	var idle := {0: 0, 1: 0}
 	var live: int = 0
+	var loose_age: int = 0
 	for _i: int in int(secs / Harness.DT):
 		h.step()
 		if h.carrier_id != -1:
+			loose_age = 0
+			continue
+		loose_age += 1
+		if loose_age <= DISPATCH_LATENCY_TICKS:
 			continue
 		live += 1
 		var chasing := {0: 0, 1: 0}
