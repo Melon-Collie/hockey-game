@@ -146,6 +146,13 @@ const CONTAINMENT_TELEPORT_SKIP: float = 2.0
 
 var carrier: Skater = null
 var pickup_locked: bool = false
+# Host time of the last release/nudge — the last moment this puck was teleported
+# onto a blade and given a wholesale new velocity. Host-side only; it exists so a
+# lag-comped claim can ask "has the puck been played since the instant I saw it?"
+# (ShotReleaseRules.one_timer_claim_is_stale). A claim rewinds to its own stamp,
+# so it can otherwise pass its geometry gate against a puck that has since been
+# fired somewhere else entirely — and then undo that shot. -1 = never played.
+var last_played_time: float = -1.0
 # The puck's velocity store. The puck is a plain Node3D — no physics body, no
 # engine integration — so this is just state the analytic drive (host) and the
 # gameplay interactions (deflects, pokes, strips, sweeps) read and write; the
@@ -566,6 +573,7 @@ func release(direction: Vector3, power: float) -> void:
 		global_position.y = ice_height
 	_pending_elevation_vel = direction * power
 	clear_carrier()
+	last_played_time = _now()
 	if ex_carrier != null:
 		_set_cooldown(ex_carrier, reattach_cooldown)
 	puck_released.emit()
@@ -586,6 +594,7 @@ func nudge(velocity: Vector3) -> void:
 	v.y = 0.0
 	_pending_elevation_vel = v
 	clear_carrier()
+	last_played_time = _now()
 	if ex_carrier != null:
 		_set_cooldown(ex_carrier, nudge_cooldown)
 	puck_released.emit()

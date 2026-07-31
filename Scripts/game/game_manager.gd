@@ -3186,6 +3186,13 @@ func on_remote_one_timer_release(direction: Vector3, _power: float, peer_id: int
 			puck.carrier != null, puck.pickup_locked, is_movement_locked(),
 			record.skater.is_ghost, puck.is_on_cooldown(record.skater)):
 		return
+	# ...and the same double-fire from the other direction: somebody ELSE (or this
+	# shooter's own host-side sim) already played the puck after this claim was
+	# stamped, so the loose puck the carrier check sees is one already in flight.
+	# The rewound range gate below cannot catch that — it re-derives the claimant's
+	# own view, where the puck was on their blade.
+	if ShotReleaseRules.one_timer_claim_is_stale(host_timestamp, puck.last_played_time):
+		return
 	var controller: SkaterController = record.controller
 	var safe_rtt_ms: float = ShotReleaseRules.clamp_rtt_ms(
 			rtt_ms, float(NetworkManager.get_peer_ping_ms(peer_id)))
