@@ -33,8 +33,13 @@ class_name AIRoleSlots5
 # rest state is decided by identity, small enough that real momentum wins.
 const POSITION_BIAS_S: float = 0.35
 
-# Same stickiness the 3v3 elections use (AIRoleSlots.HYSTERESIS_PENALTY_S).
-const HYSTERESIS_PENALTY_S: float = 0.12
+# Same stickiness the 3v3 elections use — REFERENCED, not copied (the rationale
+# for the value lives on AIRoleSlots.HYSTERESIS_PENALTY_S). This was a duplicated
+# literal and it drifted: 3v3's was re-derived to 0.2 when time_to_arrive moved
+# to the measured phase model, this copy stayed at 0.12, and the comment kept
+# claiming they matched — so 5v5's elections were ~40% less sticky than intended.
+# Two numbers that must agree should not be two numbers.
+const HYSTERESIS_PENALTY_S: float = AIRoleSlots.HYSTERESIS_PENALTY_S
 
 # ── Election-target geometry (metres, world coords) ─────────────────────────
 # These are the RACE TARGETS the assignment queries use — "who is best placed

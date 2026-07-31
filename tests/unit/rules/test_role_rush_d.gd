@@ -298,3 +298,41 @@ func test_the_shade_is_mirror_symmetric() -> void:
 	var right: Vector3 = _stand_for_carrier_x(GameRules.END_ZONE_FACEOFF_DOT_X)
 	assert_almost_eq(left.x, -right.x, 0.05,
 			"both wings are angled the same way; got %s vs %s" % [left, right])
+
+
+# ── RUSH_D2 only leaves mid-ice for a genuinely mid-lane man ─────────────────
+# D2's whole job is the middle. Picking argmin|x| over the rush with no bound
+# meant a lone second attacker on the boards read as "the mid-lane drive" and
+# pulled him off the lane the layered defense keeps him in.
+
+func _d2_target(second_x: float) -> Vector3:
+	var ctx: RoleContext = _ctx(Vector3(-2.0, 0.0, 16.0), [
+		[10, 1, Vector3(0.0, 0.0, 0.0), Vector3(0.0, 0.0, 7.0)],       # carrier
+		[11, 1, Vector3(second_x, 0.0, 2.0), Vector3(0.0, 0.0, 7.0)],  # second man
+	], 10)
+	return AIRoleRushD.decide(ctx, AIRoleSlots.Slot.RUSH_D2).target_position
+
+
+func test_d2_covers_a_man_driving_the_middle() -> void:
+	var target: Vector3 = _d2_target(1.5)
+	assert_lt(absf(target.x - 1.5), 6.0,
+			"a man in the middle is D2's to take; got %s" % target)
+
+
+func test_d2_holds_mid_ice_against_a_wall_man() -> void:
+	# Outside the dot lane he is the mid trackers' pickup as he cuts in, not
+	# D2's to chase — chasing him vacates the middle.
+	var wall_x: float = GameRules.END_ZONE_FACEOFF_DOT_X + 3.0
+	var target: Vector3 = _d2_target(wall_x)
+	assert_lt(absf(target.x), absf(wall_x) * 0.5,
+			"D2 stays central instead of chasing the wall man; got %s" % target)
+
+
+func test_the_mid_lane_band_is_the_dot_lane() -> void:
+	# Just inside the dots is his; just outside is not. Pinned so the boundary
+	# can't drift without the intent being restated.
+	var inside: Vector3 = _d2_target(GameRules.END_ZONE_FACEOFF_DOT_X - 0.5)
+	var outside: Vector3 = _d2_target(GameRules.END_ZONE_FACEOFF_DOT_X + 0.5)
+	assert_gt(absf(inside.x), absf(outside.x),
+			"the man inside the dots pulls D2 wider than the one outside them; "
+			+ "got %s vs %s" % [inside, outside])

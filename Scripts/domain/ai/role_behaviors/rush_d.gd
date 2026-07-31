@@ -88,6 +88,13 @@ const LANE_PLAY_DANGER_BAR: float = 0.5
 # man to pick up, measured along the threat axis. Just above the house gate —
 # he is the layer behind RUSH_D1, not a second body on the puck.
 const D2_MID_DEPTH_M: float = 12.0
+# How far off centre an attacker may be and still count as the MID-LANE drive
+# D2 exists to take: the end-zone dot lane, which is what bounds the middle of
+# the ice. Without this the pick was argmin|x| over the whole rush, so a lone
+# second attacker hugging the boards read as "the mid-lane man" and pulled D2
+# off mid-ice — vacating the exact lane the layered defense keeps him in. A wide
+# man is the mid trackers' pickup as he cuts in, not D2's to chase.
+const D2_MID_LANE_HALF_WIDTH_M: float = GameRules.END_ZONE_FACEOFF_DOT_X
 # How far weak-side of centre D2 shades while holding mid-ice.
 const D2_WEAK_SHADE_M: float = 2.0
 
@@ -275,11 +282,13 @@ static func _decide_d2(ctx: RoleContext) -> RoleDecision:
 	return d
 
 
-# The attacker (excluding the carrier) nearest the middle of the ice, as his
-# velocity-led point. Vector3.INF when there is none.
+# The attacker (excluding the carrier) driving the MIDDLE — the most central one
+# inside the mid-lane band, as his velocity-led point. Vector3.INF when nobody is
+# in the middle, which is D2's cue to hold his post rather than chase a wide man
+# (see D2_MID_LANE_HALF_WIDTH_M).
 static func _mid_lane_man(read: AIRushRead) -> Vector3:
 	var best: Vector3 = Vector3.INF
-	var best_x: float = INF
+	var best_x: float = D2_MID_LANE_HALF_WIDTH_M
 	for i: int in read.attackers.size():
 		if read.attackers[i] == read.carrier_peer:
 			continue
