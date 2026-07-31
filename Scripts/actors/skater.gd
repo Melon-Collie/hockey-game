@@ -2240,6 +2240,19 @@ func hud_screen_down() -> Vector2:
 	return _hud.screen_down()
 
 
+# ── Name plate (read by PlayerNameOverlay, drawn as 2D) ──────────────────────
+func name_plate_visible() -> bool:
+	return _hud.name_plate_visible()
+
+
+func name_plate_text() -> String:
+	return _hud.name_plate_text()
+
+
+func name_plate_anchor() -> Vector3:
+	return _hud.name_plate_anchor()
+
+
 func set_skin_tone(index: int) -> void:
 	# Head and neck are one SURFACE of the helmet mesh, not child nodes — they
 	# always wore the same skin material, so the merge gave them a single paint
