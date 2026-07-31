@@ -1634,7 +1634,7 @@ func _shooting_tick(delta: float) -> void:
 		_shoot_restage_timer -= delta
 		if _shoot_restage_timer <= 0.0:
 			_shoot_restage_timer = -1.0
-			_stage_puck_for_player()
+			_restage_shooter()
 		return
 	if _puck.carrier != null:
 		return  # puck on a stick — nothing in flight
@@ -1741,6 +1741,36 @@ func _begin_restage() -> void:
 	_shoot_restage_timer = _REATTEMPT_DELAY
 
 
+# How far the shooter may wander from the station before the next attempt puts
+# them back. Non-zero so stepping into a shot isn't undone on a rep the player
+# barely moved on — and so a stationary shooter never pays teleport_to's
+# prediction-history clear once per attempt.
+const _STATION_DRIFT_TOL: float = 0.75
+
+# Station the active targets wave shoots from: the slot for the flat / saucer /
+# MID waves, the doorstep for the HIGH wave.
+func _targets_station_z() -> float:
+	return _doorstep_z() if _targets_phase == 3 else _slot_z()
+
+
+# Returns the shooter to the wave's station, then stages the next puck. The
+# target waves are calibrated per range — the rung that reaches the corners from
+# the slot can't reach them from the doorstep, and vice versa — while the puck
+# stages relative to wherever the player is STANDING. Without this the shooter
+# creeps netward a stride per attempt and the range each wave teaches quietly
+# drifts out from under it. Only the target drill re-stations: the other
+# shooting steps have no range calibration to protect, and the free finish is
+# meant to roam.
+func _restage_shooter() -> void:
+	if _current_step_id() == STEP_SHOOT_TARGETS:
+		var station := Vector3(0.0, 1.0, _targets_station_z())
+		var drift: float = Vector2(_skater.global_position.x - station.x,
+				_skater.global_position.z - station.z).length()
+		if drift > _STATION_DRIFT_TOL:
+			_local_controller.teleport_to(station, Vector2(0.0, -1.0))
+	_stage_puck_for_player()
+
+
 # Called when the active wave's targets are all cleared. Returns true if the
 # whole step is done, false if the drill advanced to a new wave / beat.
 func _on_targets_wave_cleared() -> bool:
@@ -1800,12 +1830,14 @@ func _show_targets_wave(phase: int) -> void:
 			_show_target_set(_HIGH_TARGETS)
 		3:
 			# Same corners, in tight — MID can't climb to them from here, so the
-			# player has to reach for the top rung. Restaged rather than left in
-			# the slot: HIGH is an in-tight tool and the drill should stand them
-			# where it works (see _DOORSTEP_DIST_M).
+			# player has to reach for the top rung. Moved on the spot rather than
+			# on the restage beat that follows, so the player is already standing
+			# on the doorstep as the copy telling them so appears; the puck lands
+			# on the beat like every other wave change. HIGH is an in-tight tool
+			# and the drill should stand them where it works (see
+			# _DOORSTEP_DIST_M).
 			_local_controller.teleport_to(
 					Vector3(0.0, 1.0, _doorstep_z()), Vector2(0.0, -1.0))
-			_stage_puck_for_player()
 			_set_live_copy(
 				"Pick Your Spot",
 				"Now you're on the doorstep — and MID can't climb this fast. Tap {elevation_up} once more to HIGH and roof both corners from in tight.",
