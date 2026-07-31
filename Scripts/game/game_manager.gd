@@ -277,6 +277,11 @@ var shape_tally := AIPossessionShapeTally.new()
 # Live breakout-outcome tally (F6 overlay) — the in-game counterpart of the
 # breakout harness, so its staged verdicts can be checked against real play.
 var breakout_episodes := AIBreakoutEpisodeTracker.new()
+# Both tallies sample at the 120 Hz host tick, so they stay OFF until asked for:
+# the overlay only exists in a debug build, and the first F6 press latches this.
+# It never un-latches — closing the panel would otherwise punch a hole in the
+# denominator and quietly corrupt every share it reports.
+var shape_tally_armed: bool = false
 var _state_buffer_manager: StateBufferManager = null
 # Per-team last-elected loose-puck chaser, fed back into
 # AILoosePuckChase.elect each frame for incumbent hysteresis.
@@ -558,8 +563,9 @@ func _physics_process(delta: float) -> void:
 			# Shape-occupancy sample (debug instrument, F6). Sampled against the
 			# PUBLISHED state so it measures the shape actually being run, and
 			# only during live play — shares should describe hockey, not the
-			# stoppages between it.
-			if _state_machine != null \
+			# stoppages between it. Armed by the first F6 press (see
+			# shape_tally_armed); a shipped build never reaches it at all.
+			if shape_tally_armed and _state_machine != null \
 					and _state_machine.current_phase == GamePhase.Phase.PLAYING:
 				var tally_puck: PuckNetworkState = current_snapshot.puck_state
 				var carrier_team: int = -1
@@ -1578,8 +1584,12 @@ func _wire_subsystems() -> void:
 	add_child(_debug_overlay)
 	shape_tally.reset()
 	breakout_episodes.reset()
-	_shape_overlay = ShapeDebugOverlay.new()
-	add_child(_shape_overlay)
+	shape_tally_armed = false
+	# Dev-only surface: no overlay in a shipped build, so F6 can never arm the
+	# per-tick sampling there (same gate NetworkDebugOverlay's toasts use).
+	if OS.is_debug_build():
+		_shape_overlay = ShapeDebugOverlay.new()
+		add_child(_shape_overlay)
 
 	var _home_c := TeamColorRegistry.get_colors(teams[0].color_slot, 0)
 	var _away_c := TeamColorRegistry.get_colors(teams[1].color_slot, 1)

@@ -24,6 +24,11 @@ extends CanvasLayer
 # Host-only by nature: the tally samples the team brains, which exist only
 # where the bots are simulated. A client sees the "no brains" notice.
 #
+# The sampling itself is OFF until this panel is first opened (F6 latches
+# GameManager.shape_tally_armed) and the overlay is only built in a debug build,
+# so an ordinary match pays nothing for it. Cost of being wrong here is real:
+# the tally ticks at 120 Hz per team off the host's physics step.
+#
 # Debug surface — strings are deliberately not routed through tr(), matching
 # NetworkDebugOverlay. Built entirely in code (no .tscn) so it stays a
 # Claude-editable file. Laid out as a bbcode [table] rather than space-padded
@@ -115,6 +120,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		_showing = not _showing
 		_panel.visible = _showing
 		if _showing:
+			# Arm the host-side sampling on first open. It is a 120 Hz tick cost,
+			# so it does not run in a match nobody asked to measure — and it
+			# stays armed once latched, because a gap in the sampling would skew
+			# every share the panel then reports.
+			GameManager.shape_tally_armed = true
 			_refresh()
 		get_viewport().set_input_as_handled()
 		return

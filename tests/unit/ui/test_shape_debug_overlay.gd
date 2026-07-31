@@ -13,12 +13,15 @@ extends GutTest
 var _overlay: ShapeDebugOverlay = null
 var _saved_tally: AIPossessionShapeTally = null
 var _saved_brains: Array[TeamBrain] = []
+var _saved_armed: bool = false
 
 
 func before_each() -> void:
 	_saved_tally = GameManager.shape_tally
 	_saved_brains = GameManager.team_brains
+	_saved_armed = GameManager.shape_tally_armed
 	GameManager.shape_tally = AIPossessionShapeTally.new()
+	GameManager.shape_tally_armed = false
 	_overlay = ShapeDebugOverlay.new()
 	add_child_autofree(_overlay)
 
@@ -26,6 +29,14 @@ func before_each() -> void:
 func after_each() -> void:
 	GameManager.shape_tally = _saved_tally
 	GameManager.team_brains = _saved_brains
+	GameManager.shape_tally_armed = _saved_armed
+
+
+func _press(keycode: int) -> void:
+	var ev := InputEventKey.new()
+	ev.keycode = keycode
+	ev.pressed = true
+	_overlay._unhandled_input(ev)
 
 
 func _text() -> String:
@@ -118,6 +129,28 @@ func test_refresh_survives_a_null_tally() -> void:
 	_overlay._refresh()
 	assert_string_contains(_text(), "No team brains",
 			"a null tally falls through to the notice instead of crashing")
+
+
+# ── Arming the host-side sampling ────────────────────────────────────────────
+# The tallies tick at 120 Hz per team off the host's physics step, so they stay
+# off until somebody asks to measure a match (GameManager.shape_tally_armed).
+
+func test_opening_the_panel_arms_the_sampling() -> void:
+	assert_false(GameManager.shape_tally_armed,
+			"an unopened overlay leaves the host tick alone")
+	_press(KEY_F6)
+	assert_true(GameManager.shape_tally_armed,
+			"the first F6 press turns the sampling on")
+
+
+func test_closing_the_panel_leaves_the_sampling_armed() -> void:
+	# Deliberate latch, not a mirror of visibility: pausing the sampling mid-run
+	# would punch a hole in the denominator and skew every share reported after.
+	_press(KEY_F6)
+	_press(KEY_F6)
+	assert_false(_overlay._showing, "the panel closed")
+	assert_true(GameManager.shape_tally_armed,
+			"but the tally keeps sampling — a gap would corrupt the shares")
 
 
 # ── Live breakout episodes ───────────────────────────────────────────────────
