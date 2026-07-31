@@ -1332,11 +1332,29 @@ func _is_reactive_slot(slot: int, snapshot: WorldSnapshot) -> bool:
 	match slot:
 		AIRoleSlots.Slot.PRESSURE, AIRoleSlots.Slot.F1_PRESSURE, \
 		AIRoleSlots.Slot.MARK, \
-		AIRoleSlots.Slot.CHASE, AIRoleSlots.Slot.ZONE_D_STRONG, \
+		AIRoleSlots.Slot.CHASE, \
 		AIRoleSlots.Slot.RUSH_D1, AIRoleSlots.Slot.RUSH_D2, \
 		AIRoleSlots.Slot.TRACK_PUCK, AIRoleSlots.Slot.TRACK_MID_STRONG, \
 		AIRoleSlots.Slot.TRACK_MID_WEAK, AIRoleSlots.Slot.TRACK_MID:
 			return true
+		AIRoleSlots.Slot.ZONE_D_STRONG, AIRoleSlots.Slot.ZONE_D_WEAK, \
+		AIRoleSlots.Slot.ZONE_C, AIRoleSlots.Slot.ZONE_W_STRONG, \
+		AIRoleSlots.Slot.ZONE_W_WEAK:
+			# The zone defender who OWNS pressure this tick runs the full
+			# AIRolePressure cut-off argmax against a live carrier — the same job
+			# PRESSURE does, so it wants the same cadence. Ownership MOVES with
+			# the puck (AIZoneCoverage.pressure_owner), so it cannot be a fixed
+			# slot: ZONE_D_STRONG was hardcoded here, which left a carrier in the
+			# slot (ZONE_C) or the net-front box (ZONE_D_WEAK) pressured on the
+			# shape-holding cadence instead. That path sets no locked_man_pid
+			# either, so the soft-lock fallthrough below never caught it.
+			if snapshot != null and snapshot.puck_state != null:
+				var strong_x: float = _current_strategy.strong_x() \
+						if _current_strategy != null else 1.0
+				if AIZoneCoverage.pressure_owner(strong_x,
+						_own_goal_dir * GameRules.GOAL_LINE_Z,
+						snapshot.puck_state.position) == slot:
+					return true
 		AIRoleSlots.Slot.FINISHER, AIRoleSlots.Slot.NET_FRONT:
 			# The one-timer camp's fast cadence buys a live seam read — which
 			# only exists while the puck is IN the attacking zone. Elsewhere

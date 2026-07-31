@@ -248,3 +248,53 @@ func test_d2_holds_mid_ice_with_nobody_driving() -> void:
 	assert_lt(absf(d.target_position.x), 6.0, "D2 holds mid-ice")
 	assert_lt(d.target_position.z, OUR_NET_Z,
 			"and stays in front of the net, not on it")
+
+
+# ── Inside angling scales with the carrier's own lateral offset ──────────────
+# The shade takes away the middle. A carrier already IN the middle has no inside
+# to take, so the depth goes to zero there — which is also what makes the two
+# sides meet continuously instead of the stand jumping across as he crosses
+# centre.
+
+func _stand_for_carrier_x(carrier_x: float) -> Vector3:
+	var ctx: RoleContext = _ctx(Vector3(0.0, 0.0, 14.0), [
+		[10, 1, Vector3(carrier_x, 0.0, 0.0), Vector3(0.0, 0.0, 7.0)],
+	], 10)
+	return AIRoleRushD.decide(ctx, AIRoleSlots.Slot.RUSH_D1).target_position
+
+
+func test_a_centre_lane_carrier_gets_no_lateral_shade() -> void:
+	var stand: Vector3 = _stand_for_carrier_x(0.0)
+	assert_almost_eq(stand.x, 0.0, 0.05,
+			"dead centre there is no inside to take away; got %s" % stand)
+
+
+func test_the_shade_does_not_jump_across_centre() -> void:
+	# The defect: a fixed shade had to pick a side, so the stand flipped a full
+	# 2x ANGLE_INSIDE_M between a carrier a centimetre either side of x = 0.
+	var left: Vector3 = _stand_for_carrier_x(-0.05)
+	var right: Vector3 = _stand_for_carrier_x(0.05)
+	assert_lt(absf(left.x - right.x), 0.15,
+			"the stand must be continuous through centre; got %s vs %s"
+			% [left, right])
+
+
+func test_a_wide_carrier_is_shaded_toward_the_middle() -> void:
+	# Out at the dot lane the inside/outside split is real and the full shade
+	# applies — toward centre, i.e. the opposite side from the carrier.
+	var stand: Vector3 = _stand_for_carrier_x(GameRules.END_ZONE_FACEOFF_DOT_X)
+	assert_lt(stand.x, GameRules.END_ZONE_FACEOFF_DOT_X,
+			"shaded inside of the carrier, not outside him; got %s" % stand)
+	var mid: Vector3 = _stand_for_carrier_x(GameRules.END_ZONE_FACEOFF_DOT_X * 0.5)
+	var wide_shade: float = GameRules.END_ZONE_FACEOFF_DOT_X - stand.x
+	var mid_shade: float = GameRules.END_ZONE_FACEOFF_DOT_X * 0.5 - mid.x
+	assert_gt(wide_shade, mid_shade,
+			"the shade deepens as the carrier gets wider (%.2f vs %.2f)"
+			% [wide_shade, mid_shade])
+
+
+func test_the_shade_is_mirror_symmetric() -> void:
+	var left: Vector3 = _stand_for_carrier_x(-GameRules.END_ZONE_FACEOFF_DOT_X)
+	var right: Vector3 = _stand_for_carrier_x(GameRules.END_ZONE_FACEOFF_DOT_X)
+	assert_almost_eq(left.x, -right.x, 0.05,
+			"both wings are angled the same way; got %s vs %s" % [left, right])
