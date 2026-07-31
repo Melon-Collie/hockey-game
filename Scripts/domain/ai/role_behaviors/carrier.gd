@@ -1159,6 +1159,33 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 			* -signf(attacking_goal.z)
 	var shot_from_behind_line: bool = puck_forward_of_line <= SHOT_MIN_FORWARD_OF_LINE_M
 
+	# ...and no shot at all from OUTSIDE the attacking zone while the keeper is
+	# HOME. This is the same proof threat_surface_shoot and _score_at already
+	# run: at that range a direct shot is dead by score_shoot's own
+	# arrival-honest coverage math — he is square long before the puck arrives —
+	# so the goalie hole geometry, the three-sample release sweep and the tip
+	# read below all resolve to ~0 on every neutral- and defensive-zone dispatch.
+	#
+	# The reason to gate it is the GUARANTEE, not the cost: measured on the
+	# micro-bench's out-of-zone carrier the saving is ~26 us of a ~1850 us
+	# compete (~1.4%, inside the run-to-run noise), because the carry beam
+	# dominates that number. Do not cite this as a perf win. The giveaway bar
+	# (SHOT_MIN_VALUE) already made a own-zone shot unreachable in practice, but
+	# only by arithmetic that runs downstream of two multipliers — the fire
+	# hysteresis and the smart-ping SHOOT bias — both of which scale a live
+	# score upward before the bar is checked. With the score never computed there
+	# is nothing for either to lift: SHOOT cannot win a compete outside the zone
+	# by any route.
+	#
+	# The keeper-home condition is load-bearing and is why this is not a blanket
+	# zone gate: a DISPLACED or PULLED keeper voids the proof, and an empty net
+	# genuinely scores from centre ice. That shot has to stay available, exactly
+	# as it does in the other two consumers.
+	var shot_unavailable: bool = shot_from_behind_line \
+			or (not AIActionScoring.in_offensive_zone(self_pos, attacking_goal)
+					and goalie_now.distance_to(attacking_goal)
+							< AIActionScoring.THREAT_GOALIE_HOME_M)
+
 	# The five-hole as it physically exists RIGHT NOW, from the replicated pose:
 	# standing = the real ~0.20 m slot between the pads (sealable by dropping —
 	# the model gates on the reach time vs the drop), down = the residual leak.
@@ -1172,7 +1199,7 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 	_shot_env_hands = Vector4.INF
 	_shot_env_pads = Vector4.INF
 	var opp_goalie_state: GoalieNetworkState = ctx.snapshot.goalie_states.get(1 - ctx.team_id)
-	if opp_goalie_state != null:
+	if opp_goalie_state != null and not shot_unavailable:
 		_shot_env_goalie_down = opp_goalie_state.is_down()
 		# Hand + pad positions off the same replicated pose (hole-model v3):
 		# the HIGH cover races from where the glove/blocker actually are,
@@ -1216,7 +1243,7 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 	var usable_offset: float = _usable_release_offset(ctx.self_handle_reach)
 	_phase_shoot_score = -1.0
 	for frac: float in RELEASE_SAMPLE_FRACS:
-		if shot_from_behind_line:
+		if shot_unavailable:
 			break
 		var offset: Vector3 = forehand_perp * (frac * usable_offset)
 		var sample_speed: float = ctx.self_wrister_shot_speed
@@ -1287,7 +1314,7 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 	# — the tip's whole edge is the collapsed post-contact read, which the
 	# hole geometry prices via t_reach).
 	_shot_sample_is_tip = false
-	if not shot_from_behind_line and not _scratch_option_receiver_pos.is_empty():
+	if not shot_unavailable and not _scratch_option_receiver_pos.is_empty():
 		var tip_release: Vector3 = AIActionScoring.release_ahead_of_goalie(
 				wrister_base_release, attacking_goal, goalie_now)
 		for tip_man: Vector3 in _scratch_option_receiver_pos:

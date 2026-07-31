@@ -2348,6 +2348,56 @@ func test_committed_saucer_pass_caps_launch_at_the_receivability_bound() -> void
 
 # ─── puck-protect mirror (blade shielding read by the state machine) ─────────
 
+func test_no_shot_is_even_scored_from_outside_the_zone() -> void:
+	# The shot eval is skipped entirely outside the attacking zone while the
+	# keeper is HOME — the same proof threat_surface_shoot and _score_at already
+	# run, applied to the eval that costs the most (goalie hole geometry + the
+	# three-sample release sweep + the tip read, on every NZ/DZ dispatch, to
+	# compute ~0).
+	#
+	# It is a behavioural guarantee, not only a saving. SHOT_MIN_VALUE already
+	# made an own-zone shot unreachable in practice, but only by arithmetic
+	# downstream of two multipliers — the fire hysteresis and the smart-ping
+	# SHOOT bias — which both scale a live score up BEFORE the bar is checked.
+	# With no score computed there is nothing for either to lift.
+	var self_pos := Vector3(0.0, 0.0, 20.0)          # deep in our OWN zone
+	var ctx := _make_ctx(self_pos, [[1, TEAM_ID, self_pos]])
+	var home := GoalieNetworkState.new()
+	home.position_x = 0.0
+	home.position_z = OPP_NET_Z + 1.0                # keeper home in his crease
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = home
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_lt(c.debug_shoot_score, 0.0,
+			"no shot is scored at all from our own zone against a home keeper")
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"…so SHOOT cannot win the compete by any route")
+
+	# Even ordered to shoot by a teammate's smart ping, which biases the shot
+	# score: the bias multiplies a score that was never computed.
+	var pinged := _make_ctx(self_pos, [[1, TEAM_ID, self_pos]])
+	pinged.snapshot.goalie_states[1 - TEAM_ID] = home
+	pinged.ping_shoot_active = true
+	var cp := AIRoleCarrier.new()
+	cp.decide(pinged)
+	assert_ne(cp.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"a shoot ping cannot manufacture an own-zone shot")
+
+	# The keeper-home condition is load-bearing, and is why this is not a blanket
+	# zone gate: a PULLED keeper voids the proof and an empty net genuinely
+	# scores from distance, so the shot must still be evaluated out here.
+	var empty := _make_ctx(self_pos, [[1, TEAM_ID, self_pos]])
+	var pulled := GoalieNetworkState.new()
+	pulled.position_x = 0.0
+	pulled.position_z = 0.0                          # off for an extra attacker
+	empty.snapshot.goalie_states[1 - TEAM_ID] = pulled
+	var ce := AIRoleCarrier.new()
+	ce.decide(empty)
+	assert_gt(ce.debug_shoot_score, 0.0,
+			"an empty net is still scored from outside the zone; got %f"
+			% ce.debug_shoot_score)
+
+
 func test_open_ice_carrier_feels_no_protect_gain() -> void:
 	# Nobody near the presented forward carry spot: shielding buys nothing, so the
 	# gain is 0 and the state machine keeps the plain forward carry aim.
