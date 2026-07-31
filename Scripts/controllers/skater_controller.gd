@@ -1513,7 +1513,7 @@ func _process_input(input: InputState, delta: float) -> void:
 	# clamp never validated — so a stick reaching from behind/beside could drag
 	# the pinned puck into the net even with the blade reading legal. Runs after
 	# _apply_state so it sees this tick's final blade pose.
-	_clamp_carry_pin_from_net()
+	_clamp_pinned_puck_from_net()
 	# Mirror the state machine into the replicated field on every simulated
 	# tick, AFTER _apply_state so same-tick transitions are visible to the
 	# cosmetic consumers below (gait shot stance) and to Skater._process (stick
@@ -1768,20 +1768,55 @@ func _do_release(direction: Vector3, power: float) -> void:
 	puck_release_requested.emit(direction, power, slapper)
 
 
-# Net exclusion for the CARRIED PUCK. The blade net-clamp keeps the blade out of
-# the net, but the puck pins to a carry offset off the blade (get_carry_target_
-# global) — a separate point. This clamps that pin the same way, so a carried
-# puck can only be inside the net box via a legit FRONT-mouth path (a wraparound
-# tuck rides in; a reach from behind/beside is pushed out and the puck knocked
-# loose). It is the physical invariant the goal check can then simply trust:
-# a puck in the net got there legally. Mirrors the slapshot-pin clamp, which
-# already guards its own pin — this covers the plain-carry and wrister-aim states
-# (SLAPPER_CHARGE_WITH_PUCK still uses its stricter allow_front=false clamp in
-# _update_slapper_charge, so skip it here to avoid fighting it).
-func _clamp_carry_pin_from_net() -> void:
-	if not has_puck or _sm.get_state() == State.SLAPPER_CHARGE_WITH_PUCK:
+# Net exclusion for the CARRIED PUCK, routed to whichever pin is live. The blade
+# net-clamp keeps the BLADE out of the net, but the puck rides a pin off the
+# blade (get_carry_target_global) — a separate point that needs its own guard, so
+# that "a puck in the net got there legally" is an invariant the goal check can
+# simply trust.
+#
+# Which rule applies is a fact about the PIN, not about the state name: dispatch
+# on is_slapshot_pinning() rather than enumerating states, so any state that
+# adopts that pin is covered the day it does (the one-timer's retention hold
+# continues the wind-up's pin and was the case that exposed this — it inherited
+# the permissive carry rule for the length of the hold because it is not
+# SLAPPER_CHARGE_WITH_PUCK).
+#
+# Exactly one of the two runs per tick, which is the point: they disagree on
+# allow_front and would fight over the same pin.
+func _clamp_pinned_puck_from_net() -> void:
+	if not has_puck:
 		_has_prev_carry_pin = false
 		return
+	if skater.is_slapshot_pinning():
+		# No carry pin history survives a wind-up — re-seed on the way back out.
+		_has_prev_carry_pin = false
+		_clamp_slapshot_pin_from_net()
+		return
+	_clamp_carry_pin_from_net()
+
+
+# Fixed skater-local ice offset (the wind-up / retention pin). allow_front=false:
+# a wind-up never tucks the puck into the mouth, so ANY entry into the net box
+# knocks it loose. Stricter than the carry rule below, which must let a genuine
+# wraparound ride in.
+func _clamp_slapshot_pin_from_net() -> void:
+	var pin: Vector3 = skater.get_carry_target_global()
+	var clamped: Vector3 = NetClampRules.clamp_out_of_net(
+			pin, pin, GameRules.GOAL_LINE_Z, GameRules.NET_HALF_WIDTH,
+			GameRules.NET_POST_RADIUS, GameRules.NET_PUCK_BUFFER,
+			GameRules.NET_DEPTH, GameRules.NET_HEIGHT, false)
+	if clamped == pin:
+		return
+	var away: Vector3 = clamped - pin
+	if away.length() > 0.001:
+		_do_release(away.normalized(), goalie_strip_power)
+
+
+# Ordinary carry off the blade (plain carry and wrister aim). allow_front=true:
+# a puck can be inside the net box only via a legit FRONT-mouth path — a
+# wraparound tuck rides in; a reach from behind or beside is pushed out and the
+# puck knocked loose.
+func _clamp_carry_pin_from_net() -> void:
 	var pin: Vector3 = skater.get_carry_target_global()
 	# First carry tick: no legal prior pin to induct from. Seed from the pin so a
 	# genuine front entry next tick is judged against a real position; a puck
@@ -2515,24 +2550,10 @@ func _update_slapper_charge(delta: float) -> void:
 			skater.predicted_shot_velocity = pred.direction * pred.power
 	if show_one_timer_indicator:
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
-	# Net exclusion for the slapshot PIN. While charging with the puck, the puck
-	# is pinned to a body-relative ice offset (Skater.get_carry_target_global's
-	# slapshot branch) instead of the blade contact, so the blade-contact net
-	# clamp never sees it — a carrier winding up while skating behind or across
-	# a net would otherwise drag the pinned puck straight through the mesh (and
-	# across the goal line). Mirror the blade path's rule: the moment the pin
-	# would enter the net's exclusion box, the net knocks the puck loose.
-	# allow_front=false — a wind-up never tucks the puck into the mouth.
-	if has_puck and skater.is_slapshot_pinning():
-		var pin: Vector3 = skater.get_carry_target_global()
-		var clamped: Vector3 = NetClampRules.clamp_out_of_net(
-				pin, pin, GameRules.GOAL_LINE_Z, GameRules.NET_HALF_WIDTH,
-				GameRules.NET_POST_RADIUS, GameRules.NET_PUCK_BUFFER,
-				GameRules.NET_DEPTH, GameRules.NET_HEIGHT, false)
-		if clamped != pin:
-			var away: Vector3 = clamped - pin
-			if away.length() > 0.001:
-				_do_release(away.normalized(), goalie_strip_power)
+	# (The slapshot pin's own net exclusion lives in _clamp_pinned_puck_from_net,
+	# which runs after _apply_state for every pin type — a carrier winding up
+	# while skating behind or across a net would otherwise drag the pinned puck
+	# straight through the mesh and over the goal line.)
 
 # Normalized wind-up progress (0..1) over the FULL charge time. With the charge
 # ring gone the wind-up pose is the charge gauge, so every pose consumer (blade

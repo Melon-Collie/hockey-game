@@ -692,21 +692,31 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 				server_state.shot_state == SkaterStateMachine.State.ONE_TIMER_RETENTION
 		if server_still_aiming:
 			apply_server_shot_state = false
-	# Same class of in-flight transition as FOLLOW_THROUGH: the client has
-	# committed the one-timer swing and is counting down its hold, while the host
-	# is still processing-lag behind on the slap-release input. Reverting to the
-	# wind-up would re-arm a charge the player already let go of (and the held
-	# button can't re-fire the rising-edge entry); reverting to skating would
-	# eject the swing outright. Any real progression still lands — the host's own
-	# hold expiring flips it to FOLLOW_THROUGH, which is not blocked here.
+	# The one-timer's committed hold is CLIENT-OWNED outright — the server never
+	# overrides it, in either direction. Unlike every other guard here that is a
+	# safe blanket rather than an enumeration, because the hold SELF-TERMINATES
+	# within one_timer_retention_time: the worst a wrong local state can do is
+	# survive a fraction of a second before the timer expires into FOLLOW_THROUGH
+	# on its own. (Blocking FOLLOW_THROUGH that way would be a real risk — it has
+	# no such bound, which is why it enumerates.)
+	#
+	# What the server can send here is one of two things. Behind: the lagged
+	# pre-release state, since the host has not processed the slap-release input
+	# yet — applying it re-arms a wind-up the player already let go of (and the
+	# held button can't re-fire the rising-edge entry) or ejects the swing to
+	# skating. Ahead: FOLLOW_THROUGH, which silently EATS the shot — the client
+	# skips its own release, so the puckless one-timer's claim is never sent and
+	# the host cannot fire it either (one_timer_release_requested is deliberately
+	# disconnected for remote controllers). The ahead case should be unreachable
+	# — the client applies inputs immediately while the host gates consumption on
+	# host_timestamp, so the client leads by the input lead and its hold always
+	# expires first — but the failure is invisible when it isn't, so don't bet the
+	# shot on it.
+	#
+	# Real progressions are unaffected: a stoppage cancels the swing through
+	# teleport_to -> _cancel_active_charge, which does not route through here.
 	if apply_server_shot_state and pre_state == SkaterStateMachine.State.ONE_TIMER_RETENTION:
-		var server_pre_release: bool = \
-				server_state.shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK or \
-				server_state.shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK or \
-				server_state.shot_state == SkaterStateMachine.State.SKATING_WITH_PUCK or \
-				server_state.shot_state == SkaterStateMachine.State.SKATING_WITHOUT_PUCK
-		if server_pre_release:
-			apply_server_shot_state = false
+		apply_server_shot_state = false
 	# Symmetric guard for the reverse direction: don't revert from an aiming state
 	# back to skating when we have the puck. The server hasn't processed the shoot
 	# input yet (it's still in-flight or queued); letting the server override here
