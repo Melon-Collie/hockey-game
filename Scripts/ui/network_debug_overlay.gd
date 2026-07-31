@@ -60,6 +60,35 @@ var _fps_label: Label
 var _dot_timer: float = 0.0
 const DOT_REFRESH_SECONDS: float = 0.5
 
+# Frame-cost measurement (the "what is capping my FPS?" section). Splitting the
+# frame into GPU / render-thread CPU / script time is the only way to tell a
+# fill-rate problem from a draw-call problem from a per-tick simulation
+# regression — they all present identically as "FPS dropped".
+#
+# viewport_set_measure_render_time inserts GPU timestamp queries around the
+# viewport's passes, which is not free, so it is armed only while the F3 panel
+# is open and disarmed on close (and on exit). The measured numbers cover the
+# ROOT viewport; SubViewports (ice scratch map, jersey decals, jumbotron) are
+# measured separately by the engine and are NOT included here — their cost
+# still shows in the draw-call and primitive counts, which are engine-wide.
+var _vp_rid: RID
+var _measuring: bool = false
+# Exponential moving averages — raw per-frame GPU/CPU times are far too noisy to
+# read off a screen. The time constant is a readability choice: fast enough that
+# toggling a video option shows its effect within a beat, slow enough that the
+# digits hold still.
+const FRAME_COST_EMA_TAU: float = 0.30
+var _ema_gpu_ms: float = 0.0
+var _ema_cpu_render_ms: float = 0.0
+var _ema_process_ms: float = 0.0
+var _ema_physics_ms: float = 0.0
+var _ema_frame_ms: float = 0.0
+# A term has to own this much of the frame before it is named as the bound. A
+# frame is not a clean sum of its parts (GPU and CPU overlap by a frame, the
+# render thread pipelines), so "the biggest term is 40% of the frame" means
+# nothing is saturated — the cap is vsync or the FPS limiter.
+const FRAME_COST_BOUND_FRACTION: float = 0.60
+
 # Built fresh each frame: collected metric lines + the worst health seen, which
 # rolls up into the header verdict.
 var _lines: PackedStringArray = []
@@ -67,6 +96,7 @@ var _worst: Health = Health.OK
 
 func _ready() -> void:
 	layer = 100
+	_vp_rid = get_viewport().get_viewport_rid()
 	_panel = PanelContainer.new()
 	_panel.anchor_left = 1.0
 	_panel.anchor_right = 1.0
@@ -150,6 +180,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.keycode == KEY_F3:
 		_showing = not _showing
 		_panel.visible = _showing
+		_set_measuring(_showing)
 	elif event.keycode == KEY_F4:
 		_log_felt_lag()
 	elif event.keycode == KEY_C and _showing:
@@ -201,6 +232,22 @@ func _copy_session_digest() -> void:
 		"role": "host" if NetworkManager.is_host else "client",
 		"net_sim_active": NetworkSimManager.enabled,
 		"game_id": GameManager.get_game_id(),
+		# Local frame cost rides along so a pasted digest can answer "GPU or CPU?"
+		# on its own. Live EMAs, not session aggregates — the digest is copied from
+		# the open panel, so they describe the moment the tester chose to capture.
+		# Skater count makes the digest self-describing about roster size, which
+		# every per-actor cost scales with.
+		"frame_cost": {
+			"skaters": get_tree().get_nodes_in_group("skaters").size(),
+			"frame_ms": _ema_frame_ms,
+			"gpu_ms": _ema_gpu_ms,
+			"cpu_render_ms": _ema_cpu_render_ms,
+			"process_ms": _ema_process_ms,
+			"physics_ms": _ema_physics_ms,
+			"draw_calls": int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
+			"objects": int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)),
+			"primitives": int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)),
+		},
 		"metrics": t.session.to_dict(),
 	}
 	DisplayServer.clipboard_set(JSON.stringify(digest, "\t"))
@@ -224,12 +271,52 @@ func _process(delta: float) -> void:
 	# (for the always-on dot) but only on a throttle, since the full-text build
 	# isn't needed and telemetry only changes at 1 Hz.
 	if _showing:
+		_sample_frame_cost(delta)
 		_refresh()
 	else:
 		_dot_timer -= delta
 		if _dot_timer <= 0.0:
 			_dot_timer = DOT_REFRESH_SECONDS
 			_refresh()
+
+# GPU timestamp queries cost something to collect, so the measurement only runs
+# while someone is looking at the panel.
+func _set_measuring(on: bool) -> void:
+	if on == _measuring or not _vp_rid.is_valid():
+		return
+	_measuring = on
+	RenderingServer.viewport_set_measure_render_time(_vp_rid, on)
+	if not on:
+		return
+	# Start each arming from a clean slate — stale averages from the last time
+	# the panel was open would blend into the first seconds of the new reading.
+	_ema_gpu_ms = 0.0
+	_ema_cpu_render_ms = 0.0
+	_ema_process_ms = 0.0
+	_ema_physics_ms = 0.0
+	_ema_frame_ms = 0.0
+
+
+func _exit_tree() -> void:
+	_set_measuring(false)
+
+
+func _sample_frame_cost(delta: float) -> void:
+	if not _measuring:
+		return
+	# Frame-rate-independent EMA: a fixed per-frame weight would smooth over a
+	# different real duration at 60 fps than at 240.
+	var a: float = 1.0 - exp(-delta / FRAME_COST_EMA_TAU)
+	_ema_gpu_ms = lerpf(_ema_gpu_ms,
+			RenderingServer.viewport_get_measured_render_time_gpu(_vp_rid), a)
+	_ema_cpu_render_ms = lerpf(_ema_cpu_render_ms,
+			RenderingServer.viewport_get_measured_render_time_cpu(_vp_rid), a)
+	_ema_process_ms = lerpf(_ema_process_ms,
+			float(Performance.get_monitor(Performance.TIME_PROCESS)) * 1000.0, a)
+	_ema_physics_ms = lerpf(_ema_physics_ms,
+			float(Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS)) * 1000.0, a)
+	_ema_frame_ms = lerpf(_ema_frame_ms, delta * 1000.0, a)
+
 
 func _refresh() -> void:
 	_lines.clear()
@@ -255,6 +342,9 @@ func _refresh() -> void:
 	else:
 		role = "CLIENT"
 		_render_client(t)
+
+	if _showing:
+		_render_frame_cost()
 
 	# Verdict is known once all lines are collected; drive the always-on dot.
 	# Hide it while the F3 panel is open — they share the top-right corner and the
@@ -338,10 +428,6 @@ func _render_client(t: NetworkTelemetry) -> void:
 
 	_info("Bandwidth", "%.1f KB/s down" % (t.bytes_received_per_sec / 1024.0),
 		"game data received per second (payload only, excludes Steam framing)")
-	# The always-on FPS readout hides while this panel owns the corner, so carry
-	# the number here (host/solo already get it via _frame_health).
-	_info("Render FPS", "%d" % int(Engine.get_frames_per_second()),
-		"your draw rate; server tick health is host-side")
 
 	_render_watch(t)
 
@@ -394,7 +480,9 @@ func _render_solo(t: NetworkTelemetry) -> void:
 # frames (steps run inside the main loop), so its percentiles read high even when the
 # sim is perfectly real-time — at >tick-rate FPS the gap alternates 1-2 frames. So we
 # report what actually matters: the effective rate (mean gap → Hz; "are we keeping
-# real-time?"), the worst stall (max gap), and render FPS for context.
+# real-time?") and the worst stall (max gap). What this pair CANNOT tell you is how
+# EXPENSIVE the sim is: a tick that eats most of the frame budget still reports a
+# perfect rate right up until it overruns. "Frame cost → Script" is that number.
 func _frame_health(t: NetworkTelemetry) -> void:
 	if t.host_effective_tick_hz <= 0.0:
 		return
@@ -406,11 +494,79 @@ func _frame_health(t: NetworkTelemetry) -> void:
 	elif ratio < 0.97:
 		sim_h = Health.WARN
 	_metric(sim_h, "Sim rate", "%.0f Hz (target %d)" % [t.host_effective_tick_hz, target_hz],
-		"physics keeping real-time; well below target = host overloaded, sim runs slow-motion")
-	_info("Render FPS", "%d" % int(Engine.get_frames_per_second()),
-		"your draw rate; physics ticks land on render frames, so a tick spacing of 1-2 frames is normal")
+		"physics keeping real-time; well below target = host overloaded, sim runs slow-motion. Says nothing about tick COST — see Frame cost → Script")
 	_metric(_band(t.host_physics_tick_max_ms, 33.0, 66.0), "Worst stall", "%.0f ms" % t.host_physics_tick_max_ms,
-		"longest pause between ticks in the last second; under ~33ms is fine, a big spike = a hitch everyone feels")
+		"longest pause between ticks in the last second; ticks land on render frames so 1-2 frames' spacing is normal, but a big spike = a hitch everyone feels")
+
+# Local frame cost — the answer to "why is my FPS down?", which the network
+# metrics above cannot give. Three costs can independently cap the frame rate and
+# they present identically as lost FPS:
+#   • GPU        — pixels and shading. Moves with resolution, MSAA, shadow map
+#                  count, transparent overdraw, post-processing.
+#   • CPU render — the render thread turning the visible scene into draw
+#                  commands. Moves with the NUMBER of visible mesh instances,
+#                  not their size, and every shadow-casting light re-submits the
+#                  casters in its range. A hundred small MeshInstance3Ds cost
+#                  here, not on the GPU.
+#   • Script     — _process + _physics_process on the main thread. At a 120 Hz
+#                  sim, roughly one physics tick runs inside every rendered
+#                  frame, so per-tick work is charged straight to frame time.
+#                  Note this stays invisible to "Sim rate": the sim can hold a
+#                  perfect 120 Hz while still eating half the frame budget.
+# Verdict-neutral throughout (_context / _info) — the header verdict is about the
+# NETWORK, and a GPU-bound frame is not a network problem.
+func _render_frame_cost() -> void:
+	_section("Frame cost (your machine)")
+	if _ema_frame_ms <= 0.0:
+		_info("Measuring", "…", "sampling starts when this panel opens; give it a second")
+		return
+	var frame_ms: float = _ema_frame_ms
+	var script_ms: float = _ema_process_ms + _ema_physics_ms
+	_info("Frame", "%.2f ms (%.0f fps)" % [frame_ms, 1000.0 / maxf(frame_ms, 0.001)],
+		"wall-clock per rendered frame; the costs below are slices of it, and they overlap (GPU and CPU run a frame apart)")
+	_context(_band(_frac(_ema_gpu_ms, frame_ms), 0.60, 0.85), "GPU",
+		"%.2f ms (%.0f%% of frame)" % [_ema_gpu_ms, _frac(_ema_gpu_ms, frame_ms) * 100.0],
+		"drawing cost — resolution, MSAA, shadow maps, transparent overdraw, post FX")
+	_context(_band(_frac(_ema_cpu_render_ms, frame_ms), 0.60, 0.85), "CPU render",
+		"%.2f ms (%.0f%% of frame)" % [_ema_cpu_render_ms, _frac(_ema_cpu_render_ms, frame_ms) * 100.0],
+		"render thread building draw commands; scales with the draw-call count below, not with pixels")
+	_context(_band(_frac(script_ms, frame_ms), 0.60, 0.85), "Script",
+		"%.2f ms (process %.2f · physics %.2f)" % [script_ms, _ema_process_ms, _ema_physics_ms],
+		"your _process + _physics_process; physics is per-tick work charged to the frame it ran in")
+	_info("Scene", "%d draws · %d objects · %.1f M prims" % [
+			int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
+			int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)),
+			Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME) / 1_000_000.0],
+		"what the frame submits, engine-wide (includes shadow passes and every SubViewport); draw calls are the CPU render driver")
+	_info("Skaters on ice", "%d" % get_tree().get_nodes_in_group("skaters").size(),
+		"3v3 is 6, 5v5 is 10 — the multiplier on every per-skater mesh, particle system and shadow caster")
+	_info("Bound by", _frame_bound_verdict(frame_ms, script_ms),
+		"the cost that is actually capping the frame rate — optimize this one, the others are free wins on paper only")
+
+
+# Names the cost that owns the frame, or says nothing does. A frame is not a sum
+# of its parts (the render thread pipelines a frame behind, GPU overlaps CPU), so
+# a term has to clear FRAME_COST_BOUND_FRACTION before it can be called the
+# bound. Below that the frame is idle-waiting and the ceiling is vsync or the FPS
+# cap — reporting a "bound" there would send tuning after the wrong number.
+func _frame_bound_verdict(frame_ms: float, script_ms: float) -> String:
+	var worst: float = maxf(_ema_gpu_ms, maxf(_ema_cpu_render_ms, script_ms))
+	if worst < frame_ms * FRAME_COST_BOUND_FRACTION:
+		var cap: String = "vsync" if DisplayServer.window_get_vsync_mode() \
+				!= DisplayServer.VSYNC_DISABLED else "the FPS cap"
+		if Engine.max_fps > 0 and 1000.0 / maxf(frame_ms, 0.001) >= float(Engine.max_fps) * 0.95:
+			cap = "the %d fps cap" % Engine.max_fps
+		return "nothing is saturated — waiting on %s, or on main-thread work outside _process" % cap
+	if is_equal_approx(worst, _ema_gpu_ms):
+		return "GPU — cut resolution / MSAA / shadow-casting lights / transparent overdraw"
+	if is_equal_approx(worst, _ema_cpu_render_ms):
+		return "CPU render — cut VISIBLE MESH COUNT (draws), not polygons; shadow-casting lights multiply it"
+	return "Script — per-tick simulation cost; profile _physics_process"
+
+
+func _frac(part: float, whole: float) -> float:
+	return part / maxf(whole, 0.001)
+
 
 # Watch metrics: shown only when they leave the healthy band, so the client view
 # stays quiet until something is actually wrong. When all clear, one calm line.
