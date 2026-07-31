@@ -47,36 +47,43 @@ Per-part materials survive as **surfaces**: one mesh, one surface per material
 (jersey, helmet, gloves, skin, laces, steel, ...). That lands ~8-10 draw calls
 per skater instead of ~40, and 1 node instead of ~55.
 
-## Verification — and the gap that must be closed FIRST
+## Verification
 
 `tools/skater_matrix.gd` renders five builds with deliberately loud per-part gear
 colours, varied skin tones, and a ghosted column. It caught real errors during
-the mesh-merge pass and it byte-compares cleanly.
+the mesh-merge pass and it byte-compares cleanly. But **it renders ONE STATIC
+REST POSE**: it proves proportions, paint and the ghost fade, and nothing about
+articulation — which is exactly what a skeleton conversion changes.
 
-**It renders ONE STATIC REST POSE.** It proves proportions, paint and the ghost
-fade. It proves nothing about articulation — which is exactly what a skeleton
-conversion changes. A byte-identical rest pose would give false confidence about
-the most likely failure.
+`tools/pose_capture.gd` closes that gap and is the harness this work is measured
+against. It drives a real `SkaterController` on a real `Skater` with scripted
+`InputState` sequences and renders eleven poses: rest, carry, two gait phases at
+two facings, a cross-body reach at the arm ROM limit, wrister aim, wrister
+follow-through, slapper coil, slapper follow-through, the block stance, and the
+lofted blade. `--baseline` records; a bare run compares and prints changed-pixel
+count, worst channel delta, and the bounding box per pose, plus a magenta overlay
+sheet.
 
-**Step 1 is therefore to close that gap**, and it is worth doing regardless:
-extend the capture (or add a sibling) to render a POSE SET and diff all of it —
+Two properties were verified when it was built, and both need re-checking if it
+is ever changed:
 
-- rest
-- mid-stride (gait cycle at a couple of phases)
-- full cross-body reach (arm IK near its ROM limit)
-- wrister aim (blade held, torso coiled)
-- follow-through
-- slapper coil (the pose authored in upper-body-local space)
-- blade tilt / stick flex extremes
+- **It is deterministic.** Back-to-back runs report all eleven poses identical.
+  This is not free — it is why the skater's `_process` / `_physics_process` are
+  driven by hand at a fixed DT, why VFX and the world HUD are frozen, why each
+  pose gets a fresh actor, and why nothing casts shadows.
+- **It is sensitive.** A 4 mm offset injected into one arm-bone write was caught
+  in all eleven poses, with the bounding box landing on the arms.
 
-Compare with the pixel-diff approach used through the mesh merges: count changed
-pixels, worst channel delta, and the bounding box of the change. Sub-perceptual
-differences localised to alpha-sort seams are acceptable; anything structural or
-scattered is not.
+Sub-perceptual differences localised to alpha-sort seams are acceptable; anything
+structural or scattered is not. The bounding box is what separates them — a
+change confined to one silhouette edge reads very differently from the same pixel
+COUNT scattered across the tile.
 
 ## Staged plan
 
-1. **Pose-coverage capture tool** + baseline. Stands alone; do it first.
+1. ~~**Pose-coverage capture tool** + baseline.~~ Done — `tools/pose_capture.gd`.
+   Baselines live in `user://`, so record one from the pre-change tree before
+   starting each step rather than expecting a committed reference.
 2. **Spike: arm rig only.** Twelve nodes per skater, purely cosmetic, already
    isolated behind `Skater.bone_visual()`. Convert just those to bones and diff
    across the pose set. If that lands clean the pattern is proven on real code
@@ -111,6 +118,8 @@ Rules established during that pass that this work must respect:
 
 ## Tools
 
+- `tools/pose_capture.gd` (+ `pose_capture_runner.gd`) — the eleven-pose set and
+  its pixel diff. `-- --baseline` records, a bare run compares.
 - `tools/skater_matrix.gd` — five builds, loud gear colours, ghosted column.
 - `tools/goalie_capture.gd`, `tools/skate_capture.gd` — goalie and gear angles.
 - `tools/ring_capture.gd` — drives the ice shader's HUD uniforms directly.
