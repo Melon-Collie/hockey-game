@@ -7,6 +7,10 @@ extends RefCounted
 # name sit below the rings on the screen-down side.
 const RING_LINE_SCALE: float     = 2.0   # line-thickness bump for readability; visual only, never a hitbox
 const RING_OUTER_R: float        = 0.45
+# The slot ring is no longer a mesh — the ice shader draws it analytically from
+# these radii (see IceRingField). Kept here because everything else on the rig
+# is still laid out relative to the ring's outer edge.
+const RING_INNER_R: float        = RING_OUTER_R - MenuStyle.HUD_LINE_THIN * RING_LINE_SCALE
 
 # Stamina ring — BOTW-style sprint gauge nested inside the player's own color
 # ring (self-only). Hidden while the pool is full; while draining/refilling the
@@ -115,7 +119,6 @@ enum RingRelation { UNKNOWN = -1, SELF = 0, TEAMMATE = 1, ENEMY = 2 }
 
 var _skater: Skater
 
-var _ring_mesh: MeshInstance3D
 var _stamina_ring_mesh: MeshInstance3D
 var _stamina_ring_mat: ShaderMaterial
 var _chevron_mesh: MeshInstance3D
@@ -193,6 +196,11 @@ var _last_stamina_color: Color = Color(0, 0, 0, 0)  # unreachable sentinel
 # an unreachable sentinel that forces the first refresh to apply.
 const _RING_RECOLOR_INTERVAL: float = 0.25
 var _ring_relation_resolver: Callable = Callable()
+# Whether the ring should be drawn at all — replaces the mesh's `visible` flag
+# now that IceRingField reads state instead of the tree. Starts false: the field
+# only includes a skater once update() has run and established a relation, so a
+# freshly spawned skater cannot flash an UNKNOWN-coloured ring for a frame.
+var _ring_visible: bool = false
 var _ring_relation_cached: int = -2
 var _ring_color_cached: Color = Color(0, 0, 0, 0)  # unreachable sentinel; forces first refresh
 var _ring_recolor_accum: float = _RING_RECOLOR_INTERVAL
@@ -206,13 +214,6 @@ var _hidden_for_replay: bool = false
 
 func setup(skater: Skater) -> void:
 	_skater = skater
-
-	_ring_mesh = MeshInstance3D.new()
-	_ring_mesh.name = "RingIndicator"
-	_ring_mesh.mesh = _create_ring_mesh(RING_OUTER_R - MenuStyle.HUD_LINE_THIN * RING_LINE_SCALE, RING_OUTER_R, 48)
-	_ring_mesh.position = Vector3.ZERO
-	_ring_mesh.material_override = _make_hud_ice_material()
-	_skater.add_child(_ring_mesh)
 
 	# Stamina ring: top_level so its world transform is rewritten each tick —
 	# parented transform would spin the gauge's 12-o'clock fill origin with the
@@ -339,7 +340,7 @@ func update(delta: float) -> void:
 	if _force_world_hud_hidden or NetworkManager.is_replay_mode() or GameManager.is_local_spectator():
 		if not _hidden_for_replay:
 			_hidden_for_replay = true
-			if _ring_mesh != null: _ring_mesh.visible = false
+			_ring_visible = false
 			if _stamina_ring_mesh != null: _stamina_ring_mesh.visible = false
 			if _chevron_mesh != null: _chevron_mesh.visible = false
 			if _chevron_mesh2 != null: _chevron_mesh2.visible = false
@@ -358,7 +359,7 @@ func update(delta: float) -> void:
 		# _slapper_indicator children, and _slapper_ring_mesh are gated by
 		# their own show logic (driven from skater / stamina state) and will
 		# re-enable themselves as needed.
-		if _ring_mesh != null: _ring_mesh.visible = true
+		_ring_visible = true
 		if _name_label != null: _name_label.visible = true
 		if _slapper_indicator != null: _slapper_indicator.visible = true
 		_update_beacon_visibility()
@@ -502,8 +503,8 @@ func _refresh_height_anchors_if_skater_moved() -> void:
 	if is_equal_approx(y, _last_skater_y):
 		return
 	_last_skater_y = y
-	if _ring_mesh != null:
-		_ring_mesh.global_position.y = 0.05
+	# The slot ring needs no anchoring any more — the ice shader draws it at the
+	# ice surface by construction, which is what this was re-pinning it to.
 	if _slapper_indicator != null:
 		_slapper_indicator.global_position.y = 0.0
 
@@ -585,7 +586,7 @@ func set_ring_relation_resolver(resolver: Callable) -> void:
 # per-skater StandardMaterial3D (see _make_hud_ice_material) so mutating its
 # albedo here never bleeds into other skaters' rings.
 func _refresh_ring_color() -> void:
-	if _ring_mesh == null or not _ring_relation_resolver.is_valid():
+	if not _ring_relation_resolver.is_valid():
 		return
 	var relation: int = _ring_relation_resolver.call() as int
 	var col: Color = _ring_color_for_relation(relation)
@@ -596,9 +597,6 @@ func _refresh_ring_color() -> void:
 		return
 	_ring_relation_cached = relation
 	_ring_color_cached = col
-	var mat: StandardMaterial3D = _ring_mesh.material_override as StandardMaterial3D
-	if mat != null:
-		mat.albedo_color = Color(col.r, col.g, col.b, MenuStyle.HUD_OPACITY)
 	_apply_self_beacon_relation(relation)
 
 
@@ -688,7 +686,7 @@ func set_world_hud_hidden(hidden: bool) -> void:
 	_force_world_hud_hidden = hidden
 	if hidden:
 		_hidden_for_replay = true
-		if _ring_mesh != null: _ring_mesh.visible = false
+		_ring_visible = false
 		if _stamina_ring_mesh != null: _stamina_ring_mesh.visible = false
 		if _chevron_mesh != null: _chevron_mesh.visible = false
 		if _chevron_mesh2 != null: _chevron_mesh2.visible = false
@@ -750,6 +748,16 @@ func update_slapper_indicator_window(_t: float) -> void:
 	pass
 
 
+# Read by IceRingField each frame. Colour is the cached relation colour, so the
+# 0.25 s recolour throttle still governs how often the relation is resolved.
+func ring_visible() -> bool:
+	return _ring_visible and _ring_relation_cached >= 0
+
+
+func ring_color() -> Color:
+	return _ring_color_cached
+
+
 func apply_ghost(ghost: bool) -> void:
 	# While the per-skater HUD is force-hidden (replay viewer / spectator) or
 	# latched off for a replay cinematic, an un-ghost must NOT re-show the ring or
@@ -760,8 +768,7 @@ func apply_ghost(ghost: bool) -> void:
 	# origin instead of on the ice. The beacon below is already gated the same way
 	# via _update_beacon_visibility().
 	var hud_hidden: bool = _force_world_hud_hidden or _hidden_for_replay
-	if _ring_mesh != null:
-		_ring_mesh.visible = not ghost and not hud_hidden
+	_ring_visible = not ghost and not hud_hidden
 	if _name_label != null:
 		_name_label.visible = not ghost and not hud_hidden
 	# The stamina ring is left alone: like the beacon, it stays useful while
@@ -876,31 +883,6 @@ func _upload_to_mesh(
 
 
 # ── Private: mesh builders ────────────────────────────────────────────────────
-
-func _create_ring_mesh(inner_r: float, outer_r: float, segments: int) -> ArrayMesh:
-	var verts := PackedVector3Array()
-	var normals := PackedVector3Array()
-	var indices := PackedInt32Array()
-	for i: int in segments:
-		var a0: float = TAU * i / segments
-		var a1: float = TAU * (i + 1) / segments
-		var base: int = verts.size()
-		verts.append(Vector3(cos(a0) * inner_r, 0.0, sin(a0) * inner_r))
-		verts.append(Vector3(cos(a0) * outer_r, 0.0, sin(a0) * outer_r))
-		verts.append(Vector3(cos(a1) * inner_r, 0.0, sin(a1) * inner_r))
-		verts.append(Vector3(cos(a1) * outer_r, 0.0, sin(a1) * outer_r))
-		for _n: int in 4:
-			normals.append(Vector3.UP)
-		indices.append_array([base, base + 1, base + 2, base + 1, base + 3, base + 2])
-	var arrays: Array = []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = normals
-	arrays[Mesh.ARRAY_INDEX] = indices
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return mesh
-
 
 # Bakes a clockwise-from-12-o'clock UV.x onto every vertex so the charge-ring
 # shader can use it as an angular fill mask.

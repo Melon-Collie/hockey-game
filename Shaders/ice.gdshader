@@ -27,6 +27,15 @@ uniform vec2 decal_uv_min = vec2(0.0, 0.0);
 uniform vec2 decal_uv_max = vec2(1.0, 1.0);
 // Plane size in world meters — used to convert parallax offset to UV.
 uniform vec2 rink_size = vec2(26.0, 60.0);
+// ── On-ice player rings ──────────────────────────────────────────────────────
+// Filled each frame by IceRingField. The array is fixed-size (shader arrays must
+// be, and it is sized for the largest roster); ring_count says how much of it is
+// live, so a 3v3 pays for three rings and an empty rink pays for none.
+//   ring_pos: xy = world (x, z) centre, z = OUTER radius, w = INNER radius
+//   ring_col: rgba, alpha is the ring's opacity over the ice
+uniform vec4 ring_pos[12];
+uniform vec4 ring_col[12];
+uniform int ring_count = 0;
 // Color the lines fade toward at grazing. Default to the ice color itself so
 // lines blend into the surrounding ice; nudge cooler/lighter for more drama.
 uniform vec3 ice_fog_color : source_color = vec3(0.9, 0.95, 1.0);
@@ -83,6 +92,28 @@ void fragment() {
 	float scratch = texture(scratch_tex, UV).r * scratch_strength;
 	albedo = mix(albedo, scratch_color, scratch);
 	float rough = mix(base_rough, scratch_roughness, scratch);
+
+	// Player rings, drawn ON the ice rather than as geometry above it (fed by
+	// IceRingField). Each used to be a 48-segment alpha-blended mesh with its own
+	// node and its own per-frame transform; here they are a distance test, so ten
+	// skaters cost ten uniforms instead of ten nodes and ten transparent draws.
+	// Composited after the scratches so a ring reads over a scuffed patch, and
+	// last before ALBEDO so it sits on top of every ice feature — the layering the
+	// floating mesh got from being physically above the surface.
+	// Sampled in WORLD space rather than UV: it needs no assumption about the ice
+	// plane's UV convention, and a ring is defined in metres.
+	vec2 ice_xz = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xz;
+	for (int i = 0; i < ring_count; i++) {
+		float d = distance(ice_xz, ring_pos[i].xy);
+		// Screen-space derivative of the distance field: one pixel of feather at
+		// any camera height or zoom. This is what a fixed polygon count cannot
+		// do — the old 48-segment ring faceted visibly up close and shimmered
+		// far away.
+		float aa = max(fwidth(d), 0.0001);
+		float band = smoothstep(ring_pos[i].w - aa, ring_pos[i].w + aa, d)
+				* (1.0 - smoothstep(ring_pos[i].z - aa, ring_pos[i].z + aa, d));
+		albedo = mix(albedo, ring_col[i].rgb, band * ring_col[i].a);
+	}
 
 	ALBEDO = albedo;
 	METALLIC = 0.0;

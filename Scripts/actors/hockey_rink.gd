@@ -509,6 +509,14 @@ func _add_ice(tex: ImageTexture) -> void:
 		mat.set_shader_parameter("scratch_tex", scratch_map.get_texture())
 		_scratch_map = scratch_map
 
+		# Player rings — the ice shader draws them analytically; this feeds it
+		# the live positions. Sibling of the scratch map in every sense: same
+		# owner, same job of turning skater state into an ice-shader input.
+		var ring_field := IceRingField.new()
+		ring_field.name = "IceRingField"
+		ring_field.setup(mat)
+		add_child(ring_field)
+
 	# Center-ice decals (logo + curved "MITTS"/"ARENA" text). The content
 	# only occupies a small patch at center ice (logo + text ring fit inside
 	# ~5 m of the world origin), so we render into a tiny SubViewport instead
