@@ -34,10 +34,6 @@ var _blade_tape: MeshInstance3D                    # team-colored tape band, chi
 var _helmet: MeshInstance3D
 var _head: MeshInstance3D                          # skin parts under the helmet shell
 var _neck: MeshInstance3D
-var _blade_steel_l: MeshInstance3D                 # steel blade children of the boots
-var _blade_steel_r: MeshInstance3D
-var _laces_l: MeshInstance3D                       # drawn-on lace rungs, boot children
-var _laces_r: MeshInstance3D
 var _shoulder_l: MeshInstance3D
 var _shoulder_r: MeshInstance3D
 var _hip_l: MeshInstance3D
@@ -110,12 +106,12 @@ func setup(skater: Skater) -> void:
 	_skate_stripe_r = _skate_r.get_node_or_null("Stripe") as MeshInstance3D
 	_foot_l = skater.lower_body.get_node("LegL/ShinL/FootL") as MeshInstance3D
 	_foot_r = skater.lower_body.get_node("LegR/ShinR/FootR") as MeshInstance3D
-	_blade_steel_l = _foot_l.get_node_or_null("Blade") as MeshInstance3D
-	_blade_steel_r = _foot_r.get_node_or_null("Blade") as MeshInstance3D
+	# Blade steel and laces are SURFACES of the boot mesh now, not child nodes
+	# (SkaterMeshBuilder.shared_boot_assembly). Nothing may set material_override
+	# on a merged mesh — it would erase every surface at once — so the boot's own
+	# colour lives on surface 0 alongside them.
 	# Created by SkaterMeshBuilder with a placeholder white; repainted with
 	# the gear style's lace pick on every uniform apply.
-	_laces_l = _foot_l.get_node_or_null("Laces") as MeshInstance3D
-	_laces_r = _foot_r.get_node_or_null("Laces") as MeshInstance3D
 	_create_jersey_viewport()
 	_create_shoulder_viewport()
 
@@ -286,8 +282,12 @@ func apply_uniform(colors: Dictionary) -> void:
 	var skate_mat: StandardMaterial3D = _make_solid_mat(Color(0.08, 0.08, 0.08), _ROUGH_SKATE)
 	_skate_l.material_override = skate_mat.duplicate()
 	_skate_r.material_override = skate_mat.duplicate()
-	_foot_l.material_override = skate_mat.duplicate()
-	_foot_r.material_override = skate_mat.duplicate()
+	# Surface 0, never material_override — the boot mesh also carries the steel
+	# and the laces (see the setup comment).
+	_foot_l.set_surface_override_material(
+			SkaterMeshBuilder.BOOT_SURF_SHELL, skate_mat.duplicate())
+	_foot_r.set_surface_override_material(
+			SkaterMeshBuilder.BOOT_SURF_SHELL, skate_mat.duplicate())
 	_repaint_skate_stripes()
 	_repaint_laces()
 
@@ -545,10 +545,10 @@ func _repaint_skate_stripes() -> void:
 
 func _repaint_laces() -> void:
 	var lace_mat: StandardMaterial3D = _make_solid_mat(_resolve_lace_color())
-	if _laces_l != null:
-		_laces_l.material_override = lace_mat.duplicate()
-	if _laces_r != null:
-		_laces_r.material_override = lace_mat.duplicate()
+	_foot_l.set_surface_override_material(
+			SkaterMeshBuilder.BOOT_SURF_LACES, lace_mat.duplicate())
+	_foot_r.set_surface_override_material(
+			SkaterMeshBuilder.BOOT_SURF_LACES, lace_mat.duplicate())
 
 
 # Repaints the gear-style accents (glove cuff rings, skate collar bands,
@@ -656,10 +656,8 @@ func apply_ghost(ghost: bool) -> void:
 			_helmet, _head, _neck, _shoulder_l, _shoulder_r,
 			_hip_l, _hip_r, _thigh_l, _thigh_r,
 			_knee_l, _knee_r, _sock_l, _sock_r,
-			_skate_l, _skate_r, _foot_l, _foot_r,
+			_skate_l, _skate_r,
 			_skate_stripe_l, _skate_stripe_r,
-			_blade_steel_l, _blade_steel_r,
-			_laces_l, _laces_r,
 			_skater.top_cuff_mesh, _skater.bot_cuff_mesh,
 		]
 	for mesh: MeshInstance3D in meshes:
@@ -675,3 +673,29 @@ func apply_ghost(ghost: bool) -> void:
 		else:
 			mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
 			mat.albedo_color.a = 1.0
+	# The boots are merged meshes: shell, steel and laces are three surfaces of
+	# one node, so they fade per-surface. They must NOT go through the loop above
+	# — writing material_override on a merged mesh overrides every surface at
+	# once and would erase the steel and the laces for the rest of the match.
+	for foot: MeshInstance3D in [_foot_l, _foot_r]:
+		if foot == null:
+			continue
+		for surface: int in foot.mesh.get_surface_count():
+			_apply_ghost_to_surface(foot, surface, ghost)
+
+
+# Fades one surface of a merged mesh, creating the override if the surface has
+# only its shared default so far (an unpainted rig ghosting before its first
+# uniform pass — mutating the default in place would fade every skater).
+func _apply_ghost_to_surface(mesh: MeshInstance3D, surface: int, ghost: bool) -> void:
+	var mat: StandardMaterial3D = mesh.get_surface_override_material(surface) as StandardMaterial3D
+	if mat == null:
+		var shared: StandardMaterial3D = mesh.mesh.surface_get_material(surface) as StandardMaterial3D
+		mat = shared.duplicate() as StandardMaterial3D if shared != null else StandardMaterial3D.new()
+		mesh.set_surface_override_material(surface, mat)
+	if ghost:
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.albedo_color.a = 0.3
+	else:
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+		mat.albedo_color.a = 1.0

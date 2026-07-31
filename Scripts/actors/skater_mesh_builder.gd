@@ -250,10 +250,11 @@ static func apply(upper_body: Node3D, lower_body: Node3D) -> void:
 		_swap(lower_body, "Leg%s/Knee%s" % [side, side], "knee", _build_knee)
 		_swap(lower_body, "Leg%s/Shin%s/Sock%s" % [side, side, side], "sock", _build_sock)
 		_swap(lower_body, "Leg%s/Shin%s/Skate%s" % [side, side, side], "skate", _build_skate)
-		_swap(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side], "boot", _build_boot)
-		_ensure_blade(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side])
+		# Boot, steel and laces are ONE mesh with three surfaces (see
+		# shared_boot_assembly) — the steel and laces used to be child nodes.
+		_swap(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side],
+				"boot_assembly", _build_boot_assembly)
 		_ensure_skate_stripe(lower_body, "Leg%s/Shin%s/Skate%s" % [side, side, side])
-		_ensure_laces(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side])
 
 
 static func _swap(root: Node3D, path: String, key: String, builder: Callable) -> void:
@@ -304,6 +305,63 @@ static func shared_arm_bone() -> ArrayMesh:
 # carries (radius, radius, length) and the wrapper disappears: four fewer nodes
 # per skater, and — since these are written every frame by the IK — one less
 # level of transform propagation on each write.
+# ── Merged assemblies ────────────────────────────────────────────────────────
+# Parts that never move relative to their parent do not need to be nodes. Each
+# one used to be a MeshInstance3D child purely because it needed its OWN
+# material — the steel is bright, the laces take a gear colour — and a child was
+# the only place to hang one. A multi-surface mesh with per-surface overrides
+# gives the same result with one node instead of three.
+#
+# The cost of a node here is not the draw call: these are children of a foot the
+# gait moves every frame, so each one is a transform to propagate and a global
+# to recompute, per skater, per frame.
+#
+# NON-NEGOTIABLE for any merged mesh: nothing may set material_override on it.
+# That property overrides EVERY surface at once, so it would erase the steel and
+# the laces the moment the boot was painted. The parent's own colour lives on
+# surface 0 like everything else — see SkaterUniformCoordinator's BOOT_* slots.
+const BOOT_SURF_SHELL: int = 0
+const BOOT_SURF_BLADE: int = 1
+const BOOT_SURF_LACES: int = 2
+
+
+static func shared_boot_assembly() -> ArrayMesh:
+	return _shared("boot_assembly", _build_boot_assembly)
+
+
+static func _build_boot_assembly() -> ArrayMesh:
+	var m := ArrayMesh.new()
+	_append_surface(m, _shared("boot", _build_boot))
+	_append_surface(m, _shared("skate_blade", _build_skate_blade))
+	_append_surface(m, shared_laces())
+	# Defaults for the two merged surfaces, standing in for the material_override
+	# their child nodes used to carry — so an unpainted rig (workbench preview,
+	# a spawn before the uniform pass) still shows steel and white laces rather
+	# than untextured white. Surface 0 is left null on purpose: _swap_instance
+	# carries the scene primitive's material onto it, exactly as before.
+	var steel := StandardMaterial3D.new()
+	steel.albedo_color = _BLADE_STEEL_COLOR
+	steel.roughness = 0.25
+	BodyRim.apply(steel)
+	m.surface_set_material(BOOT_SURF_BLADE, steel)
+	var lace := StandardMaterial3D.new()
+	lace.albedo_color = _LACE_COLOR
+	lace.roughness = 0.9
+	BodyRim.apply(lace)
+	m.surface_set_material(BOOT_SURF_LACES, lace)
+	return m
+
+
+# Appends `src`'s surface 0 to `target` as a new surface. The children this
+# replaces all sat at identity relative to their parent, so no transform is
+# baked — which is also why the merge cannot change the rendered geometry.
+static func _append_surface(target: ArrayMesh, src: ArrayMesh) -> void:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.append_from(src, 0, Transform3D.IDENTITY)
+	st.commit(target)
+
+
 static func shared_arm_bone_z() -> ArrayMesh:
 	return _shared("arm_bone_z", func() -> ArrayMesh:
 		var st := SurfaceTool.new()
@@ -735,40 +793,6 @@ static func _ensure_skate_stripe(lower_body: Node3D, skate_path: String) -> void
 	BodyRim.apply(mat)
 	stripe.material_override = mat
 	collar.add_child(stripe)
-
-
-# The laces are a CHILD of the boot mesh (same frame, like the blade steel),
-# placeholder-white until the uniform pass paints the lace pick.
-static func _ensure_laces(lower_body: Node3D, foot_path: String) -> void:
-	var foot: MeshInstance3D = lower_body.get_node_or_null(foot_path) as MeshInstance3D
-	if foot == null or foot.get_node_or_null("Laces") != null:
-		return
-	var laces := MeshInstance3D.new()
-	laces.name = "Laces"
-	laces.mesh = shared_laces()
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = _LACE_COLOR
-	mat.roughness = 0.9
-	BodyRim.apply(mat)
-	laces.material_override = mat
-	foot.add_child(laces)
-
-
-# The steel is a CHILD of the foot's boot mesh with its own bright material —
-# the whole point of splitting it out of the boot solid.
-static func _ensure_blade(lower_body: Node3D, foot_path: String) -> void:
-	var foot: MeshInstance3D = lower_body.get_node_or_null(foot_path) as MeshInstance3D
-	if foot == null or foot.get_node_or_null("Blade") != null:
-		return
-	var blade := MeshInstance3D.new()
-	blade.name = "Blade"
-	blade.mesh = _shared("skate_blade", _build_skate_blade)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = _BLADE_STEEL_COLOR
-	mat.roughness = 0.25
-	BodyRim.apply(mat)
-	blade.material_override = mat
-	foot.add_child(blade)
 
 
 # Boot cross-section at one station: narrowed top, full-width sidewall, tucked
