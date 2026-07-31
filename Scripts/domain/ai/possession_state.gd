@@ -31,42 +31,21 @@ class_name AIPossessionState
 #     stretch OUTLET at the far blue line makes sense. One bucket for both fires
 #     that OUTLET from deep in our own zone.
 #
+# A RETRIEVAL state once sat alongside these — a loose puck in our DZ that we
+# clearly won the race to, which re-slotted the team onto the BREAKOUT posts
+# while the retriever skated back. It was removed after measurement: it never
+# gated a breakout (the same breakouts happen straight from DZONE), and it cost
+# 25-38% of ALL shape transitions, halving how long a team held its D-zone shape
+# (mean spell 0.74 s -> 1.90 s with it gone). Four measurements — two harness
+# runs and both arms of a live A/B — found no outcome benefit. See
+# docs/breakout-plan.md Phase A for the full record before resurrecting it.
+#
 # Loose-puck handling: possession is sticky. `prev_carrier_team` carries
 # over until a new carrier sets it. The 6 Hz brain tick smooths sub-tick
 # oscillation (e.g., stick-on-stick contact during a strip) naturally —
 # we sample at the brain tick, not every physics tick.
 
-enum State { DZONE, OZONE, TRANS_DO, TRANS_OD, NEUTRAL, BREAKOUT, FORECHECK, RETRIEVAL }
-
-# ── RETRIEVAL (5v5 only; docs/breakout-plan.md Phase A) ──────────────────────
-# The retrieval posture: a loose puck in our DZ that WE clearly win the race
-# to. compute() below never returns it — its inputs are race elections the
-# TeamBrain owns — the brain UPGRADES its DZONE result through retrieval_read
-# after computing both teams' best intercept times. The team shape is the
-# BREAKOUT posts with the race winner chasing (AIRoleSlots5), so the outlets
-# are standing at their stations by the time the retriever touches the puck —
-# real breakouts are choreographed during the retrieval, not after pickup.
-# A contested race stays DZONE: a strip scramble in our slot is defense.
-#
-# Margins: ENTER commits the posture only on a clear win — the starting value
-# covers the forechecker's reaction gate (EVADE_REACTION_S 0.15) plus one
-# brain tick (~0.17 s at 6 Hz) of read staleness; calibrate against the
-# breakout harness's cough-up metric (plan Phase D). HOLD < ENTER is the
-# hysteresis: once postured, the team holds the shape until the advantage
-# genuinely collapses, so the boundary can't flicker DZONE ↔ RETRIEVAL.
-const RETRIEVAL_ENTER_MARGIN_S: float = 0.25
-const RETRIEVAL_HOLD_MARGIN_S: float = 0.1
-
-
-# True when the race read says to take (or keep) the retrieval posture:
-# our best intercept time beats theirs by the margin — enter margin
-# normally, the smaller hold margin while already postured (`was_retrieval`).
-# INF opp time (nobody can reach it) always reads as a win.
-static func retrieval_read(our_best_t: float, opp_best_t: float,
-		was_retrieval: bool) -> bool:
-	var margin: float = RETRIEVAL_HOLD_MARGIN_S if was_retrieval \
-			else RETRIEVAL_ENTER_MARGIN_S
-	return our_best_t + margin <= opp_best_t
+enum State { DZONE, OZONE, TRANS_DO, TRANS_OD, NEUTRAL, BREAKOUT, FORECHECK }
 
 # ── Coverage readiness (docs/transition-defense-plan.md §9) ──────────────────
 # DZONE is a SHAPE, not a location. The raw table above flips to it the instant
@@ -77,7 +56,7 @@ static func retrieval_read(our_best_t: float, opp_best_t: float,
 #
 # Real hockey has the readiness concept explicitly: get back, get set, THEN take
 # your man. So the brain upgrades its raw DZONE result the same way it upgrades
-# to RETRIEVAL — the team stays in the rush/recovery shape until the bodies the
+# to DZONE coverage — the team stays in the rush/recovery shape until the bodies the
 # coverage assumes have actually arrived (AIRushRead.coverage_ready).
 #
 # The asymmetry that matters: it is EASY to become set and HARD to stop being

@@ -61,7 +61,7 @@ static var _read_stamina_cfg := StaminaRules.StaminaConfig.new()
 # cruise speed is near-uniform by design (the attribute doc), the sprint
 # ceiling is where Speed's separation lives, and the body sprints its races
 # while the read priced cruise (~0.3 s off on a 3 s race — larger than the
-# RETRIEVAL and kill-setup margins).
+# the race-read and kill-setup margins).
 #
 #   - locked out, or pool below the engage floor, or the race shorter than
 #     the sprint engage gap → cruise (the bot genuinely won't sprint it).

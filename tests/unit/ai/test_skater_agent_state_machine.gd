@@ -2298,3 +2298,66 @@ func test_reach_band_yields_to_a_dead_puck() -> void:
 	_add_skater(s, SELF_ID, Vector3(4, 0, 0))         # 1.0 m away
 	s.closest_to_puck_by_team[0] = -1
 	assert_false(sm._should_chase_loose_puck(s, Vector3(4, 0, 0)))
+
+
+# ── Re-eval cadence: the zone pressure owner is reactive ─────────────────────
+# A zone defender whose AREA owns the puck runs the full AIRolePressure cut-off
+# argmax against a live carrier — PRESSURE's job under a different slot name, so
+# it needs PRESSURE's cadence. Ownership moves with the puck, so the classifier
+# has to ask AIZoneCoverage.pressure_owner rather than name one slot.
+
+func _puck_at(x: float, z: float) -> WorldSnapshot:
+	var s := WorldSnapshot.new()
+	s.puck_state = PuckNetworkState.new()
+	s.puck_state.position = Vector3(x, 0.0, z)
+	s.puck_state.carrier_peer_id = OPP_ID
+	return s
+
+
+# Team 0 defends +Z; depth is metres off that goal line into our end.
+func _our_zone_pt(x: float, depth: float) -> WorldSnapshot:
+	return _puck_at(x, GameRules.GOAL_LINE_Z - depth)
+
+
+func test_the_zone_owner_of_a_low_puck_is_reactive() -> void:
+	# The corner battle — ZONE_D_STRONG, which used to be the only zone slot
+	# the classifier recognised.
+	var snap: WorldSnapshot = _our_zone_pt(9.0, 3.0)
+	assert_true(sm._is_reactive_slot(AIRoleSlots.Slot.ZONE_D_STRONG, snap),
+			"the low battle D owns this puck")
+
+
+func test_the_zone_owner_of_a_slot_puck_is_reactive() -> void:
+	# The regression: a carrier in the slot is ZONE_C's to pressure, and it was
+	# being re-evaluated on the shape-holding cadence instead.
+	var snap: WorldSnapshot = _our_zone_pt(1.0, 8.5)
+	assert_eq(AIZoneCoverage.pressure_owner(1.0, GameRules.GOAL_LINE_Z,
+			snap.puck_state.position), AIRoleSlots.Slot.ZONE_C,
+			"fixture sanity: this puck is ZONE_C's")
+	assert_true(sm._is_reactive_slot(AIRoleSlots.Slot.ZONE_C, snap),
+			"the slot's owner pressures a live carrier and needs the cadence")
+
+
+func test_the_zone_owner_of_a_net_front_puck_is_reactive() -> void:
+	var snap: WorldSnapshot = _our_zone_pt(0.0, 2.0)
+	assert_eq(AIZoneCoverage.pressure_owner(1.0, GameRules.GOAL_LINE_Z,
+			snap.puck_state.position), AIRoleSlots.Slot.ZONE_D_WEAK,
+			"fixture sanity: this puck is the net-front box's")
+	assert_true(sm._is_reactive_slot(AIRoleSlots.Slot.ZONE_D_WEAK, snap),
+			"the net-front owner pressures a live carrier too")
+
+
+func test_a_zone_slot_that_does_not_own_the_puck_is_not_reactive() -> void:
+	# Everyone else is holding a breathing anchor — the whole point of the
+	# slower cadence. Without a live soft-lock they stay non-reactive.
+	var snap: WorldSnapshot = _our_zone_pt(1.0, 8.5)   # ZONE_C's puck
+	assert_false(sm._is_reactive_slot(AIRoleSlots.Slot.ZONE_W_WEAK, snap),
+			"a defender whose area does not hold the puck is a shape-holder")
+	assert_false(sm._is_reactive_slot(AIRoleSlots.Slot.ZONE_D_STRONG, snap),
+			"including the slot that used to be hardcoded reactive")
+
+
+func test_zone_reactivity_survives_a_missing_puck() -> void:
+	var snap := WorldSnapshot.new()
+	assert_false(sm._is_reactive_slot(AIRoleSlots.Slot.ZONE_C, snap),
+			"no puck, no owner — and no crash")

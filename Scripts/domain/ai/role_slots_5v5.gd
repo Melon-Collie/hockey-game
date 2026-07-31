@@ -33,8 +33,13 @@ class_name AIRoleSlots5
 # rest state is decided by identity, small enough that real momentum wins.
 const POSITION_BIAS_S: float = 0.35
 
-# Same stickiness the 3v3 elections use (AIRoleSlots.HYSTERESIS_PENALTY_S).
-const HYSTERESIS_PENALTY_S: float = 0.12
+# Same stickiness the 3v3 elections use — REFERENCED, not copied (the rationale
+# for the value lives on AIRoleSlots.HYSTERESIS_PENALTY_S). This was a duplicated
+# literal and it drifted: 3v3's was re-derived to 0.2 when time_to_arrive moved
+# to the measured phase model, this copy stayed at 0.12, and the comment kept
+# claiming they matched — so 5v5's elections were ~40% less sticky than intended.
+# Two numbers that must agree should not be two numbers.
+const HYSTERESIS_PENALTY_S: float = AIRoleSlots.HYSTERESIS_PENALTY_S
 
 # ── Election-target geometry (metres, world coords) ─────────────────────────
 # These are the RACE TARGETS the assignment queries use — "who is best placed
@@ -108,10 +113,6 @@ static func slots_for_state(state: int) -> Array[int]:
 					AIRoleSlots.Slot.TRAILER]
 		AIPossessionState.State.BREAKOUT:
 			return [AIRoleSlots.Slot.CARRIER, AIRoleSlots.Slot.BREAKOUT_D2,
-					AIRoleSlots.Slot.BREAKOUT_STRONG, AIRoleSlots.Slot.BREAKOUT_C,
-					AIRoleSlots.Slot.BREAKOUT_STRETCH]
-		AIPossessionState.State.RETRIEVAL:
-			return [AIRoleSlots.Slot.CHASE, AIRoleSlots.Slot.BREAKOUT_D2,
 					AIRoleSlots.Slot.BREAKOUT_STRONG, AIRoleSlots.Slot.BREAKOUT_C,
 					AIRoleSlots.Slot.BREAKOUT_STRETCH]
 		AIPossessionState.State.FORECHECK:
@@ -317,20 +318,6 @@ static func _specs_for_state(state: int, own_goal_z: float, strong_x: float,
 			return _breakout_post_specs(own_goal_z, own_dir, strong_x,
 					half_w, our_blue_z)
 
-		AIPossessionState.State.RETRIEVAL:
-			# The retrieval posture (docs/breakout-plan.md Phase A): the race
-			# winner chases the loose puck (CHASE first — the soonest-to-
-			# arrive election IS the race read, same as NEUTRAL's); the other
-			# four take the breakout posts NOW, so the outlets exist by the
-			# time the retriever touches the puck. Same posts as BREAKOUT,
-			# so the pickup's state flip renames nothing — nobody moves.
-			var specs: Array[SlotSpec] = [
-				SlotSpec.make(AIRoleSlots.Slot.CHASE, Group.ANY, puck_pos),
-			]
-			specs.append_array(_breakout_post_specs(own_goal_z, own_dir,
-					strong_x, half_w, our_blue_z))
-			return specs
-
 		AIPossessionState.State.TRANS_OD:
 			# The layered rush defense (docs/transition-defense-plan.md §5): a D
 			# pair in front, three forwards tracking back through mid-ice. Race
@@ -389,9 +376,7 @@ static func _specs_for_state(state: int, own_goal_z: float, strong_x: float,
 	return empty
 
 
-# The four breakout post specs — shared verbatim by BREAKOUT (carrier fixed)
-# and RETRIEVAL (race winner chasing), so the pickup's state flip renames the
-# retriever to CARRIER and moves nobody else (docs/breakout-plan.md Phase A).
+# The four breakout post specs: the outlets a carrier breaking out reads for.
 static func _breakout_post_specs(own_goal_z: float, own_dir: float,
 		strong_x: float, half_w: float, our_blue_z: float) -> Array[SlotSpec]:
 	return [

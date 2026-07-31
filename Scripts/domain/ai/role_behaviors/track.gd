@@ -120,10 +120,18 @@ static func _decide_mid(ctx: RoleContext, side: float) -> RoleDecision:
 	var d := RoleDecision.new()
 	var read: AIRushRead = ctx.rush_read
 
-	# RECOVERING: no argmax, no post — just get back through the middle, hard.
-	# This is the whole of the urgency fix (§7).
+	# RECOVERING: no argmax, no man — just get back through the middle, hard.
+	# This is the whole of the urgency fix (§7). The destination is the same
+	# post he will hold once home: it already rides `read.threat_axis`, so it
+	# rotates with the rush's bearing and the tracker converges on the lane the
+	# rush is actually using rather than a fixed spot. (A branch here once tried
+	# to aim further up-ice at the rush's own depth; it projected at the POST's
+	# depth instead, which measured a 0.3 m difference — it never did anything.
+	# Reinstating that idea means deciding whether a recovering tracker should
+	# CUT INSIDE to the circles, as he does now, or run a pursuit curve at the
+	# rush's shoulder. The post is the researched answer.)
 	if not _is_inside(ctx, read):
-		d.target_position = _recovery_point(ctx, read, side)
+		d.target_position = _post(ctx, read, side)
 		d.sprint_override = true
 		d.arrive_at_speed = true
 		return d
@@ -142,27 +150,6 @@ static func _decide_mid(ctx: RoleContext, side: float) -> RoleDecision:
 	return d
 
 
-# The recovery lane point: mid-ice on my side of centre, at the depth the rush
-# has reached — so the tracker comes back THROUGH the middle (the researched
-# lane) rather than up his own wall behind the play, and keeps converging as the
-# rush advances instead of running to a fixed spot.
-static func _recovery_point(ctx: RoleContext, read: AIRushRead,
-		side: float) -> Vector3:
-	var post: Vector3 = _post(ctx, read, side)
-	if read.mode == AIRushRead.Mode.NONE or not read.threat_axis.is_finite():
-		return post
-	# Aim at the deeper of (the post, the rush's current depth on my lane) so a
-	# tracker still up-ice heads for the ice in FRONT of the rush, not behind it.
-	var our_net: Vector3 = ctx.defending_goal_pos
-	var rush_depth: float = read.rush_origin.distance_to(our_net)
-	var post_depth: float = post.distance_to(our_net)
-	if rush_depth <= post_depth:
-		return post
-	var axis: Vector3 = read.threat_axis
-	return Vector3(our_net.x - axis.x * post_depth + side * MID_LANE_SPLIT_M,
-			0.0, our_net.z - axis.z * post_depth)
-
-
 # The mid tracker's post: just inside the tops of the circles, split off centre.
 static func _post(ctx: RoleContext, read: AIRushRead, side: float) -> Vector3:
 	var our_net: Vector3 = ctx.defending_goal_pos
@@ -175,9 +162,9 @@ static func _post(ctx: RoleContext, read: AIRushRead, side: float) -> Vector3:
 	return p if AIRoleHelpers.is_legal_position(p) else our_net - axis * depth
 
 
-# The most dangerous attacker (excluding the carrier) on my side of centre and
-# not already owned goal-side by a teammate. Lane ownership, not man-marking:
-# whoever enters my ice is mine while he is in it.
+# The attacker (excluding the carrier) nearest our net on my side of centre.
+# Lane ownership, not man-marking: whoever enters my ice is mine while he is in
+# it, and the deepest man in it is the one who gets covered.
 static func _man_in_my_lane(ctx: RoleContext, read: AIRushRead,
 		side: float) -> Vector3:
 	var best: Vector3 = Vector3.INF

@@ -169,15 +169,19 @@ static func assign(
 # house threat (or man_danger wasn't supplied), which disables the override.
 static func _most_dangerous_house_man(men: Array[int], man_danger: Dictionary) -> int:
 	var best_man: int = -1
-	var best_danger: float = NET_FRONT_DANGER_BAR
+	var best_danger: float = -INF
 	for m: int in men:
 		var danger: float = man_danger.get(m, 0.0)
-		if danger >= best_danger:
-			# >= with a rising floor: ties resolve to the lower peer id
-			# (deterministic) since a strictly-greater danger is needed to switch.
-			if danger > best_danger or best_man == -1:
-				best_danger = danger
-				best_man = m
+		if danger < NET_FRONT_DANGER_BAR:
+			continue
+		# Ties break to the lower peer id. `men` follows the SNAPSHOT's insertion
+		# order (peer registration), not peer order, so without an explicit
+		# tiebreak the winner of a symmetric pair — two net-front men mirrored
+		# about the slot, which score bit-identically because score_shoot is
+		# x-symmetric — would depend on who joined first.
+		if danger > best_danger or (danger == best_danger and m < best_man):
+			best_danger = danger
+			best_man = m
 	return best_man
 
 
@@ -258,6 +262,14 @@ static func cover_anchor(man: Vector3, our_net: Vector3) -> Vector3:
 # Each defender either covers an unused man (adds reward[d][m]) or covers no one
 # (adds 0) — so leaving a defender idle is allowed only when it can't improve
 # the total (more defenders than men, or no positive-reward man left).
+#
+# Two matchings of EXACTLY equal total resolve to whichever the recursion reaches
+# first, i.e. to `men` order — which is snapshot insertion order, not peer order.
+# Unlike the house pin above this is left as-is deliberately: the tie means the
+# two matchings are equally good by the reward model, so neither is wrong, and a
+# real tiebreak has to compare maps through the recursion rather than totals.
+# Sorting `men` at the caller would settle it in one line but also reorders this
+# enumeration, which can move live assignments — a behavior change, not a fix.
 static func _best_matching(
 		idx: int, defenders: Array[int], men: Array[int],
 		used: Dictionary, reward: Dictionary) -> Array:

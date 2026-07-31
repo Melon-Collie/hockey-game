@@ -1,7 +1,7 @@
 extends GutTest
 
 # AIRoleFlank — NEUTRAL only. Target = puck position offset laterally (sign
-# per L/R) and slightly back toward our net, bounded by the race home.
+# per L/R) and slightly back toward our net, bounded by the numbers read.
 
 const TEAM_ID: int = 0
 const OUR_NET_Z: float = 26.65
@@ -26,6 +26,18 @@ func _make_ctx(self_pos: Vector3, puck_pos: Vector3) -> RoleContext:
 	ctx.defending_goal_pos = Vector3(0.0, 0.0, OUR_NET_Z)
 	ctx.own_goal_dir = 1.0
 	ctx.team_id_by_peer = {1: TEAM_ID}
+	return ctx
+
+
+# The same fixture with the LIVE transition read the brain hands production
+# dispatch. The last-man bound (AIRoleHelpers.neutral_station_target) needs real
+# perception — who is an attacker and who is behind the stand — and an unwired
+# read deliberately reports "nobody told me anything" and holds the geometry,
+# so a fixture that wants to exercise the bound has to supply it.
+func _with_read(ctx: RoleContext) -> RoleContext:
+	var read := AIRushRead.new()
+	read.fill(ctx.snapshot, TEAM_ID, OUR_NET_Z, ctx.team_id_by_peer, {}, {})
+	ctx.rush_read = read
 	return ctx
 
 
@@ -64,7 +76,7 @@ func test_falls_back_to_self_pos_when_no_puck_state() -> void:
 			"null puck_state → fall back to self_pos")
 
 
-# ── Race-home bound: the flank is a shape, not a puck magnet ─────────────────
+# ── Last-man bound: the flank is a shape, not a puck magnet ──────────────────
 
 func _with_opponent(ctx: RoleContext, pos: Vector3, vel: Vector3) -> void:
 	var opp := SkaterNetworkState.new()
@@ -82,7 +94,7 @@ func test_flank_holds_its_puck_side_shape_when_the_counter_is_contained() -> voi
 	var puck_pos := Vector3(0, 0, -2)
 	var ctx: RoleContext = _make_ctx(Vector3(0, 0, 8), puck_pos)
 	_with_opponent(ctx, Vector3(1, 0, -22), Vector3.ZERO)
-	var d: RoleDecision = AIRoleFlank.decide(ctx, 1.0)
+	var d: RoleDecision = AIRoleFlank.decide(_with_read(ctx), 1.0)
 	assert_almost_eq(d.target_position.x,
 			puck_pos.x + AIRoleFlank.FLANK_LATERAL_M, 0.01)
 	assert_almost_eq(d.target_position.z,
@@ -95,10 +107,13 @@ func test_flank_refuses_to_step_up_into_a_guaranteed_breakaway() -> void:
 	# the raw shape puts this flank up past centre — while an opponent sits
 	# BEHIND him, a stretch pass away from a clean run at our net. The old
 	# target was the puck offset and nothing else, so he stepped up regardless.
+	# The lurker is kept ONSIDE (our side of the blue line, but not past it):
+	# a body parked deeper than that couldn't legally take the feed, and the
+	# shared read drops him for exactly that reason.
 	var puck_pos := Vector3(0, 0, -22)
 	var ctx: RoleContext = _make_ctx(Vector3(0, 0, -18), puck_pos)
-	_with_opponent(ctx, Vector3(1, 0, 14), Vector3(0, 0, 6))
+	_with_opponent(ctx, Vector3(1, 0, 5), Vector3(0, 0, 6))
 	var raw_z: float = puck_pos.z + AIRoleFlank.FLANK_DEPTH_M
-	var d: RoleDecision = AIRoleFlank.decide(ctx, 1.0)
+	var d: RoleDecision = AIRoleFlank.decide(_with_read(ctx), 1.0)
 	assert_gt(d.target_position.z, raw_z,
 			"the last man sags home instead of following the puck up-ice")

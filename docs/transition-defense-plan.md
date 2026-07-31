@@ -18,9 +18,11 @@ needed no changes to them. See §5.2.
 - **3v3 runs the compressed three-role set** (`RUSH_D1` / `TRACK_PUCK` / `TRACK_MID`),
   no dedicated `RUSH_D2`. Two bodies on the puck is affordable because transition is
   bounded — see §5.2.
-- **`numbers` gets hysteresis** — enter/hold margins on the same pattern as
-  `AIPossessionState.retrieval_read`, so one body crossing the puck line can't flip the
-  whole team's aggression mid-rush.
+- **`numbers` gets hysteresis** — enter/hold margins (as landed:
+  `AIRushRead.TRACK_ENTER_MARGIN_S` / `TRACK_HOLD_MARGIN_S`; the
+  `AIPossessionState.retrieval_read` this was patterned on has since been removed with
+  the RETRIEVAL shape), so one body crossing the puck line can't flip the whole team's
+  aggression mid-rush.
 - **DZONE entry is gated on coverage readiness** (§9) — the team stays in the rush /
   recovery shape until the coverage it would switch to actually makes sense.
 
@@ -377,6 +379,28 @@ genuinely the question being asked, and the model answers it well. But:
 Keeping the model where it earns its keep and removing it where it doesn't is the whole
 change; it is a good pinch evaluator and a bad positioning primitive.
 
+> **Superseded — the model is gone entirely.** §13.2 (written later in the same effort)
+> found that the pinch is not a race simulation either, and the offensive stations moved
+> to `offensive_station_target`. That left the two NEUTRAL shapes (3v3 FLANK, 5v5 DBACK)
+> as its only consumers, and they have since moved to `neutral_station_target` — the same
+> categorical read, conceding a numbers layer instead of a post. `fill_counter_channels`,
+> `race_home_feasible`, `most_forward_feasible`, `collect_counter_threats`, `ThreatSet`
+> and the station grid are deleted.
+>
+> What decided it: NEUTRAL is ~0.1% of live play (five clean bot-vs-bot samples), so the
+> two survivors were paying a per-station conjunction over every attacker's channels for
+> a shape almost nobody is ever in; and in NEUTRAL the puck is loose by definition, so
+> every attacker was priced an OUTLET channel as a max-speed feed that no one was in a
+> position to throw. Neither defect is fixable without rebuilding the model into the
+> shared read it was already superseded by.
+>
+> One behavior genuinely changed with it: at our own blue line, under the enforced
+> ruleset, nobody can legally be behind the DBACK pair while the puck is out of our zone,
+> so the shared read never bounds that stand — the offside rule IS the bound. The old
+> model routed such a lurker's channel through a tag-up at the line and sagged the pair
+> for him. `test_role_defenseman.gd` pins both halves (holds under enforced offsides,
+> sags with the rule off).
+
 ---
 
 ## 9. Coverage readiness — the transition → DZONE handoff
@@ -410,7 +434,7 @@ gets promoted out of `contain.gd` into `AIRushRead` and reused for both purposes
 ### The gate
 
 The brain **upgrades** its raw possession-state result, same seam and same shape as the
-existing `RETRIEVAL` upgrade (`team_brain.gd:186–211`, `retrieval_read`):
+the (since-removed) `RETRIEVAL` upgrade — see docs/breakout-plan.md Phase A:
 
 ```
 if raw_state == DZONE and not coverage_read(rush_read, was_set):
@@ -418,8 +442,7 @@ if raw_state == DZONE and not coverage_read(rush_read, was_set):
 ```
 
 with enter/hold margins so the boundary can't flicker (`COVERAGE_SET_ENTER` /
-`COVERAGE_SET_HOLD`, hysteresis in the same direction as `retrieval_read`: harder to
-declare set than to stay set).
+`COVERAGE_SET_HOLD`, asymmetric hysteresis: harder to declare set than to stay set).
 
 Symmetrically, once set the team **holds** coverage until the rush-over conditions
 genuinely fail — a re-entering rush after a failed clear shouldn't dump a set structure
@@ -542,7 +565,8 @@ A body straddling the blue line to pressure the point is not a broken structure.
   under the `DOWN_ONE` read, where the numbers read tells it *when* to apply instead of it
   inferring that from receiver danger alone.
 - The threat partition, for DZONE.
-- The counter-channel model, for offensive pinch decisions (§8).
+- ~~The counter-channel model, for offensive pinch decisions (§8).~~ Superseded by §13.2
+  and since deleted outright — see the note at the end of §8.
 
 **New**
 - `Scripts/domain/ai/rush_read.gd` + GUT tests.

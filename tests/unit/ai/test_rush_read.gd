@@ -212,8 +212,8 @@ func test_our_possession_reads_no_rush_but_still_prices_the_counter() -> void:
 
 func test_unwired_read_is_not_mistaken_for_a_clear_coast() -> void:
 	# The inert instance every brainless context gets must report is_live false,
-	# so collect_counter_threats falls back to all opponents instead of silently
-	# disabling every race-home bound in the game.
+	# so may_hold_forward_stand can tell "nobody told me anything" from "the coast
+	# is clear" and just hold the station's own geometry.
 	assert_false(AIRushRead.new().is_live)
 
 

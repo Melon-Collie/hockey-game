@@ -16,12 +16,12 @@ class_name AIRoleFlank
 # last man back stepping to his own blue line while an opponent lurked behind
 # him: a stand nobody can recover from is not a stand, and NEUTRAL was the one
 # game state whose off-puck shape never asked the question. So the flank stand
-# is bounded by the same race-home read every other defensive station uses
-# (RUSH_D1, the D pair's line hold, the points, the valve): hold the puck-side
-# shape while the counter-attack channels are containable, sag down the retreat
-# line exactly as far as they demand when they aren't. Contained counters leave
-# the shape untouched, so ordinary loose-puck play is unchanged — the bound only
-# bites on the guaranteed-breakaway geometry it exists to refuse.
+# is bounded by the shared numbers read (AIRoleHelpers.neutral_station_target):
+# hold the puck-side shape unless a man has got behind it with nobody covering,
+# and when one has, give up exactly the ice that restores the layer. Nobody
+# behind means the shape is untouched, so ordinary loose-puck play is unchanged
+# — the bound only bites on the guaranteed-breakaway geometry it exists to
+# refuse.
 
 # Lateral offset from puck X axis. Sampling parameter — the
 # defensive "shape" the team holds during loose-puck play.
@@ -45,18 +45,8 @@ static func decide(ctx: RoleContext, lateral_sign: float) -> RoleDecision:
 			puck_pos.x + lateral_sign * FLANK_LATERAL_M,
 			0.0,
 			puck_pos.z + ctx.own_goal_dir * FLANK_DEPTH_M)
-	# Race-home bound (see the header doc). Channels are built off the full
-	# opponent list, memoized per snapshot — the second flank's fill is a
-	# cache hit.
-	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
-	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
-	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
-	AIRoleHelpers.collect_counter_threats(
-			ctx, ctx.scratch_counter_states, ctx.scratch_counter_caps)
-	AIRoleHelpers.fill_counter_channels(ctx, ctx.scratch_counter_states,
-			ctx.scratch_counter_caps, ctx.defending_goal_pos,
-			AIRoleHelpers.ThreatSet.COUNTER_ATTACKERS)
-	d.target_position = AIRoleHelpers.most_forward_feasible(
-			stand, AIRoleHelpers.self_race_vmax(ctx), ctx.self_max_accel,
-			AIRoleHelpers.station_retreat_floor(ctx, stand))
+	# Last-man bound (see the header doc).
+	d.target_position = AIRoleHelpers.neutral_station_target(
+			ctx, stand, ctx.prev_held_forward_stand)
+	d.held_forward_stand = d.target_position.distance_to(stand) < 0.5
 	return d
