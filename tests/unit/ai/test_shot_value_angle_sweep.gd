@@ -136,9 +136,7 @@ func _cell(spot: Vector3, spread: float) -> Dictionary:
 	var loft: int = AIActionScoring.best_shot_loft(spot, _goal, g,
 			GameRules.NET_HALF_WIDTH, speed, 0.0, five, down,
 			seal_x, seal_tall, spread, 0.0, hands, pads)
-	var pt: float = AIActionScoring.best_shot_power_t(spot, _goal, g,
-			GameRules.NET_HALF_WIDTH, speed, 0.0, five, down,
-			seal_x, seal_tall, spread, 0.0, hands, pads)
+	var pt: float = 1.0  # full pace, always (contact-point solve)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = SEED
 	var goals: int = 0

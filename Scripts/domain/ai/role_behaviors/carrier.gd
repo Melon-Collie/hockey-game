@@ -434,12 +434,11 @@ var shot_loft_level: int = ShotMechanics.ELEVATION_FLAT
 var shot_aim_point: Vector3 = Vector3.INF
 
 # Set alongside shot_loft_level: the release power fraction (0..1 over this
-# bot's wrister band) of that same hole. A HIGH (roof) hole commits the
-# arrival-honest pace — the fastest release whose arc still arrives in the top
-# band at this range (AIActionScoring.best_shot_power_t); flat holes fire full.
-# For a backhand-side release the fraction is pre-compensated for the
-# controller's backhand power penalty, so the executed pace matches the scored
-# one (see the remap at the SHOOT commit).
+# bot's wrister band) of that same hole. Every hole fires full power — the
+# contact-point solve adapts the launch angle, not the pace. For a
+# backhand-side release the fraction is pre-compensated for the controller's
+# backhand power penalty, so the executed pace matches the scored one (see
+# the remap at the SHOOT commit).
 var shot_power_t: float = 1.0
 
 # Set alongside shot_loft_level: the world-space RELEASE OFFSET (relative to the
@@ -1560,20 +1559,17 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					_shot_env_unsettled, _shot_env_five_hole, _shot_env_goalie_down,
 					_shot_env_seal_x, _shot_env_seal_tall, ctx.self_aim_spread_rad,
-					shot_screen_dist, _shot_env_hands, _shot_env_pads, ctx.self_loft_tan)
+					shot_screen_dist, _shot_env_hands, _shot_env_pads, ctx.self_loft_tans)
 			shot_aim_point = AIActionScoring.best_shot_aim(
 					_shot_sample_release, attacking_goal, _shot_sample_goalie,
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					_shot_env_unsettled, _shot_env_five_hole, _shot_env_goalie_down,
 					ctx.self_aim_spread_rad,
 					_shot_env_seal_x, _shot_env_seal_tall, shot_screen_dist,
-					_shot_env_hands, _shot_env_pads, ctx.self_loft_tan)
-			shot_power_t = AIActionScoring.best_shot_power_t(
-					_shot_sample_release, attacking_goal, _shot_sample_goalie,
-					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
-					_shot_env_unsettled, _shot_env_five_hole, _shot_env_goalie_down,
-					_shot_env_seal_x, _shot_env_seal_tall, ctx.self_aim_spread_rad,
-					shot_screen_dist, _shot_env_hands, _shot_env_pads, ctx.self_loft_tan)
+					_shot_env_hands, _shot_env_pads, ctx.self_loft_tans)
+			# Full power for every hole: the contact-point solve adapts the
+			# LAUNCH ANGLE, so pace only buys flight time and toe-clamp relief.
+			shot_power_t = 1.0
 			shot_release_offset = _shot_sample_offset
 			if _shot_sample_backhand:
 				# The controller applies backhand_power_coefficient to the FINAL

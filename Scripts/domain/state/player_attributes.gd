@@ -23,7 +23,7 @@ extends RefCounted
 #     stamina metabolism fork (lean = shallow pool / fast regen).
 #   • GEAR — four discrete slots, three options each, ALL LIVE and all
 #     LATERAL (no net power): SKATE PROFILE (top-end/glide ↔ first-step/
-#     cornering incl. grip), BLADE CURVE (face angle gates the soft roof ↔
+#     cornering incl. grip), BLADE CURVE (loft-ladder steepness ↔
 #     backhand honesty, + runway lean), STICK FLEX (shot ceiling ↔ load
 #     time + runway), STICK LENGTH (reach/sweep ↔ snap/inner-circle — the
 #     blade-cap lever).
@@ -258,22 +258,25 @@ const _FLEX_RUNWAY_LEAN: Array[float] = [0.90, 1.00, 1.12]  # wrister full-strok
 # BLADE CURVE — three house patterns modeled on hockey's most-played real
 # blades: M88 (closed slot — the P88-like mid curve), M92 (balanced — the
 # P92-like mid-toe all-rounder, the neutral row), M28 (open — the P28-like
-# open toe hook). The FACE ANGLE caps the shot's LAUNCH ANGLE
-# (ShotMechanics.loft_y's ratio is tan(launch angle); the curve tightens the
-# pre-existing universal 45° cap, MAX_LOFT_RATIO): a shot can never leave the
-# blade steeper than the face. Loft levels stay fixed vertical speeds, so at
-# PACE every curve still reaches the same apex — the crossbar ceiling holds
-# for all blades — but the SOFT steep shot that roofs in tight is face-gated:
-# min bar-height roofing distance emerges at ~2.2 m (M28, 45° = today's
-# global cap, bit-identical) / ~3.7 m (M92, 31°) / ~4.5 m (M88, 26°), and the
-# standstill saucer flip flattens on the M88 the same way. Trajectory is a
-# pure function of (power, level, face) — never of where the net is.
+# open toe hook). The ANGLE LADDER is the elevation lever (the manual
+# contact-point model — docs/elevation-rework-plan.md v3): each loft level is
+# a set launch angle from this pattern's ladder, steeper on the open blade at
+# every rung. MID chases HIGH's band end so adjacent full-charge bands nearly
+# touch (the 2026-07 retune closed the just-off-the-doorstep dead ring). At
+# full wrister charge the top-shelf bands land: LOW = the point snipe (M92
+# ~13–21 m; M28 ~10–14 m then clips iron; M88 arrives under-the-arm and can
+# NEVER sail — its flattest ladder apexes at crossbar-ping height even off a
+# max slapper), MID = the slot snipe (M92 ~2.9–4.0 m), HIGH = the in-tight
+# roof (M92 ~2.0–2.7 m; only the M28's 28° tops the shelf from the crease —
+# doorstep floors 2.24/1.93/1.62 m by gear). The M28 is the close-range
+# weapon and the worst at range at every rung; the M88 is the safe blade
+# that cannot miss the net high, and fills its long range at slapper pace.
 #
 # The rest of the identity triangle, all lateral trades about the M92:
 #   M88 — the playmaker/point blade: best backhand, +3% slapper (a flatter
 #         face stays square through the heel-contact sweep), and catches the
 #         hardest feeds (+7% reception ceiling — the flat blade cradles).
-#   M28 — the in-tight blade: the open toe face is its whole (large) upside;
+#   M28 — the in-tight blade: the open toe is its whole (large) upside;
 #         it pays the deepest backhand penalty, −3% slapper, and hard feeds
 #         bounce off (−7% reception). Its stored quick-release runway lean
 #         goes live when the wrister travel gate unfreezes.
@@ -282,7 +285,9 @@ const _FLEX_RUNWAY_LEAN: Array[float] = [0.90, 1.00, 1.12]  # wrister full-strok
 # alignment bonus at the decision sites (PuckReceptionRules callers) — never
 # pickup_max_speed, so soft passes settle on every blade and the client's
 # provisional-pickup gate stays build-independent.
-const _CURVE_FACE_ANGLE_DEG: Array[float] = [26.0, 31.0, 45.0]  # M88 / M92 / M28
+const _CURVE_LOFT_LOW_DEG: Array[float] = [7.0, 8.0, 8.5]      # M88 / M92 / M28
+const _CURVE_LOFT_MID_DEG: Array[float] = [15.5, 17.5, 19.0]
+const _CURVE_LOFT_HIGH_DEG: Array[float] = [21.0, 24.0, 28.0]
 const _CURVE_RUNWAY_LEAN: Array[float] = [1.00, 1.00, 0.90]
 const _CURVE_BACKHAND_LEAN: Array[float] = [1.08, 1.00, 0.90]
 const _CURVE_SLAP_LEAN: Array[float] = [1.03, 1.00, 0.97]
@@ -556,11 +561,18 @@ func curve_slap_mult() -> float: return _CURVE_SLAP_LEAN[curve]
 # framing: the blown-open force limit of the blade shape, not a hands stat.
 func reception_ceiling_mult() -> float: return _CURVE_RECEPTION_LEAN[curve]
 
-# tan(face angle) — the launch-angle cap the release math applies (see the
-# _CURVE_FACE_ANGLE_DEG doc). Open's 45° equals ShotMechanics.MAX_LOFT_RATIO,
-# so the open blade is bit-identical to the pre-curve shipped behavior.
-func curve_loft_tan() -> float:
-	return tan(deg_to_rad(_CURVE_FACE_ANGLE_DEG[curve]))
+# tan(launch angle) per loft level — this pattern's angle ladder (see the
+# _CURVE_LOFT_*_DEG doc). Every rung sits under ShotMechanics.MAX_LOFT_RATIO.
+func curve_loft_tan_low() -> float:
+	return tan(deg_to_rad(_CURVE_LOFT_LOW_DEG[curve]))
+
+
+func curve_loft_tan_mid() -> float:
+	return tan(deg_to_rad(_CURVE_LOFT_MID_DEG[curve]))
+
+
+func curve_loft_tan_high() -> float:
+	return tan(deg_to_rad(_CURVE_LOFT_HIGH_DEG[curve]))
 
 
 # Sprint ceiling — speed-normalized, grounded to the 20–25 mph burst band.

@@ -15,41 +15,36 @@ class ShotResult:
 		r.power = p
 		return r
 
-# ── Loft levels ───────────────────────────────────────────────────────────────
-# Elevation is a player-selected LOFT LEVEL (scroll wheel), not a computed arc:
-#   0 = FLAT  — puck stays on the ice
-#   1 = LOW   — a saucer flip (~0.26 m apex): clears stick blades, lands and slides
-#   2 = HIGH  — a rising shot (~1.12 m apex, puck top ~1.14 m): the peak sits a
-#               clean ~5 cm UNDER the crossbar's inner edge (1.19 m), so a HIGH
-#               shot snipes the top of the net but its disc never reaches the bar
-#               to sail over it. Apex height is a FIXED ceiling (v_y is power-
-#               independent), so raising shot power can't put a shot over the net —
-#               it only pushes the apex DISTANCE out (see v_y default on
-#               SkaterController.loft_vertical_speed_high for the tuning history).
-# Each level maps to a FIXED VERTICAL LAUNCH SPEED (m/s), independent of shot
-# power and shot direction. Where the puck sits on its arc when it reaches the
-# net is therefore emergent from loft × power × distance — range and charge
-# management are the skill, not a solved-for arrival height. Levels apply
-# identically to quick passes, wristers, and slappers, in every
-# direction — a saucer pass, a flip clear, and a top-shelf snipe are all the
-# same mechanic. (The old system ballistically solved Y to arrive at a target
-# height at the goal line, which both trivialized top-corner aim and made
-# toward-net saucer passes impossible.)
+# ── Loft levels: where the puck sits on the blade ─────────────────────────────
+# Elevation is a player-selected LOFT LEVEL (scroll wheel, 0..3), fictionalized
+# as the CONTACT POINT on the blade (design: docs/elevation-rework-plan.md).
+# Each level is a SET LAUNCH ANGLE from the blade curve's per-gear ladder
+# (PlayerAttributes._CURVE_LOFT_*_DEG) — no target-height solve, no position
+# input, no power coupling. Arrival height is emergent from angle × charge ×
+# range, and MISSING HIGH is the price of greed: the player is the calibrated
+# shooter, or isn't yet.
+#   0 = FLAT — heel. The puck stays on the ice.
+#   1 = LOW  — mid-blade partial roll (7°/8°/8.5° by gear): the saucer at pass
+#              pace, the point snipe at full wrister charge.
+#   2 = MID  — toe-side (15.5°/17.5°/19°): the slot snipe (~3–4 m at full).
+#   3 = HIGH — the toe (21°/24°/28°): the in-tight roof; the flattest ladder
+#              (M88) cannot roof the doorstep but also can never sail — its
+#              worst outcome at any charge is a crossbar ping — while the M28
+#              roofs from the crease and pays for it everywhere else.
+# The levels double as DEFLECT MODES (blade lift height + redirect sign follow
+# the level — see PuckCollisionRules.deflect_loft_speed).
+# QUICK PASSES keep the fixed vertical-speed table (loft_vy_low/high — LOW at
+# pass power IS the saucer pass, MID/HIGH the flip), position- and gear-free.
 const ELEVATION_FLAT: int = 0
 const ELEVATION_LOW: int = 1
-const ELEVATION_HIGH: int = 2
+const ELEVATION_MID: int = 2
+const ELEVATION_HIGH: int = 3
 
-# Cap on the pre-normalization Y/XZ ratio of a lofted direction: 1.0 = 45°.
-# This is a degenerate-input guard, not a feel lever — it stops y from running
-# toward vertical as power approaches the level's launch speed. At 45° it
-# binds only below ~6.6 m/s at HIGH loft (v_y·√2). Since the wrister floor dropped to
-# 10 m/s (soft touch passes), the very softest release — a min-power backhand
-# from a slow-bladed skater, ~6.4 m/s — can now reach the cap, flattening that
-# flip to 45° instead of running vertical: exactly the intended behavior (a
-# soft chip over a sprawled goalie stays possible, never a straight-up pop).
-# Every other release gets its full level v_y. Keeps every legit direction
-# under ShotReleaseRules.MAX_DIRECTION_Y (normalized y at 45° is ~0.707 vs the
-# 0.75 clamp) so the host's forged-direction clamp never touches an honest shot.
+# Universal cap on the pre-normalization Y/XZ ratio of a lofted direction:
+# 1.0 = 45°. Pure anti-forgery guard — the steepest authored ladder rung (M28
+# HIGH, 28°) sits well under it. Keeps every legit direction under
+# ShotReleaseRules.MAX_DIRECTION_Y (normalized y at 45° is ~0.707 vs the 0.75
+# clamp) so the host's forged-direction clamp never touches an honest shot.
 const MAX_LOFT_RATIO: float = 1.0
 
 class WristerConfig:
@@ -57,11 +52,15 @@ class WristerConfig:
 	var max_wrister_power: float = 0.0
 	var backhand_power_coefficient: float = 0.0
 	var quick_pass_power: float = 0.0
-	var loft_vy_low: float = 0.0                # vertical launch speed (m/s), level 1
-	var loft_vy_high: float = 0.0               # vertical launch speed (m/s), level 2
-	# Blade FACE angle as tan(angle) — caps the launch angle per curve gear
-	# (see loft_y). Default = the universal cap, i.e. an open blade.
-	var loft_tan_max: float = MAX_LOFT_RATIO
+	# Fixed vertical launch speeds (m/s) for the QUICK-PASS loft table only
+	# (levels 1/2 — the saucer and the flip; see the loft-level doc above).
+	var loft_vy_low: float = 0.0
+	var loft_vy_high: float = 0.0
+	# The blade curve's angle ladder as tan(angle) per elevated level (see
+	# shot_loft_y). Defaults = the M92 (league-neutral) ladder.
+	var loft_tan_low: float = GameRules.DEFAULT_LOFT_TAN_LOW
+	var loft_tan_mid: float = GameRules.DEFAULT_LOFT_TAN_MID
+	var loft_tan_high: float = GameRules.DEFAULT_LOFT_TAN_HIGH
 	# ── Power model (see wrister_power_t) ──
 	# Cursor speed (m/s of screen-space pointer travel, already scaled by the
 	# player's Shot Power Sensitivity) that reads as a full-power release.
@@ -85,9 +84,10 @@ class SlapperConfig:
 	var min_slapper_power: float = 0.0
 	var max_slapper_power: float = 0.0
 	var max_slapper_charge_time: float = 0.0
-	var loft_vy_low: float = 0.0
-	var loft_vy_high: float = 0.0
-	var loft_tan_max: float = MAX_LOFT_RATIO    # blade face angle cap (see loft_y)
+	# Angle ladder as tan(angle) per elevated level (see shot_loft_y).
+	var loft_tan_low: float = GameRules.DEFAULT_LOFT_TAN_LOW
+	var loft_tan_mid: float = GameRules.DEFAULT_LOFT_TAN_MID
+	var loft_tan_high: float = GameRules.DEFAULT_LOFT_TAN_HIGH
 
 # ── Wrister power model (pure mouse speed, travel-gated ceiling) ─────────────
 # Normalized 0..1 charged-wrister power from a single signal: CURSOR SPEED —
@@ -249,15 +249,17 @@ static func release_wrister(
 		# blade's lateral carry-side offset (the puck sits off to the forehand
 		# side), which pulled the pass off the cursor line — this reads blade→cursor
 		# directly. Falls back to player→cursor only when the cursor sits on the
-		# blade (degenerate, no direction). Loft rides the same level table as
-		# charged shots: level 1 at pass power is the saucer pass, level 2 the flip.
+		# blade (degenerate, no direction). Loft rides the fixed-vy pass table
+		# (NOT the shot ladder): LOW at pass power is the saucer, MID+ the flip.
 		var blade_xz := Vector3(blade_world_pos.x, 0.0, blade_world_pos.z)
 		var pass_dir: Vector3 = (target - blade_xz).normalized()
 		if pass_dir.length_squared() < 0.0001:
 			pass_dir = (target - player_xz).normalized()
+		# Quick passes are deliberately GEAR-FREE under the universal cap only —
+		# the angle ladder is a shot lever; the saucer and flip stay calibrated
+		# across blades so pass mechanics never vary by build.
 		var tap_y: float = loft_y(cfg.quick_pass_power,
-				_loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high),
-				cfg.loft_tan_max)
+				_loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high))
 		return ShotResult.make(
 				Vector3(pass_dir.x, tap_y, pass_dir.z).normalized(),
 				cfg.quick_pass_power, out)
@@ -275,9 +277,8 @@ static func release_wrister(
 	if is_backhand:
 		power *= cfg.backhand_power_coefficient
 
-	var y: float = loft_y(power,
-			_loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high),
-			cfg.loft_tan_max)
+	var y: float = shot_loft_y(elevation_level,
+			cfg.loft_tan_low, cfg.loft_tan_mid, cfg.loft_tan_high)
 	return ShotResult.make(
 			Vector3(wrister_dir.x, y, wrister_dir.z).normalized(),
 			power, out)
@@ -304,15 +305,15 @@ static func release_slapper(
 	var charge_t: float = clampf(charge_time / cfg.max_slapper_charge_time, 0.0, 1.0)
 	var power: float = lerpf(cfg.min_slapper_power, cfg.max_slapper_power, charge_t)
 
-	var y: float = loft_y(power,
-			_loft_vy(elevation_level, cfg.loft_vy_low, cfg.loft_vy_high),
-			cfg.loft_tan_max)
+	var y: float = shot_loft_y(elevation_level,
+			cfg.loft_tan_low, cfg.loft_tan_mid, cfg.loft_tan_high)
 	return ShotResult.make(
 			Vector3(shot_dir.x, y, shot_dir.z).normalized(),
 			power, out)
 
-# Vertical launch speed (m/s) for a loft level. Levels above HIGH clamp to
-# high — the input decode already bounds the wire value, this is belt-and-braces.
+# Vertical launch speed (m/s) for a QUICK-PASS loft level (charged shots use
+# shot_loft_y). Levels above HIGH clamp to high — the input decode already
+# bounds the wire value, this is belt-and-braces.
 static func _loft_vy(elevation_level: int, vy_low: float, vy_high: float) -> float:
 	if elevation_level <= ELEVATION_FLAT:
 		return 0.0
@@ -323,16 +324,10 @@ static func _loft_vy(elevation_level: int, vy_low: float, vy_high: float) -> flo
 # Y direction component (pre-normalization Y/XZ ratio) that gives a shot fired
 # at `power` a vertical launch speed of `loft_vy`, exactly:
 #   v_y = power · y / sqrt(1 + y²)  →  y = loft_vy / sqrt(power² − loft_vy²)
-# Since loft_vy is per-level constant, the apex (v_y²/2g) is the same for every
-# shot at that level — charge buys pace, not height, so the two aim axes stay
-# orthogonal. The ratio IS tan(launch angle), and it is capped at the blade's
-# FACE angle (`loft_tan_max`, per curve gear; MAX_LOFT_RATIO = the 45° open
-# face = the pre-curve universal cap): a shot can never leave the blade
-# steeper than the face. At pace the cap never binds — every curve reaches
-# the full per-level apex (the crossbar ceiling holds for all blades) — but
-# the SOFT steep release that roofs in tight flattens on a closed face, so
-# each curve's minimum roofing distance emerges from ballistics alone.
-# Trajectory stays a pure function of (power, level, face) — never position.
+# The ratio IS tan(launch angle), capped at `loft_tan_max` as a degenerate-
+# input guard (y would run toward vertical as power approaches loft_vy).
+# Serves the fixed-speed consumers: the quick-pass loft table and the puck's
+# deflect-tip solve (Puck.deflect_up/down_loft_speed).
 static func loft_y(power: float, loft_vy: float,
 		loft_tan_max: float = MAX_LOFT_RATIO) -> float:
 	if loft_vy <= 0.0:
@@ -342,6 +337,23 @@ static func loft_y(power: float, loft_vy: float,
 	if loft_vy >= max_vy_at_cap:
 		return tan_cap
 	return loft_vy / sqrt(power * power - loft_vy * loft_vy)
+
+# Y direction ratio (tan of the launch angle) for a CHARGED shot — the ladder
+# lookup of the contact-point model (see the loft-level doc at the top of this
+# file). Set angles: power and position never enter; where the arc arrives is
+# the player's read, and over the bar is a real outcome. Levels above HIGH
+# clamp to HIGH (belt-and-braces with the 2-bit input decode), every rung is
+# bounded by MAX_LOFT_RATIO so the host's forged-direction clamp
+# (ShotReleaseRules.MAX_DIRECTION_Y) never touches an honest shot.
+static func shot_loft_y(elevation_level: int,
+		loft_tan_low: float, loft_tan_mid: float, loft_tan_high: float) -> float:
+	if elevation_level <= ELEVATION_FLAT:
+		return 0.0
+	if elevation_level == ELEVATION_LOW:
+		return minf(MAX_LOFT_RATIO, loft_tan_low)
+	if elevation_level == ELEVATION_MID:
+		return minf(MAX_LOFT_RATIO, loft_tan_mid)
+	return minf(MAX_LOFT_RATIO, loft_tan_high)
 
 # Follow-through aim direction (world XZ). The finish choreography sweeps the
 # torso + blade along the SHOT line so the release reads as a genuine follow-

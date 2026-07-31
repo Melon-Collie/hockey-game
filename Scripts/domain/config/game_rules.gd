@@ -468,15 +468,21 @@ const DEFAULT_SLAPPER_POWER_MAX_M_S: float = 40.0
 # pass speed (passes are quick-shots in this codebase).
 const DEFAULT_QUICK_PASS_POWER_M_S: float = 14.0
 
-# ── Loft vertical launch speeds (ShotMechanics loft levels) ───────────────────
-# Each loft level is a FIXED vertical launch speed independent of shot power
-# (see ShotMechanics.loft_y — charge buys pace, loft buys height). Shared
-# defaults between the SkaterController exports (loft_vertical_speed_low/high)
-# and the bot AI's shot model, which needs the real arc to know what height a
-# lofted shot physically ARRIVES at over a given range/power (a HIGH-loft
-# full-power wrister from 5 m tops out at belly height, not the top corner).
-#   LOW  2.2  → ~0.26 m apex (saucer: clears stick blades, lands and slides)
-#   HIGH 4.65 → ~1.10 m apex (puck top ~5 cm under the crossbar's inner edge)
+# ── Loft (ShotMechanics loft levels — the manual angle ladder) ────────────────
+# Design: docs/elevation-rework-plan.md v3. Charged shots use SET LAUNCH
+# ANGLES per level, from the blade curve's per-gear ladder
+# (PlayerAttributes._CURVE_LOFT_*_DEG); these are the M92 (league-neutral)
+# rungs as tan(angle) — the defaults everywhere a build isn't known (AI
+# league-average reads, unwired configs). Arrival height is emergent from
+# angle × charge × range; missing high is a real outcome.
+const DEFAULT_LOFT_TAN_LOW: float = 0.1405   # tan 8°    — saucer / point snipe
+const DEFAULT_LOFT_TAN_MID: float = 0.3153   # tan 17.5° — the slot snipe
+const DEFAULT_LOFT_TAN_HIGH: float = 0.4452  # tan 24°   — the in-tight roof
+#
+# QUICK PASSES keep the fixed vertical-speed table (ShotMechanics.loft_y —
+# pass mechanics must not solve toward a net that isn't their target):
+#   LOW  2.2  → ~0.26 m apex (saucer pass: clears stick blades, lands, slides)
+#   HIGH 4.65 → ~1.10 m apex (the flip pass / chip)
 const DEFAULT_LOFT_VY_LOW_M_S: float = 2.2
 const DEFAULT_LOFT_VY_HIGH_M_S: float = 4.65
 

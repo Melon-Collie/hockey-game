@@ -142,8 +142,7 @@ static func run_rush(path: Array, goal: Vector3, profile: BotSkillProfile,
 			AIShotAim.DEFAULT_CORNER_BIAS, state.z)
 	var loft: int = AIActionScoring.best_shot_loft(shooter, goal, goalie, Shot.NET_HW,
 			AIActionScoring.WRISTER_SHOT_SPEED_M_S, unsettled, -1.0, false, 0.0, false, spread)
-	var power_t: float = AIActionScoring.best_shot_power_t(shooter, goal, goalie, Shot.NET_HW,
-			AIActionScoring.WRISTER_SHOT_SPEED_M_S, unsettled, -1.0, false, 0.0, false, spread)
+	var power_t: float = 1.0  # every hole fires full pace (contact-point solve)
 	# The goalie keeps sliding at release velocity: pass his (x, vx) via `state`.
 	for _i: int in samples:
 		var err: float = rng.randf_range(-spread, spread)

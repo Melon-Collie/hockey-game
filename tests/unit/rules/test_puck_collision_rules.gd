@@ -132,62 +132,35 @@ func test_zero_velocity_yields_zero() -> void:
 	assert_almost_eq(result.length(), 0.0, 0.001, "no input energy, no output")
 
 # ── deflect_loft_speed ───────────────────────────────────────────────────────
-# Args: (elevation_level, puck_y, blade_y, up_speed, down_speed, deadband).
-# Grounded plane (FLAT/LOW) takes its direction from the level; the lifted plane
-# (HIGH) takes it from blade-vs-puck geometry.
 
 const _UP: float = 3.8
 const _DOWN: float = 3.5
-const _DEADBAND: float = 0.05
-# Contact points that matter: blade_height 0.03 + blade_lift_height 0.52.
-const _LIFTED_BLADE_Y: float = 0.55
-const _SAUCER_APEX_Y: float = 0.26
 
-func _loft(level: int, puck_y: float, blade_y: float) -> float:
-	return PuckCollisionRules.deflect_loft_speed(
-		level, puck_y, blade_y, _UP, _DOWN, _DEADBAND)
+func _loft(level: int) -> float:
+	return PuckCollisionRules.deflect_loft_speed(level, _UP, _DOWN)
 
-func test_flat_level_never_lofts() -> void:
-	# FLAT is horizontal on the ice regardless of where anything sits.
-	assert_almost_eq(_loft(ShotMechanics.ELEVATION_FLAT, 0.0175, 0.03), 0.0, 0.001)
+# The four loft levels are DEFLECT MODES (docs/elevation-rework-plan.md v3
+# §3): the level names the redirect's vertical sign outright — FLAT flat,
+# LOW/MID up, HIGH down — and the blade's LIFT HEIGHT plays the matching
+# plane (ice / ice / low air / high air), which is where the old geometry
+# test's anti-cheese properties now live: a saucer apexes under the MID
+# pivot, so an air mode still only ever meets genuinely high pucks.
 
-func test_low_level_lifts_from_the_level_not_geometry() -> void:
-	# The grounded plane names its own direction: LOW leans a puck up even though
-	# the blade (0.03) sits ABOVE the puck's centre (0.0175) — geometry that would
-	# read as a knock-down on the lifted plane.
-	assert_almost_eq(_loft(ShotMechanics.ELEVATION_LOW, 0.0175, 0.03), _UP, 0.001,
-		"LOW lifts a grounded puck; 'down' is meaningless for a puck on the ice")
+func test_flat_mode_never_lofts() -> void:
+	assert_almost_eq(_loft(ShotMechanics.ELEVATION_FLAT), 0.0, 0.001,
+		"FLAT redirects along the ice")
 
-func test_high_lifts_a_puck_above_the_blade() -> void:
-	# Got under it → tip it up. This is the case that was unrepresentable before:
-	# the lifted plane could only ever bat down.
-	assert_almost_eq(_loft(ShotMechanics.ELEVATION_HIGH, 0.85, _LIFTED_BLADE_Y), _UP, 0.001)
+func test_low_mode_tips_the_ground_puck_up() -> void:
+	assert_almost_eq(_loft(ShotMechanics.ELEVATION_LOW), _UP, 0.001,
+		"LOW is the money tip — ground puck up")
 
-func test_high_bats_down_a_puck_below_the_blade() -> void:
-	# Blade over the puck → knock it to the ice.
-	assert_almost_eq(_loft(ShotMechanics.ELEVATION_HIGH, 0.30, _LIFTED_BLADE_Y), -_DOWN, 0.001)
+func test_mid_mode_tips_the_air_puck_up() -> void:
+	assert_almost_eq(_loft(ShotMechanics.ELEVATION_MID), _UP, 0.001,
+		"MID roofs the rising shot — air puck up")
 
-func test_high_stays_flat_when_level_with_the_puck() -> void:
-	# Inside the deadband the two are level: the puck glances through with no
-	# vertical bias, in either direction off centre.
-	assert_almost_eq(_loft(ShotMechanics.ELEVATION_HIGH, _LIFTED_BLADE_Y, _LIFTED_BLADE_Y), 0.0, 0.001)
-	assert_almost_eq(_loft(ShotMechanics.ELEVATION_HIGH, _LIFTED_BLADE_Y + 0.04, _LIFTED_BLADE_Y), 0.0, 0.001)
-	assert_almost_eq(_loft(ShotMechanics.ELEVATION_HIGH, _LIFTED_BLADE_Y - 0.04, _LIFTED_BLADE_Y), 0.0, 0.001)
-
-func test_saucer_pass_can_never_be_roofed_by_a_camping_high_blade() -> void:
-	# The anti-degeneracy property, as a property rather than a gate: a LOW saucer
-	# apexes at ~0.26, well under a lifted blade at 0.55, so it never reaches the
-	# "above the blade" band. Parking at HIGH still only ever swats saucers down.
-	assert_almost_eq(_loft(ShotMechanics.ELEVATION_HIGH, _SAUCER_APEX_Y, _LIFTED_BLADE_Y), -_DOWN, 0.001,
-		"a saucer at its apex is still below a lifted blade → knock-down, never a roof")
-
-func test_high_pivot_follows_the_blade_not_a_fixed_height() -> void:
-	# The pivot is the blade's own contact point, so a blade still easing up
-	# through its lift blend judges from the height it has ACTUALLY reached: the
-	# same puck reads as a lift mid-raise and a knock-down once fully up.
-	var mid_raise_blade_y: float = 0.20
-	assert_almost_eq(_loft(ShotMechanics.ELEVATION_HIGH, 0.40, mid_raise_blade_y), _UP, 0.001)
-	assert_almost_eq(_loft(ShotMechanics.ELEVATION_HIGH, 0.40, _LIFTED_BLADE_Y), -_DOWN, 0.001)
+func test_high_mode_bats_the_air_puck_down() -> void:
+	assert_almost_eq(_loft(ShotMechanics.ELEVATION_HIGH), -_DOWN, 0.001,
+		"HIGH is the knockdown — air puck down")
 
 # ── body_block_velocity ──────────────────────────────────────────────────────
 

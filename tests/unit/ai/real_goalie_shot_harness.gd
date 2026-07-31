@@ -198,30 +198,22 @@ func publish_windup(shooter: Vector3, declared_aim: Vector3, loft_level: int,
 		_ctrl._physics_process(DT)
 
 
-# Launch velocity for a shot from `shooter` toward the net-plane `aim`: horizontal
-# heading toward the aim (+ scatter), pace split into the horizontal component and
-# the loft's fixed vertical launch (same model as ShotMechanics / shot_sim_harness
-# so the two instruments are comparable). Vector3.ZERO if the aim is degenerate.
+# Launch velocity for a shot from `shooter` toward the net-plane `aim`:
+# horizontal heading toward the aim (+ scatter), pace split by the level's SET
+# ANGLE (ShotMechanics.shot_loft_y, league-neutral M92 ladder — same model as
+# the live release and shot_sim_harness, so the instruments are comparable).
+# Vector3.ZERO if the aim is degenerate.
 func shot_velocity(shooter: Vector3, aim: Vector3, loft_level: int, power_t: float,
 		err_rad: float) -> Vector3:
-	var to_aim := Vector2(aim.x - shooter.x, aim.z - shooter.z)
-	if to_aim.length() < 0.001:
-		return Vector3.ZERO
-	var ang: float = to_aim.angle() + err_rad
-	var hdir := Vector2(cos(ang), sin(ang))
 	var speed: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S \
 			+ clampf(power_t, 0.0, 1.0) * (GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 					- GameRules.DEFAULT_WRISTER_POWER_MIN_M_S)
-	var loft_vy: float = ShotMechanics._loft_vy(loft_level,
-			GameRules.DEFAULT_LOFT_VY_LOW_M_S, GameRules.DEFAULT_LOFT_VY_HIGH_M_S)
-	var v_h: float = sqrt(maxf(speed * speed - loft_vy * loft_vy, 1.0))
-	return Vector3(hdir.x * v_h, loft_vy, hdir.y * v_h)
+	return shot_velocity_at(shooter, aim, loft_level, speed, err_rad)
 
 
 # Launch velocity at an EXPLICIT speed (m/s) rather than a power fraction, so an
 # instrument can sweep the speeds people actually shoot instead of a normalized
-# band. Same loft split as shot_velocity: the loft's fixed vertical launch comes
-# out of the total, the rest is horizontal.
+# band. Same contact-point split as shot_velocity.
 func shot_velocity_at(shooter: Vector3, aim: Vector3, loft_level: int,
 		speed_m_s: float, err_rad: float) -> Vector3:
 	var to_aim := Vector2(aim.x - shooter.x, aim.z - shooter.z)
@@ -229,10 +221,12 @@ func shot_velocity_at(shooter: Vector3, aim: Vector3, loft_level: int,
 		return Vector3.ZERO
 	var ang: float = to_aim.angle() + err_rad
 	var hdir := Vector2(cos(ang), sin(ang))
-	var loft_vy: float = ShotMechanics._loft_vy(loft_level,
-			GameRules.DEFAULT_LOFT_VY_LOW_M_S, GameRules.DEFAULT_LOFT_VY_HIGH_M_S)
-	var v_h: float = sqrt(maxf(speed_m_s * speed_m_s - loft_vy * loft_vy, 1.0))
-	return Vector3(hdir.x * v_h, loft_vy, hdir.y * v_h)
+	var y_ratio: float = ShotMechanics.shot_loft_y(loft_level,
+			GameRules.DEFAULT_LOFT_TAN_LOW, GameRules.DEFAULT_LOFT_TAN_MID,
+			GameRules.DEFAULT_LOFT_TAN_HIGH)
+	var inv_norm: float = 1.0 / sqrt(1.0 + y_ratio * y_ratio)
+	var v_h: float = maxf(speed_m_s * inv_norm, 1.0)
+	return Vector3(hdir.x * v_h, speed_m_s * y_ratio * inv_norm, hdir.y * v_h)
 
 
 # fire() at an explicit speed. Mirrors fire()'s bookkeeping exactly.

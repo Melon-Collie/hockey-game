@@ -65,47 +65,34 @@ static func deflect_velocity(
 		e = lerpf(normal_restitution, normal_restitution_min, hard)
 	return v_tangent * tangential_retain - v_normal * e
 
-# Signed vertical launch speed for a deliberate deflect's redirect (fed to
+# Signed vertical launch speed for a deflect's redirect (fed to
 # ShotMechanics.loft_y by Puck.apply_blade_deflect). Positive lifts, negative
 # drives the puck down, zero keeps it flat.
 #
-# On the GROUNDED plane (FLAT / LOW) the level names the direction outright:
-# a blade on the ice can keep a puck flat or lean it up, and "down" is
-# meaningless for a puck already on the ice.
-#
-# On the LIFTED plane (HIGH) the direction is not a choice — it's geometry.
-# You can only bat down what your blade is ABOVE, and only lift what it's
-# UNDER, so the sign comes from the puck's height relative to the blade's own
-# contact point. This is what restores the airborne up-tip that collapsed when
-# the stick-lift and deflect buttons merged: one 3-state level can't encode
-# plane × direction, but the plane can supply the direction itself.
-#
-# `deadband` is a physical measurement, not a feel knob: the blade face's
-# half-height plus the puck's half-thickness — the band over which the two are
-# level and the puck glances straight through with no vertical bias.
-#
-# Anti-degeneracy is preserved by the pivot's HEIGHT rather than by a gate: a
-# saucer pass tops out well below a lifted blade, so it never reaches the
-# "above the blade" band and a player camping HIGH still only ever swats
-# saucers down. Getting under a puck to lift it means the puck is genuinely
-# high — a real shot, not a pass being squatted on.
+# The LEVEL names the deflection intent outright — the four loft levels double
+# as DEFLECT MODES (docs/elevation-rework-plan.md v3 §3), and the blade's lift
+# height follows the level so each mode plays its own plane:
+#   FLAT — blade on the ice: a ground puck stays on the ground (redirect
+#          along the ice; "down" is meaningless there).
+#   LOW  — blade on the ice: a ground puck deflects UP — the money tip.
+#   MID  — blade lifted to the low air (~0.35 m pivot): an airborne puck
+#          deflects UP — roof the rising shot.
+#   HIGH — blade lifted high (~0.52 m pivot, reaching ~1.05 m): an airborne
+#          puck bats DOWN — the high-feed knockdown at the net mouth.
+# The old model derived up-vs-down from puck-vs-blade geometry at HIGH; the
+# sign is now the player's stated intent, so identical contacts never flip
+# outcome on a centimeter of height. Anti-cheese is preserved by the PIVOT
+# heights, not a gate: a saucer pass apexes ~0.21–0.26 m — under the MID
+# pivot — so camping an air mode still only ever meets genuinely high pucks.
 static func deflect_loft_speed(
 		elevation_level: int,
-		puck_y: float,
-		blade_y: float,
 		up_speed: float,
-		down_speed: float,
-		deadband: float) -> float:
+		down_speed: float) -> float:
 	if elevation_level <= ShotMechanics.ELEVATION_FLAT:
 		return 0.0
-	if elevation_level == ShotMechanics.ELEVATION_LOW:
-		return up_speed
-	var offset: float = puck_y - blade_y
-	if offset > deadband:
-		return up_speed
-	if offset < -deadband:
+	if elevation_level == ShotMechanics.ELEVATION_HIGH:
 		return -down_speed
-	return 0.0
+	return up_speed
 
 # Analytic board-containment rescue: the velocity for a puck the engine let
 # slip past the inner board boundary (trimesh facet-seam escape — the wall
