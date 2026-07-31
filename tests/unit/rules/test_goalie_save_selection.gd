@@ -275,6 +275,59 @@ func test_a_loose_rebound_with_bodies_converging_stays_sealed() -> void:
 			"a converging scramble at his feet reads as unanswerable")
 
 
+# ── Staying down: the seal releases when standing is safe ────────────────────
+
+const STAND_UP: float = 0.35        # recovery_duration — the cost of leaving
+
+
+func test_a_rebound_cleared_to_the_corner_lets_him_recover() -> void:
+	# THE STUCK-IN-BUTTERFLY BUG. He kicks the rebound 8 m to the corner; the
+	# nearest opponent is a second of skating from reaching it. The arrival term
+	# still prices the worst case — next touch plus a 33 m/s whack back at him —
+	# so a full from-the-feet answer never fits and the fraction alone held him
+	# sealed indefinitely. But nothing can touch the puck before he is back on
+	# his feet, so standing exposes nothing: the eventual shot meets a set
+	# goalie. Coaching consensus: beyond a couple of stick lengths, recover.
+	var contest: float = GoalieSaveSelection.contest_time(
+			STICK + 9.0, STICK, GameRules.DEFAULT_SKATER_MAX_SPEED_M_S)
+	var s := _s(contest + 8.0 / 33.0, contest)
+	assert_lt(GoalieSaveSelection.answer_fraction(s), 1.0,
+			"the worst-case relaunch still reads as not fully answerable")
+	assert_false(GoalieSaveSelection.should_hold_seal(s, STAND_UP),
+			"but he can beat any touch to his feet, so he recovers")
+
+
+func test_a_loose_rebound_at_his_feet_still_holds_the_seal() -> void:
+	# The bug the hold was built for, re-pinned against the stand-up race: a
+	# stick already on the puck contests it long before he could be upright, so
+	# standing up is standing into the whack — five-hole. He stays sealed.
+	var contest: float = GoalieSaveSelection.contest_time(0.5, STICK, 3.0)
+	assert_true(GoalieSaveSelection.should_hold_seal(
+			_s(contest + 0.02, contest), STAND_UP),
+			"a puck a stick can already touch keeps him down")
+
+
+func test_a_shot_arriving_mid_recovery_holds_the_seal() -> void:
+	# A puck in flight lands on him before he could finish standing — getting
+	# up opens the five-hole exactly as it arrives. Contest is irrelevant;
+	# the flight itself beats the stand-up.
+	assert_true(GoalieSaveSelection.should_hold_seal(_s(0.25), STAND_UP),
+			"a flight shorter than the stand-up keeps him sealed")
+
+
+func test_a_lost_lateral_race_holds_regardless_of_time() -> void:
+	# Coverage, not timing — same precedence as should_block.
+	assert_true(GoalieSaveSelection.should_hold_seal(
+			_s(5.0, INF, 0.0, true), STAND_UP),
+			"only the seal covers a lost lateral race")
+
+
+func test_a_fully_answerable_situation_releases_the_seal() -> void:
+	# The original asymmetric release: a whole answer fits from his feet again.
+	assert_false(GoalieSaveSelection.should_hold_seal(_s(2.0), STAND_UP),
+			"with a full answer available he has no business on the ice")
+
+
 # ── The middle: caught mid-drop is real, not a rounding error ────────────────
 
 func test_the_mid_drop_state_is_represented() -> void:

@@ -53,3 +53,19 @@ static func make_blade_material() -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = _CARBON_SHADER
 	return mat
+
+
+# Goalie sticks ship white in the real world — shaft, paddle, and blade
+# alike — so the goalie colorway of the house design (this seam's first
+# second entry) is one white composite material for the whole stick. Plain
+# paint on a standard material: the goalie stick is rigid (no flex shader),
+# and its ~3 cm shaft renders the wordmark subpixel at the game camera, so
+# no branding.
+const GOALIE_STICK_COLOR := Color(0.92, 0.92, 0.90)
+
+
+static func make_goalie_stick_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = GOALIE_STICK_COLOR
+	mat.roughness = SHAFT_ROUGHNESS
+	return mat

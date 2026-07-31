@@ -459,23 +459,19 @@ func test_shot_danger_set_goalie_slot_is_a_modest_look() -> void:
 	assert_gt(s, 0.8, "the slot quick release beats a standing keeper's drop")
 
 
-func test_shot_danger_down_goalie_slot_is_roofed_at_an_honest_pace() -> void:
+func test_shot_danger_down_goalie_slot_is_roofed() -> void:
 	# The butterfly's defining trade: DOWN, the goalie seals the ice and
 	# concedes the top band (his glove starts at pad height). The slot look
-	# roofs — and at the arrival-honest pace: soft enough that the arc
-	# genuinely arrives above the pad-top seam, instead of the old full-power
-	# HIGH rip that crossed the line at belly height and smacked his chest.
-	var shooter := Vector3(0.0, 0.0, 21.65)
+	# roofs — at FULL pace: the contact-point solve adapts the launch angle so
+	# the arc arrives top-shelf, instead of the old fixed-vy rip that crossed
+	# the line at belly height and smacked his chest.
+	var shooter := Vector3(0.0, 0.0, 23.15)   # 3.5 m — the MID rung's pocket
 	var goalie := Vector3(0.0, 0.0, 25.05)
 	var loft: int = AIActionScoring.best_shot_loft(
 			shooter, GOAL, goalie, NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S,
 			0.0, 0.0, true)   # down, five-hole sealed
-	assert_eq(loft, ShotMechanics.ELEVATION_HIGH, "roof the butterflied goalie")
-	var power: float = AIActionScoring.best_shot_power_t(
-			shooter, GOAL, goalie, NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S,
-			0.0, 0.0, true)
-	assert_between(power, 0.15, 0.75,
-			"…at a pace whose arc actually gets up (full power arrives at the belly)")
+	assert_eq(loft, ShotMechanics.ELEVATION_MID,
+			"roof the butterflied goalie — the slot's in-band rung is MID")
 
 
 func test_shot_danger_point_blank_into_a_set_goalie_is_smothered() -> void:
@@ -582,7 +578,7 @@ func test_shot_danger_top_band_glove_race_in_tight_deploy_shuts_it_at_range() ->
 	# to his body covers the whole deploy and the set glove shuts the band. A
 	# DOWN goalie concedes the arm extension entirely (glove starts at the
 	# pads), so his top corner reads at least as open as the set goalie's.
-	var shooter := Vector3(0.0, 0.0, 23.65)    # 3 m
+	var shooter := Vector3(0.0, 0.0, 24.25)    # 2.4 m — the HIGH rung's pocket
 	var goalie := Vector3(0.0, 0.0, 25.9)
 	var set_high: float = AIActionScoring._hole_open_angle(
 			0, shooter, GOAL, goalie, NET_HW, 33.0, 0.0)
@@ -598,34 +594,61 @@ func test_shot_danger_top_band_glove_race_in_tight_deploy_shuts_it_at_range() ->
 			"at range the deploy beats the puck to his body — top band shut")
 
 
-func test_high_band_is_unreachable_at_point_blank() -> void:
-	# The fixed-vy arc needs ~0.25 s to rise above the pad-top seam; inside
-	# ~2.7 m even the min-power release arrives below it — no legal power
-	# roofs from the doorstep, so the loft never reads HIGH there (the old
-	# model happily "roofed" into the goalie's chest from 2 m).
+func test_point_blank_roof_is_live_over_a_down_goalie() -> void:
+	# The contact-point identity shot: from 2 m over a butterflied goalie the
+	# open toe's solved arc arrives top-shelf at full pace — the doorstep roof
+	# the old fixed-vy model physically could not produce (its arc needed
+	# ~0.25 s to rise above the pad-top seam). The keeper is DEEP (beaten to
+	# his crease): dead on the shooter's nose his body-disc still occludes
+	# the whole mouth from 2 m, which is the honest no-shot.
 	var shooter := Vector3(0.0, 0.0, 24.65)    # 2 m
-	var goalie := Vector3(0.0, 0.0, 25.65)
+	var goalie := Vector3(0.0, 0.0, 25.9)
 	var loft: int = AIActionScoring.best_shot_loft(
 			shooter, GOAL, goalie, NET_HW, 33.0,
+			0.0, 0.0, true)   # slide gap sealed — the roof is the way in
+	assert_eq(loft, ShotMechanics.ELEVATION_HIGH,
+			"the open toe roofs the butterfly from the doorstep")
+	# With his slide gap leaking (caught mid-slide), the five-hole is the
+	# wider, simpler hole and the finish stays flat — the tie-break at work.
+	var leaky: int = AIActionScoring.best_shot_loft(
+			shooter, GOAL, goalie, NET_HW, 33.0,
 			0.0, GoalieBehaviorRules.five_hole_gap_m(true, 0.18), true)
-	assert_eq(loft, ShotMechanics.ELEVATION_FLAT,
-			"point-blank finishes stay flat — the arc can't get up in time")
+	assert_eq(leaky, ShotMechanics.ELEVATION_FLAT,
+			"a leaking five-hole out-simples the roof")
 
 
-func test_high_band_power_is_full_only_when_range_lets_the_arc_rise() -> void:
-	# The committed power is the arrival solve: from 15 m a full-power HIGH
-	# arc is still above the band at the net (fire full); from 5 m it must
-	# soften (the range/charge trade a human plays on top-corner shots).
-	var goalie_near := Vector3(0.0, 0.0, 25.05)
-	var soft: float = AIActionScoring.best_shot_power_t(
-			Vector3(0.0, 0.0, 21.65), GOAL, goalie_near, NET_HW, 33.0,
-			0.0, 0.0, true)
-	var goalie_far := Vector3(0.0, 0.0, 25.05)
-	var full: float = AIActionScoring.best_shot_power_t(
-			Vector3(0.0, 0.0, 11.65), GOAL, goalie_far, NET_HW, 33.0,
-			0.0, 0.0, true)
-	assert_lt(soft, 0.75, "5 m roof commits a softened release")
-	assert_almost_eq(full, 1.0, 0.001, "15 m roof rips full — the arc has room to rise")
+func test_high_band_is_a_rung_choice_per_ladder() -> void:
+	# The roofing gradient IS the ladder: from 2 m only the M28's 30° rung
+	# gets up in time (the M88's flattest ladder arrives under the pad seam
+	# on every rung); at 4 m the M88's MID rung lands in-band; and from the
+	# point the default ladder's in-band rung is LOW — the mid-blade snipe —
+	# because every steeper rung would miss high and the band never lets the
+	# bot sail on purpose.
+	var m88 := Vector3(0.12278, 0.27732, 0.38386)   # 7/15.5/21 deg
+	var m28 := Vector3(0.14945, 0.34433, 0.53171)   # 8.5/19/28 deg
+	assert_almost_eq(AIActionScoring._band_pace(1, 2.0, 33.0, m88), 0.0, 0.0001,
+			"the flat ladder cannot roof the doorstep")
+	assert_gt(AIActionScoring._band_pace(1, 2.0, 33.0, m28), 0.0,
+			"the toe hook can")
+	assert_gt(AIActionScoring._band_pace(1, 4.0, 33.0, m88), 0.0,
+			"the M88's MID rung lands in-band from 4 m")
+	assert_eq(AIActionScoring._best_high_rung(2.0, 33.0, m28),
+			ShotMechanics.ELEVATION_HIGH, "the doorstep roof commits the toe rung")
+	assert_eq(AIActionScoring._best_high_rung(15.0, 33.0),
+			ShotMechanics.ELEVATION_LOW,
+			"from the point the top-shelf rung is the mid-blade snipe")
+
+
+func test_standing_keeper_on_top_bars_the_point_blank_roof() -> void:
+	# Against a STANDING goalie right on the puck, even the toe rung crosses
+	# his plane under the stick assembly (PADDLE_HEIGHT_M) — the paddle eats
+	# it, so the band is closed and the finish stays flat. (Only the DOWN
+	# goalie, paddle on the ice, concedes the doorstep roof.)
+	var m28 := Vector3(0.14945, 0.34433, 0.53171)
+	assert_almost_eq(AIActionScoring._band_pace(1, 2.0, 33.0, m28, 1.0), 0.0,
+			0.0001, "standing keeper at 1 m: the paddle bars the roof")
+	assert_gt(AIActionScoring._band_pace(1, 2.0, 33.0, m28, 1.0, true), 0.0,
+			"the same look over a DOWN goalie is live")
 
 
 func test_shot_danger_sharp_angle_is_low() -> void:
@@ -700,7 +723,7 @@ func test_shot_aim_roofs_toward_a_post() -> void:
 	# CORNER (near a post), not dead centre — aim and loft describe the same
 	# hole. (A SET goalie's slot no longer roofs at all — see the arrival-
 	# honesty tests above.)
-	var shooter := Vector3(0.0, 0.0, 21.65)
+	var shooter := Vector3(0.0, 0.0, 23.15)   # 3.5 m — the MID rung's pocket
 	var goalie := Vector3(0.0, 0.0, 25.05)
 	var loft: int = AIActionScoring.best_shot_loft(
 			shooter, GOAL, goalie, NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S,
@@ -708,7 +731,7 @@ func test_shot_aim_roofs_toward_a_post() -> void:
 	var aim: Vector3 = AIActionScoring.best_shot_aim(
 			shooter, GOAL, goalie, NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S,
 			0.0, 0.0, true)
-	assert_eq(loft, ShotMechanics.ELEVATION_HIGH, "the down goalie's opening is up high")
+	assert_eq(loft, ShotMechanics.ELEVATION_MID, "the down goalie's opening is up high")
 	assert_gt(absf(aim.x), 0.4, "...so the aim is a top corner, not the goalie's chest")
 
 
@@ -2136,25 +2159,28 @@ func test_threat_surface_shoot_seals_a_dead_angle_opponent() -> void:
 # ─── Post-seal stances (VH / RVH) — the pose IS the coverage ───────────────
 
 func test_vh_seal_closes_short_side_high() -> void:
-	# Short-side HIGH vs a goalie a step off the post: his body-reach cover
-	# alone leaves a slice over the shoulder — the RVH weakness — and closing
-	# it is VH's whole reason to exist. Sealed-tall reads 0; RVH (not tall)
-	# keeps the same measured opening the bare read gives.
+	# Short-side HIGH vs a goalie AT his post: his body-reach cover alone
+	# leaves a slice over the shoulder — the RVH weakness — and closing it is
+	# VH's whole reason to exist. Sealed-tall reads 0; RVH (not tall) keeps
+	# the same measured opening the bare read gives. The look rides an EASED
+	# MID (19 m/s): at ~4.35 m the M92 ladder's full-pace arcs all miss the
+	# band (the documented mid-range gap), and the seal's structure is
+	# pace-independent — what the deployed wall covers, not a race.
 	var goal := Vector3(0, 0, -26.65)
 	var shooter := Vector3(3.0, 0, -23.5)
-	var goalie := Vector3(0.4, 0, -26.2)
+	var goalie := Vector3(0.5, 0, -26.2)
 	var high_near: int = 1   # HIGH band, +x side — the seal side for this shooter
 	var bare: float = AIActionScoring._hole_open_angle(
 			high_near, shooter, goal, goalie, GameRules.NET_HALF_WIDTH,
-			33.0, 0.0, -1.0, true)
+			19.0, 0.0, -1.0, true)
 	assert_gt(bare, 0.0, "sanity: body reach alone leaves short-side high open")
 	var vh: float = AIActionScoring._hole_open_angle(
 			high_near, shooter, goal, goalie, GameRules.NET_HALF_WIDTH,
-			33.0, 0.0, -1.0, true, 1.0, true)
+			19.0, 0.0, -1.0, true, 1.0, true)
 	assert_eq(vh, 0.0, "VH walls the whole near column — no short-side high")
 	var rvh: float = AIActionScoring._hole_open_angle(
 			high_near, shooter, goal, goalie, GameRules.NET_HALF_WIDTH,
-			33.0, 0.0, -1.0, true, 1.0, false)
+			19.0, 0.0, -1.0, true, 1.0, false)
 	assert_eq(rvh, bare, "RVH stays compressed — short-side high stays measured")
 
 
@@ -2425,17 +2451,32 @@ func test_ready_hands_reproduce_the_legacy_high_cover() -> void:
 				% [dist, posed, legacy])
 
 
-func test_low_hands_open_the_top_in_tight_and_recover_at_range() -> void:
-	# Hands caught at pad height (butterfly): in tight the lift can't beat
-	# the flight, so the above-the-pads window opens — the EMERGENT armpit /
-	# high look. From the point the lift + extension fits and the top shuts
-	# again. This is the arm-commitment perception the old model refused to
-	# fake with a static hole.
+func test_low_hands_open_the_top_at_mid_range_and_recover_at_the_point() -> void:
+	# Hands caught at pad height (butterfly): where the flight leaves SOME
+	# read budget but not enough to also LIFT to the band, the above-the-pads
+	# window opens — the EMERGENT armpit / high look. Under the full-pace
+	# contact-point arcs that seam lives in the MID-SLOT (~9-10 m: in tight
+	# the flight beats every hand — both poses collapse to the stance core —
+	# and from further the lift + extension fits and the top shuts). This is
+	# the arm-commitment perception the old model refused to fake with a
+	# static hole.
 	var spread: float = BotSkillProfile.hard().shot_aim_error_rad
-	var tight := Vector3(0.0, 0.0, GOAL.z - 7.0)
 	var goalie := Vector3(0.0, 0.0, GOAL.z - 1.2)
 	# Measured at the raw hole-angle level (the danger scalar saturates in
 	# tight for BOTH poses — an in-tight look is near-certain regardless).
+	var mid := Vector3(0.0, 0.0, GOAL.z - 9.0)
+	var mid_ready: float = AIActionScoring._hole_open_angle(
+			0, mid, GOAL, goalie, NET_HW,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0,
+			-1.0, false, 0.0, false, 0.0, 0.0, HANDS_READY)
+	var mid_low: float = AIActionScoring._hole_open_angle(
+			0, mid, GOAL, goalie, NET_HW,
+			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0,
+			-1.0, false, 0.0, false, 0.0, 0.0, HANDS_BUTTERFLY)
+	assert_gt(mid_low, mid_ready + 0.005,
+			"low hands at mid range widen the high window (%.4f vs %.4f rad)"
+			% [mid_low, mid_ready])
+	var tight := Vector3(0.0, 0.0, GOAL.z - 7.0)
 	var tight_ready: float = AIActionScoring._hole_open_angle(
 			0, tight, GOAL, goalie, NET_HW,
 			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0,
@@ -2444,9 +2485,8 @@ func test_low_hands_open_the_top_in_tight_and_recover_at_range() -> void:
 			0, tight, GOAL, goalie, NET_HW,
 			AIActionScoring.WRISTER_SHOT_SPEED_M_S, 0.0,
 			-1.0, false, 0.0, false, 0.0, 0.0, HANDS_BUTTERFLY)
-	assert_gt(tight_low, tight_ready + 0.005,
-			"low hands in tight widen the high window (%.4f vs %.4f rad)"
-			% [tight_low, tight_ready])
+	assert_almost_eq(tight_low, tight_ready, 0.005,
+			"in tight the flight beats every hand — the poses read alike")
 	var point := Vector3(0.0, 0.0, GOAL.z - 16.0)
 	var point_ready: float = AIActionScoring.open_net_danger(
 			point, GOAL, goalie, NET_HW,
@@ -2464,7 +2504,7 @@ func test_committed_glove_side_covers_and_vacates_correctly() -> void:
 	# Glove dragged WIDE toward net-left (a committed reach): its side's high
 	# corner is covered sooner, and the vacated right side (blocker parked
 	# low) opens — per-side asymmetry the band aggregate could never see.
-	var shooter := Vector3(0.0, 0.0, GOAL.z - 6.0)
+	var shooter := Vector3(0.0, 0.0, GOAL.z - 3.5)   # the MID rung's pocket
 	var goalie := Vector3(0.0, 0.0, GOAL.z - 1.2)
 	var committed_left := Vector4(-0.80, 0.95, 0.44, 0.40)  # glove wide-left, blocker low
 	var left_open: float = AIActionScoring._hole_open_angle(

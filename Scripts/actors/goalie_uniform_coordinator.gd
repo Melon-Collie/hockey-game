@@ -21,6 +21,12 @@ const _MAX_STRIPES: int = 5
 
 const _JERSEY_SHADER: Shader = preload("res://Assets/Shaders/goalie_jersey.gdshader")
 
+# Where the jersey ends and the pants band begins on the body solid, in the
+# shader's normalized height (0 = collar, 1 = bottom). 0.72 lands just above
+# the mesh's hip-crest station (body-local y −0.16) so the color split rides
+# the silhouette split.
+const _PANTS_START_NORM_Y: float = 0.72
+
 const _CYLINDER_SIDE_V_FRACTION: float = 0.5
 const _STRIPE_TEX_HEIGHT_PX: int = 128
 const _STRIPE_TEX_WIDTH_PX: int = 4
@@ -61,7 +67,11 @@ func apply_uniform(colors: Dictionary) -> void:
 	if yoke is Color:
 		_jersey_mat.set_shader_parameter("yoke_color", yoke as Color)
 
-	_goalie.head_mesh.material_override = _make_solid_mat(uniform.helmet, _ROUGH_HELMET)
+	# The mask mesh bakes its cage as a dark per-facet vertex tint
+	# (GoalieMeshBuilder._bake_cage_tint) — multiply it under the kit paint.
+	var mask_mat: StandardMaterial3D = _make_solid_mat(uniform.helmet, _ROUGH_HELMET)
+	mask_mat.vertex_color_use_as_albedo = true
+	_goalie.head_mesh.material_override = mask_mat
 
 	var pads_mat: StandardMaterial3D = _make_solid_mat(colors.goalie_pads, _ROUGH_PADS)
 	_goalie.left_pad_mesh.material_override = pads_mat
@@ -92,6 +102,20 @@ func apply_uniform(colors: Dictionary) -> void:
 	# connectors are too thin for side-stripe positioning to matter).
 	_paint_mesh_h(_goalie.left_hip_connector, uniform.pants)
 	_paint_mesh_h(_goalie.right_hip_connector, uniform.pants)
+
+	# The body solid is torso THROUGH hips — its lower band paints as the
+	# kit's pants (the mesh's hip flare marks the same line in silhouette;
+	# see GoalieMeshBuilder._BODY_STATIONS).
+	_jersey_mat.set_shader_parameter("pants_color", uniform.pants.base)
+	_jersey_mat.set_shader_parameter("pants_start", _PANTS_START_NORM_Y)
+
+	# Stick — the house design's goalie colorway (#586): all-white composite,
+	# shaft through blade, the real-world goalie norm. The white tape knob is
+	# geometry-side (Goalie._init_stick_knob) and never repaints.
+	var stick_mat: StandardMaterial3D = StickStyle.make_goalie_stick_material()
+	_goalie.stick_shaft_mesh.material_override = stick_mat
+	_goalie.stick_paddle_mesh.material_override = stick_mat.duplicate()
+	_goalie.stick_blade_mesh.material_override = stick_mat.duplicate()
 
 	_rebuild_text_decal()
 

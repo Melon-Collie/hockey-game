@@ -496,17 +496,20 @@ func test_flex_is_a_power_release_seesaw() -> void:
 	assert_lt(tall.shot_charge_mult(), 1.0, "big frame still threatens sooner at medium flex")
 
 
-func test_curve_trades_face_angle_and_release_for_backhand() -> void:
+func test_curve_trades_loft_ladder_and_release_for_backhand() -> void:
 	var m88 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
 	var m92 := PlayerAttributes.all_average()
 	var m28 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1)
-	# The face angle is the elevation lever: M28 ≥ M92 ≥ M88, and the M28's
-	# 45° equals the universal launch-angle cap — an M28 blade is
-	# bit-identical to the pre-curve shipped behavior.
-	assert_lt(m88.curve_loft_tan(), m92.curve_loft_tan(), "M88 is flattest")
-	assert_lt(m92.curve_loft_tan(), m28.curve_loft_tan())
-	assert_almost_eq(m28.curve_loft_tan(), ShotMechanics.MAX_LOFT_RATIO, 0.0001,
-			"M28 face = the universal 45° cap")
+	# The angle ladder is the elevation lever: every rung steeper on the M28,
+	# flatter on the M88, all rungs under the universal launch-angle guard.
+	assert_lt(m88.curve_loft_tan_high(), m92.curve_loft_tan_high(),
+			"M88's toe gives the least")
+	assert_lt(m92.curve_loft_tan_high(), m28.curve_loft_tan_high())
+	assert_lt(m88.curve_loft_tan_low(), m92.curve_loft_tan_low())
+	assert_lt(m92.curve_loft_tan_low(), m28.curve_loft_tan_low())
+	assert_lt(m88.curve_loft_tan_mid(), m28.curve_loft_tan_mid())
+	assert_lt(m28.curve_loft_tan_high(), ShotMechanics.MAX_LOFT_RATIO,
+			"the whole ladder sits under the universal guard")
 	assert_lt(m28.wrister_runway_mult(), 1.0, "M28 is the quick release (banked)")
 	assert_gt(m88.curve_backhand_mult(), m28.curve_backhand_mult())
 	# Backhand relief approaches but never reaches forehand parity: the

@@ -17,10 +17,13 @@ shader_type spatial;
 
 const int MAX_STRIPES = 5;
 
-// Half-extents of the body BoxMesh — kept as constants here so the shader
-// compiles with exact values even if the mesh size is ever adjusted.
-const float HALF_H = 0.3;   // body height 0.6 m
-const float HALF_W = 0.24;  // body width  0.48 m
+// Half-extents of the body mesh (GoalieMeshBuilder's 0.52 x 0.72 envelope) —
+// kept as constants here so the shader compiles with exact values; keep in
+// sync if the body envelope is ever adjusted. (These sat stale at the old
+// 0.48 x 0.6 box for a while, compressing stripes toward the middle — trued
+// up when the pants band below made the mapping load-bearing.)
+const float HALF_H = 0.36;  // body height 0.72 m
+const float HALF_W = 0.26;  // body width  0.52 m
 
 uniform vec4 base_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform vec4 yoke_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
@@ -31,6 +34,10 @@ uniform float stripe_positions[MAX_STRIPES];
 uniform float stripe_widths[MAX_STRIPES];
 // Transparent-background viewport with name + number drawn centred.
 uniform sampler2D text_decal : hint_default_transparent, filter_linear_mipmap;
+// The body solid is torso THROUGH hips: below pants_start (normalised
+// height, 0 = collar) the band paints as the kit's pants instead of jersey.
+uniform vec4 pants_color : source_color = vec4(0.1, 0.1, 0.1, 1.0);
+uniform float pants_start = 0.72;
 
 varying float v_obj_y;
 varying float v_obj_x;
@@ -58,6 +65,12 @@ void fragment() {
 				abs(norm_y - stripe_positions[i]) < stripe_widths[i] * 0.5) {
 			col = stripe_colors[i].rgb;
 		}
+	}
+
+	// Pants band — after the stripes so no jersey stripe bleeds onto the
+	// pants (the hip connectors carry the pants stripes instead).
+	if (norm_y > pants_start) {
+		col = pants_color.rgb;
 	}
 
 	// Yoke on the top face only — same approach as JerseyDecal's TOP_CAP_RECT

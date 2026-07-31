@@ -24,17 +24,18 @@ reversal seesaw bounded and monotonic). §6 (wrister gate) landed
 separately on main. Step 3 (flex + curve) is IMPLEMENTED: flex leans the
 shot ceiling WITH wind-up and runway (its charge lean deliberately breaks
 from the height 2−power coupling — a lateral slot trades, never stacks),
-curve is the FACE-ANGLE launch cap (§5.2 v2 — roofing-distance gradient,
-crossbar equality at pace) plus runway / backhand leans (parity-bounded),
+curve was the FACE-ANGLE launch cap (§5.2 v2 — since superseded by the
+loft-ladder model, see the §5.2 banner) plus runway / backhand leans
+(parity-bounded),
 the 0.81× stacked runway floor is pinned by calibration tests, and the
 picker has all three stick rows. Step 4 (skate profile) and the AI pass
 are IMPLEMENTED: profile leans speed/accel/agility(+grip)/glide (§5.1 —
 sprint band re-widened ~20.5–24 mph, stacked agility corners pinned
 0.84–1.15), the picker has all four gear rows, and bots price their own
-gear — `AISkaterCaps.loft_tan_max` threads the blade face angle through
-the HIGH-hole chain (`_high_band_horizontal_speed`'s face floor), so a
-bot's minimum roofing distance matches its human counterpart's; blade
-caps/reach/backhand already rode the caps. **v4 IS COMPLETE.** Planning is
+gear — `AISkaterCaps.loft_tans` (originally `loft_tan_max` under the
+face-cap model) threads the blade's loft ladder through the HIGH-hole
+chain, so a bot prices and fires the rungs its own blade actually has;
+blade caps/reach/backhand already rode the caps. **v4 IS COMPLETE.** Planning is
 grip-aware too: `AISkaterCaps.lateral_grip` feeds the ETA cross-momentum
 shed, each defender's `reach_clearance` shed, and the deke's lateral
 bite/unwind budgets (calibration test pins the grip-aware model against
@@ -372,9 +373,17 @@ fork — the tuning corners are height-extreme × matching lean; check
 6'1"+power (fastest thing in the game) and 5'8"+agility (shiftiest)
 deliberately.
 
-### 5.2 Blade curve — the face angle vs. backhand (IMPLEMENTED, v2 model)
+### 5.2 Blade curve — the face angle vs. backhand (SUPERSEDED)
 
-The curve is the blade's **FACE ANGLE** — a launch-angle cap in the release
+> **Superseded by the manual loft-ladder model** (issue #585 —
+> `docs/elevation-rework-plan.md` v3): the face-angle cap and the
+> fixed-vertical-speed loft levels below are gone; each level is now a
+> set launch angle from a per-curve ladder (`_CURVE_LOFT_*_DEG`), with
+> missing high a real outcome. The runway and backhand leans this slot
+> also carries are unchanged and still live. Kept for the design
+> reasoning.
+
+The curve was the blade's **FACE ANGLE** — a launch-angle cap in the release
 math (`ShotMechanics.loft_y`'s ratio IS tan(launch angle); the face tightens
 the pre-existing universal 45° cap, `MAX_LOFT_RATIO`):
 

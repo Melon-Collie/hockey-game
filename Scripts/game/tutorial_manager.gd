@@ -1572,10 +1572,10 @@ func _expected_elevation() -> int:
 		STEP_DEFLECT, STEP_SAUCER_PASS:
 			return ShotMechanics.ELEVATION_LOW
 		STEP_BLADE_LIFT, STEP_STICK_LIFT:
-			# The stick lift rides the same raised blade as the blade lift, which
-			# only comes up at HIGH loft (SkaterController: blade_up requires
-			# elevation >= HIGH). Without HIGH the hold-{stick_lift} does nothing
-			# and there's no other tell — so the step tracks loft like the others.
+			# The stick lift rides the fully-raised blade, which needs HIGH loft
+			# (MID lifts only to the low-air pivot; SkaterController: blade_up
+			# requires elevation >= MID). Without HIGH the hold-{stick_lift} has
+			# no reach and no tell — so the step tracks loft like the others.
 			return ShotMechanics.ELEVATION_HIGH
 	return _ELEV_ANY
 

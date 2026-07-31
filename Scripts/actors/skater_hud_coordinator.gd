@@ -121,6 +121,7 @@ var _stamina_ring_mat: ShaderMaterial
 var _chevron_mesh: MeshInstance3D
 # Second stacked chevron, visible only at HIGH loft (level 2).
 var _chevron_mesh2: MeshInstance3D
+var _chevron_mesh3: MeshInstance3D
 var _name_label: Label3D
 
 # Overhead self-beacon. `_self_beacon` is top_level (world transform rewritten
@@ -235,12 +236,23 @@ func setup(skater: Skater) -> void:
 	_skater.add_child(_chevron_mesh)
 
 	_chevron_mesh2 = MeshInstance3D.new()
-	_chevron_mesh2.name = "ElevatedChevronHigh"
+	_chevron_mesh2.name = "ElevatedChevronMid"
 	_chevron_mesh2.top_level = true
 	_chevron_mesh2.mesh = _chevron_mesh.mesh
 	_chevron_mesh2.material_override = _chevron_mesh.material_override
 	_chevron_mesh2.visible = false
 	_skater.add_child(_chevron_mesh2)
+
+	# One chevron per elevated rung (LOW/MID/HIGH). At four levels this
+	# readout is at its limit — the eventual replacement is the contact-point
+	# tell (plan doc v3 §4).
+	_chevron_mesh3 = MeshInstance3D.new()
+	_chevron_mesh3.name = "ElevatedChevronHigh"
+	_chevron_mesh3.top_level = true
+	_chevron_mesh3.mesh = _chevron_mesh.mesh
+	_chevron_mesh3.material_override = _chevron_mesh.material_override
+	_chevron_mesh3.visible = false
+	_skater.add_child(_chevron_mesh3)
 
 	# Player name. Single billboarded Label3D, top-level so its world
 	# transform isn't tied to the skater's rotation. Position is rewritten
@@ -331,6 +343,7 @@ func update(delta: float) -> void:
 			if _stamina_ring_mesh != null: _stamina_ring_mesh.visible = false
 			if _chevron_mesh != null: _chevron_mesh.visible = false
 			if _chevron_mesh2 != null: _chevron_mesh2.visible = false
+			if _chevron_mesh3 != null: _chevron_mesh3.visible = false
 			if _name_label != null: _name_label.visible = false
 			if _slapper_indicator != null: _slapper_indicator.visible = false
 			if _slapper_ring_mesh != null: _slapper_ring_mesh.visible = false
@@ -399,22 +412,30 @@ func update(delta: float) -> void:
 	if _chevron_mesh != null:
 		var chevron_should_show: bool = _skater.elevation_level > 0 and not _skater.is_ghost
 		var chevron2_should_show: bool = _skater.elevation_level >= 2 and not _skater.is_ghost
+		var chevron3_should_show: bool = _skater.elevation_level >= 3 and not _skater.is_ghost
 		if _chevron_mesh.visible != chevron_should_show:
 			_chevron_mesh.visible = chevron_should_show
 		if _chevron_mesh2.visible != chevron2_should_show:
 			_chevron_mesh2.visible = chevron2_should_show
+		if _chevron_mesh3.visible != chevron3_should_show:
+			_chevron_mesh3.visible = chevron3_should_show
 		if chevron_should_show:
 			_chevron_mesh.global_position = Vector3(
 					_skater.global_position.x + _cached_chevron_dir.x * _CHEVRON_RADIUS,
 					0.05,
 					_skater.global_position.z + _cached_chevron_dir.z * _CHEVRON_RADIUS)
 		if chevron2_should_show:
-			# Stack the second "^" screen-up from the first (the chevron points
-			# screen-up, so -screen_down is "above" it on screen).
+			# Stack each further "^" screen-up from the last (the chevron
+			# points screen-up, so -screen_down is "above" it on screen).
 			_chevron_mesh2.global_position = Vector3(
 					_chevron_mesh.global_position.x - _cached_screen_down.x * _CHEVRON_STACK_GAP,
 					0.05,
 					_chevron_mesh.global_position.z - _cached_screen_down.y * _CHEVRON_STACK_GAP)
+		if chevron3_should_show:
+			_chevron_mesh3.global_position = Vector3(
+					_chevron_mesh2.global_position.x - _cached_screen_down.x * _CHEVRON_STACK_GAP,
+					0.05,
+					_chevron_mesh2.global_position.z - _cached_screen_down.y * _CHEVRON_STACK_GAP)
 
 	_update_stamina_ring()
 
@@ -671,6 +692,7 @@ func set_world_hud_hidden(hidden: bool) -> void:
 		if _stamina_ring_mesh != null: _stamina_ring_mesh.visible = false
 		if _chevron_mesh != null: _chevron_mesh.visible = false
 		if _chevron_mesh2 != null: _chevron_mesh2.visible = false
+		if _chevron_mesh3 != null: _chevron_mesh3.visible = false
 		if _name_label != null: _name_label.visible = false
 		if _slapper_indicator != null: _slapper_indicator.visible = false
 		if _slapper_ring_mesh != null: _slapper_ring_mesh.visible = false

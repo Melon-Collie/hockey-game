@@ -35,7 +35,8 @@ func _nhw() -> float:
 
 func _xg(shooter: Vector3, goalie: Vector3, spread: float) -> float:
 	return AIActionScoring.expected_goals(shooter, GOAL, goalie, _nhw(), SPEED,
-			0.0, -1.0, false, 0.0, false, 0.0, Vector4.INF, Vector4.INF, 1.0, spread)
+			0.0, -1.0, false, 0.0, false, 0.0, Vector4.INF, Vector4.INF,
+			AIActionScoring.DEFAULT_LOFT_TANS, spread)
 
 
 func _settled() -> float:

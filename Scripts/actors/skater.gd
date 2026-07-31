@@ -42,10 +42,11 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # Shoulder anchor offset from body center. The shoulder (top-hand anchor)
 # sits on the OPPOSITE side of the body from the blade: a left-handed shooter
 # (blade on −X) has the top hand on the right shoulder (+X), and vice versa.
-# Matches the ShoulderL/R ball origins in Scenes/Skater.tscn (keep in sync) —
-# just clear of the torso cylinder (radius ~0.20-0.22 at shoulder height) so
-# the arm bone roots at the deltoid ball instead of half-buried in the chest.
-@export var shoulder_offset: float = 0.24
+# Matches the ShoulderL/R cap origins in Scenes/Skater.tscn (keep in sync)
+# so the drawn arm roots at the deltoid cap. Sits so the cap's blunt base
+# seats into the trap slope (torso upper-chest x extent ~0.21) with its
+# equator just proud of the jersey.
+@export var shoulder_offset: float = 0.22
 # Shoulder Y in upper-body-local space. Matches the ShoulderL/R ball centers
 # in the scene (keep in sync) so the drawn arm hangs from the visible
 # shoulder rather than a point 5 cm below it. Vertical drop from shoulder to
@@ -100,6 +101,10 @@ var reception_ceiling_mult: float = 1.0
 # uniform is applied; SkaterUniformCoordinator resolves the palette picks
 # against the team accent when it paints. Never null after _init.
 var tape_config: StickTapeConfig = StickTapeConfig.new()
+# The player's gear cosmetics (skate + glove color) — same contract as
+# tape_config: set from the replicated per-peer code before the uniform is
+# applied, resolved against the kit by the uniform coordinator. Never null.
+var gear_style: GearStyleConfig = GearStyleConfig.new()
 @export var wall_squeeze_threshold: float = 0.3
 # When the puck is lost on the boards (blade squeezed past the threshold above),
 # it squirts ALONG the boards in the carrier's travel direction. This blends a
@@ -134,27 +139,36 @@ var tape_config: StickTapeConfig = StickTapeConfig.new()
 # (cross-body reach, arm × 0.5625) and the backhand cap is chain-derived
 # (sqrt(arm_eff² − shoulder-to-hand drop²)), so no reachable hand target ever
 # exceeds the arm's length — the forearm never draws stretched.
-# Baseline lengths give one-arm = 0.70m; with the shoulder balls at ±0.24
-# that's a wingspan ≈ 1.88m on a 1.78m body (~106% of height — a touch rangy
-# vs the 100–104% real athletes run, which reads fine in-game; the segments
+# Baseline lengths give one-arm = 0.70m; with the shoulder caps at ±0.22
+# that's a wingspan ≈ 1.84m on a 1.78m body (~103% of height, inside the
+# 100–104% real athletes run; the segments
 # split evenly because the distal bone ends at the gloved-fist center, and
 # elbow→fist really is about humerus-length).
-@export var upper_arm_length: float = 0.35
-@export var forearm_length: float = 0.35
+# 0.33 per segment ≈ real shoulder→elbow and elbow→fist-center at the mesh's
+# native 5'10" (the lower bone ends at the FIST, so it carries the hand's
+# length too). The old 0.35s read long on screen — with hands close on the
+# stick, the surplus folded into wide-flared elbows.
+@export var upper_arm_length: float = 0.33
+@export var forearm_length: float = 0.33
 # Pole direction for the elbow (upper-body local). Mostly down with a real
 # outward flare (+X is away from the body; the sign flips per side in
 # update_arm_mesh) and a touch backward — a hockey top-hand elbow rides out
 # and slightly behind the chest line, not pinned against the ribs.
 @export var arm_pole_local: Vector3 = Vector3(0.55, -1.0, 0.1)
 # Base size of the arm bone meshes. scale.z is set per tick to the bone's
-# actual length; X/Y control arm thickness.
-@export var arm_mesh_thickness: float = 0.11
+# actual length; X/Y control arm thickness. Sized as a padded JERSEY SLEEVE
+# (elbow pad + liner under cloth), not a bare arm — bare-arm 0.055 radius
+# read skinny next to the 0.09 socks.
+@export var arm_mesh_thickness: float = 0.13
 # Radius of the elbow joint spheres positioned per-tick at the IK elbow.
-# Kept a touch larger than arm_mesh_thickness * 0.5 so the joint reads as a
-# distinct bulge between the upper-arm and forearm cylinders.
-@export var elbow_sphere_radius: float = 0.065
-# Radius of the hand spheres positioned per-tick at the IK hand.
-@export var hand_sphere_radius: float = 0.06
+# Well proud of arm_mesh_thickness * 0.5 so the joint reads as the elbow
+# PAD bulging under the sleeve, the arm's answer to the deltoid caps.
+@export var elbow_sphere_radius: float = 0.082
+# 0.064 puts the fist mesh (±1.05 unit-width) at ~13.4 cm across the
+# knuckles — real glove proportion; the old 0.07 read a touch oversized.
+# Radius of the hand spheres positioned per-tick at the IK hand — gloved
+# fists, so slightly thicker than the sleeve they hang from.
+@export var hand_sphere_radius: float = 0.064
 # Gap (along the bone direction, toward the elbow) between the hand-sphere
 # center and the forward face of the glove cuff cylinder. Without this the
 # cuff sits flush against the hand sphere and visually swallows it; a small
@@ -256,18 +270,24 @@ var bottom_hand: Marker3D = null
 # Arm visual meshes (shoulder → elbow → top_hand). Each is a Node3D wrapper
 # that gets position/scale/look_at applied by _update_bone_mesh(); the child
 # "Cylinder" MeshInstance3D holds the actual geometry (rotated 90° around X
-# so the cylinder's Y axis aligns with the wrapper's Z axis — see
+# so the prism's Y axis aligns with the wrapper's Z axis — see
 # _resolve_or_create_bone_mesh()).
 var upper_arm_mesh: Node3D = null
 var forearm_mesh: Node3D = null
 var bottom_upper_arm_mesh: Node3D = null
 var bottom_forearm_mesh: Node3D = null
 
-# Joint spheres positioned per-tick at the IK elbow / hand points.
+# Joint meshes positioned per-tick at the IK elbow / hand points — elbow-pad
+# balls, and beveled-cube gloved fists aligned to the forearm.
 var top_elbow_sphere: MeshInstance3D = null
 var top_hand_sphere: MeshInstance3D = null
 var bottom_elbow_sphere: MeshInstance3D = null
 var bottom_hand_sphere: MeshInstance3D = null
+
+# Deltoid shoulder caps (the scene's ShoulderL/R meshes), re-oriented each rig
+# update to lean toward their arm's live direction — see _orient_shoulder_cap.
+var _shoulder_cap_l: MeshInstance3D = null
+var _shoulder_cap_r: MeshInstance3D = null
 
 # Glove cuff cylinders just past the wrist. Created by SkaterUniformCoordinator
 # when the uniform is applied; consumed by _update_cuff_transform() here so
@@ -441,7 +461,7 @@ var _facing: Vector2 = Vector2.DOWN
 # Loft mode (0 flat / 1 low saucer / 2 high). Set each tick by the controller
 # from the input frame; replicated so remotes/AI read it directly.
 var elevation_level: int = 0
-# Eased 0→1 toward elevation_level/2 (half scoop at LOW, full at HIGH); drives
+# Eased 0→1 toward elevation_level/3 (a third per rung, full at HIGH); drives
 # the extra blade toe-lift (see _update_blade_elevation / _apply_blade_tilt).
 var _blade_elevation_blend: float = 0.0
 # True when the blade is lifted off the ice — own stick-lift (Q held while not
@@ -573,6 +593,23 @@ func _ready() -> void:
 		shaft.subdivide_depth = _STICK_FLEX_SEGMENTS
 		stick_mesh.mesh = shaft
 
+	# Swap the scene's primitive part meshes for the shared low-poly faceted
+	# set. Order-free relative to the coordinators below — the uniform painter
+	# overrides materials on these nodes and the appearance rig scales the
+	# nodes, so mesh identity is free to change here.
+	SkaterMeshBuilder.apply(upper_body, lower_body)
+	_shoulder_cap_l = upper_body.get_node_or_null("ShoulderL") as MeshInstance3D
+	_shoulder_cap_r = upper_body.get_node_or_null("ShoulderR") as MeshInstance3D
+
+	# On-skates stance: the scene layout is standing height, so the skate
+	# stack lifts both body roots (see SkaterMeshBuilder.SKATE_LIFT_M — the
+	# blade meshes reach correspondingly deeper to keep the steel on the
+	# ice). Before the _default_*_y captures below, so the height attribute's
+	# root scaling composes on the lifted stance. Gameplay is unaffected: the
+	# blade IK targets the world ice plane, and the hitbox never moves.
+	upper_body.position.y += SkaterMeshBuilder.SKATE_LIFT_M
+	lower_body.position.y += SkaterMeshBuilder.SKATE_LIFT_M
+
 	top_hand = upper_body.get_node_or_null("TopHand") as Marker3D
 	if top_hand == null:
 		top_hand = Marker3D.new()
@@ -634,9 +671,9 @@ func _ready() -> void:
 	bottom_forearm_mesh = _resolve_or_create_bone_mesh("BottomForearmMesh")
 
 	top_elbow_sphere = _resolve_or_create_joint_sphere("TopElbowSphere", elbow_sphere_radius)
-	top_hand_sphere = _resolve_or_create_joint_sphere("TopHandSphere", hand_sphere_radius)
+	top_hand_sphere = _resolve_or_create_hand_glove("TopHandSphere", hand_sphere_radius)
 	bottom_elbow_sphere = _resolve_or_create_joint_sphere("BottomElbowSphere", elbow_sphere_radius)
-	bottom_hand_sphere = _resolve_or_create_joint_sphere("BottomHandSphere", hand_sphere_radius)
+	bottom_hand_sphere = _resolve_or_create_hand_glove("BottomHandSphere", hand_sphere_radius)
 
 	_uniform = SkaterUniformCoordinator.new()
 	_uniform.setup(self)
@@ -1121,6 +1158,16 @@ func set_tape_config(config: StickTapeConfig) -> void:
 		_uniform.refresh_tape()
 
 
+# Installs a new gear look (skate + glove color) and repaints the affected
+# parts. Same live-cosmetic contract as set_tape_config.
+func set_gear_style(config: GearStyleConfig) -> void:
+	if config == null:
+		return
+	gear_style = config
+	if _uniform != null:
+		_uniform.refresh_gear_style()
+
+
 # The uniform pass installs a fresh shaft ShaderMaterial (uniform apply,
 # un-ghost); its uniforms are back at defaults, so the dirty guards must
 # forget their last-written values or an unchanged flex/length never re-sends.
@@ -1166,7 +1213,7 @@ func apply_blade_pattern(curve_gear: int) -> void:
 # Runs the full stick pass, not just the tilt — the tilt moves the hosel tip
 # the shaft is aimed at, so the shaft must follow or the joint opens.
 func _update_blade_elevation(delta: float) -> void:
-	var target: float = float(elevation_level) * 0.5
+	var target: float = float(elevation_level) / float(ShotMechanics.ELEVATION_HIGH)
 	if is_equal_approx(_blade_elevation_blend, target):
 		return
 	_blade_elevation_blend = move_toward(
@@ -1699,8 +1746,8 @@ func _hosel_tip_upper_body() -> Vector3:
 	return blade.transform * tip_local
 
 
-# Caps the extended butt end with the knob, its CylinderMesh long axis (local
-# Y) aligned to the shaft — same look_at + rotate_object_local(X, 90°) trick
+# Caps the extended butt end with the knob, its long axis (local Y) aligned
+# to the shaft — same look_at + rotate_object_local(X, 90°) trick
 # as the glove cuffs. `to_shaft_end` is the hand→hosel-tip vector the shaft
 # itself was aimed with, so the knob and the shaft always share one axis; the
 # knob wraps the top of the butt extension, slightly proud of its end.
@@ -1711,8 +1758,7 @@ func _update_stick_knob(stick_origin: Vector3, to_shaft_end: Vector3) -> void:
 		return
 	var hand_w: Vector3 = upper_body.to_global(stick_origin)
 	var up_shaft_w: Vector3 = (hand_w - upper_body.to_global(stick_origin + to_shaft_end)).normalized()
-	var cyl: CylinderMesh = stick_knob_mesh.mesh as CylinderMesh
-	var knob_h: float = cyl.height if cyl != null else 0.05
+	var knob_h: float = SkaterMeshBuilder.KNOB_HEIGHT_M
 	var butt_w: Vector3 = hand_w + up_shaft_w * SHAFT_BUTT_EXTEND_M
 	var knob_center_w: Vector3 = butt_w - up_shaft_w * (knob_h * 0.5 - _KNOB_PROUD_M)
 	stick_knob_mesh.position = upper_body.to_local(knob_center_w)
@@ -1808,7 +1854,8 @@ func update_arm_mesh() -> void:
 	_update_bone_mesh(forearm_mesh, elbow_w, hand_w)
 	_update_cuff_transform(top_cuff_mesh, elbow_w, hand_w)
 	_update_joint_sphere(top_elbow_sphere, elbow_w)
-	_update_joint_sphere(top_hand_sphere, hand_w)
+	_update_hand_glove(top_hand_sphere, elbow_w, hand_w)
+	_orient_shoulder_cap(shoulder.position, elbow_w)
 
 
 # ── Bottom Arm Mesh ───────────────────────────────────────────────────────────
@@ -1824,7 +1871,8 @@ func update_bottom_arm_mesh() -> void:
 	_update_bone_mesh(bottom_forearm_mesh, elbow_w, hand_w)
 	_update_cuff_transform(bot_cuff_mesh, elbow_w, hand_w)
 	_update_joint_sphere(bottom_elbow_sphere, elbow_w)
-	_update_joint_sphere(bottom_hand_sphere, hand_w)
+	_update_hand_glove(bottom_hand_sphere, elbow_w, hand_w)
+	_orient_shoulder_cap(bottom_shoulder.position, elbow_w)
 
 
 func _update_bone_mesh(bone: Node3D, a_world: Vector3, b_world: Vector3) -> void:
@@ -1845,6 +1893,62 @@ func _update_joint_sphere(sphere: MeshInstance3D, world_pos: Vector3) -> void:
 	sphere.position = upper_body.to_local(world_pos)
 
 
+# Positions the gloved fist at the hand and aligns its long (local Y) axis
+# with the forearm so the beveled cube's faces track the arm — same
+# quaternion composition as the cuff (quaternion writes preserve the node
+# scale the sizing seams own).
+func _update_hand_glove(mesh: MeshInstance3D, elbow_w: Vector3, hand_w: Vector3) -> void:
+	if mesh == null:
+		return
+	mesh.position = upper_body.to_local(hand_w)
+	var dir: Vector3 = hand_w - elbow_w
+	if dir.length_squared() < 0.0001:
+		return
+	var dir_l: Vector3 = (upper_body.global_transform.basis.inverse() * dir).normalized()
+	mesh.quaternion = (Basis.looking_at(dir_l, _up_for_look_at(dir_l))
+			* Basis(Vector3.RIGHT, PI * 0.5)).get_rotation_quaternion()
+
+
+# Fraction of the way the cap's pole leans from its rest hang toward the live
+# upper-arm direction. Partial follow: the deltoid engages with the arm but
+# stays seated on the torso at extreme reaches (a full follow points the whole
+# pad down a cross-body arm and opens a gap at the trap line).
+const _SHOULDER_CAP_FOLLOW: float = 0.6
+# Rest pole in upper-body space for the RIGHT cap (x mirrors for the left):
+# down, a touch outboard and forward — the deltoid's hang on a relaxed arm.
+const _SHOULDER_CAP_REST_POLE := Vector3(0.32, -0.93, -0.17)
+
+
+# Leans the deltoid cap on the anchor's side toward that arm's shoulder→elbow
+# direction. Two texture constraints shape the basis (the shoulder-number
+# decal was authored against the caps' identity orientation):
+#   - The +Y pole points AWAY from the arm: the cap's blunt torso-side base
+#     leans into the trap while the tapered −Y tail runs down the arm, and
+#     the equirect texture stays upright — an along-the-arm (downward) pole
+#     renders the number flipped and mirrored.
+#   - Local +X stays near world +X for BOTH caps; each side's decal picks its
+#     outboard face via uv1_offset (±0.25), exactly as at identity. Flipping
+#     +X outboard per side turns the left cap's number to the inside.
+# Writes rotation only — the caps' scale is SkaterAppearanceCoordinator's
+# (quaternion assignment preserves it) and their position is the scene's.
+func _orient_shoulder_cap(anchor_local: Vector3, elbow_w: Vector3) -> void:
+	var side: float = signf(anchor_local.x)
+	var cap: MeshInstance3D = _shoulder_cap_l if side < 0.0 else _shoulder_cap_r
+	if cap == null:
+		return
+	var arm_dir: Vector3 = upper_body.to_local(elbow_w) - anchor_local
+	if arm_dir.length_squared() < 0.0001:
+		return
+	var rest: Vector3 = _SHOULDER_CAP_REST_POLE.normalized()
+	rest.x *= side
+	var pole: Vector3 = -rest.slerp(arm_dir.normalized(), _SHOULDER_CAP_FOLLOW)
+	var x_axis: Vector3 = Vector3.RIGHT - pole * pole.x
+	if x_axis.length_squared() < 0.01:
+		return  # pole nearly along +X — keep the last stable roll
+	x_axis = x_axis.normalized()
+	cap.quaternion = Basis(x_axis, pole, x_axis.cross(pole)).get_rotation_quaternion()
+
+
 func _update_cuff_transform(mesh: MeshInstance3D, elbow_w: Vector3, hand_w: Vector3) -> void:
 	if mesh == null or not is_instance_valid(mesh):
 		return
@@ -1854,18 +1958,22 @@ func _update_cuff_transform(mesh: MeshInstance3D, elbow_w: Vector3, hand_w: Vect
 		mesh.position = upper_body.to_local(hand_w)
 		return
 	var bone_dir_n: Vector3 = bone_dir / bone_len
-	# Glove cuff cylinder: its forward end sits at the hand and it extends
-	# back toward the elbow by its mesh height (no overlap past the hand).
-	# CylinderMesh's long axis is local Y; look_at sets -Z = -bone_dir_n
-	# (toward elbow), and rotate_object_local(X, +90°) then maps the new
-	# local Y to that elbow direction — so the cylinder stretches along
-	# the bone from hand to hand - bone_dir_n * cuff_height.
-	var cyl: CylinderMesh = mesh.mesh as CylinderMesh
-	var cuff_height: float = cyl.height if cyl != null else 0.06
+	# Glove cuff ring: its forward end sits at the hand and it extends back
+	# toward the elbow by its mesh height (no overlap past the hand). The
+	# ring's long axis is local Y: looking_at puts -Z on the bone, and the
+	# post-multiplied X(+90°) twist maps local Y onto it. The rotation is
+	# written via `quaternion` — NOT look_at + rotate_object_local — because
+	# the cuff's radius rides non-uniform node scale on the unit mesh, and
+	# rotate_object_local composes the twist AFTER the stored basis's scale,
+	# landing the radius on the wrong mesh axes (metre-wide flickering fins
+	# at the wrist). The quaternion property recomposes basis = R·S with the
+	# scale safely in the mesh frame.
+	var cuff_height: float = SkaterMeshBuilder.CUFF_HEIGHT_M
 	var cuff_center_w: Vector3 = hand_w - bone_dir_n * (cuff_height * 0.5 + cuff_wrist_offset)
 	mesh.position = upper_body.to_local(cuff_center_w)
-	mesh.look_at(cuff_center_w + bone_dir_n, _up_for_look_at(bone_dir_n))
-	mesh.rotate_object_local(Vector3.RIGHT, PI * 0.5)
+	var dir_l: Vector3 = (upper_body.global_transform.basis.inverse() * bone_dir_n).normalized()
+	mesh.quaternion = (Basis.looking_at(dir_l, _up_for_look_at(dir_l))
+			* Basis(Vector3.RIGHT, PI * 0.5)).get_rotation_quaternion()
 
 
 # Returns an up vector that's safely non-colinear with `direction`. Falls back
@@ -1881,11 +1989,14 @@ static func _up_for_look_at(direction: Vector3) -> Vector3:
 
 # Bone "rig" pattern: the public node is a Node3D wrapper that gets positioned,
 # scaled, and look_at'd by _update_bone_mesh(). The child MeshInstance3D named
-# "Cylinder" holds a unit-height CylinderMesh, pre-rotated 90° around X so the
-# cylinder's local Y axis maps to the wrapper's local Z (the look_at forward
-# axis). When the wrapper is scaled along Z to the bone's length, the cylinder
-# stretches along the bone. SkaterUniformCoordinator drills into this child to
-# set material_override (see bone_visual()).
+# "Cylinder" (name kept for the painter seam) holds the shared unit-height
+# bone prism, pre-rotated 90° around X so the prism's local Y axis maps to the
+# wrapper's local Z (the look_at forward axis). The wrapper's Z scale
+# stretches it to the bone length; the child's own X/Z scale is the bone
+# THICKNESS (unit-radius mesh — SkaterAppearanceCoordinator resizes it there,
+# never by mesh mutation, so all skaters share one mesh).
+# SkaterUniformCoordinator drills into this child to set material_override
+# (see bone_visual()).
 func _resolve_or_create_bone_mesh(node_name: String) -> Node3D:
 	var existing: Node3D = upper_body.get_node_or_null(node_name) as Node3D
 	if existing != null:
@@ -1895,12 +2006,9 @@ func _resolve_or_create_bone_mesh(node_name: String) -> Node3D:
 	upper_body.add_child(wrapper)
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.name = "Cylinder"
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = arm_mesh_thickness * 0.5
-	cyl.bottom_radius = arm_mesh_thickness * 0.5
-	cyl.height = 1.0
-	cyl.radial_segments = 16
-	mesh_instance.mesh = cyl
+	mesh_instance.mesh = SkaterMeshBuilder.shared_arm_bone()
+	var radius: float = arm_mesh_thickness * 0.5
+	mesh_instance.scale = Vector3(radius, 1.0, radius)
 	mesh_instance.rotation_degrees = Vector3(90.0, 0.0, 0.0)
 	wrapper.add_child(mesh_instance)
 	return wrapper
@@ -1914,18 +2022,32 @@ func bone_visual(bone: Node3D) -> MeshInstance3D:
 	return bone.get_node_or_null("Cylinder") as MeshInstance3D
 
 
+# Joint balls share the unit-radius faceted mesh; the node's scale IS the
+# radius (SkaterAppearanceCoordinator resizes it there — see the bone-rig
+# note above).
 func _resolve_or_create_joint_sphere(node_name: String, radius: float) -> MeshInstance3D:
 	var existing: MeshInstance3D = upper_body.get_node_or_null(node_name) as MeshInstance3D
 	if existing != null:
 		return existing
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.name = node_name
-	var sphere := SphereMesh.new()
-	sphere.radius = radius
-	sphere.height = radius * 2.0
-	sphere.radial_segments = 14
-	sphere.rings = 8
-	mesh_instance.mesh = sphere
+	mesh_instance.mesh = SkaterMeshBuilder.shared_joint_ball()
+	mesh_instance.scale = Vector3.ONE * radius
+	upper_body.add_child(mesh_instance)
+	return mesh_instance
+
+
+# Gloved fists: the shared beveled-cube glove mesh under the same uniform
+# node-scale contract as the joint balls (node names kept — the painter and
+# appearance seams resolve these by name).
+func _resolve_or_create_hand_glove(node_name: String, radius: float) -> MeshInstance3D:
+	var existing: MeshInstance3D = upper_body.get_node_or_null(node_name) as MeshInstance3D
+	if existing != null:
+		return existing
+	var mesh_instance := MeshInstance3D.new()
+	mesh_instance.name = node_name
+	mesh_instance.mesh = SkaterMeshBuilder.shared_glove_fist()
+	mesh_instance.scale = Vector3.ONE * radius
 	upper_body.add_child(mesh_instance)
 	return mesh_instance
 
@@ -2030,6 +2152,21 @@ func set_uniform(colors: Dictionary) -> void:
 # uniform (last set_uniform call).
 func set_jersey_info(p_name: String, number: int) -> void:
 	_uniform.apply_jersey_info(p_name, number)
+
+
+# Repaints the skin parts (head + neck, created by SkaterMeshBuilder) to the
+# player's identity tone. Albedo only, preserving the current alpha so a
+# repaint landing mid-ghost doesn't snap the skin opaque.
+func set_skin_tone(index: int) -> void:
+	var skin: Color = SkinToneRegistry.color_for(index)
+	for part_name: String in ["Head", "Neck"]:
+		var mi: MeshInstance3D = helmet.get_node_or_null(part_name) as MeshInstance3D
+		if mi == null:
+			continue
+		var mat: StandardMaterial3D = mi.material_override as StandardMaterial3D
+		if mat == null:
+			continue
+		mat.albedo_color = Color(skin.r, skin.g, skin.b, mat.albedo_color.a)
 
 
 # ── HUD (delegate to SkaterHUDCoordinator) ────────────────────────────────────

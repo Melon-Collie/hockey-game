@@ -78,11 +78,14 @@ var wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 # override. Default mirrors the controller's 10.0.
 var blade_speed: float = 10.0
 
-# Blade face-angle cap as tan(angle) (= SkaterController.loft_tan_max, from
-# the curve gear). Caps how steep this build's shots can launch — the HIGH
-# hole solver reads it so a closed-blade bot prices its real minimum roofing
-# distance instead of the open blade's. Default = the universal 45° cap.
-var loft_tan_max: float = 1.0
+# The blade curve's angle ladder as tan per elevated loft level
+# (x = LOW, y = MID, z = HIGH — SkaterController.loft_tan_low/mid/high). The
+# HIGH-hole rung-picker reads it so a bot prices (and fires) the rungs its
+# own blade actually has. Default = the M92 league-neutral ladder.
+var loft_tans: Vector3 = Vector3(
+		GameRules.DEFAULT_LOFT_TAN_LOW,
+		GameRules.DEFAULT_LOFT_TAN_MID,
+		GameRules.DEFAULT_LOFT_TAN_HIGH)
 
 # Lateral grip multiplier (= SkaterController.lateral_grip — agility × the
 # skate-profile lean). Scales the PERPENDICULAR thrust authority in the real

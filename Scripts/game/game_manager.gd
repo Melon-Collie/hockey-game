@@ -452,6 +452,8 @@ func _wire_network_signals() -> void:
 	NetworkManager.local_identity_changed.connect(_on_local_identity_changed)
 	NetworkManager.local_attributes_changed.connect(_on_local_attributes_changed)
 	NetworkManager.local_tape_changed.connect(_on_local_tape_changed)
+	NetworkManager.local_skin_changed.connect(_on_local_skin_changed)
+	NetworkManager.local_gear_style_changed.connect(_on_local_gear_style_changed)
 	NetworkManager.local_preferred_color_changed.connect(_on_local_preferred_color_changed)
 	NetworkManager.pickup_claim_received.connect(_on_pickup_claim_received)
 	NetworkManager.pickup_claim_rejected_received.connect(_on_pickup_claim_rejected)
@@ -1188,6 +1190,10 @@ func sync_existing_players(player_data: Array) -> void:
 			attrs = PlayerAttributes.all_average()
 		var tape_code: int = int(entry[15]) if entry.size() > 15 else StickTapeConfig.DEFAULT_CODE
 		NetworkManager.set_peer_tape_code(peer_id, tape_code)
+		var skin_tone: int = int(entry[16]) if entry.size() > 16 else SkinToneRegistry.DEFAULT_INDEX
+		NetworkManager.set_peer_skin_tone(peer_id, skin_tone)
+		var gear_style: int = int(entry[17]) if entry.size() > 17 else GearStyleConfig.DEFAULT_CODE
+		NetworkManager.set_peer_gear_style(peer_id, gear_style)
 		var colors: Dictionary = TeamColorRegistry.get_colors(teams[team_id].color_slot, team_id)
 		_state_machine.register_remote_assigned_player(peer_id, team_slot, team_id)
 		_registry.spawn(peer_id, team_slot, teams[team_id],
@@ -3547,7 +3553,8 @@ func _note_shot_trajectory() -> void:
 				_defending_goalie_pos(directed_line_z),
 				GameRules.NET_HALF_WIDTH, vel.length(),
 				0.0, -1.0, false, 0.0, false, 0.0,
-				Vector4.INF, Vector4.INF, 1.0, _shot_release_spread())
+				Vector4.INF, Vector4.INF, AIActionScoring.DEFAULT_LOFT_TANS,
+				_shot_release_spread())
 		_shot_tracker.note_xg(xg)
 
 
@@ -4502,6 +4509,32 @@ func _on_local_tape_changed(tape_code: int) -> void:
 		record.skater.set_tape_config(StickTapeConfig.from_code(tape_code))
 
 
+# Repaints the local skater's skin live. Same cosmetic-and-local-only contract
+# as the tape handler above.
+func _on_local_skin_changed(skin_tone: int) -> void:
+	if _registry == null:
+		return
+	var record: PlayerRecord = _registry.get_local()
+	if record == null:
+		return
+	record.skin_tone = skin_tone
+	if record.skater != null:
+		record.skater.set_skin_tone(skin_tone)
+
+
+# Repaints the local skater's gear (skate/glove color) live. Same
+# cosmetic-and-local-only contract as the tape and skin handlers above.
+func _on_local_gear_style_changed(gear_style_code: int) -> void:
+	if _registry == null:
+		return
+	var record: PlayerRecord = _registry.get_local()
+	if record == null:
+		return
+	record.gear_style_code = gear_style_code
+	if record.skater != null:
+		record.skater.set_gear_style(GearStyleConfig.from_code(gear_style_code))
+
+
 # Pushes new attribute multipliers into the live local controller. Always
 # updates the record (so the next respawn lands the new values), but only
 # touches the running controller when we're not in an active online match —
@@ -4789,6 +4822,9 @@ func _spawn_bots_from_lobby() -> void:
 		# sync_existing_players payload. Unlike the human spawn broadcast (removed
 		# from the lobby push to stop double-delivery), there's no overlapping
 		# channel here, so this must stay. Don't "consolidate" it away.
+		# The bot's host-resolved skin tone must be in the peer map BEFORE the
+		# broadcast reads it (send_spawn_remote_skater passes get_peer_skin_tone).
+		NetworkManager.set_peer_skin_tone(record.peer_id, record.skin_tone)
 		NetworkManager.send_spawn_remote_skater(record.peer_id, team_slot, team_id,
 				colors.jersey, colors.helmet, colors.pants,
 				record.is_left_handed, record.player_name, record.jersey_number, record.attributes)
@@ -4911,7 +4947,7 @@ func _collect_existing_player_data() -> Array[Array]:
 				r.is_left_handed, r.player_name, r.jersey_number,
 				attrs.height, attrs.weight, attrs.profile,
 				attrs.curve, attrs.flex, attrs.length,
-				r.tape_code])
+				r.tape_code, r.skin_tone, r.gear_style_code])
 	return existing
 
 

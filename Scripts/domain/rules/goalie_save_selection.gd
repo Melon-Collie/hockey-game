@@ -162,10 +162,24 @@ static func must_commit_now(s: Situation) -> bool:
 # (a whole drop's worth of time on top of the read), never on the hair's breadth
 # that his own retreat just bought him. No tuned constant: `answer_fraction` is
 # already normalised by the drop, so "fully answerable" is its own ceiling.
-static func should_hold_seal(s: Situation) -> bool:
+#
+# One release the fraction cannot see, and it is the far end of the same
+# asymmetry: `stand_up_time` is the COST of leaving — the vulnerable window
+# during which he can neither drop nor react. If no stick can reach the puck and
+# its own flight cannot arrive inside that window, standing exposes nothing:
+# whatever eventually comes meets a SET goalie making this same block-or-react
+# choice from his feet. Without it, the loose-puck arrival term (next touch plus
+# a worst-case flight) reads "not fully answerable" for any dead puck within
+# ~11 m — an instruction to lie sealed while the nearest opponent is seconds
+# away, the exact absurdity `must_commit_now` exists to prevent on the way down.
+# Coaching consensus agrees from the other side: a rebound beyond a couple of
+# stick lengths is answered by recovering to the feet, not by holding the ice.
+static func should_hold_seal(s: Situation, stand_up_time: float) -> bool:
 	if s.lateral_race_lost:
 		return true
-	return answer_fraction(s) < 1.0
+	if answer_fraction(s) >= 1.0:
+		return false
+	return minf(s.time_to_contest, s.time_to_arrival) <= stand_up_time
 
 
 # THE decision. Block when reacting cannot cover the threat at all, or when it

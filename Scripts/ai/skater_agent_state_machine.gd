@@ -1050,7 +1050,7 @@ var _self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 # intercept points the sprinting body overruns.
 var _self_sprint_mult: float = AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
 var _self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
-var _self_loft_tan: float = 1.0
+var _self_loft_tans: Vector3 = AIActionScoring.DEFAULT_LOFT_TANS
 var _self_lateral_grip: float = 1.0
 # Body-check delivery (mass-emergent), so a defensive role can predict THIS
 # bot's hit strength before committing to a check. League baselines until
@@ -1524,7 +1524,7 @@ func apply_capabilities(caps: AISkaterCaps) -> void:
 	_receive_body_offset = caps.blade_span - RECEIVE_BODY_INSET_M
 	_poke_jab_reach = caps.blade_span + GameRules.POKE_RADIUS_M
 	_self_wrister_shot_speed = caps.wrister_shot_speed
-	_self_loft_tan = caps.loft_tan_max
+	_self_loft_tans = caps.loft_tans
 	_self_lateral_grip = caps.lateral_grip
 	_self_weight = caps.weight
 	_self_body_check_transfer = caps.body_check_transfer
@@ -2179,8 +2179,12 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 				_resolve_sprint(input, self_state, self_pos, decision.target_position, false, false)
 		# Deflection routine: FINISHER raises its blade to tip an incoming
 		# ELEVATED on-net shot (a grounded blade flies under it). Off-puck
-		# only — the controller ignores voluntary lifts while carrying.
+		# only — the controller ignores voluntary lifts while carrying. The
+		# committed HIGH level is the deflect MODE (bat the high feed down at
+		# the mouth) and puts the lifted blade on the high-air plane.
 		input.stick_lift_held = decision.lift_blade
+		if decision.lift_blade:
+			input.elevation_level = ShotMechanics.ELEVATION_HIGH
 		# One-timer ready overrides the default ready-stance aim: point
 		# mouse + facing at the open net so the bot is pre-aimed when
 		# the puck arrives. Mouse aim is what drives blade IK + body
@@ -2310,7 +2314,7 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	ctx.self_max_speed = _self_max_speed
 	ctx.self_max_accel = _chase_max_accel
 	ctx.self_wrister_shot_speed = _self_wrister_shot_speed
-	ctx.self_loft_tan = _self_loft_tan
+	ctx.self_loft_tans = _self_loft_tans
 	ctx.self_lateral_grip = _self_lateral_grip
 	# The scoring/aim spread budgets the SHOT error — that's the budget the
 	# release that matters (a scored shot) is actually sampled on.
