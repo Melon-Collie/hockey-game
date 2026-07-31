@@ -278,13 +278,20 @@ func apply(delta: float) -> void:
 	# remotes don't see the state machine's follow-through timer, only the
 	# state flip.
 	var shot_state: int = _skater.current_shot_state
+	# The one-timer's retention hold is the loaded tail of the wind-up, so the
+	# legs stay in the slapper load through it — and the follow-through it hands
+	# off to is a slap kick, not a wrister's (every one-timer now reaches
+	# FOLLOW_THROUGH via retention, so omitting it here would misclassify all of
+	# them).
 	var in_slap_charge: bool = shot_state == State.SLAPPER_CHARGE_WITH_PUCK \
-			or shot_state == State.SLAPPER_CHARGE_WITHOUT_PUCK
+			or shot_state == State.SLAPPER_CHARGE_WITHOUT_PUCK \
+			or shot_state == State.ONE_TIMER_RETENTION
 	if shot_state != _shot_prev_state:
 		if shot_state == State.FOLLOW_THROUGH:
 			_shot_kick_t = 0.0
 			_shot_kick_is_slap = _shot_prev_state == State.SLAPPER_CHARGE_WITH_PUCK \
-					or _shot_prev_state == State.SLAPPER_CHARGE_WITHOUT_PUCK
+					or _shot_prev_state == State.SLAPPER_CHARGE_WITHOUT_PUCK \
+					or _shot_prev_state == State.ONE_TIMER_RETENTION
 			if _shot_kick_is_slap:
 				_shot_kick_power = maxf(_slap_load, _controller.slapper_kick_min_power)
 			else:

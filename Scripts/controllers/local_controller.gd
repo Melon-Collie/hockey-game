@@ -526,6 +526,10 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# blade pops off the shot line.
 	var pre_shot_dir: Vector3 = _sm.shot_dir
 	var pre_one_timer_window_timer: float = _aiming.one_timer_window_timer
+	# Same rail as the charge timer: _state_one_timer_retention counts this down
+	# inside the replay loop, so without save/restore each reconcile drains the
+	# unconfirmed window again and the one-timer fires ahead of its own hold.
+	var pre_one_timer_retention_timer: float = _aiming.one_timer_retention_timer
 	# slapper_charge_timer ticks inside _update_slapper_charge during replay; without
 	# save/restore each reconcile re-ticks the unconfirmed inputs and the timer
 	# inflates O(N) per broadcast, popping the blade above slapper_wind_up_height.
@@ -665,6 +669,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_sm.follow_through_power = pre_follow_through_power
 	_sm.shot_dir = pre_shot_dir
 	_aiming.one_timer_window_timer = pre_one_timer_window_timer
+	_aiming.one_timer_retention_timer = pre_one_timer_retention_timer
 	_aiming.slapper_charge_timer = pre_slapper_charge_timer
 	_aiming.swing_rotation = pre_charge_swing_rotation
 	_aiming.cursor_speed_ema = pre_charge_cursor_speed
@@ -683,8 +688,24 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	if apply_server_shot_state and pre_state == SkaterStateMachine.State.FOLLOW_THROUGH:
 		var server_still_aiming: bool = \
 				server_state.shot_state == SkaterStateMachine.State.WRISTER_AIM or \
-				server_state.shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK
+				server_state.shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK or \
+				server_state.shot_state == SkaterStateMachine.State.ONE_TIMER_RETENTION
 		if server_still_aiming:
+			apply_server_shot_state = false
+	# Same class of in-flight transition as FOLLOW_THROUGH: the client has
+	# committed the one-timer swing and is counting down its hold, while the host
+	# is still processing-lag behind on the slap-release input. Reverting to the
+	# wind-up would re-arm a charge the player already let go of (and the held
+	# button can't re-fire the rising-edge entry); reverting to skating would
+	# eject the swing outright. Any real progression still lands — the host's own
+	# hold expiring flips it to FOLLOW_THROUGH, which is not blocked here.
+	if apply_server_shot_state and pre_state == SkaterStateMachine.State.ONE_TIMER_RETENTION:
+		var server_pre_release: bool = \
+				server_state.shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK or \
+				server_state.shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK or \
+				server_state.shot_state == SkaterStateMachine.State.SKATING_WITH_PUCK or \
+				server_state.shot_state == SkaterStateMachine.State.SKATING_WITHOUT_PUCK
+		if server_pre_release:
 			apply_server_shot_state = false
 	# Symmetric guard for the reverse direction: don't revert from an aiming state
 	# back to skating when we have the puck. The server hasn't processed the shoot
@@ -757,7 +778,8 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# _ik.apply_blade_from_mouse here would IK the blade to the mouse position every
 	# reconcile, popping it down from the slapper wind-up pose at the broadcast rate.
 	match _sm.get_state():
-		State.SLAPPER_CHARGE_WITH_PUCK, State.SLAPPER_CHARGE_WITHOUT_PUCK:
+		State.SLAPPER_CHARGE_WITH_PUCK, State.SLAPPER_CHARGE_WITHOUT_PUCK, \
+		State.ONE_TIMER_RETENTION:
 			_shot_pose.apply_slapper_blade_position()
 		State.FOLLOW_THROUGH:
 			if _sm.follow_through_is_slapper:

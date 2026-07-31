@@ -3198,7 +3198,8 @@ func on_remote_one_timer_release(direction: Vector3, _power: float, peer_id: int
 	var puck_speed: float = Vector2(puck.linear_velocity.x, puck.linear_velocity.z).length()
 	if not ShotReleaseRules.one_timer_in_range(
 			zone_xz, view_puck_xz,
-			controller.slapper_zone_radius, puck_speed, controller.one_timer_leniency_time):
+			controller.slapper_zone_radius, puck_speed,
+			controller.one_timer_effective_leniency_time()):
 		return
 	# HOST-AUTHORITATIVE direction: fire along the shooter's OWN locked slapper aim,
 	# which the host's RemoteController derived from the replayed wind-up — not the

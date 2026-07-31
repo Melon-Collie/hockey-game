@@ -63,6 +63,12 @@ var _charge_result: ChargeTracking.Result = ChargeTracking.Result.new()
 # ── Slapper charge state ──────────────────────────────────────────────────────
 var slapper_charge_timer: float = 0.0
 var one_timer_window_timer: float = 0.0
+# Seconds left in the one-timer's committed catch-and-load hold. Counts down in
+# ONE_TIMER_RETENTION only; the shot fires when it reaches zero. Saved/restored
+# across reconcile like the other shot timers — the retention handler ticks it
+# inside the replay loop, so without that it would drain O(N) per broadcast and
+# fire the shot early.
+var one_timer_retention_timer: float = 0.0
 
 # ── Wrister ───────────────────────────────────────────────────────────────────
 
@@ -120,6 +126,7 @@ func tick_wrister_charge(
 func reset_slapper() -> void:
 	slapper_charge_timer = 0.0
 	one_timer_window_timer = 0.0
+	one_timer_retention_timer = 0.0
 
 
 func tick_slapper(delta: float) -> void:
@@ -129,3 +136,8 @@ func tick_slapper(delta: float) -> void:
 func tick_one_timer_window(delta: float) -> void:
 	if one_timer_window_timer > 0.0:
 		one_timer_window_timer -= delta
+
+
+func tick_one_timer_retention(delta: float) -> void:
+	if one_timer_retention_timer > 0.0:
+		one_timer_retention_timer -= delta
