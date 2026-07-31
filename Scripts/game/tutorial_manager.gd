@@ -518,7 +518,7 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_BLADE_LIFT:
 			return _step(
 				"Blade Lift",
-				"Now play the air. Tap {elevation_up} again to raise your loft to HIGH, hold {stick_lift} to raise your blade off the ice, and bat your teammate's lob down out of the air.",
+				"Now play the air. Tap {elevation_up} twice more to take your loft from LOW up to HIGH, hold {stick_lift} to raise your blade off the ice, and bat your teammate's lob down out of the air.",
 				"The raised blade only plays airborne pucks — a grounded pass slides right under it. HIGH knocks the puck DOWN to the ice.")
 		STEP_DROP_PUCK:
 			return _step(
@@ -612,7 +612,7 @@ func _step_def_for(step_id: int) -> TutorialStep:
 		STEP_STICK_LIFT:
 			return _step(
 				"Stick Lift",
-				"Tap {elevation_up} to raise your loft to HIGH, get under the opponent's stick, and hold {stick_lift} to lift it — that pops the puck off their blade.",
+				"Tap {elevation_up} three times to take your loft all the way to HIGH, get under the opponent's stick, and hold {stick_lift} to lift it — that pops the puck off their blade.",
 				"Same gesture as the blade lift: ride your blade high, slide it beneath their stick, and hold {stick_lift} to knock the puck free.")
 		STEP_SHOT_BLOCK:
 			return _step(
@@ -1740,7 +1740,7 @@ func _on_targets_wave_cleared() -> bool:
 				_target_node.clear()
 			_set_live_copy(
 				"Pick Your Spot",
-				"Nice. Your loft is still on full, though — tap {elevation_down} twice to flatten back out, or your next shot flies high too.",
+				"Nice. Your loft is still on full, though — tap {elevation_down} three times to flatten back out, or your next shot flies high too.",
 				"Loft is a mode you manage: up for more, down for less.")
 			_hud.set_objective("Take the loft back off.")
 			return false
@@ -1775,7 +1775,7 @@ func _show_targets_wave(phase: int) -> void:
 		2:
 			_set_live_copy(
 				"Pick Your Spot",
-				"Up top. Tap {elevation_up} once more for full loft, and put both away in the top corners over his shoulders.",
+				"Up top. Tap {elevation_up} twice more for full loft, and put both away in the top corners over his shoulders.",
 				"Loft buys the height, pace picks where the arc peaks — from here an easy shot crests right at the bar.")
 			_clear_wall()
 			_show_target_set(_HIGH_TARGETS)

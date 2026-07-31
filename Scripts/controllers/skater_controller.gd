@@ -1476,12 +1476,13 @@ func _process_input(input: InputState, delta: float) -> void:
 	# loft level shapes the redirect (grounded / up / down).
 	skater.deflect_intent = _wants_deflect(input)
 
-	# Blade lift (off the ice) is now a CONSEQUENCE of deflecting at HIGH loft:
-	# the raised blade reaches higher airborne pucks (to knock them down) and is
-	# what lets a stick-lift hook under an opponent's shaft. FLAT/LOW deflects keep
-	# the blade grounded so they can still meet pucks on the ice (a LOW deflect
-	# tips a grounded shot UP). A forced lift (an opponent hooked under your stick)
-	# overrides regardless of possession and is what dislodges a carried puck.
+	# Blade lift (off the ice) is a CONSEQUENCE of deflecting at an AIR loft: MID
+	# rides the low-air pivot, HIGH the high one, so the raised blade reaches
+	# airborne pucks and can hook under an opponent's shaft (the stick lift, which
+	# wants HIGH's reach). FLAT/LOW deflects keep the blade grounded so they can
+	# still meet pucks on the ice (a LOW deflect tips a grounded shot UP). A forced
+	# lift (an opponent hooked under your stick) overrides regardless of possession
+	# and is what dislodges a carried puck.
 	skater.blade_up = (skater.deflect_intent and _elevation_level >= ShotMechanics.ELEVATION_MID) \
 			or skater.is_forced_lift_active()
 

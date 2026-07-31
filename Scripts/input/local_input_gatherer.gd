@@ -169,7 +169,7 @@ func _process(delta: float) -> void:
 
 # Rising-edge detection for the pad's press-type inputs, mirroring the mouse
 # action just_pressed latch above. Triggers (wrister/slapshot) edge on crossing
-# TRIGGER_THRESHOLD; the d-pad steps the loft mode in place.
+# TRIGGER_THRESHOLD; the bound loft buttons step the loft mode in place.
 func _accumulate_gamepad_edges() -> void:
 	var shoot_now: bool = _pad_trigger(JOY_AXIS_TRIGGER_RIGHT)
 	if shoot_now and not _prev_pad_shoot:
