@@ -496,6 +496,57 @@ func test_flex_is_a_power_release_seesaw() -> void:
 	assert_lt(tall.shot_charge_mult(), 1.0, "big frame still threatens sooner at medium flex")
 
 
+func test_flex_number_is_fitted_to_the_body() -> void:
+	# The DISPLAYED stiffness is a real retail number fitted to weight: the
+	# neutral 201 lb build's medium is the most-shipped 85, and the gear pick
+	# shifts one rung either way.
+	assert_eq(PlayerAttributes.all_average().flex_number(), 85, "neutral shoots an 85")
+	assert_eq(PlayerAttributes.new(73, 201, 1, 1, PlayerAttributes.FLEX_LOW, 1).flex_number(), 75)
+	assert_eq(PlayerAttributes.new(73, 201, 1, 1, PlayerAttributes.FLEX_HIGH, 1).flex_number(), 100)
+	# Both ends of the ladder are reachable, and only by an extreme body on the
+	# matching pick.
+	assert_eq(PlayerAttributes.new(67, 162, 1, 1, PlayerAttributes.FLEX_LOW, 1).flex_number(),
+			PlayerAttributes.FLEX_LADDER[0], "lightest body, whippiest pick")
+	assert_eq(PlayerAttributes.new(80, 264, 1, 1, PlayerAttributes.FLEX_HIGH, 1).flex_number(),
+			PlayerAttributes.FLEX_LADDER[-1], "heaviest body, stiffest pick")
+	# Numbers OVERLAP across bodies — an 85 is the light winger's plank and the
+	# heavy defenseman's noodle. That overlap is the whole reason the number
+	# stays a display quantity: the gameplay leans read the relative pick.
+	assert_eq(PlayerAttributes.new(68, 162, 1, 1, PlayerAttributes.FLEX_HIGH, 1).flex_number(),
+			PlayerAttributes.new(77, 240, 1, 1, PlayerAttributes.FLEX_LOW, 1).flex_number(),
+			"stiff on a light frame == whippy on a heavy one")
+
+
+func test_flex_number_is_a_real_rung_for_every_build() -> void:
+	# Every playable body × pick lands on a shipping flex, monotone in the pick.
+	for inches: int in range(PlayerAttributes.HEIGHT_MIN, PlayerAttributes.HEIGHT_MAX + 1):
+		for lbs: int in [PlayerAttributes.weight_min(inches),
+				PlayerAttributes.weight_neutral(inches),
+				PlayerAttributes.weight_max(inches)]:
+			var prev: int = 0
+			for pick: int in 3:
+				var n: int = PlayerAttributes.new(inches, lbs, 1, 1, pick, 1).flex_number()
+				assert_true(PlayerAttributes.FLEX_LADDER.has(n),
+						"%d\" %d lb pick %d → %d is a shipping flex" % [inches, lbs, pick, n])
+				assert_gt(n, prev, "a stiffer pick reads a higher number")
+				prev = n
+
+
+func test_flex_number_never_reaches_the_gameplay_leans() -> void:
+	# Two builds on the same nominal 85 flex still shoot differently: the leans
+	# ride the RELATIVE pick, so weight stays out of the shot-power axis. (A
+	# two-rung spread needs two very different bodies — the per-height weight
+	# band is far too narrow to span it — so each build is measured against its
+	# OWN medium-flex twin, which cancels the height term.)
+	var light_stiff := PlayerAttributes.new(68, 168, 1, 1, PlayerAttributes.FLEX_HIGH, 1)
+	var heavy_whippy := PlayerAttributes.new(78, 245, 1, 1, PlayerAttributes.FLEX_LOW, 1)
+	assert_eq(light_stiff.flex_number(), heavy_whippy.flex_number(), "same nominal stick")
+	assert_gt(light_stiff.shot_power_mult(), PlayerAttributes.new(68, 168).shot_power_mult(),
+			"the stiff pick shoots harder than its own medium")
+	assert_lt(heavy_whippy.shot_power_mult(), PlayerAttributes.new(78, 245).shot_power_mult(),
+			"the whippy pick shoots softer than its own — same 85 on the sticker")
+
+
 func test_curve_trades_loft_ladder_and_release_for_backhand() -> void:
 	var m88 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
 	var m92 := PlayerAttributes.all_average()
