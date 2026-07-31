@@ -44,6 +44,7 @@ STICK_CURVE_M28,M28,M28
 STICK_FLEX_WHIPPY,Whippy,Flexible
 STICK_FLEX_MEDIUM,Medium,Medio
 STICK_FLEX_STIFF,Stiff,Rígido
+STICK_FLEX_ITEM,%s · %d,%s · %d
 TAPE_BLADE_LABEL,Blade tape,Cinta de pala
 TAPE_COVERAGE_LABEL,Coverage,Cobertura
 TAPE_KNOB_LABEL,Knob,Pomo

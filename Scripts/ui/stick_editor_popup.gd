@@ -21,7 +21,7 @@ signal stick_edited(curve: int, flex: int, length: int, tape_code: int)
 # Gear tooltips (headline effects only).
 const _LENGTH_TOOLTIP: String = "Cut relative to your height.\nShort = snappier blade, finest close control, less reach.\nLong = more reach & sweep, slower to cut back."
 const _CURVE_TOOLTIP: String = "Blade pattern.\nM88 mid curve = best backhand & slappers, catches the hardest passes, flattest face.\nM92 mid-toe = the no-weakness all-rounder.\nM28 toe hook = easiest lift in tight; weakest backhand & slappers, hard passes bounce off."
-const _FLEX_TOOLTIP: String = "Shaft stiffness.\nWhippy = fastest release, softer shot ceiling.\nStiff = biggest shot, slower to load."
+const _FLEX_TOOLTIP: String = "Shaft stiffness, cut to your weight — the same number is a plank on a light build and a noodle on a heavy one.\nWhippy = fastest release, softer shot ceiling.\nStiff = biggest shot, slower to load."
 
 # Preview geometry mirrors the Skater defaults (blade_lie_deg,
 # blade_hosel_length, shaft BoxMesh cross-section) — the preview is the same
@@ -481,6 +481,14 @@ func _on_style_selected(option: int) -> void:
 func _refresh() -> void:
 	_length_btn.select(clampi(_length, 0, _LENGTH_KEYS.size() - 1))
 	_curve_btn.select(clampi(_curve, 0, _CURVE_KEYS.size() - 1))
+	# Flex rows carry the real stiffness number, which is fitted to the build's
+	# weight — so the row re-labels whenever a different body opens the
+	# workbench, and "Stiff" on a light frame reads a lower number than
+	# "Whippy" on a heavy one.
+	var lbs: int = _body.weight if _body != null else int(PlayerAttributes.NEUTRAL_WEIGHT_LBS)
+	for i: int in _FLEX_KEYS.size():
+		_flex_btn.set_item_text(i, tr(&"STICK_FLEX_ITEM")
+				% [tr(_FLEX_KEYS[i]), PlayerAttributes.flex_number_for(lbs, i)])
 	_flex_btn.select(clampi(_flex, 0, _FLEX_KEYS.size() - 1))
 	for btn: OptionButton in [_length_btn, _curve_btn, _flex_btn]:
 		btn.disabled = _gear_locked
