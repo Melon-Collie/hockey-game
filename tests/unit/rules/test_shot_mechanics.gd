@@ -394,10 +394,10 @@ func test_slapper_loft() -> void:
 	assert_almost_eq(flat.direction.y, 0.0, 0.001)
 	assert_gt(high.direction.y, 0.0)
 
-# ── Loft physics: the contact-point model ────────────────────────────────────
-# docs/elevation-rework-plan.md — FLAT = heel, LOW = mid-blade set angle with
-# a vertical-speed ceiling, HIGH = toe, solved to arrive at the target height
-# on the faced goal plane and clamped by the curve gear's toe cap.
+# ── Loft physics: the manual angle ladder ────────────────────────────────────
+# docs/elevation-rework-plan.md v3 — four levels, each a SET launch angle from
+# the gear's ladder. Power and position never enter the angle; arrival height
+# is emergent from angle × charge × range, and missing high is a real outcome.
 
 # Crossing height (m above launch) of a released shot `dist` meters along its
 # own line, from the ShotResult alone.
@@ -408,140 +408,72 @@ func _crossing_height(r: ShotMechanics.ShotResult, dist: float) -> float:
 	return v_y * t - 0.5 * GameRules.GRAVITY_M_S2 * t * t
 
 
-# The defining property of HIGH: the arc crosses the goal plane at the target
-# height regardless of charge — pace buys flight time, the solve buys the
-# arrival. (The old fixed-vy model made arrival height a range × pace fact.)
-func test_high_arrives_at_target_height_across_charge() -> void:
-	var cfg := _wrister_cfg()
-	var blade := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z - 8.0)
-	for sweep: float in [4.0, FULL_SWEEP]:
-		var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-			blade, blade + Vector3(0, 0, 5), blade,
-			false, 2, cfg,
-			Vector3(0, 0, 1), false, sweep)
-		assert_almost_eq(_crossing_height(r, 8.0), cfg.loft_target_height, 0.01,
-			"top-shelf arrival at sweep %.1f" % sweep)
-
-
-func test_high_toe_cap_clamps_the_roof_in_tight() -> void:
-	# From 2 m at full power the solve wants ~29°; a closed toe (M88's 15°)
-	# pins there and the shot arrives well under the top shelf — the roofing
-	# gradient IS this clamp.
-	var cfg := _wrister_cfg()
-	cfg.loft_tan_max = 0.26795  # tan 15°
-	var blade := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z - 2.0)
-	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-		blade, blade + Vector3(0, 0, 5), blade,
-		false, 2, cfg,
-		Vector3(0, 0, 1), false, FULL_SWEEP)
-	var xz_len: float = Vector2(r.direction.x, r.direction.z).length()
-	assert_almost_eq(r.direction.y / xz_len, cfg.loft_tan_max, 0.0001,
-		"launch pins at the toe cap")
-	assert_lt(_crossing_height(r, 2.0), cfg.loft_target_height - 0.3,
-		"a closed toe cannot roof from the doorstep")
-
-
-func test_high_open_toe_roofs_in_tight_at_pace() -> void:
-	# The same shot on the open toe (45°) arrives at the target — the M28's
-	# identity, at a real shot pace instead of the old 15 mph muffin.
-	var cfg := _wrister_cfg()
-	var blade := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z - 2.0)
-	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-		blade, blade + Vector3(0, 0, 5), blade,
-		false, 2, cfg,
-		Vector3(0, 0, 1), false, FULL_SWEEP)
-	assert_almost_eq(_crossing_height(r, 2.0), cfg.loft_target_height, 0.01,
-		"open toe roofs from the doorstep at full pace")
-
-
-func test_high_unreachable_range_is_the_toe_cap_lob() -> void:
-	# A minimum-power release 20 m out can't arrive at the target at all —
-	# the solve falls to the toe-cap lob (the flip clear).
-	var cfg := _wrister_cfg()
-	var blade := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z - 20.0)
-	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-		blade, blade + Vector3(0, 0, 5), blade,
-		false, 2, cfg,
-		Vector3(0, 0, 1), false, 0.0)
-	var xz_len: float = Vector2(r.direction.x, r.direction.z).length()
-	assert_almost_eq(r.direction.y / xz_len, cfg.loft_tan_max, 0.0001,
-		"unreachable target -> max lob at the toe cap")
-
-
-func test_high_cross_ice_is_the_toe_cap_lob() -> void:
-	# No goal plane ahead of a z-parallel line — HIGH means "flip it high".
-	var cfg := _wrister_cfg()
-	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-		Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
-		false, 2, cfg,
-		Vector3(1, 0, 0), false, FULL_SWEEP)
-	var xz_len: float = Vector2(r.direction.x, r.direction.z).length()
-	assert_almost_eq(r.direction.y / xz_len, cfg.loft_tan_max, 0.0001,
-		"cross-ice HIGH lobs at the toe cap")
-
-
-func test_high_position_enters_only_via_distance() -> void:
-	# Two releases the same distance from their respective goal planes — from
-	# opposite ends, different lateral spots — fly the identical arc. The one
-	# positional input is d (the purity contract of the contact-point model).
-	var cfg := _wrister_cfg()
-	var a_blade := Vector3(3.0, 0.0, GameRules.GOAL_LINE_Z - 8.0)
-	var a: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-		a_blade, a_blade + Vector3(0, 0, 5), a_blade,
-		false, 2, cfg, Vector3(0, 0, 1), false, FULL_SWEEP)
-	var b_blade := Vector3(-5.0, 0.0, -(GameRules.GOAL_LINE_Z - 8.0))
-	var b: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-		b_blade, b_blade + Vector3(0, 0, -5), b_blade,
-		false, 2, cfg, Vector3(0, 0, -1), false, FULL_SWEEP)
-	assert_almost_eq(a.direction.y, b.direction.y, 0.0001,
-		"same distance-to-plane -> same arc, anywhere on the ice")
-
-
-func test_low_is_a_set_angle_across_charge() -> void:
-	# LOW is the mid-blade partial roll: a fixed launch angle at every charge
-	# (the ceiling never binds inside the wrister band), so where the arc
-	# arrives stays the range/charge read.
-	var cfg := _wrister_cfg()
-	for sweep: float in [2.0, FULL_SWEEP]:
-		var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+func _wrister_at(cfg: ShotMechanics.WristerConfig, level: int,
+		sweep: float, dir: Vector3 = Vector3(0, 0, 1)) -> ShotMechanics.ShotResult:
+	return ShotMechanics.release_wrister(
 			Vector3.ZERO, Vector3(0, 0, 10), Vector3(0.5, 0, 0),
-			false, 1, cfg,
-			Vector3(0, 0, 1), false, sweep)
-		var xz_len: float = Vector2(r.direction.x, r.direction.z).length()
-		assert_almost_eq(r.direction.y / xz_len, cfg.loft_tan_low, 0.0001,
-			"LOW launches at the set angle at sweep %.1f" % sweep)
+			false, level, cfg, dir, false, sweep)
 
 
-func test_low_ceiling_binds_at_the_top_of_the_slapper_band() -> void:
-	# A max slapper (40 m/s) at the raw set angle would apex ~1.6 m — over
-	# the bar. The vy ceiling flattens the angle just enough that LOW pings
-	# the crossbar band instead of sailing: the no-sail property of LOW.
-	var cfg := _slapper_cfg()
-	var r: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
-		Vector3.ZERO, Vector3(0, 0, 10), 1, 1.0, cfg, Vector3(0, 0, 1))
-	var v_y: float = r.power * r.direction.y
-	assert_almost_eq(v_y, cfg.loft_vy_low_cap, 0.01,
-		"LOW vertical speed pins at the ceiling on a max bomb")
-	var apex: float = v_y * v_y / (2.0 * GameRules.GRAVITY_M_S2)
-	assert_lt(apex, 1.25, "LOW's apex stays inside the crossbar pipe band")
-
-
-# LOW is direction-agnostic — a backward flip clear and a toward-net saucer
-# get the identical y (no solve, no plane: the set angle is the whole model).
-func test_low_direction_agnostic() -> void:
+func test_levels_are_set_angles_independent_of_charge() -> void:
+	# The defining property of the ladder: a level's launch ANGLE is constant
+	# across shot power — charge buys pace, the level buys angle, and where
+	# the arc arrives is the player's read.
 	var cfg := _wrister_cfg()
-	var toward: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-		Vector3.ZERO, Vector3(0, 0, 10),
-		Vector3(0.5, 0, 0),
-		false, 1, cfg,
-		Vector3(0, 0, 1), false, FULL_SWEEP)
-	var away: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-		Vector3.ZERO, Vector3(0, 0, 10),
-		Vector3(0.5, 0, 0),
-		false, 1, cfg,
-		Vector3(0, 0, -1), false, FULL_SWEEP)
-	assert_almost_eq(toward.direction.y, away.direction.y, 0.0001,
-		"same loft level and power -> same y, regardless of direction")
+	var expected: Array[float] = [
+			0.0, cfg.loft_tan_low, cfg.loft_tan_mid, cfg.loft_tan_high]
+	for level: int in 4:
+		for sweep: float in [2.0, FULL_SWEEP]:
+			var r: ShotMechanics.ShotResult = _wrister_at(cfg, level, sweep)
+			var xz_len: float = Vector2(r.direction.x, r.direction.z).length()
+			assert_almost_eq(r.direction.y / maxf(xz_len, 0.0001), expected[level],
+					0.0001, "level %d at its set angle (sweep %.1f)" % [level, sweep])
+
+
+func test_ladder_orders_by_level() -> void:
+	var cfg := _wrister_cfg()
+	var prev: float = -0.1
+	for level: int in 4:
+		var r: ShotMechanics.ShotResult = _wrister_at(cfg, level, FULL_SWEEP)
+		assert_gt(r.direction.y, prev, "each rung launches steeper (level %d)" % level)
+		prev = r.direction.y
+
+
+func test_loft_is_direction_and_position_free() -> void:
+	# Same level, same power -> same y, whatever the direction — the ladder
+	# restored full position-independence (no goal-plane term anywhere).
+	var cfg := _wrister_cfg()
+	var toward: ShotMechanics.ShotResult = _wrister_at(cfg, 2, FULL_SWEEP, Vector3(0, 0, 1))
+	var away: ShotMechanics.ShotResult = _wrister_at(cfg, 2, FULL_SWEEP, Vector3(0, 0, -1))
+	var cross: ShotMechanics.ShotResult = _wrister_at(cfg, 2, FULL_SWEEP, Vector3(1, 0, 0))
+	assert_almost_eq(toward.direction.y, away.direction.y, 0.0001, "direction-free")
+	assert_almost_eq(toward.direction.y, cross.direction.y, 0.0001, "cross-ice too")
+
+
+func test_missing_high_is_a_real_outcome() -> void:
+	# A MID (15°) at full charge from 8 m crosses the goal plane above the
+	# crossbar — the price of greed the v3 model is built on. Ease the charge
+	# and the same rung stays under the bar.
+	var cfg := _wrister_cfg()
+	var full: ShotMechanics.ShotResult = _wrister_at(cfg, 2, FULL_SWEEP)
+	assert_gt(_crossing_height(full, 8.0), GameRules.NET_HEIGHT + 0.03,
+			"full-charge MID from 8 m sails over the bar")
+	var eased: ShotMechanics.ShotResult = _wrister_at(cfg, 2, 4.0)
+	assert_lt(_crossing_height(eased, 8.0), GameRules.NET_HEIGHT,
+			"an eased charge on the same rung stays under the bar")
+
+
+func test_flattest_ladder_never_sails() -> void:
+	# The M88's 7° LOW apexes at crossbar-ping height even off a max slapper
+	# (40 m/s) — the safe blade cannot put the puck over the glass, with no
+	# clamp anywhere: the property IS the gear table.
+	var cfg := _slapper_cfg()
+	cfg.loft_tan_low = 0.12278   # tan 7° — the M88 rung
+	var r: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
+			Vector3.ZERO, Vector3(0, 0, 10), 1, 1.0, cfg, Vector3(0, 0, 1))
+	var v_y: float = r.power * r.direction.y
+	var apex: float = v_y * v_y / (2.0 * GameRules.GRAVITY_M_S2)
+	assert_lt(apex, 1.25, "M88 LOW at max slap: iron at worst, never over")
 
 
 # Quick passes ride the fixed-speed loft table — LOW at pass power IS the
@@ -560,56 +492,32 @@ func test_quick_pass_loft_uses_level_table() -> void:
 		"quick-shot saucer launches at the LOW level vertical speed")
 
 
-func test_quick_pass_high_ignores_the_solve() -> void:
-	# A HIGH quick pass is the flip — the fixed table, even released in tight
-	# where a charged HIGH would solve steep. Passes never aim at a net that
-	# isn't their target (the failure that killed the original adaptive model).
+func test_quick_pass_flip_is_gear_free() -> void:
+	# MID and HIGH quick passes both ride the fixed flip speed — pass
+	# mechanics never read the shot ladder, so every blade sauces and flips
+	# identically.
 	var cfg := _wrister_cfg()
-	var blade := Vector3(0.5, 0.0, GameRules.GOAL_LINE_Z - 2.0)
-	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-		blade, blade + Vector3(0, 0, 5), blade,
-		false, 2, cfg,
-		Vector3.ZERO,
-		true)                           # is_quick_pass
-	var v_y: float = r.power * r.direction.y
-	assert_almost_eq(v_y, cfg.loft_vy_high, 0.01,
-		"the flip pass launches at the fixed HIGH speed, position-free")
-
-
-func test_loft_ratio_capped_for_soft_shot() -> void:
-	# Min-power backhand wrister (8.0 * 0.75 = 6.0 m/s) can't reach the
-	# target height from range — the toe-cap lob — and the open toe's 45°
-	# stays inside the host's forged-direction clamp.
-	var cfg := _wrister_cfg()
-	var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-		Vector3.ZERO, Vector3(0, 0, 10),
-		Vector3(0.5, 0, 0),
-		true, 2, cfg,
-		Vector3(0, 0, 1))
-	var xz_len: float = Vector2(r.direction.x, r.direction.z).length()
-	assert_almost_eq(r.direction.y / xz_len, ShotMechanics.MAX_LOFT_RATIO, 0.001,
-		"soft lofted flip flattens to the ratio cap")
-	# Every legit loft stays inside the host's forged-direction clamp.
-	assert_lt(r.direction.y, ShotReleaseRules.MAX_DIRECTION_Y,
-		"capped loft never trips ShotReleaseRules.sanitize_direction")
+	cfg.loft_tan_high = 0.57735   # an M28 shot ladder changes nothing here
+	for level: int in [2, 3]:
+		var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
+				Vector3.ZERO, Vector3(10, 0, 0), Vector3(0.5, 0, 0),
+				false, level, cfg, Vector3.ZERO, true)
+		assert_almost_eq(r.power * r.direction.y, cfg.loft_vy_high, 0.01,
+				"the flip pass launches at the fixed speed at level %d" % level)
 
 
 func test_direction_y_under_host_clamp_everywhere() -> void:
-	# The host's forged-direction clamp (MAX_DIRECTION_Y) must never touch an
-	# honest shot: sweep level × charge × toe cap × range.
+	# The steepest authored ladder (M28: 8.5/16/30°) at every level and
+	# charge stays under the host's forged-direction clamp.
 	var cfg := _wrister_cfg()
-	for cap: float in [0.26795, 0.40403, 1.0]:
-		cfg.loft_tan_max = cap
-		for level: int in [0, 1, 2]:
-			for sweep: float in [0.0, 4.0, FULL_SWEEP]:
-				for dist: float in [1.0, 5.0, 15.0, 40.0]:
-					var blade := Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z - dist)
-					var r: ShotMechanics.ShotResult = ShotMechanics.release_wrister(
-						blade, blade + Vector3(0, 0, 5), blade,
-						false, level, cfg,
-						Vector3(0, 0, 1), false, sweep)
-					assert_lt(r.direction.y, ShotReleaseRules.MAX_DIRECTION_Y,
-						"honest shot under the clamp (cap %.2f lvl %d)" % [cap, level])
+	cfg.loft_tan_low = 0.14945
+	cfg.loft_tan_mid = 0.28675
+	cfg.loft_tan_high = 0.57735
+	for level: int in 4:
+		for sweep: float in [0.0, 4.0, FULL_SWEEP]:
+			var r: ShotMechanics.ShotResult = _wrister_at(cfg, level, sweep)
+			assert_lt(r.direction.y, ShotReleaseRules.MAX_DIRECTION_Y,
+					"honest shot under the clamp (lvl %d)" % level)
 
 
 func test_loft_y_zero_for_flat() -> void:
@@ -625,17 +533,15 @@ func test_loft_y_exact_solution() -> void:
 	assert_almost_eq(v_y, 5.4, 0.0001)
 
 
-func test_shot_loft_y_exact_arrival() -> void:
-	# The solve's contract, checked directly: at p=20 from 10 m the returned
-	# tan puts the parabola through (d, H) exactly.
-	var h_target: float = GameRules.DEFAULT_LOFT_TARGET_HEIGHT_M
-	var y: float = ShotMechanics.shot_loft_y(20.0, 2, 10.0,
-			GameRules.DEFAULT_LOFT_TAN_LOW, GameRules.DEFAULT_LOFT_VY_LOW_CAP_M_S,
-			1.0, h_target)
-	var v_y: float = 20.0 * y / sqrt(1.0 + y * y)
-	var v_h: float = 20.0 / sqrt(1.0 + y * y)
-	var t: float = 10.0 / v_h
-	assert_almost_eq(v_y * t - 0.5 * GameRules.GRAVITY_M_S2 * t * t, h_target, 0.001)
+func test_shot_loft_y_is_the_ladder_lookup() -> void:
+	assert_almost_eq(ShotMechanics.shot_loft_y(0, 0.1, 0.2, 0.3), 0.0, 0.000001)
+	assert_almost_eq(ShotMechanics.shot_loft_y(1, 0.1, 0.2, 0.3), 0.1, 0.000001)
+	assert_almost_eq(ShotMechanics.shot_loft_y(2, 0.1, 0.2, 0.3), 0.2, 0.000001)
+	assert_almost_eq(ShotMechanics.shot_loft_y(3, 0.1, 0.2, 0.3), 0.3, 0.000001)
+	# Above-HIGH clamps to HIGH; every rung is bounded by the universal guard.
+	assert_almost_eq(ShotMechanics.shot_loft_y(7, 0.1, 0.2, 0.3), 0.3, 0.000001)
+	assert_almost_eq(ShotMechanics.shot_loft_y(3, 0.1, 0.2, 9.9),
+			ShotMechanics.MAX_LOFT_RATIO, 0.000001)
 
 
 # ── Wall-pin release ─────────────────────────────────────────────────────────
@@ -752,142 +658,52 @@ func test_follow_through_aim_ignores_degenerate_cursor() -> void:
 	assert_almost_eq(aim.z, -1.0, 0.0001, "degenerate cursor holds shot line")
 
 
-# ── Blade toe caps (curve gear): the roofing gradient ────────────────────────
-# The toe cap clamps HIGH's solved launch angle; each gear's minimum
-# top-shelf roofing distance emerges from where the solve first fits under
-# its cap. Toe tans (from PlayerAttributes._CURVE_TOE_ANGLE_DEG): M88 15°,
-# M92 22°, M28 45° (= MAX_LOFT_RATIO, the universal cap).
+# ── Per-gear ladders: the band identities ────────────────────────────────────
+# The gear tables (PlayerAttributes._CURVE_LOFT_*_DEG) give each blade its own
+# top-shelf bands — checked at full wrister charge (33 m/s) with the same
+# arrival arithmetic the AI rung-picker uses.
 
-const _TOE_M88: float = 0.26795   # tan 15°
-const _TOE_M92: float = 0.40403   # tan 22°
-const _TOE_M28: float = 1.0       # tan 45°
+const _FULL_PACE: float = 33.0
 
 
-# Closest range whose solved angle for the target height fits under `toe_tan`
-# at launch speed p — the small root of the same projectile quadratic the
-# solve inverts (H = d·T − g·d²·(1+T²)/(2p²) with T at the cap).
-func _min_roof_distance(toe_tan: float, p: float) -> float:
-	var h_target: float = GameRules.DEFAULT_LOFT_TARGET_HEIGHT_M
-	var coef: float = GameRules.GRAVITY_M_S2 * (1.0 + toe_tan * toe_tan) / (2.0 * p * p)
-	return (toe_tan - sqrt(toe_tan * toe_tan - 4.0 * coef * h_target)) / (2.0 * coef)
+func _arrive(dist: float, speed: float, tan_a: float) -> float:
+	return dist * tan_a \
+			- 9.8 * dist * dist * (1.0 + tan_a * tan_a) / (2.0 * speed * speed)
 
 
-func test_toe_cap_roofing_gradient_at_pace() -> void:
-	# The identity triangle at a real 18 m/s (~40 mph) release: doorstep /
-	# slot / high slot. (The old fixed-vy model only produced a gradient
-	# below the 10 m/s wrister floor — a 15 mph muffin.)
-	assert_almost_eq(_min_roof_distance(_TOE_M28, 18.0), 1.09, 0.05,
-			"M28 roofs from the doorstep")
-	assert_almost_eq(_min_roof_distance(_TOE_M92, 18.0), 2.99, 0.05,
-			"M92 roofs from the slot")
-	assert_almost_eq(_min_roof_distance(_TOE_M88, 18.0), 6.39, 0.05,
-			"M88 needs the high slot")
-	# And the solve agrees at each boundary: just outside it the angle is
-	# unclamped (arrives at the target), just inside it pins at the cap.
-	for toe: float in [_TOE_M88, _TOE_M92]:
-		var d_min: float = _min_roof_distance(toe, 18.0)
-		var outside: float = ShotMechanics.shot_loft_y(18.0, 2, d_min + 0.2,
-				GameRules.DEFAULT_LOFT_TAN_LOW, GameRules.DEFAULT_LOFT_VY_LOW_CAP_M_S,
-				toe, GameRules.DEFAULT_LOFT_TARGET_HEIGHT_M)
-		var inside: float = ShotMechanics.shot_loft_y(18.0, 2, d_min - 0.2,
-				GameRules.DEFAULT_LOFT_TAN_LOW, GameRules.DEFAULT_LOFT_VY_LOW_CAP_M_S,
-				toe, GameRules.DEFAULT_LOFT_TARGET_HEIGHT_M)
-		assert_lt(outside, toe, "past the boundary the solve is unclamped")
-		assert_almost_eq(inside, toe, 0.0001, "inside the boundary the toe cap pins")
+func test_doorstep_roof_belongs_to_the_m28() -> void:
+	# From 2 m at full pace only the M28's 30° tops the shelf; the M92's 26°
+	# arrives just under it and the M88's 22° mid-net — each blade has its own
+	# roof pocket, and the crease is the toe hook's alone.
+	var m88 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
+	var m92 := PlayerAttributes.all_average()
+	var m28 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1)
+	var h88: float = _arrive(2.0, _FULL_PACE, m88.curve_loft_tan_high())
+	var h92: float = _arrive(2.0, _FULL_PACE, m92.curve_loft_tan_high())
+	var h28: float = _arrive(2.0, _FULL_PACE, m28.curve_loft_tan_high())
+	assert_lt(h88, 0.86, "M88 arrives mid-net from the crease")
+	assert_between(h28, 1.0, 1.19, "only the toe hook tops the shelf from 2 m")
+	assert_gt(h28, h92, "steeper toe, higher doorstep arrival")
 
 
-func test_toe_cap_gradient_shrinks_with_pace() -> void:
-	# A harder shot needs a shallower angle, so pace pulls every gear's
-	# minimum roofing distance IN — snap it hard to go upstairs in tight
-	# (inverted from the old model, where only a soft touch roofed close).
-	assert_lt(_min_roof_distance(_TOE_M88, 25.0), _min_roof_distance(_TOE_M88, 18.0),
-			"the closed toe roofs from closer at higher pace")
-	assert_lt(_min_roof_distance(_TOE_M92, 25.0), _min_roof_distance(_TOE_M92, 18.0),
-			"the balanced toe too")
-
-# ── Follow-through whip direction (frozen-wrister) ─────────────────────────────
-# The whip builds the stick outward from the shoulder along whip_local_dir. A
-# coiled body (yaw-rotated upper body) must NOT bend the finish off the shot line:
-# B * whip_local_dir(axis, B) has to stay parallel to the shot axis in XZ, or the
-# blade splays radially outward from the body (the reported bug). Repro includes a
-# straight-up ("12 o'clock") shot under a range of coils, both handedness signs.
-func test_whip_local_dir_stays_on_shot_axis_under_coil() -> void:
-	var axes: Array[Vector3] = [
-		Vector3(0.0, 0.0, -1.0),      # straight up / forward
-		Vector3(1.0, 0.0, 0.0),       # hard right
-		Vector3(0.6, 0.0, -0.8),      # forward-right
-		Vector3(-0.35, 0.0, -0.94),   # forward-left (lefty forehand-ish)
-	]
-	var yaws: Array = [-0.9, -0.4, -0.1, 0.0, 0.25, 0.7, 1.2]
-	for axis in axes:
-		for yaw in yaws:
-			var b := Basis(Vector3.UP, yaw)
-			var local_dir: Vector3 = ShotMechanics.whip_local_dir(axis, b)
-			var world_dir: Vector3 = b * local_dir
-			var wd := Vector3(world_dir.x, 0.0, world_dir.z).normalized()
-			var a := Vector3(axis.x, 0.0, axis.z).normalized()
-			assert_almost_eq(wd.dot(a), 1.0, 0.0005,
-					"whip drives along the shot axis (yaw %.2f) — not radially outward" % yaw)
+func test_m28_is_worse_at_range_on_every_rung() -> void:
+	# Every M28 rung flies steeper than the same M88 rung — which from range
+	# means the bar or over. LOW from the deep point: the M88 stays under,
+	# the M28 is at the iron.
+	var m88 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
+	var m28 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1)
+	assert_lt(_arrive(17.0, _FULL_PACE, m88.curve_loft_tan_low()), 1.19,
+			"M88 LOW from the point stays under the bar")
+	assert_gt(_arrive(17.0, _FULL_PACE, m28.curve_loft_tan_low()), 1.19,
+			"M28 LOW from the point is at the iron or over")
 
 
-func test_whip_local_dir_degenerate_axis_returns_zero() -> void:
-	assert_eq(ShotMechanics.whip_local_dir(Vector3.ZERO, Basis()), Vector3.ZERO,
-			"degenerate shot axis returns ZERO so the caller can fall back")
-	assert_eq(ShotMechanics.whip_local_dir(Vector3(0.0, 1.0, 0.0), Basis()), Vector3.ZERO,
-			"purely vertical axis has no XZ direction → ZERO")
-
-# ── Bot-vs-human wrister aim/hand routing ──────────────────────────────────────
-# Bots commit their aim direction + hand directly (no cursor); humans aim
-# positionally (origin→cursor) with forehand/backhand from the cursor sweep. The
-# committed bot_aim_dir being non-ZERO is the "this is a bot commit" signal.
-func test_wrister_aim_dir_bot_commit_wins() -> void:
-	var bot_dir := Vector3(0.6, 0.0, -0.8)
-	# Cursor and origin are garbage-near-body (the bot's cosmetic bubble); the
-	# committed direction must be returned verbatim, ignoring them.
-	var got: Vector3 = ShotMechanics.wrister_aim_dir(
-			bot_dir, Vector3(1.0, 0.0, 1.0), Vector3(0.9, 0.0, 1.1))
-	assert_eq(got, bot_dir, "a committed bot aim dir is used verbatim, not origin→cursor")
-
-
-func test_wrister_aim_dir_human_positional() -> void:
-	# No bot commit (ZERO) → positional: mouse − origin, Y flattened.
-	var got: Vector3 = ShotMechanics.wrister_aim_dir(
-			Vector3.ZERO, Vector3(5.0, 2.0, 3.0), Vector3(1.0, 0.5, 1.0))
-	assert_almost_eq(got, Vector3(4.0, 0.0, 2.0), Vector3(0.001, 0.001, 0.001),
-			"human wrister aims origin→cursor (Y flattened)")
-
-
-func test_slapper_aim_dir_bot_commit_wins() -> void:
-	var bot_dir := Vector3(0.6, 0.0, -0.8)
-	# The bot's cursor sits ~1.3 m off its body and the blade anchor ~1 m to the
-	# blade side, so blade→cursor is a garbage vector for a bot — the committed
-	# direction must be returned verbatim.
-	var got: Vector3 = ShotMechanics.slapper_aim_dir(
-			bot_dir, Vector3(1.0, 0.0, 1.0), Vector3(0.9, 0.0, 1.1))
-	assert_eq(got, bot_dir, "a committed bot slapper dir is used verbatim, not blade→cursor")
-
-
-func test_slapper_aim_dir_human_blade_to_cursor() -> void:
-	# No bot commit (ZERO) → the human lock: mouse − blade, Y flattened.
-	var got: Vector3 = ShotMechanics.slapper_aim_dir(
-			Vector3.ZERO, Vector3(5.0, 2.0, 3.0), Vector3(1.0, 0.5, 1.0))
-	assert_almost_eq(got, Vector3(4.0, 0.0, 2.0), Vector3(0.001, 0.001, 0.001),
-			"human slapper locks blade→cursor (Y flattened)")
-
-
-func test_wrister_is_backhand_bot_commit_wins() -> void:
-	var bot_dir := Vector3(0.0, 0.0, -1.0)
-	# swing_rotation would say forehand, but the bot committed backhand → backhand.
-	assert_true(ShotMechanics.wrister_is_backhand(bot_dir, true, 0.0, false, 0.35),
-			"committed bot backhand wins over the (ignored) swing")
-	assert_false(ShotMechanics.wrister_is_backhand(bot_dir, false, -5.0, false, 0.35),
-			"committed bot forehand wins over a swing that would read backhand")
-
-
-func test_wrister_is_backhand_human_reads_swing() -> void:
-	# No bot commit → falls through to is_backhand_from_swing. Righty: negative
-	# swing past the deadband is a backhand; a near-zero swing defaults forehand.
-	assert_true(ShotMechanics.wrister_is_backhand(Vector3.ZERO, false, -1.0, false, 0.35),
-			"human: righty negative swing past deadband = backhand")
-	assert_false(ShotMechanics.wrister_is_backhand(Vector3.ZERO, false, 0.1, false, 0.35),
-			"human: near-straight drag inside the deadband defaults forehand")
+func test_m92_low_is_the_point_snipe() -> void:
+	# The all-rounder's 8° LOW tops the shelf from the point band and cannot
+	# miss high at full wrister pace (its whole arc apexes under the bar).
+	var m92 := PlayerAttributes.all_average()
+	var t: float = m92.curve_loft_tan_low()
+	assert_between(_arrive(15.0, _FULL_PACE, t), 0.95, 1.19, "top shelf from 15 m")
+	var sin_a: float = t / sqrt(1.0 + t * t)
+	var apex: float = pow(_FULL_PACE * sin_a, 2.0) / (2.0 * 9.8)
+	assert_lt(apex, 1.19, "the M92 point snipe cannot sail on a wrister")

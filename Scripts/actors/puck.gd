@@ -66,16 +66,11 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 # CONSISTENT apex regardless of pace, and the redirect keeps its horizontal pace
 # minus what's carved into the lift (energy-conserving, like a lofted shot).
 #
-# On the GROUNDED plane the level names the direction: FLAT stays horizontal,
-# LOW tips a grounded puck UP. On the LIFTED plane (HIGH) the direction is
-# geometry, not a choice — the blade bats DOWN what it sits above and lifts UP
-# what it sits under. See PuckCollisionRules.deflect_loft_speed.
+# The four loft levels double as DEFLECT MODES — the level names the
+# direction outright (FLAT flat, LOW/MID up, HIGH down) and the blade's lift
+# height plays the matching plane. See PuckCollisionRules.deflect_loft_speed.
 @export var deflect_up_loft_speed: float = 3.8     # tip up and in (apex ≈ 0.74 m)
 @export var deflect_down_loft_speed: float = 3.5   # drive an airborne puck down to the ice
-# Height band over which a lifted blade and the puck count as LEVEL (redirect
-# stays flat, no vertical bias). A physical measurement — blade face half-height
-# (~0.025) plus puck half-thickness (0.0175) — not a feel knob.
-@export var deflect_level_deadband: float = 0.05
 # A deflect whose resulting speed lands below this reads as a BOBBLE — the blade
 # smothered the puck (knocked it down) rather than redirecting it. The deflector
 # gets the short bobble_cooldown so they can gather their own knockdown, instead
@@ -385,17 +380,12 @@ func apply_blade_deflect(skater: Skater) -> void:
 	# A dead-square knockdown collapses to ~zero speed (a bobble drop); skip the
 	# lift there — a smothered puck shouldn't pop off the ice.
 	#
-	# FLAT/LOW take their direction from the level; a lifted blade (HIGH) takes
-	# it from where the blade sits relative to the puck — see
-	# PuckCollisionRules.deflect_loft_speed. The blade contact point is the LIVE
-	# one, so the eased stick-lift blend is already folded in: a blade still on
-	# its way up pivots at the height it has actually reached.
+	# The level names the redirect's direction outright (the deflect-mode
+	# table — FLAT flat, LOW/MID up, HIGH down); the blade's lift height put
+	# it on the right plane to make this contact in the first place.
 	var loft_vy: float = PuckCollisionRules.deflect_loft_speed(
 			skater.elevation_level,
-			global_position.y,
-			skater.get_blade_contact_global().y,
-			deflect_up_loft_speed, deflect_down_loft_speed,
-			deflect_level_deadband)
+			deflect_up_loft_speed, deflect_down_loft_speed)
 	var horiz_speed: float = new_vel.length()
 	if not is_zero_approx(loft_vy) and horiz_speed > 0.001:
 		# loft_y gives the Y/XZ ratio that yields launch speed |loft_vy| at this

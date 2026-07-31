@@ -468,23 +468,16 @@ const DEFAULT_SLAPPER_POWER_MAX_M_S: float = 40.0
 # pass speed (passes are quick-shots in this codebase).
 const DEFAULT_QUICK_PASS_POWER_M_S: float = 14.0
 
-# ── Loft (ShotMechanics loft levels — contact-point elevation) ────────────────
-# Design: docs/elevation-rework-plan.md. Charged shots use the contact-point
-# model (ShotMechanics.shot_loft_y): LOW is a set launch angle with a
-# vertical-speed ceiling, HIGH solves the launch angle to arrive at
-# DEFAULT_LOFT_TARGET_HEIGHT_M on the faced goal plane, clamped by the blade
-# curve's toe cap (PlayerAttributes.curve_toe_tan).
-#
-# LOW's set angle, as tan(8.5°). At pass pace this is the saucer (~0.24 m
-# apex); at shot pace a mid-net rising shot.
-const DEFAULT_LOFT_TAN_LOW: float = 0.1494
-# LOW's vertical-speed ceiling (m/s). Binds only above ~33 m/s (the top of
-# the slapper band), pinning LOW's apex at crossbar-ping height (~1.22 m
-# center — the pipe band 1.19–1.25) so a max bomb rings iron, never sails.
-const DEFAULT_LOFT_VY_LOW_CAP_M_S: float = 4.85
-# HIGH's solved arrival height (m) at the goal plane — top shelf, under the
-# scoring cavity's top (NET_HEIGHT − post − puck half ≈ 1.18).
-const DEFAULT_LOFT_TARGET_HEIGHT_M: float = 1.05
+# ── Loft (ShotMechanics loft levels — the manual angle ladder) ────────────────
+# Design: docs/elevation-rework-plan.md v3. Charged shots use SET LAUNCH
+# ANGLES per level, from the blade curve's per-gear ladder
+# (PlayerAttributes._CURVE_LOFT_*_DEG); these are the M92 (league-neutral)
+# rungs as tan(angle) — the defaults everywhere a build isn't known (AI
+# league-average reads, unwired configs). Arrival height is emergent from
+# angle × charge × range; missing high is a real outcome.
+const DEFAULT_LOFT_TAN_LOW: float = 0.1405   # tan 8°  — saucer / point snipe
+const DEFAULT_LOFT_TAN_MID: float = 0.2679   # tan 15° — the slot snipe
+const DEFAULT_LOFT_TAN_HIGH: float = 0.4877  # tan 26° — the in-tight roof
 #
 # QUICK PASSES keep the fixed vertical-speed table (ShotMechanics.loft_y —
 # pass mechanics must not solve toward a net that isn't their target):

@@ -461,7 +461,7 @@ var _facing: Vector2 = Vector2.DOWN
 # Loft mode (0 flat / 1 low saucer / 2 high). Set each tick by the controller
 # from the input frame; replicated so remotes/AI read it directly.
 var elevation_level: int = 0
-# Eased 0→1 toward elevation_level/2 (half scoop at LOW, full at HIGH); drives
+# Eased 0→1 toward elevation_level/3 (a third per rung, full at HIGH); drives
 # the extra blade toe-lift (see _update_blade_elevation / _apply_blade_tilt).
 var _blade_elevation_blend: float = 0.0
 # True when the blade is lifted off the ice — own stick-lift (Q held while not
@@ -1213,7 +1213,7 @@ func apply_blade_pattern(curve_gear: int) -> void:
 # Runs the full stick pass, not just the tilt — the tilt moves the hosel tip
 # the shaft is aimed at, so the shaft must follow or the joint opens.
 func _update_blade_elevation(delta: float) -> void:
-	var target: float = float(elevation_level) * 0.5
+	var target: float = float(elevation_level) / float(ShotMechanics.ELEVATION_HIGH)
 	if is_equal_approx(_blade_elevation_blend, target):
 		return
 	_blade_elevation_blend = move_toward(

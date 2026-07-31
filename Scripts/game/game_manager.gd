@@ -3517,7 +3517,8 @@ func _note_shot_trajectory() -> void:
 				_defending_goalie_pos(directed_line_z),
 				GameRules.NET_HALF_WIDTH, vel.length(),
 				0.0, -1.0, false, 0.0, false, 0.0,
-				Vector4.INF, Vector4.INF, 1.0, _shot_release_spread())
+				Vector4.INF, Vector4.INF, AIActionScoring.DEFAULT_LOFT_TANS,
+				_shot_release_spread())
 		_shot_tracker.note_xg(xg)
 
 

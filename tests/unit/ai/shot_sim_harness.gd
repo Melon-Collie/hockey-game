@@ -173,16 +173,15 @@ static func flight(shooter: Vector3, goal: Vector3, aim: Vector3,
 		return Vector3(0.0, 0.0, -1.0)
 	var travel: float = dz / hdir.y                  # horizontal distance to the plane
 	var cross_x: float = shooter.x + hdir.x * travel
-	# Loft parabola under the contact-point model: the launch angle comes from
-	# the same solve the live release runs (ShotMechanics.shot_loft_y at the
-	# distance to the net plane, open-toe instrument), so the sim flies the arc
-	# a real shot flies. cross_y is UNclamped (a flat shot reads slightly
-	# below launch height) so callers can recover the exact launch vy from
-	# (cross_y, flight_t).
+	# Loft parabola under the manual angle ladder: the launch angle is the
+	# level's set angle (ShotMechanics.shot_loft_y, league-neutral M92 ladder),
+	# so the sim flies the arc a real shot flies. cross_y is UNclamped (a flat
+	# shot reads slightly below launch height) so callers can recover the
+	# exact launch vy from (cross_y, flight_t).
 	var speed: float = _launch_speed(power_t)
-	var y_ratio: float = ShotMechanics.shot_loft_y(speed, loft_level, absf(travel),
-			GameRules.DEFAULT_LOFT_TAN_LOW, GameRules.DEFAULT_LOFT_VY_LOW_CAP_M_S,
-			1.0, GameRules.DEFAULT_LOFT_TARGET_HEIGHT_M)
+	var y_ratio: float = ShotMechanics.shot_loft_y(loft_level,
+			GameRules.DEFAULT_LOFT_TAN_LOW, GameRules.DEFAULT_LOFT_TAN_MID,
+			GameRules.DEFAULT_LOFT_TAN_HIGH)
 	var inv_norm: float = 1.0 / sqrt(1.0 + y_ratio * y_ratio)
 	var v_h: float = maxf(speed * inv_norm, 1.0)
 	var loft_vy: float = speed * y_ratio * inv_norm

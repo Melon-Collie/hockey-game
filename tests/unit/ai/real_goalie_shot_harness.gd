@@ -198,12 +198,11 @@ func publish_windup(shooter: Vector3, declared_aim: Vector3, loft_level: int,
 		_ctrl._physics_process(DT)
 
 
-# Launch velocity for a shot from `shooter` toward the net-plane `aim`: horizontal
-# heading toward the aim (+ scatter), pace split by the CONTACT-POINT solve
-# (ShotMechanics.shot_loft_y at the distance to the aim plane along the
-# scattered heading, open-toe instrument — same model as the live release and
-# shot_sim_harness, so the instruments are comparable). Vector3.ZERO if the
-# aim is degenerate.
+# Launch velocity for a shot from `shooter` toward the net-plane `aim`:
+# horizontal heading toward the aim (+ scatter), pace split by the level's SET
+# ANGLE (ShotMechanics.shot_loft_y, league-neutral M92 ladder — same model as
+# the live release and shot_sim_harness, so the instruments are comparable).
+# Vector3.ZERO if the aim is degenerate.
 func shot_velocity(shooter: Vector3, aim: Vector3, loft_level: int, power_t: float,
 		err_rad: float) -> Vector3:
 	var speed: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S \
@@ -222,14 +221,9 @@ func shot_velocity_at(shooter: Vector3, aim: Vector3, loft_level: int,
 		return Vector3.ZERO
 	var ang: float = to_aim.angle() + err_rad
 	var hdir := Vector2(cos(ang), sin(ang))
-	var travel: float = -1.0
-	if absf(hdir.y) > 0.0001:
-		travel = (aim.z - shooter.z) / hdir.y
-	if travel <= 0.0:
-		travel = -1.0
-	var y_ratio: float = ShotMechanics.shot_loft_y(speed_m_s, loft_level, travel,
-			GameRules.DEFAULT_LOFT_TAN_LOW, GameRules.DEFAULT_LOFT_VY_LOW_CAP_M_S,
-			1.0, GameRules.DEFAULT_LOFT_TARGET_HEIGHT_M)
+	var y_ratio: float = ShotMechanics.shot_loft_y(loft_level,
+			GameRules.DEFAULT_LOFT_TAN_LOW, GameRules.DEFAULT_LOFT_TAN_MID,
+			GameRules.DEFAULT_LOFT_TAN_HIGH)
 	var inv_norm: float = 1.0 / sqrt(1.0 + y_ratio * y_ratio)
 	var v_h: float = maxf(speed_m_s * inv_norm, 1.0)
 	return Vector3(hdir.x * v_h, speed_m_s * y_ratio * inv_norm, hdir.y * v_h)

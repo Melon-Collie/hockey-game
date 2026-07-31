@@ -1,360 +1,186 @@
 # Elevation Rework — Design Doc (issue #585)
 
-Status: **agreed-design draft, v2 (contact-point model)** — implementation
-follows the CLAUDE.md workflow: this doc is the plan; deviations get discussed
-first. v1 (power-scaled vertical speed with per-gear lift ceilings) is in git
-history; it was set aside because it still derived height from speed, when the
-real-life controlled variable is launch angle. Supersedes the elevation half of
-`docs/attributes-v4-plan.md` §5.2.
+Status: **agreed design, v3 (manual angle ladder)** — implementation follows
+the CLAUDE.md workflow: this doc is the plan; deviations get discussed first.
+Supersedes the elevation half of `docs/attributes-v4-plan.md` §5.2.
+
+Version history (full writeups in git):
+- **v1** — power-scaled vertical speed with per-gear lift ceilings. Set aside:
+  it still derived height from speed, when the real-life controlled variable
+  is launch angle.
+- **v2** — the adaptive solve (HIGH auto-arrives top-shelf at the faced goal
+  plane, clamped by a per-gear toe cap). Implemented through the AI layer,
+  then set aside after playtest: with the vertical axis solved and cursor aim
+  absolute, an open corner is a deposit, not a contest — "sniping corners
+  left and right." The calibration skill belongs to the PLAYER.
+- **v3 (this doc)** — four manual levels, per-gear set-angle ladders, missing
+  high as a real outcome, and the levels doubling as deflect modes.
 
 All constants below are STARTING VALUES for playtest tuning; the shapes and
 invariants are the design.
 
-## 1. The problem
+## 1. The model — a ladder of contact points, no solve
 
-The current model (`ShotMechanics.loft_y`, `shot_mechanics.gd:336-344`): each
-loft level is a **fixed vertical launch speed** independent of shot power
-(LOW 2.2, HIGH 4.65 m/s — `game_rules.gd:480-481`), so every HIGH shot apexes
-~5 cm under the crossbar. The blade-curve face cap (26/31/45°) binds only below
-~6.6–10.6 m/s — at or under the 10 m/s wrister floor — so:
+Elevation is a player-selected LOFT LEVEL (scroll, 0–3), fictionalized as the
+contact point on the blade (heel → toe). Each level is a **set launch angle**
+from the gear's ladder — no target-height solve, no position input, no
+vertical-speed caps. Arrival height is emergent from angle × charge × range,
+and **missing high is the price of greed**: the player is the calibrated
+shooter now, or isn't yet.
 
-- **The M28's identity — roofing in tight — lives entirely below real shot
-  pace** (the min roofing distances ~2.2/3.7/4.5 m are the apex distances of
-  ~15 mph muffins).
-- **Steepness never differentiates at pace**: every blade flies the identical
-  arc on every real shot.
-- Elevation carries no risk and no read beyond range/charge; the AI hand-fakes
-  a sail risk that cannot occur (`LOFT_TIE_FRAC`, `action_scoring.gd:470-474`).
+Per-gear ladders (degrees; tan enters the release math):
 
-Prior art: the game's *original* elevation was an adaptive solve to a target
-height at the goal line. It roofed beautifully in tight but was retired
-because it made saucer/elevated passes impossible and produced unbounded
-weird arcs on misses (`shot_mechanics.gd:34-37`). #340/#363 then showed that
-any fixed-speed model either can't roof or sails routine point shots
-(`skater_controller.gd:595-610`). This rework brings the adaptive solve back
-with those failures specifically closed off.
-
-## 2. The model — elevation is where the puck sits on the blade
-
-Real-life grounding: a shooter's controlled variable is **launch angle**, set
-by face/wrist roll at release — and on strong-curve blades the dominant input
-is **where the puck contacts the blade**: heel shots go low regardless of
-snap, mid-blade rolls go medium, toe shots go upstairs (on an open toe,
-"the rafters"). The loft level is fictionalized as that contact point:
-
-| Level | Contact | Behavior |
-|---|---|---|
-| FLAT | heel | unchanged — along the ice, the hard easy release |
-| LOW | mid-blade, partial roll | a **set launch angle** `θ_low = 8.5°` (ceilinged, §2.3) — the saucer at pass pace, a mid-net rising shot at pace |
-| HIGH | toe | an **adaptive solve**: launch angle chosen so the arc crosses the attacking goal plane at target height `H ≈ 1.05 m` (top shelf), clamped to the blade's **toe cap** |
-
-This models the shooter's calibration skill (a real shooter solves the angle
-by feel every time), and the modal "P28 experience" from play reports — pick
-the contact point, then commit attention to power and lateral aim — is
-literally this input scheme.
-
-### 2.1 The HIGH solve
-
-Given release speed `p`, distance `d` to the attacking goal plane along the
-shot's XZ direction, target `H`:
-
-```
-tan θ = (p² − √(p⁴ − g·(g·d² + 2·H·p²))) / (g·d)      (flat root)
-θ     = clamp(θ, 0, toe_cap_gear)
-```
-
-- **Discriminant < 0 (unreachable — soft pace at long range)** → clamp at the
-  toe cap: the maximum lob. The defensive flip clear falls out of the math.
-- **Goal plane selection**: the plane the shot direction faces (sign of the
-  direction's z). Near-parallel (cross-ice) → unreachable → toe-cap lob,
-  which is the honest reading of "flicked it high with nothing to solve
-  toward."
-- **Misses are bounded**: worst case is the toe cap (45°), never the
-  near-vertical degeneracies that made the old adaptive system's misses fly
-  absurdly. An in-tight roof attempt that misses climbs steeply and hits the
-  glass behind — which is what that miss really does.
-
-### 2.2 The toe caps — the primary gear lever
-
-The per-gear cap is **what the toe of the pattern gives a toe-released
-shot**, not the blade's static face angle (a P88's face is ~26°, but its toe
-gives you almost nothing — the cap describes the toe):
-
-| Gear | toe cap | min roofing distance @ 18 m/s (~40 mph) | @ 25 m/s |
+| level (contact) | M88 | M92 | M28 |
 |---|---|---|---|
-| M88 | 15° | ~6.4 m | ~4.6 m |
-| M92 | 22° | ~3.0 m | ~2.8 m |
-| M28 | 45° | ~1.1 m | ~1.1 m |
+| 0 FLAT (heel) | 0 | 0 | 0 |
+| 1 LOW (mid-blade) | 7 | 8 | 8.5 |
+| 2 MID (toe-side) | 14 | 15 | 16 |
+| 3 HIGH (toe) | 22 | 26 | 30 |
 
-(Min roofing distance = closest range from which the solved angle for `H`
-fits under the cap.) The identity triangle finally exists at real pace: M28
-roofs from anywhere including the doorstep, M92 from the slot in, M88 needs
-the high slot. Two emergent properties, both realistic and both inverted
-from the current model:
+Top-shelf bands at full wrister charge (33 m/s), over-the-bar beyond them:
 
-- **Pace helps you roof**: harder shots need shallower angles, so charging
-  up lets the closed blades roof from closer. Snap it hard to go upstairs in
-  tight — instead of today's "only a muffin roofs in tight."
-- **HIGH is the solved intent; LOW keeps the emergent read.** A HIGH shot
-  arrives at `H` whenever solvable, at any charge — pace buys flight time
-  against the goalie's deploy, not height. LOW's fixed roll is the level
-  where "where does this arrive" remains a range/charge read (at full charge
-  from the point the LOW arc arrives top-shelf-ish itself; backed off, mid
-  net; soft, a saucer). The old model's celebrated skill lives on in LOW.
+| level | M88 | M92 | M28 |
+|---|---|---|---|
+| LOW | ~0.8–0.9 m arrival from the point — **never sails** (max-slap apex ~1.23 m = iron at worst) | ~13–21 m: the textbook point snipe | ~10–14 m; clips iron beyond ~14 |
+| MID | ~4.6–5.3 m | ~4.2–4.9 m | ~3.9–4.5 m |
+| HIGH | ~2.7–3.1 m | ~2.2–2.5 m | ~1.9–2.1 m |
 
-### 2.3 LOW as a set angle, with a lift ceiling
+Backing off the charge slides every band toward the net; each blade's HIGH is
+a distinct "roof pocket" rather than strictly better/worse. The identities:
 
-`θ_low = 8.5°` (tan ≈ 0.149), and LOW's vertical launch speed is ceilinged at
-`LOW_VY_CAP = 4.85 m/s` (`v_y = min(p·sin θ_low, 4.85)`):
+- **M88** — the flattest ladder: physically cannot put a puck over the glass
+  (its worst outcome is a crossbar ping), cannot roof the true doorstep.
+  The safe blade. No clamp needed — the safety emerges from the table.
+- **M92** — the all-rounder owns the textbook top-shelf point snipe (LOW 8°).
+- **M28** — the steepest ladder at every rung: the only blade that roofs from
+  the crease at pace (30° from 2 m arrives ~1.13 m), and the worst at range
+  (every band sits closest to the net; LOW clips the bar from the deep
+  point). The close-range weapon.
 
-- At pass pace (14 m/s): apex ~0.24 m — the saucer, nearly today's 0.26 m;
-  still clears stick blades (0.07 m), still lands and slides, still far below
-  the lifted-blade pivot (0.55 m) so the deflect anti-cheese argument and
-  `blade_lift_height`'s floor (`skater_controller.gd:189-208`) hold.
-- At pace: a mid-net rising shot (over the pads from the slot) — the third
-  band between FLAT and HIGH that the fixed 2.2 m/s never was (a full-power
-  LOW today arrives essentially flat).
-- **The ceiling is what makes LOW un-sailable for both shot types.** The
-  angle alone is safe for wristers (apex at the 33 m/s max ≈ 1.23 m — the
-  crossbar's pipe band, so a truly max-charged LOW wrister from ~13–19 m
-  rings iron or skims under, never cleanly over) but slappers reach 40 m/s,
-  where any reasonable set angle sails from mid-range. The cap binds only
-  above ~33 m/s — the passing game and the whole wrister band never feel
-  it — and pins the apex at "can ping the iron, never over the glass" for
-  the top half of the slapper band. One `minf()` in the solve.
+Consequences accepted deliberately:
 
-### 2.4 Quick passes stay on the fixed-speed table
+- **A max-charge point slapper at LOW sails for M92/M28** — the fully-wound
+  point bomb wants FLAT or an eased charge. Elevation at max power is the
+  risky choice; that's the language of the whole model.
+- **A mastered player still hits a learned band from a clean look.** Manual
+  elevation makes sniping earned and self-punishing under pressure; if
+  static-look snipes remain too free after playtest, the goalie's high game
+  (pre-arm read of the visible toe carry) returns as a *complement*, not a
+  competing design.
+- Nothing in the ladder approaches 45°, so `ShotMechanics.MAX_LOFT_RATIO`
+  becomes a pure anti-forgery guard and the host clamp headroom widens.
+- The flip clear is the steepest rung at soft pace — no special case.
 
-The quick-pass button keeps today's fixed vertical speeds (LOW 2.2 /
-HIGH 4.65): a saucer pass and a flip pass are *pass* mechanics, calibrated
-into reception and deflection, and must not solve toward a net that isn't
-their target (the exact failure that killed the original adaptive system).
-The pass/shot split already exists as a hard input split
-(`release_wrister`'s `is_quick_pass`, separate buttons) — the two math paths
-sit on opposite sides of a boundary the codebase already enforces. Wristers
-and slappers get the new model; quick passes are bit-exact.
+Quick passes are UNCHANGED: the fixed vertical-speed table (LOW 2.2 = the
+saucer, MID/HIGH 4.65 = the flip) — pass mechanics stay calibrated and
+position-free, per v2's reasoning (the original adaptive system died on
+passes; the pass/shot split is a hard input split).
 
-### 2.5 What this deliberately gives up
+## 2. Wire and input
 
-- **Missing high on an on-net HIGH shot mostly disappears** (the solve
-  targets under the bar). The risk outcome moves to: in-tight steep misses
-  flying up the glass, toe-cap lobs from unreachable range, and max-charge
-  LOW crossbar pings. Accepted: the substance of #585 was that roofing
-  didn't exist, not that sailing didn't.
-- **Trajectory stops being position-free.** Position enters *only* as
-  distance-to-goal-plane along the shot direction. Deterministic from
-  replicated release state on every peer; the "same gesture, same arc,
-  anywhere" invariant is repealed and its doc statements rewritten (§5.6).
-- **Every HIGH arrival is at `H`**, so the goalie's high read is
-  height-deterministic and top-corner play is an x-aim-vs-glove contest.
-  Accepted for readability — and offset by the optional contact-point tell
-  (§5.7).
+Four levels fit the existing 2-bit elevation field (0..3) — no codec layout
+change. `ShotMechanics` renumbers: FLAT 0, LOW 1, **MID 2 (new)**, HIGH 3;
+`InputState.MAX_ELEVATION_LEVEL` follows. PROTOCOL_VERSION bumps anyway:
+mixed-version peers would simulate different arcs from identical inputs.
 
-## 3. Considered and declined
+## 3. The levels double as DEFLECT MODES
 
-- **v1 of this doc (power-scaled v_y, per-gear lift ceilings)**: kept height
-  coupled to speed — the thing the real mechanism doesn't do — and priced
-  roofing at range as a sail lottery. Git history has the full writeup.
-- **Fixed launch angle for HIGH** (apex ∝ p²): unusable from range at any
-  angle steep enough to roof in tight; also the shape the deflection model
-  measured and rejected (`puck.gd:64-67`).
-- **Re-leaning saucer quality against the M28** (real P28s sauce badly —
-  puck-position sensitivity we don't simulate): declined; the saucer is a
-  core pass mechanic and stays uniform. The M28's passing tax remains
-  reception (−7%) and slap (−3%). Recorded so it isn't re-proposed cold.
-- **Deflections**: unchanged entirely. The tip model's fixed launch speed
-  was chosen *because* the tipper doesn't control incoming pace
-  (`puck.gd:64-67`); that reasoning is untouched by this rework.
+The old deflect model picked up-vs-down by blade-vs-puck geometry at HIGH
+(the "fiddly based on position thing"). Four levels carry the intent
+explicitly — the level names the deflection you're playing for, and the
+blade's lift height follows the level:
 
-## 4. Why this is a grounded model
+| level | blade lift (pivot) | deflect intent |
+|---|---|---|
+| FLAT | on the ice | ground puck stays on the ground (redirect along the ice) |
+| LOW | on the ice | ground puck deflects UP — the money tip |
+| MID | ~0.35 m | airborne puck deflects UP — roof the rising shot |
+| HIGH | ~0.52 m (current `blade_lift_height`) | airborne puck bats DOWN — the high-feed knockdown at the net mouth |
 
-The solve is the shooter's own calibration — the thing ten thousand reps
-build — executed by the player-character, with the blade's toe as the
-mechanical limit. The clamp produces the roofing gradient with no positional
-special-casing: in tight the required angle is steep, and either your toe
-gives it (M28) or it doesn't (M88). Feel tunables (`H`, `θ_low`, the three
-toe caps) are legitimately hand-picked; the *shape* — solve to intent, clamp
-at hardware — is the design.
+- The up/down sign comes from the LEVEL, not from `puck_y − blade_y`; the
+  geometry deadband dies. Deliberate and natural deflects still run the same
+  physics (`PuckCollisionRules.deflect_velocity` decomposition unchanged);
+  only the loft-sign selection (`deflect_loft_speed`) changes.
+- Reach planes: FLAT/LOW play the ice; MID plays the low air (~0.35 pivot);
+  HIGH plays the high air (~0.52 pivot, reaching ~1.05) — still the
+  stick-lift gesture level.
+- Anti-cheese check: a saucer pass apexes ~0.21–0.26 m, still under MID's
+  0.35 m pivot — camping MID can't cheese saucers (marginally; verify in the
+  deflect tests).
+- Bot tipper (finisher): shooter FLAT → tipper LOW (lift it); shooter
+  elevated → tipper HIGH (reach the high feed, bat it down at the mouth) —
+  same blade heights as the old behavior, now with explicit intent.
 
-## 5. Knock-ons
+## 4. HUD
 
-### 5.1 Release math (`Scripts/domain/rules/shot_mechanics.gd`)
+Chevrons go to three (LOW 1 / MID 2 / HIGH 3, FLAT none) in the existing
+style. Noted for later: at four levels the chevron readout is at its limit —
+a proper elevation indicator (e.g. the contact-point tell: the carried puck
+visibly riding heel→toe) is the eventual replacement.
 
-- `loft_y` is superseded for wristers/slappers by a solve taking
-  `(power, level, toe_tan, dist_to_goal_plane)`; quick passes keep the
-  `_loft_vy` fixed-speed path. Configs gain `loft_tan_low`, `loft_vy_low_cap`, `toe_tan_max`;
-  `H` is a `GameRules` constant beside the net geometry it references.
-- The release seam gains one input: the caller supplies the distance to the
-  faced goal plane (`SkaterController` at release; bots from their state).
-  The function stays pure — position enters only through that scalar.
-- `SkaterController.apply_attributes` wires `curve_toe_tan()` (renamed/new
-  accessor + table in `player_attributes.gd`, replacing `curve_loft_tan`'s
-  role in shots; the 45° `MAX_LOFT_RATIO` guard remains the universal bound).
-- Host anti-cheat: `ShotReleaseRules.MAX_DIRECTION_Y = 0.75` needs no change
-  (toe cap 45° normalizes to ~0.707).
+## 5. Knock-ons (delta from the v2 implementation)
 
-### 5.2 AI shot model (`Scripts/domain/ai/action_scoring.gd`) — gets simpler
+### 5.1 Release math (`ShotMechanics`)
 
-The entire arrival-honesty apparatus existed to answer "what height does a
-fixed-speed arc reach at this range × pace" — a question the new model
-answers by construction.
+`shot_loft_y` becomes a ladder lookup: `(level, tan_low, tan_mid, tan_high)`
+→ y ratio, clamped by `MAX_LOFT_RATIO`. Power no longer enters (set angles);
+`dist_to_goal_plane`, the target height, and the LOW vy ceiling are deleted —
+**trajectory is again a pure function of (level, gear), position-free.**
+Configs carry the three tans; `PlayerAttributes` gains the three `_CURVE_LOFT_*_DEG`
+tables + accessors (replacing the toe-cap table); `SkaterController.apply_attributes`
+wires them. GameRules keeps M92's ladder as the league defaults.
 
-- `_high_band_horizontal_speed` (`:282-328`) and the pace inversion in
-  `best_shot_power_t` (`:1499-1534`) are **deleted**. A HIGH hole is live iff
-  the solved angle from here at shooting pace fits under the bot's toe cap
-  (`AISkaterCaps.loft_tan_max` → renamed `toe_tan_max`) — the same clamp the
-  human feels. Arrival height is `H` (above the 0.86 pad-top seam by
-  construction); a clamped shot's arrival is computed directly from the
-  clamped arc.
-- HIGH shots fire at **full pace** (arrival fixed; faster only shrinks the
-  goalie's deploy window — and shrinks the clamp distance). This is a large
-  behavioral shift: the old model's "reaching the band takes ≥ ~0.25 s of
-  arc, so a set keeper's glove gets its full deploy — set-keeper top corners
-  shut everywhere" story is gone. Expect the beatability sweeps to blow the
-  HIGH bands open; the goalie's high game gets retuned against it (§5.3).
-- The HIGH band gains a top edge in `_band_cover` reasoning only insofar as
-  arrivals are now at `H` — the band model itself (two bands, seam floor)
-  survives; `LOFT_TIE_FRAC`'s fake risk premium is retired with the pace
-  solve. Bots still shoot only FLAT and HIGH (LOW remains a pass/human
-  tool); revisit a third band only if playtest shows mid-net value.
-- `dump_loft_hang_s` (`:5485-5494`) / `solve_dump_clear` / `solve_dump_in`:
-  hang time becomes `f(level, power, toe cap, d)` via the same solve
-  (unreachable → toe-cap lob is precisely the AI's clear). Saucer paths
-  (`saucer_hang_time_s`, `lane_clear_saucer`) key off the quick-pass fixed
-  table — unchanged.
-- `trajectory.gd:338-379` (`is_puck_airborne`, gate "launch vy ≥ ~2 m/s"):
-  a soft-sweep LOW wrister at 8.5° launches below 2 m/s — re-derive the gate
-  from launch angle × pace or lower the threshold; verify reception/deflect
-  planning against it.
-- `finisher.gd:161-196` keys off `elevation_level > 0` — unchanged.
-- Benchmarks run before/after phase 2 anyway, but the expected delta is
-  *negative* cost (a closed-form solve replaces the windowed inversion).
+### 5.2 AI (`action_scoring`)
 
-### 5.3 Goalie
+The bot becomes a RUNG-PICKER: for a HIGH-band hole, iterate its three
+elevated rungs, keep those whose full-pace arrival at the net lands in
+[pad-top seam, cavity top ≈ 1.18] (and clears a standing keeper's paddle at
+his plane; a down goalie's paddle stays no bar), and take the highest legal
+arrival. The chosen rung IS `best_shot_loft`'s answer for that hole (the
+`HOLE_BAND_LOFT` constant dies); no legal rung → band structurally closed.
+Bots still fire full pace; `AISkaterCaps`/`RoleContext` thread the ladder
+(three tans) instead of one toe cap. Note the point snipe: from 13–21 m the
+legal rung is LOW — the bot's top-shelf shot from range rides the mid-blade,
+exactly like the human's.
 
-- **Over-bar reaction gate** (`goalie_behavior_rules.gd:76-117`,
-  `detect_shot_into`): still added — projected `impact_y` above ~1.45 m at
-  his plane → not a shot on him. Less load-bearing than under v1 (on-net
-  HIGH shots don't sail) but toe-cap lobs and in-tight steep misses pass
-  over his net, and with `react_hand_y_max = 1.55` he can currently *catch a
-  puck that was going over* — the free-save the beatable-realism doctrine
-  forbids. Mirrors the existing lateral gate.
-- **The high-game retune is the big item.** Full-pace HIGH arrivals at a
-  known height `H` change the top-shelf race entirely: the arm-reaction
-  delay, glove deploy, and `_band_cover`'s HIGH hand model
-  (`action_scoring.gd:393-438`) get re-calibrated against the sweeps with
-  the beatable-realism signature as the acceptance test — deception must
-  keep paying, set-keeper top corners should be *hard but real*, and the
-  height-determinism of `H` is the goalie's compensating read.
+### 5.3 Deflects (`PuckCollisionRules` / `Puck` / controller)
 
-### 5.4 Physics / world
+`deflect_loft_speed` signs by level (§3); blade lift maps FLAT/LOW → ice,
+MID → 0.35, HIGH → `blade_lift_height`; the scoop pose scales `level / 3`.
+Deflect calibration tests re-pinned to the mode table.
 
-Deflections and rebounds already put pucks above the bar, so this layer is
-live code (`puck_geometry_collision.gd:12-16`); goal detection already
-rejects above-cavity crossings and keeps bar-down goals
-(`goal_detection_rules.gd:111-114, 139`); shot-on-net/Corsi margins already
-classify over-bar (`shot_on_net_rules.gd`). Remaining items:
+### 5.4 Unchanged from v2
 
-- In-tight misses now routinely fly the glass behind the net: the net-stuck
-  whistle (`game_manager.gd:630-660`) and behind-net board play get more
-  traffic — existing behavior, verify feel.
-- The crossbar solve spans `NET_CROWN_HALF_WIDTH` 0.815 vs the 0.915 post
-  line — the top-corner bend is unmodeled. Lower priority than under v1
-  (on-net shots don't cross up there) but tips/misses can; keep as a
-  phase-3 nicety.
+Over-bar physics (crossbar/top-panel/behind-net) is live code; goal detection
+already rejects above-cavity; shot-on-net margins already classify over-bar.
+The crossbar crown/post-span corner gap (0.815 vs 0.915) is HOT again now
+that launched shots can cross above the bar near the posts — model the
+corner arcs this phase or next. The goalie over-bar reaction gate (§v2 5.3)
+still wanted: he must not save pucks that were sailing.
 
 ### 5.5 Tests
 
-Per `tests/CLAUDE.md`, calibration tables are pinned measurements — the
-implementation commits state that the new numbers are intended.
+Ladder tests replace the solve tests in `test_shot_mechanics` (per-gear
+rungs, band arithmetic at fixed charge, never-sail M88, host-clamp grid);
+blade-lever calibration pins ladder ordering per rung; rung-picker tests in
+`test_ai_action_scoring`; deflect-mode tests in `test_puck_collision_rules`;
+AI calibration suites re-pinned (the parked pending in
+`test_real_goalie_shot_outcomes` stays parked until the goalie high-game
+pass). Benchmarks after (rung iteration is 3× the v2 solve — still trivial).
 
-- **Rewritten contracts**:
-  - `test_shot_mechanics.gd:401-414` (fixed-vy-across-power) → replaced by:
-    arrival-at-`H` property over a solvable (range × power × gear) grid;
-    clamp behavior at/below the toe cap; unreachable → toe-cap lob;
-    quick-pass releases bit-exact against the old table.
-  - `test_shot_mechanics.gd:617-628` (face never binds at pace) → inverted:
-    per-gear arcs *differ* at pace; min-roofing-distance ordering
-    M28 < M92 < M88 at fixed pace, shrinking with pace.
-  - `test_shot_mechanics.gd:649-669` (roofing gradient) → re-pinned at the
-    new gradient (~1.1 / 3.0 / 6.4 m @ 18 m/s).
-  - `test_blade_lever_calibration.gd:148-167` (crossbar ceiling pinned for
-    every curve) → new invariants: LOW never crosses cleanly over the bar at
-    max power for either shot type, any gear (the 4.85 ceiling); the HIGH solve never targets above the cavity;
-    toe caps ordered; quick-pass table gear-invariant.
-- **New pins**: max honest `direction.y` < 0.75 across the gear × power ×
-  level × distance grid; goalie over-bar gate; `is_puck_airborne` under the
-  8.5° soft saucer; "position enters only via d" (two releases at equal d,
-  different world positions, identical `ShotResult`).
-- **Re-pins**: high-band reachability tests (`test_ai_action_scoring.gd:
-  601-628` — both are statements about the deleted pace solve), beatability
-  goal maps, shot-value calibration grid, slot truth, angle sweep (its
-  documented arrival-height artefact disappears with the solve), butterfly
-  arrival table, real-goalie outcome tables. The sweep deltas are the
-  acceptance evidence for §5.3's retune.
-- **Benchmarks**: `-gdir=res://benchmarks` before/after phase 2.
+## 6. Open items after this lands
 
-### 5.6 Docs to update at implementation
+1. Playtest the ladder values (§1 table is the tuning surface).
+2. The goalie high-game complement (pre-arm read) if mastered static snipes
+   still feel free.
+3. The contact-point visual tell (puck rides heel→toe) — replaces chevrons
+   eventually, makes the level readable to the defense.
+4. Crossbar corner-arc collision if not done in this pass.
+5. Docs pass: gameplay-design.md, ARCHITECTURE.md elevation + deflect
+   sections, area CLAUDE.mds, tutorial/drill audit (tutorial steps reference
+   LOW tips / HIGH lobs — remap to the new modes).
 
-`docs/gameplay-design.md:25` (the loft paragraph — rewritten around contact
-points and the solve), `ARCHITECTURE.md` elevation section,
-`Scripts/domain/ai/CLAUDE.md` shot-danger bullet (arrival-honesty story
-replaced by the clamp story), `Scripts/domain/state/CLAUDE.md` blade-curve
-bullet, `player_attributes.gd` curve doc-block (face angle → toe cap),
-`skater_controller.gd:595-610` doc-block, `docs/attributes-v4-plan.md` §5.2
-superseded pointer. The "trajectory is never a function of position"
-statements are amended, not deleted: position enters only as
-distance-to-goal-plane.
+## 7. Out-of-scope flags (carried from earlier phases)
 
-### 5.7 Optional companion: the contact-point tell
-
-If the level is where the puck sits on the blade, the carried puck can
-visibly ride heel / mid / toe with the selected level (the scoop pose
-already eases with level — `skater.gd:1169` — and the carry anchor exists).
-A defender or goalie who watches the blade sees the toe carry and knows
-upstairs is coming: honest, physical deception counterplay, and the
-compensating read for `H`-determinism. Small, separable, user-testable —
-proposed as a follow-up issue rather than part of the core rework.
-
-## 6. Phasing
-
-1. **Domain mechanics** — the solve + config fields, `PlayerAttributes` toe
-   table/accessor, controller wiring (release-point → goal-plane distance),
-   quick-pass path preservation, mechanics tests. Human-feel-testable
-   immediately; bots mis-model their own shots until phase 2 (acceptable on
-   the branch).
-2. **AI** — delete the pace solve, clamp-based hole read at full pace,
-   dump/clear hang re-derivation, airborne gate, calibration re-pins,
-   benchmarks.
-3. **Goalie + world** — over-bar gate, the high-game retune against the
-   sweeps, net-stuck/behind-net feel check, (optional) crossbar corner arcs.
-4. **Docs + drills audit + tuning** — tutorial HIGH prompts, accuracy-drill
-   targets (LOW-calibrated, re-verify against 8.5°), per-gear cap tuning pass.
-
-## 7. Open questions (for review before phase 1)
-
-1. **θ_low = 8.5° + the 4.85 m/s ceiling** (settled in review): the saucer
-   stays near today's (~0.24 m), max-charge LOW tops out at crossbar pings
-   for both wristers and slappers, and clean sails are impossible. The
-   ceiling exists because slappers reach 40 m/s, where a pure set angle
-   sails from mid-range.
-2. **Toe caps 15° / 22° / 45°**: sets the roofing gradient at pace
-   (~6.4 / 3.0 / 1.1 m @ 40 mph). Playtest lever.
-3. **H = 1.05 m**: how tight under the cavity top (~1.18 m) the solve aims.
-   Higher = sniping the paint under the bar; lower = safer margin off the
-   goalie's glove arc.
-4. **Goalie high-game retune scope** (§5.3): accept up-front that the
-   set-keeper-shuts-the-top story changes, and the retune targets
-   "hard but real" rather than restoring it.
-5. **The contact-point tell** (§5.7): file as follow-up issue?
-
-## 8. Out-of-scope flags (found while researching, not part of this rework)
-
-- `test_shot_mechanics.gd:606-613` hard-codes closed = 23° "from
-  PlayerAttributes._CURVE_FACE_ANGLE_DEG", but the shipped table is 26°
-  (`player_attributes.gd:287`) — the test's local constants drifted from the
-  table they claim to mirror (its 5.20 m pin is the 23° value; the shipped
-  26° gives ~4.5 m, which is what the docs quote). Harmless today, but the
-  pins misdocument the game. Moot for the sections this rework rewrites;
-  flagged in case any survive.
-- `docs/attributes-v4-plan.md` §5.2 likewise still reads 23°/5.2 m.
+- `docs/attributes-v4-plan.md` §5.2 still describes the 23°/5.2 m face-angle
+  model (twice superseded).

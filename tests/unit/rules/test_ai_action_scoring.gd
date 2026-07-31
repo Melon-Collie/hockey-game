@@ -465,12 +465,13 @@ func test_shot_danger_down_goalie_slot_is_roofed() -> void:
 	# roofs — at FULL pace: the contact-point solve adapts the launch angle so
 	# the arc arrives top-shelf, instead of the old fixed-vy rip that crossed
 	# the line at belly height and smacked his chest.
-	var shooter := Vector3(0.0, 0.0, 21.65)
+	var shooter := Vector3(0.0, 0.0, 22.45)   # 4.2 m — the MID rung's pocket
 	var goalie := Vector3(0.0, 0.0, 25.05)
 	var loft: int = AIActionScoring.best_shot_loft(
 			shooter, GOAL, goalie, NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S,
 			0.0, 0.0, true)   # down, five-hole sealed
-	assert_eq(loft, ShotMechanics.ELEVATION_HIGH, "roof the butterflied goalie")
+	assert_eq(loft, ShotMechanics.ELEVATION_MID,
+			"roof the butterflied goalie — the slot's in-band rung is MID")
 
 
 func test_shot_danger_point_blank_into_a_set_goalie_is_smothered() -> void:
@@ -577,7 +578,7 @@ func test_shot_danger_top_band_glove_race_in_tight_deploy_shuts_it_at_range() ->
 	# to his body covers the whole deploy and the set glove shuts the band. A
 	# DOWN goalie concedes the arm extension entirely (glove starts at the
 	# pads), so his top corner reads at least as open as the set goalie's.
-	var shooter := Vector3(0.0, 0.0, 23.65)    # 3 m
+	var shooter := Vector3(0.0, 0.0, 24.45)    # 2.2 m — the HIGH rung's pocket
 	var goalie := Vector3(0.0, 0.0, 25.9)
 	var set_high: float = AIActionScoring._hole_open_angle(
 			0, shooter, GOAL, goalie, NET_HW, 33.0, 0.0)
@@ -616,28 +617,37 @@ func test_point_blank_roof_is_live_over_a_down_goalie() -> void:
 			"a leaking five-hole out-simples the roof")
 
 
-func test_high_band_shut_by_a_closed_toe_in_tight() -> void:
-	# The roofing gradient IS the toe clamp: from 3 m the required launch
-	# angle exceeds a closed blade's toe cap (M88's 15°), the clamped arc
-	# arrives below the pad-top seam, and the band is structurally closed —
-	# the same M88 shooter from range is unclamped and roofs fine.
-	var closed_toe: float = 0.26795   # tan 15°
-	assert_almost_eq(AIActionScoring._band_pace(1, 3.0, 33.0, closed_toe), 0.0,
-			0.0001, "closed toe in tight: the clamped arc never reaches the band")
-	assert_gt(AIActionScoring._band_pace(1, 8.0, 33.0, closed_toe), 0.0,
-			"the same blade from the slot is unclamped — band live")
-	assert_gt(AIActionScoring._band_pace(1, 3.0, 33.0, 1.0), 0.0,
-			"the open toe roofs from 3 m at full pace")
+func test_high_band_is_a_rung_choice_per_ladder() -> void:
+	# The roofing gradient IS the ladder: from 2 m only the M28's 30° rung
+	# gets up in time (the M88's flattest ladder arrives under the pad seam
+	# on every rung); at 4 m the M88's MID rung lands in-band; and from the
+	# point the default ladder's in-band rung is LOW — the mid-blade snipe —
+	# because every steeper rung would miss high and the band never lets the
+	# bot sail on purpose.
+	var m88 := Vector3(0.12278, 0.24933, 0.40403)   # 7/14/22 deg
+	var m28 := Vector3(0.14945, 0.28675, 0.57735)   # 8.5/16/30 deg
+	assert_almost_eq(AIActionScoring._band_pace(1, 2.0, 33.0, m88), 0.0, 0.0001,
+			"the flat ladder cannot roof the doorstep")
+	assert_gt(AIActionScoring._band_pace(1, 2.0, 33.0, m28), 0.0,
+			"the toe hook can")
+	assert_gt(AIActionScoring._band_pace(1, 4.0, 33.0, m88), 0.0,
+			"the M88's MID rung lands in-band from 4 m")
+	assert_eq(AIActionScoring._best_high_rung(2.0, 33.0, m28),
+			ShotMechanics.ELEVATION_HIGH, "the doorstep roof commits the toe rung")
+	assert_eq(AIActionScoring._best_high_rung(15.0, 33.0),
+			ShotMechanics.ELEVATION_LOW,
+			"from the point the top-shelf rung is the mid-blade snipe")
 
 
 func test_standing_keeper_on_top_bars_the_point_blank_roof() -> void:
-	# Against a STANDING goalie right on the puck, the flat-root arc crosses
+	# Against a STANDING goalie right on the puck, even the toe rung crosses
 	# his plane under the stick assembly (PADDLE_HEIGHT_M) — the paddle eats
 	# it, so the band is closed and the finish stays flat. (Only the DOWN
 	# goalie, paddle on the ice, concedes the doorstep roof.)
-	assert_almost_eq(AIActionScoring._band_pace(1, 2.0, 33.0, 1.0, 1.0), 0.0,
+	var m28 := Vector3(0.14945, 0.28675, 0.57735)
+	assert_almost_eq(AIActionScoring._band_pace(1, 2.0, 33.0, m28, 1.0), 0.0,
 			0.0001, "standing keeper at 1 m: the paddle bars the roof")
-	assert_gt(AIActionScoring._band_pace(1, 2.0, 33.0, 1.0, 1.0, true), 0.0,
+	assert_gt(AIActionScoring._band_pace(1, 2.0, 33.0, m28, 1.0, true), 0.0,
 			"the same look over a DOWN goalie is live")
 
 
@@ -713,7 +723,7 @@ func test_shot_aim_roofs_toward_a_post() -> void:
 	# CORNER (near a post), not dead centre — aim and loft describe the same
 	# hole. (A SET goalie's slot no longer roofs at all — see the arrival-
 	# honesty tests above.)
-	var shooter := Vector3(0.0, 0.0, 21.65)
+	var shooter := Vector3(0.0, 0.0, 22.45)   # 4.2 m — the MID rung's pocket
 	var goalie := Vector3(0.0, 0.0, 25.05)
 	var loft: int = AIActionScoring.best_shot_loft(
 			shooter, GOAL, goalie, NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S,
@@ -721,7 +731,7 @@ func test_shot_aim_roofs_toward_a_post() -> void:
 	var aim: Vector3 = AIActionScoring.best_shot_aim(
 			shooter, GOAL, goalie, NET_HW, AIActionScoring.WRISTER_SHOT_SPEED_M_S,
 			0.0, 0.0, true)
-	assert_eq(loft, ShotMechanics.ELEVATION_HIGH, "the down goalie's opening is up high")
+	assert_eq(loft, ShotMechanics.ELEVATION_MID, "the down goalie's opening is up high")
 	assert_gt(absf(aim.x), 0.4, "...so the aim is a top corner, not the goalie's chest")
 
 
@@ -2494,7 +2504,7 @@ func test_committed_glove_side_covers_and_vacates_correctly() -> void:
 	# Glove dragged WIDE toward net-left (a committed reach): its side's high
 	# corner is covered sooner, and the vacated right side (blocker parked
 	# low) opens — per-side asymmetry the band aggregate could never see.
-	var shooter := Vector3(0.0, 0.0, GOAL.z - 6.0)
+	var shooter := Vector3(0.0, 0.0, GOAL.z - 4.5)   # the MID rung's pocket
 	var goalie := Vector3(0.0, 0.0, GOAL.z - 1.2)
 	var committed_left := Vector4(-0.80, 0.95, 0.44, 0.40)  # glove wide-left, blocker low
 	var left_open: float = AIActionScoring._hole_open_angle(

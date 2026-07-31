@@ -8,8 +8,8 @@ const BYTES_SIZE: int = 24
 #         block_held[8] stick_lift_held[9] stick_lift_pressed[10] quick_pass_pressed[11]
 #         hit_held[12]
 
-# Highest legal loft level (ShotMechanics.ELEVATION_HIGH). Decode clamps the
-# 2-bit wire field to this so a forged 3 can't reach the shot math.
+# Highest legal loft level (ShotMechanics.ELEVATION_HIGH = 3). The 2-bit wire
+# field spans exactly 0..3, so decode's clamp to this is belt-and-braces.
 const MAX_ELEVATION_LEVEL: int = ShotMechanics.ELEVATION_HIGH
 
 var host_timestamp: float = 0.0

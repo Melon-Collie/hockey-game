@@ -1559,14 +1559,14 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					_shot_env_unsettled, _shot_env_five_hole, _shot_env_goalie_down,
 					_shot_env_seal_x, _shot_env_seal_tall, ctx.self_aim_spread_rad,
-					shot_screen_dist, _shot_env_hands, _shot_env_pads, ctx.self_loft_tan)
+					shot_screen_dist, _shot_env_hands, _shot_env_pads, ctx.self_loft_tans)
 			shot_aim_point = AIActionScoring.best_shot_aim(
 					_shot_sample_release, attacking_goal, _shot_sample_goalie,
 					GameRules.NET_HALF_WIDTH, _shot_sample_speed,
 					_shot_env_unsettled, _shot_env_five_hole, _shot_env_goalie_down,
 					ctx.self_aim_spread_rad,
 					_shot_env_seal_x, _shot_env_seal_tall, shot_screen_dist,
-					_shot_env_hands, _shot_env_pads, ctx.self_loft_tan)
+					_shot_env_hands, _shot_env_pads, ctx.self_loft_tans)
 			# Full power for every hole: the contact-point solve adapts the
 			# LAUNCH ANGLE, so pace only buys flight time and toe-clamp relief.
 			shot_power_t = 1.0

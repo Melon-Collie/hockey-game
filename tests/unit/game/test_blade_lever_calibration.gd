@@ -145,30 +145,29 @@ func test_apply_is_idempotent() -> void:
 
 # ── Flex + curve calibration (the shot gear slots) ───────────────────────────
 
-func test_toe_cap_is_the_only_loft_lever_per_curve() -> void:
-	# The contact-point model's gear contract (docs/elevation-rework-plan.md):
-	# the QUICK-PASS loft table (fixed vertical speeds — the saucer and the
-	# flip) is identical for every curve, and the charged-shot TOE CAP is the
-	# one elevation lever, ordered closed < balanced < open with open at the
-	# universal cap. (LOW's no-sail ceiling and HIGH's solved arrival are
-	# pinned in test_shot_mechanics.)
+func test_ladder_is_the_loft_lever_per_curve() -> void:
+	# The gear contract (docs/elevation-rework-plan.md v3): the QUICK-PASS
+	# loft table is identical for every curve, and the charged-shot ANGLE
+	# LADDER is the elevation lever — every rung steeper on the open blade,
+	# all rungs under the universal guard.
 	var c := _make_controller()
 	c.apply_attributes(PlayerAttributes.all_average())
 	var neutral_high: float = c.loft_vertical_speed_high
 	var neutral_low: float = c.loft_vertical_speed_low
-	var neutral_tan: float = c.loft_tan_max
-	for curve: int in [PlayerAttributes.CURVE_CLOSED, PlayerAttributes.CURVE_OPEN]:
-		c.apply_attributes(PlayerAttributes.new(73, 201, 1, curve, 1, 1))
-		assert_almost_eq(c.loft_vertical_speed_high, neutral_high, 0.0001,
-				"quick-pass HIGH untouched by curve %d" % curve)
-		assert_almost_eq(c.loft_vertical_speed_low, neutral_low, 0.0001,
-				"quick-pass LOW untouched by curve %d" % curve)
+	var m92_tans := Vector3(c.loft_tan_low, c.loft_tan_mid, c.loft_tan_high)
 	c.apply_attributes(PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1))
-	assert_lt(c.loft_tan_max, neutral_tan, "closed toe caps under balanced")
+	assert_almost_eq(c.loft_vertical_speed_high, neutral_high, 0.0001,
+			"quick-pass HIGH untouched by curve")
+	assert_almost_eq(c.loft_vertical_speed_low, neutral_low, 0.0001,
+			"quick-pass LOW untouched by curve")
+	var m88_tans := Vector3(c.loft_tan_low, c.loft_tan_mid, c.loft_tan_high)
 	c.apply_attributes(PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1))
-	assert_gt(c.loft_tan_max, neutral_tan, "open toe caps over balanced")
-	assert_almost_eq(c.loft_tan_max, ShotMechanics.MAX_LOFT_RATIO, 0.0001,
-			"open = the universal cap")
+	var m28_tans := Vector3(c.loft_tan_low, c.loft_tan_mid, c.loft_tan_high)
+	for i: int in 3:
+		assert_lt(m88_tans[i], m92_tans[i], "closed under balanced at rung %d" % i)
+		assert_lt(m92_tans[i], m28_tans[i], "balanced under open at rung %d" % i)
+		assert_lt(m28_tans[i], ShotMechanics.MAX_LOFT_RATIO,
+				"under the guard at rung %d" % i)
 
 
 func test_flex_leans_ceiling_and_windup_together() -> void:

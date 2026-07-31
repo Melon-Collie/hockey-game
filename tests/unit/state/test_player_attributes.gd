@@ -500,13 +500,16 @@ func test_curve_trades_toe_cap_and_release_for_backhand() -> void:
 	var m88 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
 	var m92 := PlayerAttributes.all_average()
 	var m28 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1)
-	# The toe cap is the elevation lever (the clamp on HIGH's solved launch
-	# angle): M28 > M92 > M88, and the M28's 45° equals the universal
-	# launch-angle cap.
-	assert_lt(m88.curve_toe_tan(), m92.curve_toe_tan(), "M88's toe gives the least")
-	assert_lt(m92.curve_toe_tan(), m28.curve_toe_tan())
-	assert_almost_eq(m28.curve_toe_tan(), ShotMechanics.MAX_LOFT_RATIO, 0.0001,
-			"M28 toe = the universal 45° cap")
+	# The angle ladder is the elevation lever: every rung steeper on the M28,
+	# flatter on the M88, all rungs under the universal launch-angle guard.
+	assert_lt(m88.curve_loft_tan_high(), m92.curve_loft_tan_high(),
+			"M88's toe gives the least")
+	assert_lt(m92.curve_loft_tan_high(), m28.curve_loft_tan_high())
+	assert_lt(m88.curve_loft_tan_low(), m92.curve_loft_tan_low())
+	assert_lt(m92.curve_loft_tan_low(), m28.curve_loft_tan_low())
+	assert_lt(m88.curve_loft_tan_mid(), m28.curve_loft_tan_mid())
+	assert_lt(m28.curve_loft_tan_high(), ShotMechanics.MAX_LOFT_RATIO,
+			"the whole ladder sits under the universal guard")
 	assert_lt(m28.wrister_runway_mult(), 1.0, "M28 is the quick release (banked)")
 	assert_gt(m88.curve_backhand_mult(), m28.curve_backhand_mult())
 	# Backhand relief approaches but never reaches forehand parity: the

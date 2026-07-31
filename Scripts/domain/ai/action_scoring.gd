@@ -117,15 +117,15 @@ const SLOT_RADIUS_M: float = 6.0
 #   3,4  bottom corners  -> FLAT      (beside the pads)
 #   5    five-hole       -> FLAT      (between the legs — opens when he's moving)
 #
-# HIGH holes fire the contact-point solve (docs/elevation-rework-plan.md): the
-# release is FULL pace and the LAUNCH ANGLE adapts — ShotMechanics.shot_loft_y
-# lands the arc at the target height on the goal plane, clamped by the
-# shooter's blade TOE CAP. Whether a top-band look exists from here is
-# therefore the CLAMP: in tight the required angle is steep, so an open toe
-# roofs from the doorstep while a closed one is structurally shut until the
-# high slot (_high_band_pace returns 0). A DOWN goalie still concedes the top
-# band's arm extension (the butterfly's defining trade); a SET goalie keeps
-# only the reaction race, now at full-pace flight times.
+# HIGH holes ride the manual angle ladder (docs/elevation-rework-plan.md v3):
+# the release is FULL pace and the bot PICKS THE RUNG — the elevated level
+# whose set-angle arc arrives highest in the top band without missing high
+# (_best_high_rung), the same read a practiced human makes. From the point
+# that rung is LOW (the mid-blade snipe); in tight it is the toe, and only a
+# steep ladder has one that gets up in time — the roofing gradient. A DOWN
+# goalie still concedes the top band's arm extension (the butterfly's
+# defining trade); a SET goalie keeps the reaction race at full-pace flight
+# times.
 #
 # The goalie FREEZES on the shot (he can't slide into it), so the only thing
 # range buys him is REACTION time to extend the relevant body part to the
@@ -240,10 +240,6 @@ static func stick_low_cover() -> float:
 # beyond it is the real lateral push (_goalie_lateral_reach in _band_cover) —
 # the old 0.15 "pad push" was a stand-in for the push term that now exists.
 const HOLE_BAND_EXT: Array[float] = [0.0, 0.45]
-const HOLE_BAND_LOFT: Array[int] = [                       # loft the band's hole is shot with
-		ShotMechanics.ELEVATION_FLAT,   # LOW  → flat
-		ShotMechanics.ELEVATION_HIGH,   # HIGH → roof it
-]
 const GOALIE_ARM_DEPLOY_S: float = 0.09   # reaction ramp width — time to extend to the placement.
 										  # Hard baseline: HIGH-band EXT (0.45) / glove_react_max_speed
 										  # (5.0) ≈ 0.09 s to cover the reaction-gated reach. The live
@@ -255,51 +251,73 @@ const GOALIE_ARM_DEPLOY_S: float = 0.09   # reaction ramp width — time to exte
 static func _band_delay(band: int) -> float:
 	return goalie_arm_delay_s if band == HOLE_BAND_HIGH else goalie_leg_delay_s
 
-# ── HIGH-band viability under the contact-point solve ─────────────────────────
-# A HIGH shot fires at FULL pace; ShotMechanics.shot_loft_y adapts the launch
-# angle to land the arc at the target height on the goal plane, clamped by the
-# shooter's toe cap — the bot flies the IDENTICAL arc the live release will
-# (same solve, same inputs), so the model and the shot cannot drift. The band
-# is structurally closed only when that (possibly toe-clamped) arc fails one
-# of two physical bars:
-#   · its arrival at the net is still below the PAD-TOP SEAM
-#     (GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M — the 0.86 m pad/torso
-#     boundary): a shot into the pad column the LOW band already models. An
-#     unclamped solve arrives above the seam by construction, so this bar IS
-#     the toe-cap roofing gradient — the closed blade in tight.
-#   · it crosses a STANDING goalie's plane below his stick assembly
-#     (GoalieStickRules.PADDLE_HEIGHT_M, 0.66 m) — into the paddle, not over
-#     him. The band between the paddle and the 0.86 m seam stays a real gap
-#     where only the pads reach (the same at-his-body correction t_reach
-#     makes: the save happens at the keeper, not the goal line). A DOWN
-#     goalie's paddle is lying on the ice (blade height, the LOW band's
-#     business), so his plane bars nothing here — which is exactly what
-#     leaves the doorstep roof over the butterfly live at full pace.
+# ── HIGH-band viability under the angle ladder ────────────────────────────────
+# The four loft levels are SET ANGLES from the shooter's blade ladder
+# (docs/elevation-rework-plan.md v3), so a top-band look is a RUNG CHOICE:
+# the bot picks the elevated rung whose full-pace arc arrives highest inside
+# the band at the net — top shelf, without missing high — which is the same
+# read a practiced human makes. The band:
+#   · floor — the PAD-TOP SEAM (GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M,
+#     0.86 m): below it the shot is contested by the pad column the LOW band
+#     already models. A flat ladder in tight arrives under the seam on every
+#     rung — the roofing gradient.
+#   · ceiling — the scoring cavity's top (HIGH_BAND_CEILING_M): above it the
+#     puck misses high. A steep ladder at range sails on every rung — bots
+#     never deliberately miss.
+#   · a STANDING keeper's plane — the arc must cross him above his stick
+#     assembly (GoalieStickRules.PADDLE_HEIGHT_M); a DOWN goalie's paddle is
+#     on the ice (the LOW band's business) and bars nothing, which is what
+#     leaves the doorstep roof over the butterfly live.
 const GRAVITY_M_S2: float = 9.8   # engine default the airborne puck falls under
+# Scoring cavity top: NET_HEIGHT − post radius − puck half-height, less a
+# whisker — mirrors goal detection's under-the-bar bound.
+const HIGH_BAND_CEILING_M: float = 1.17
+# The M92 (league-neutral) ladder — the default wherever a build isn't known
+# (defensive reads of opponents, unwired tests).
+const DEFAULT_LOFT_TANS: Vector3 = Vector3(0.1405, 0.2679, 0.4877)
 
 
-# Horizontal pace of the full-power HIGH release from `dist`, or 0.0 when the
-# band is structurally closed (see the block above).
+# Arrival height (m above launch) of a set-angle arc at `dist`:
+#   h = d·tan − g·d²·(1 + tan²) / (2p²)
+static func _arrival_height(dist: float, speed: float, tan_a: float) -> float:
+	return dist * tan_a \
+			- GRAVITY_M_S2 * dist * dist * (1.0 + tan_a * tan_a) / (2.0 * speed * speed)
+
+
+# The elevated LEVEL (ELEVATION_LOW..HIGH) whose full-pace arc lands highest
+# inside the band from `dist`, or 0 (ELEVATION_FLAT) when no rung does — the
+# committed loft of a HIGH-band hole (best_shot_loft) and its viability.
+static func _best_high_rung(dist: float, shot_speed_m_s: float,
+		loft_tans: Vector3 = DEFAULT_LOFT_TANS, goalie_dist: float = -1.0,
+		goalie_down: bool = false) -> int:
+	var best_level: int = ShotMechanics.ELEVATION_FLAT
+	var best_arrive: float = -INF
+	for i: int in 3:
+		var tan_a: float = loft_tans[i]
+		var arrive: float = _arrival_height(dist, shot_speed_m_s, tan_a)
+		if arrive < GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M \
+				or arrive > HIGH_BAND_CEILING_M:
+			continue
+		if goalie_dist > 0.0 and not goalie_down and _arrival_height(
+				goalie_dist, shot_speed_m_s, tan_a) < GoalieStickRules.PADDLE_HEIGHT_M:
+			continue
+		if arrive > best_arrive:
+			best_arrive = arrive
+			best_level = ShotMechanics.ELEVATION_LOW + i
+	return best_level
+
+
+# Horizontal pace of the full-power release on the chosen rung from `dist`,
+# or 0.0 when the band is structurally closed (no rung lands in it).
 static func _high_band_pace(dist: float, shot_speed_m_s: float,
-		toe_tan: float = 1.0, goalie_dist: float = -1.0,
+		loft_tans: Vector3 = DEFAULT_LOFT_TANS, goalie_dist: float = -1.0,
 		goalie_down: bool = false) -> float:
-	var y: float = ShotMechanics.shot_loft_y(shot_speed_m_s,
-			ShotMechanics.ELEVATION_HIGH, dist,
-			GameRules.DEFAULT_LOFT_TAN_LOW, GameRules.DEFAULT_LOFT_VY_LOW_CAP_M_S,
-			toe_tan, GameRules.DEFAULT_LOFT_TARGET_HEIGHT_M)
-	var inv_norm: float = 1.0 / sqrt(1.0 + y * y)
-	var v_h: float = maxf(shot_speed_m_s * inv_norm, 0.001)
-	var v_y: float = shot_speed_m_s * y * inv_norm
-	var t_net: float = dist / v_h
-	var arrive: float = v_y * t_net - 0.5 * GRAVITY_M_S2 * t_net * t_net
-	if arrive < GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M:
+	var level: int = _best_high_rung(dist, shot_speed_m_s, loft_tans,
+			goalie_dist, goalie_down)
+	if level == ShotMechanics.ELEVATION_FLAT:
 		return 0.0
-	if goalie_dist > 0.0 and not goalie_down:
-		var t_g: float = goalie_dist / v_h
-		var at_goalie: float = v_y * t_g - 0.5 * GRAVITY_M_S2 * t_g * t_g
-		if at_goalie < GoalieStickRules.PADDLE_HEIGHT_M:
-			return 0.0
-	return v_h
+	var tan_a: float = loft_tans[level - ShotMechanics.ELEVATION_LOW]
+	return shot_speed_m_s / sqrt(1.0 + tan_a * tan_a)
 
 
 # Horizontal pace (m/s) of a shot at hole band `band` over `dist` to the net —
@@ -308,10 +326,10 @@ static func _high_band_pace(dist: float, shot_speed_m_s: float,
 # rides the LOW band. Divides the shooter→goalie gap for the reach budget
 # (t_reach).
 static func _band_pace(band: int, dist: float, shot_speed_m_s: float,
-		toe_tan: float = 1.0, goalie_dist: float = -1.0,
+		loft_tans: Vector3 = DEFAULT_LOFT_TANS, goalie_dist: float = -1.0,
 		goalie_down: bool = false) -> float:
 	if band == HOLE_BAND_HIGH:
-		return _high_band_pace(dist, shot_speed_m_s, toe_tan, goalie_dist,
+		return _high_band_pace(dist, shot_speed_m_s, loft_tans, goalie_dist,
 				goalie_down)
 	return maxf(shot_speed_m_s, 1.0)
 
@@ -1202,7 +1220,7 @@ static func open_net_danger(
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
 		goalie_pads: Vector4 = Vector4.INF,
-		loft_tan: float = 1.0) -> float:
+		loft_tans: Vector3 = DEFAULT_LOFT_TANS) -> float:
 	# Best of the holes, SIGNED. Pure value-type math, no allocation — safe to
 	# run per carry candidate at tick rate (see _hole_margin). Pace is per-band
 	# inside _hole_margin: HIGH holes fly at the arrival-honest solved pace,
@@ -1212,7 +1230,7 @@ static func open_net_danger(
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-			screen_dist_m, goalie_hands, goalie_pads, loft_tan)
+			screen_dist_m, goalie_hands, goalie_pads, loft_tans)
 	# The two spreads are kept SEPARATE, and the distinction is load-bearing.
 	# The keeper's edge fuzziness widens the effective WINDOW (his wall is not
 	# a line); the shooter's dispersion decides whether the puck lands in it.
@@ -1311,14 +1329,14 @@ static func best_signed_margin(
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
 		goalie_pads: Vector4 = Vector4.INF,
-		loft_tan: float = 1.0) -> float:
+		loft_tans: Vector3 = DEFAULT_LOFT_TANS) -> float:
 	var best: float = HOLE_STRUCTURALLY_CLOSED_RAD
 	for i: int in HOLE_COUNT:
 		var m: float = _hole_margin(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 				goalie_five_hole_m, goalie_down,
 				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-				screen_dist_m, goalie_hands, goalie_pads, loft_tan)
+				screen_dist_m, goalie_hands, goalie_pads, loft_tans)
 		if m > best:
 			best = m
 	return best
@@ -1340,14 +1358,14 @@ static func best_open_angle(
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
 		goalie_pads: Vector4 = Vector4.INF,
-		loft_tan: float = 1.0) -> float:
+		loft_tans: Vector3 = DEFAULT_LOFT_TANS) -> float:
 	var best_angle: float = 0.0
 	for i: int in HOLE_COUNT:
 		var a: float = _hole_open_angle(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 				goalie_five_hole_m, goalie_down,
 				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-				screen_dist_m, goalie_hands, goalie_pads, loft_tan)
+				screen_dist_m, goalie_hands, goalie_pads, loft_tans)
 		if a > best_angle:
 			best_angle = a
 	return best_angle
@@ -1439,13 +1457,13 @@ static func expected_goals(
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
 		goalie_pads: Vector4 = Vector4.INF,
-		loft_tan: float = 1.0,
+		loft_tans: Vector3 = DEFAULT_LOFT_TANS,
 		release_spread_rad: float = XG_BASE_SPREAD_RAD) -> float:
 	var window: float = best_open_angle(shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, XG_ENTRY_SPREAD_RAD,
-			screen_dist_m, goalie_hands, goalie_pads, loft_tan)
+			screen_dist_m, goalie_hands, goalie_pads, loft_tans)
 	var placed: float = _placement_probability(window, release_spread_rad)
 	# Miss the open window and the goalie still has to actually stop it.
 	return minf(XG_MAX, placed + (1.0 - placed) * XG_COVERED_LEAK)
@@ -1467,15 +1485,16 @@ static func best_shot_loft(
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
 		goalie_pads: Vector4 = Vector4.INF,
-		loft_tan: float = 1.0) -> int:
+		loft_tans: Vector3 = DEFAULT_LOFT_TANS) -> int:
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-			screen_dist_m, goalie_hands, goalie_pads, loft_tan)
-	if hole < 0:
+			screen_dist_m, goalie_hands, goalie_pads, loft_tans)
+	if hole < 0 or HOLE_BAND[hole] != HOLE_BAND_HIGH:
 		return ShotMechanics.ELEVATION_FLAT
-	return HOLE_BAND_LOFT[HOLE_BAND[hole]]
+	return _best_high_rung(shooter.distance_to(attacking_goal), shot_speed_m_s,
+			loft_tans, _xz_dist(shooter, goalie_pos), goalie_down)
 
 
 # (best_shot_power_t is gone: under the contact-point solve EVERY hole fires
@@ -1499,17 +1518,17 @@ static func best_shot_aim(
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
 		goalie_pads: Vector4 = Vector4.INF,
-		loft_tan: float = 1.0) -> Vector3:
+		loft_tans: Vector3 = DEFAULT_LOFT_TANS) -> Vector3:
 	var hole: int = _choose_shot_hole(shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-			screen_dist_m, goalie_hands, goalie_pads, loft_tan)
+			screen_dist_m, goalie_hands, goalie_pads, loft_tans)
 	if hole < 0:
 		return Vector3(attacking_goal.x, 0.0, attacking_goal.z)
 	var aim_x: float = _hole_aim_x(hole, shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, goalie_unsettled_factor, aim_spread_rad,
-			goalie_down, screen_dist_m, goalie_hands, goalie_pads, loft_tan)
+			goalie_down, screen_dist_m, goalie_hands, goalie_pads, loft_tans)
 	return Vector3(aim_x, 0.0, attacking_goal.z)
 
 
@@ -1528,7 +1547,7 @@ static func _choose_shot_hole(
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
 		goalie_pads: Vector4 = Vector4.INF,
-		loft_tan: float = 1.0) -> int:
+		loft_tans: Vector3 = DEFAULT_LOFT_TANS) -> int:
 	# Chosen on the SIGNED margin, not the clamped opening, so the hole the bot
 	# aims at is the hole open_net_danger scored. With a soft cover edge a
 	# marginally-covered corner still carries real value; the clamped chooser
@@ -1542,7 +1561,7 @@ static func _choose_shot_hole(
 		var a: float = _hole_margin(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, shot_speed_m_s, unsettled, goalie_five_hole_m, goalie_down,
 				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-				screen_dist_m, goalie_hands, goalie_pads, loft_tan)
+				screen_dist_m, goalie_hands, goalie_pads, loft_tans)
 		if a > best_margin:
 			best_margin = a
 	if best_margin <= HOLE_STRUCTURALLY_CLOSED_RAD:
@@ -1558,10 +1577,10 @@ static func _choose_shot_hole(
 		var a: float = _hole_margin(i, shooter, attacking_goal, goalie_pos,
 				net_half_width, shot_speed_m_s, unsettled, goalie_five_hole_m, goalie_down,
 				goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-				screen_dist_m, goalie_hands, goalie_pads, loft_tan)
+				screen_dist_m, goalie_hands, goalie_pads, loft_tans)
 		if a < threshold or a <= HOLE_STRUCTURALLY_CLOSED_RAD:
 			continue
-		var band_loft: int = HOLE_BAND_LOFT[HOLE_BAND[i]]
+		var band_loft: int = HOLE_BAND[i]   # LOW band (flat) orders before HIGH
 		if band_loft < chosen_loft or (band_loft == chosen_loft and a > chosen_angle):
 			chosen_loft = band_loft
 			chosen_angle = a
@@ -1581,7 +1600,7 @@ static func _hole_aim_x(
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
 		goalie_pads: Vector4 = Vector4.INF,
-		loft_tan: float = 1.0) -> float:
+		loft_tans: Vector3 = DEFAULT_LOFT_TANS) -> float:
 	var kind: int = HOLE_KIND[i]
 	var side: int = HOLE_SIDE[i]
 	var band: int = HOLE_BAND[i]
@@ -1590,7 +1609,7 @@ static func _hole_aim_x(
 	# included. A chosen hole is never band-unreachable (its opening would have
 	# scored 0), so the fallback to full pace is belt-and-braces.
 	var pace: float = _band_pace(band, shooter.distance_to(attacking_goal),
-			shot_speed_m_s, loft_tan, _xz_dist(shooter, goalie_pos), goalie_down)
+			shot_speed_m_s, loft_tans, _xz_dist(shooter, goalie_pos), goalie_down)
 	if pace <= 0.0:
 		pace = maxf(shot_speed_m_s, 1.0)
 	var net_z: float = attacking_goal.z
@@ -1679,11 +1698,11 @@ static func _hole_open_angle(
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
 		goalie_pads: Vector4 = Vector4.INF,
-		loft_tan: float = 1.0) -> float:
+		loft_tans: Vector3 = DEFAULT_LOFT_TANS) -> float:
 	return maxf(0.0, _hole_margin(i, shooter, attacking_goal, goalie_pos,
 			net_half_width, shot_speed_m_s, unsettled, goalie_five_hole_m,
 			goalie_down, goalie_post_seal_x, goalie_post_seal_tall,
-			aim_spread_rad, screen_dist_m, goalie_hands, goalie_pads, loft_tan))
+			aim_spread_rad, screen_dist_m, goalie_hands, goalie_pads, loft_tans))
 
 
 # The five-hole's SIGNED margin from an effective slot width. The puck either
@@ -1727,7 +1746,7 @@ static func _hole_margin(
 		screen_dist_m: float = 0.0,
 		goalie_hands: Vector4 = Vector4.INF,
 		goalie_pads: Vector4 = Vector4.INF,
-		loft_tan: float = 1.0) -> float:
+		loft_tans: Vector3 = DEFAULT_LOFT_TANS) -> float:
 	var net_normal_z: float = -signf(attacking_goal.z)
 	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
 	if forward < 0.001:
@@ -1740,7 +1759,7 @@ static func _hole_margin(
 	# must physically reach the top band — see _band_pace); 0 = the band is
 	# structurally closed, so the hole isn't a target at all.
 	var pace: float = _band_pace(band, shooter.distance_to(attacking_goal),
-			shot_speed_m_s, loft_tan, _xz_dist(shooter, goalie_pos), goalie_down)
+			shot_speed_m_s, loft_tans, _xz_dist(shooter, goalie_pos), goalie_down)
 	if pace <= 0.0:
 		return HOLE_STRUCTURALLY_CLOSED_RAD
 	# Reach budget: the puck crosses the goalie's reach envelope at HIS body —
@@ -2123,7 +2142,7 @@ static func score_shoot(
 		screeners: Array[Vector3] = [],
 		goalie_hands: Vector4 = Vector4.INF,
 		goalie_pads: Vector4 = Vector4.INF,
-		loft_tan: float = 1.0) -> float:
+		loft_tans: Vector3 = DEFAULT_LOFT_TANS) -> float:
 	# No shot from on/behind the goal line: the mouth faces the other way, so there
 	# is no straight line from a back-there release into the net. Checked BEFORE
 	# the release clamp below — clamping a behind-the-net release used to teleport
@@ -2148,7 +2167,7 @@ static func score_shoot(
 			shot_speed_m_s, goalie_unsettled_factor,
 			goalie_five_hole_m, goalie_down,
 			goalie_post_seal_x, goalie_post_seal_tall, aim_spread_rad,
-			screen_dist, goalie_hands, goalie_pads, loft_tan)
+			screen_dist, goalie_hands, goalie_pads, loft_tans)
 	if shot_quality <= 0.0:
 		return 0.0
 	# Lane clear vs the aim point ShotAim picks (past the goalie's shadow) —
