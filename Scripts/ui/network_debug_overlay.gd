@@ -654,6 +654,29 @@ func _render_freeze_sweep() -> void:
 	if not PerfProbe.comparison_ready():
 		_lines.append("[color=#%s]%s Not enough frames yet — differences this early are noise, not findings.[/color]" % [
 			COL_WARN, DOT])
+	# Two self-checks the reader would otherwise have to run by eye. Draw-call
+	# spread says whether the modes actually saw comparable scenes — if the
+	# camera showed one mode a scrum and another an empty end, the timings are
+	# not comparable no matter how many frames were collected. Additivity says
+	# whether the parts explain the whole: the freezes are independent, so the
+	# single-system savings must sum to ALL's. When they do, the split is real.
+	if PerfProbe.sample_count(PerfProbe.Mode.NONE) > 0:
+		var lo: float = PerfProbe.mean_draws(PerfProbe.Mode.NONE)
+		var hi: float = lo
+		for m: int in PerfProbe.MODE_COUNT:
+			if PerfProbe.sample_count(m) == 0:
+				continue
+			lo = minf(lo, PerfProbe.mean_draws(m))
+			hi = maxf(hi, PerfProbe.mean_draws(m))
+		var spread: float = (hi - lo) / maxf(lo, 1.0)
+		_context(_band(spread, 0.08, 0.20), "Scene match", "%.0f%% draw-call spread" % (spread * 100.0),
+			"how alike the scenes each mode saw were; under ~8% they are comparable, high means the sweep needs longer")
+		var parts: float = 0.0
+		for m: int in [PerfProbe.Mode.RIG, PerfProbe.Mode.HUD, PerfProbe.Mode.VFX]:
+			parts += base_main - PerfProbe.mean_main_ms(m)
+		var whole: float = base_main - PerfProbe.mean_main_ms(PerfProbe.Mode.ALL)
+		_info("Adds up", "parts %.2f ms vs ALL %.2f ms" % [parts, whole],
+			"the three savings should sum to ALL's; close agreement means the split is a real decomposition rather than noise landing in an order that looks sensible")
 	# A debug build does NOT bias the three terms equally, so the split is
 	# readable but the verdict can be wrong. GDScript carries debug
 	# instrumentation (Script reads high), and an editor run shares the machine

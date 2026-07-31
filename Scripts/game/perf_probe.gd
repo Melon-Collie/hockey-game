@@ -133,6 +133,14 @@ static func set_auto_cycle(on: bool) -> void:
 # correct here — the mean over thousands of samples is the smoothing, and
 # pre-smoothing would bleed one mode's cost across a switch.
 static func record(frame_ms: float, main_ms: float, gpu_ms: float, draws: int) -> void:
+	# ONLY the interleaved sweep may contribute. Without this gate, every second
+	# spent with the panel open outside a sweep piled into whichever mode was
+	# left selected — in practice "off", which then carried both interleaved
+	# samples and a long uninterleaved tail. That is precisely the un-matched
+	# sampling the sweep exists to prevent, and it silently corrupts the one
+	# bucket every other mode is compared against.
+	if not auto_cycle:
+		return
 	if _since_switch < SETTLE_SECONDS:
 		return
 	_samples[mode] += 1
