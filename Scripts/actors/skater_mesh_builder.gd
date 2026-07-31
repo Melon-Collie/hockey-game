@@ -41,6 +41,10 @@ const _TORSO_PROFILE: Array[Vector2] = [
 	Vector2(-0.230, 0.214),
 	Vector2(-0.275, 0.222),  # jersey hem flare
 ]
+# Rear (+Z is the back) shift per _TORSO_PROFILE ring — the hockey-butt sway:
+# the seat builds through the lower back and peaks at the hem that drapes
+# over it, while the chest rings stay centered so the belly keeps its line.
+const _TORSO_REAR_SWAY: Array[float] = [0.0, 0.0, 0.0, 0.006, 0.018, 0.028, 0.032]
 const _THIGH_PROFILE: Array[Vector2] = [
 	Vector2(0.150, 0.142),
 	Vector2(0.050, 0.139),
@@ -53,10 +57,14 @@ const _SOCK_PROFILE: Array[Vector2] = [
 	Vector2(-0.040, 0.086),
 	Vector2(-0.150, 0.076),  # ankle
 ]
+# The collar ENDS just below its node origin: the scene seats that origin at
+# the boot's heel-top line, so the cuff perches ON the boot with ~1 cm of
+# overlap seal instead of dropping past the heel as a column (the old -0.100
+# bottom reached blade-holder depth and swallowed the boot's silhouette).
 const _SKATE_PROFILE: Array[Vector2] = [
 	Vector2(0.100, 0.090),   # boot collar
-	Vector2(0.020, 0.083),
-	Vector2(-0.100, 0.075),
+	Vector2(0.020, 0.082),
+	Vector2(-0.010, 0.078),
 ]
 
 # Chest reads wider than deep — lateral/depth scale on the torso lathe. The
@@ -121,7 +129,10 @@ const _SHOULDER_PROFILE: Array[Vector3] = [
 	Vector3(-0.137, 0.030, 1.0),   # arm-side taper
 ]
 
-const _HIP_RADIUS: float = 0.13
+# Hips fill the seat under the torso's rear sway: a touch bigger than the
+# 0.13 they shipped at, with the rearward seat bias carried by the HipL/R
+# nodes' scene position (z 0.035).
+const _HIP_RADIUS: float = 0.138
 const _KNEE_RADIUS: float = 0.095
 
 # Gloved fist: a beveled cube, slightly wider than deep and chamfered all
@@ -152,7 +163,15 @@ const _KNOB_BOTTOM_RADIUS: float = 0.03
 # (down). Envelope matches the prolate foot sphere it replaces (r 0.08, half
 # length 0.125).
 const _BOOT_STATIONS: Array[Vector4] = [
-	Vector4(0.115, 0.052, -0.040, 0.045),   # heel
+	# Heel top rises toward the collar like a real boot's quarter (was -0.040,
+	# which left the cuff floating over a low heel), meeting the collar's
+	# bottom so ankle and boot read as one piece from the side. The rearmost
+	# station runs the quarter back UNDER the collar's footprint (the cuff
+	# seats 0.10 heel-ward of this frame's origin, so its underside otherwise
+	# hangs bare behind the heel) — sole tucked well up so the stride's
+	# heel-kick arc can't drag it through the ice.
+	Vector4(0.155, 0.042, -0.062, 0.030),   # heel counter, under the cuff
+	Vector4(0.115, 0.052, -0.070, 0.045),   # heel
 	Vector4(0.045, 0.060, -0.072, 0.046),   # instep rise
 	Vector4(-0.045, 0.058, -0.048, 0.046),  # forefoot
 	Vector4(-0.115, 0.040, -0.012, 0.040),  # toe
@@ -174,6 +193,33 @@ const _BLADE_STEEL_COLOR := Color(0.82, 0.85, 0.88)
 # extreme builds — visually nil.
 const SKATE_LIFT_M: float = 0.04
 const _BLADE_ICE_Z: float = 0.080 + SKATE_LIFT_M
+# Skate accent stripe (see shared_skate_stripe): band height, its center on
+# the collar's local Y, and a radius just proud of the collar's sidewall at
+# that height (~0.085) so the band never z-fights the lathe under it.
+const SKATE_STRIPE_HEIGHT_M: float = 0.04
+const _SKATE_STRIPE_Y: float = 0.045
+const _SKATE_STRIPE_RADIUS: float = 0.092
+# Skate laces, drawn-on as geometry: thin rungs laid across the instep, each
+# (y, z) pair the rung's center on the boot's top line — z interpolated from
+# the _BOOT_STATIONS top_z at that y, so every rung seats on the surface it
+# crosses (ankle → forefoot). _LACE_COLOR is only the pre-uniform placeholder;
+# the gear style's lace pick repaints them (SkaterUniformCoordinator).
+const _LACE_RUNGS: Array[Vector2] = [
+	Vector2(0.070, -0.0711),
+	Vector2(0.035, -0.0693),
+	Vector2(0.000, -0.0600),
+	Vector2(-0.035, -0.0507),
+]
+const _LACE_HALF_W: float = 0.030
+const _LACE_HALF_T: float = 0.006   # rung thickness along the instep (local Y)
+# Rung depth is biased PROUD of the surface rather than centered on it: the
+# top line slopes ~0.46 across the heel→instep segment, so a surface-centered
+# box left barely 2 mm showing there — fine at rink distance, visible
+# clipping at the workbench close-up. Sink keeps the underside buried so no
+# gap opens as the slope crosses the rung.
+const _LACE_PROUD: float = 0.008    # rise above the top surface
+const _LACE_SINK: float = 0.003     # burial below it
+const _LACE_COLOR := Color(0.88, 0.88, 0.86)
 
 # Neck: skin tube from chin to collar, a child of the Helmet node like the
 # head so it rides the same head-bulk scaling and skeleton offsets. Stations
@@ -206,6 +252,8 @@ static func apply(upper_body: Node3D, lower_body: Node3D) -> void:
 		_swap(lower_body, "Leg%s/Shin%s/Skate%s" % [side, side, side], "skate", _build_skate)
 		_swap(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side], "boot", _build_boot)
 		_ensure_blade(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side])
+		_ensure_skate_stripe(lower_body, "Leg%s/Shin%s/Skate%s" % [side, side, side])
+		_ensure_laces(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side])
 
 
 static func _swap(root: Node3D, path: String, key: String, builder: Callable) -> void:
@@ -293,7 +341,8 @@ static func shared_knob() -> ArrayMesh:
 
 
 static func _build_torso() -> ArrayMesh:
-	return _build_lathe(_TORSO_PROFILE, _TORSO_SIDES, _TORSO_X_SCALE, _TORSO_Z_SCALE)
+	return _build_lathe(_TORSO_PROFILE, _TORSO_SIDES, _TORSO_X_SCALE, _TORSO_Z_SCALE,
+			_TORSO_REAR_SWAY)
 
 
 # Helmet shell: lat/long bands whose bottom latitude follows the per-azimuth
@@ -334,6 +383,36 @@ static func shared_sock() -> ArrayMesh:
 
 static func shared_boot() -> ArrayMesh:
 	return _shared("boot", _build_boot)
+
+
+static func shared_skate_collar() -> ArrayMesh:
+	return _shared("skate", _build_skate)
+
+
+# Skate accent stripe: a thin unit-radius band that rings the collar proud of
+# its sidewall — the one piece the skate-color cosmetic paints (the boot and
+# collar themselves stay dark). Unit radius like the glove cuff; the creation
+# site scales it to sit just off the collar.
+static func shared_skate_stripe() -> ArrayMesh:
+	return _shared("skate_stripe", func() -> ArrayMesh:
+		var h: float = SKATE_STRIPE_HEIGHT_M * 0.5
+		var profile: Array[Vector2] = [Vector2(h, 1.0), Vector2(-h, 1.0)]
+		return _build_lathe(profile, _LEG_SIDES, 1.0, 1.0))
+
+
+# Drawn-on skate laces (see _LACE_RUNGS): one mesh of instep rungs in the
+# boot's rotated frame, shared like every other part.
+static func shared_laces() -> ArrayMesh:
+	return _shared("laces", func() -> ArrayMesh:
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		st.set_smooth_group(-1)  # flat shading — see class doc block
+		for rung: Vector2 in _LACE_RUNGS:
+			_box(st,
+					Vector3(-_LACE_HALF_W, rung.x - _LACE_HALF_T, rung.y - _LACE_PROUD),
+					Vector3(_LACE_HALF_W, rung.x + _LACE_HALF_T, rung.y + _LACE_SINK))
+		st.generate_normals()
+		return st.commit())
 
 
 static func shared_skate_blade() -> ArrayMesh:
@@ -466,7 +545,8 @@ static func _build_skate() -> ArrayMesh:
 # convention from the class doc block. Both end caps are emitted — the engine
 # cylinders had them, and the torso's top cap is where the yoke paints.
 static func _build_lathe(profile: Array[Vector2], sides: int,
-		x_scale: float, z_scale: float) -> ArrayMesh:
+		x_scale: float, z_scale: float,
+		z_offsets: Array[float] = []) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	st.set_smooth_group(-1)  # flat shading — see class doc block
@@ -475,8 +555,18 @@ static func _build_lathe(profile: Array[Vector2], sides: int,
 	var span: float = maxf(y_top - y_bot, 0.001)
 	var rings: Array[PackedVector3Array] = []
 	var vs := PackedFloat32Array()
-	for s: Vector2 in profile:
-		rings.append(_ring(s.x, s.y, x_scale, z_scale, sides))
+	for i in profile.size():
+		var s: Vector2 = profile[i]
+		var ring: PackedVector3Array = _ring(s.x, s.y, x_scale, z_scale, sides)
+		# Optional per-ring Z shift (index-aligned with the profile; short or
+		# empty array = centered). Rings stay circular — the shift moves the
+		# whole ring, giving the lathe an asymmetric sway (the torso's seat)
+		# while the angular UV convention is untouched.
+		var z_off: float = z_offsets[i] if i < z_offsets.size() else 0.0
+		if z_off != 0.0:
+			for k in ring.size():
+				ring[k].z += z_off
+		rings.append(ring)
 		vs.append(0.5 * (y_top - s.x) / span)
 	for i in profile.size() - 1:
 		for k in sides:
@@ -487,8 +577,11 @@ static func _build_lathe(profile: Array[Vector2], sides: int,
 					rings[i][k + 1], Vector2(u1, vs[i]),
 					rings[i + 1][k + 1], Vector2(u1, vs[i + 1]),
 					rings[i + 1][k], Vector2(u0, vs[i + 1]))
-	_cap(st, rings[0], Vector3(0.0, y_top, 0.0), Vector2(0.25, 0.75), true)
-	_cap(st, rings[rings.size() - 1], Vector3(0.0, y_bot, 0.0), Vector2(0.75, 0.75), false)
+	var top_off: float = z_offsets[0] if z_offsets.size() > 0 else 0.0
+	var bot_off: float = z_offsets[profile.size() - 1] \
+			if z_offsets.size() >= profile.size() else 0.0
+	_cap(st, rings[0], Vector3(0.0, y_top, top_off), Vector2(0.25, 0.75), true)
+	_cap(st, rings[rings.size() - 1], Vector3(0.0, y_bot, bot_off), Vector2(0.75, 0.75), false)
 	st.generate_normals()
 	return st.commit()
 
@@ -603,6 +696,43 @@ static func _build_skate_blade() -> ArrayMesh:
 			Vector3(0.0035, 0.098, _BLADE_ICE_Z))                            # steel runner
 	st.generate_normals()
 	return st.commit()
+
+
+# The accent stripe is a CHILD of the collar mesh so it rides the same node
+# scaling and stride animation. Default-painted boot-dark (the classic look);
+# SkaterUniformCoordinator repaints it with the player's skate-color pick.
+static func _ensure_skate_stripe(lower_body: Node3D, skate_path: String) -> void:
+	var collar: MeshInstance3D = lower_body.get_node_or_null(skate_path) as MeshInstance3D
+	if collar == null or collar.get_node_or_null("Stripe") != null:
+		return
+	var stripe := MeshInstance3D.new()
+	stripe.name = "Stripe"
+	stripe.mesh = shared_skate_stripe()
+	stripe.position = Vector3(0.0, _SKATE_STRIPE_Y, 0.0)
+	stripe.scale = Vector3(_SKATE_STRIPE_RADIUS, 1.0, _SKATE_STRIPE_RADIUS)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.08, 0.08, 0.08)
+	mat.roughness = 0.42
+	BodyRim.apply(mat)
+	stripe.material_override = mat
+	collar.add_child(stripe)
+
+
+# The laces are a CHILD of the boot mesh (same frame, like the blade steel),
+# placeholder-white until the uniform pass paints the lace pick.
+static func _ensure_laces(lower_body: Node3D, foot_path: String) -> void:
+	var foot: MeshInstance3D = lower_body.get_node_or_null(foot_path) as MeshInstance3D
+	if foot == null or foot.get_node_or_null("Laces") != null:
+		return
+	var laces := MeshInstance3D.new()
+	laces.name = "Laces"
+	laces.mesh = shared_laces()
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = _LACE_COLOR
+	mat.roughness = 0.9
+	BodyRim.apply(mat)
+	laces.material_override = mat
+	foot.add_child(laces)
 
 
 # The steel is a CHILD of the foot's boot mesh with its own bright material —

@@ -6,11 +6,14 @@ extends VBoxContainer
 # forwards (above the away row, below the home row). Each card shows:
 #
 #   ┌──────────────────────────────────┐
-#   │ ▶  88  PLAYERNAME              L │   ← action icon (X / +) top-left;
-#   │ │                       ●  32ms  │     position letter top-right;
-#   └──────────────────────────────────┘     name in middle; ping or AI label
-#                                            bottom-right; left stripe in
-#                                            the team's UI stripe color.
+#   │ ▶  88  PLAYERNAME            <L │   ← action icon (X / +) top-left;
+#   │ │                       ●  32ms  │     position badge top-right with the
+#   └──────────────────────────────────┘     shooter's handedness as a chevron
+#                                            on the matching side ("< L" lefty,
+#                                            "L >" righty); name in middle;
+#                                            ping or AI label bottom-right;
+#                                            left stripe in the team's UI
+#                                            stripe color.
 #
 # Cards use the team's canonical UI palette (TeamColorRegistry.get_ui_colors):
 # home = primary body + secondary stripe, away = light body + primary stripe.
@@ -105,6 +108,9 @@ var _ai_label:     Array = [[], []]
 var _ready_label:  Array = [[], []]   # READY / WAITING tag (lobby only, non-host humans)
 var _action_btn:   Array = [[], []]   # X / + button (host only, hidden on remote-human)
 var _peer_ids:     Array = [[], []]
+# Occupant handedness per slot (-1 none / 0 left / 1 right) — cached so the
+# mode flip's badge re-stamp keeps the arrow without needing the roster.
+var _hand_state:   Array = [[], []]
 
 var _team_colors: Array[Dictionary] = []
 var _bot_slots: Dictionary = {}
@@ -144,8 +150,7 @@ func _apply_mode_visibility() -> void:
 			(_header_rows[team_id] as HBoxContainer).visible = not show_d
 		# Re-stamp the badges — the L/R ↔ LW/RW wording is mode-dependent.
 		for slot: int in _pos_labels[team_id].size():
-			if _pos_labels[team_id][slot] != null:
-				(_pos_labels[team_id][slot] as Label).text = _position_badge(team_id, slot)
+			_stamp_position(team_id, slot)
 
 
 # The card's position badge for the current mode: 3v3 keeps the classic
@@ -156,6 +161,24 @@ func _position_badge(team_id: int, slot: int) -> String:
 	if team_id == 1:
 		return _POSITION_LABEL_AWAY_5V5[slot] if is_5v5 else _POSITION_LABEL_AWAY[slot]
 	return _POSITION_LABEL_5V5[slot] if is_5v5 else _POSITION_LABEL[slot]
+
+
+# Writes the position badge with the occupant's handedness as a chevron on
+# the matching side ("< L" lefty, "L >" righty). A hand fact about the
+# player, so the away-row L/R mirroring never touches it. State -1 (empty
+# card, identity-less bot) keeps the bare badge.
+func _stamp_position(team_id: int, slot: int) -> void:
+	var lbl: Label = _pos_labels[team_id][slot]
+	if lbl == null:
+		return
+	var badge: String = _position_badge(team_id, slot)
+	match int(_hand_state[team_id][slot]):
+		0:
+			lbl.text = "< %s" % badge
+		1:
+			lbl.text = "%s >" % badge
+		_:
+			lbl.text = badge
 
 
 func _ready() -> void:
@@ -198,6 +221,8 @@ func _build_grid() -> void:
 		_action_btn[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_peer_ids[team_id].resize(PlayerRules.MAX_PER_TEAM)
 		_peer_ids[team_id].fill(-1)
+		_hand_state[team_id].resize(PlayerRules.MAX_PER_TEAM)
+		_hand_state[team_id].fill(-1)
 
 		if team_id == 1:
 			_d_rows[team_id] = _build_d_row(team_id)
@@ -601,6 +626,8 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 	if entry == null and not is_bot_slot:
 		# === Empty slot ============================================
 		_peer_ids[team_id][slot] = -1
+		_hand_state[team_id][slot] = -1
+		_stamp_position(team_id, slot)
 		# Slightly elevated card bg so the empty slot still reads as a
 		# card against the dark lobby panel.
 		style.bg_color = MenuStyle.SURFACE_ELEV
@@ -640,6 +667,11 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 		name_lbl.text = bot_name.to_upper()
 		name_lbl.add_theme_color_override("font_color", text_c)
 		_fit_name(name_lbl)
+		# A curated bot identity carries real handedness; the generic
+		# placeholder shows the bare badge.
+		_hand_state[team_id][slot] = -1 if not identity.has("is_left_handed") \
+				else (0 if bool(identity.is_left_handed) else 1)
+		_stamp_position(team_id, slot)
 		pos_lbl.add_theme_color_override("font_color", _muted(text_c, 0.7))
 		ping_lbl.visible = false
 		dot.visible = false
@@ -662,6 +694,8 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 	name_lbl.text = p_name.to_upper() if not p_name.is_empty() else "PLAYER"
 	name_lbl.add_theme_color_override("font_color", text_c)
 	_fit_name(name_lbl)
+	_hand_state[team_id][slot] = 0 if bool(entry.get("is_left_handed", true)) else 1
+	_stamp_position(team_id, slot)
 	pos_lbl.add_theme_color_override("font_color", _muted(text_c, 0.7))
 
 	ai_lbl.visible = false

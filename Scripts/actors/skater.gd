@@ -101,6 +101,10 @@ var reception_ceiling_mult: float = 1.0
 # uniform is applied; SkaterUniformCoordinator resolves the palette picks
 # against the team accent when it paints. Never null after _init.
 var tape_config: StickTapeConfig = StickTapeConfig.new()
+# The player's gear cosmetics (skate + glove color) — same contract as
+# tape_config: set from the replicated per-peer code before the uniform is
+# applied, resolved against the kit by the uniform coordinator. Never null.
+var gear_style: GearStyleConfig = GearStyleConfig.new()
 @export var wall_squeeze_threshold: float = 0.3
 # When the puck is lost on the boards (blade squeezed past the threshold above),
 # it squirts ALONG the boards in the carrier's travel direction. This blends a
@@ -140,8 +144,12 @@ var tape_config: StickTapeConfig = StickTapeConfig.new()
 # 100–104% real athletes run; the segments
 # split evenly because the distal bone ends at the gloved-fist center, and
 # elbow→fist really is about humerus-length).
-@export var upper_arm_length: float = 0.35
-@export var forearm_length: float = 0.35
+# 0.33 per segment ≈ real shoulder→elbow and elbow→fist-center at the mesh's
+# native 5'10" (the lower bone ends at the FIST, so it carries the hand's
+# length too). The old 0.35s read long on screen — with hands close on the
+# stick, the surplus folded into wide-flared elbows.
+@export var upper_arm_length: float = 0.33
+@export var forearm_length: float = 0.33
 # Pole direction for the elbow (upper-body local). Mostly down with a real
 # outward flare (+X is away from the body; the sign flips per side in
 # update_arm_mesh) and a touch backward — a hockey top-hand elbow rides out
@@ -156,9 +164,11 @@ var tape_config: StickTapeConfig = StickTapeConfig.new()
 # Well proud of arm_mesh_thickness * 0.5 so the joint reads as the elbow
 # PAD bulging under the sleeve, the arm's answer to the deltoid caps.
 @export var elbow_sphere_radius: float = 0.082
+# 0.064 puts the fist mesh (±1.05 unit-width) at ~13.4 cm across the
+# knuckles — real glove proportion; the old 0.07 read a touch oversized.
 # Radius of the hand spheres positioned per-tick at the IK hand — gloved
 # fists, so slightly thicker than the sleeve they hang from.
-@export var hand_sphere_radius: float = 0.07
+@export var hand_sphere_radius: float = 0.064
 # Gap (along the bone direction, toward the elbow) between the hand-sphere
 # center and the forward face of the glove cuff cylinder. Without this the
 # cuff sits flush against the hand sphere and visually swallows it; a small
@@ -1146,6 +1156,16 @@ func set_tape_config(config: StickTapeConfig) -> void:
 	tape_config = config
 	if _uniform != null:
 		_uniform.refresh_tape()
+
+
+# Installs a new gear look (skate + glove color) and repaints the affected
+# parts. Same live-cosmetic contract as set_tape_config.
+func set_gear_style(config: GearStyleConfig) -> void:
+	if config == null:
+		return
+	gear_style = config
+	if _uniform != null:
+		_uniform.refresh_gear_style()
 
 
 # The uniform pass installs a fresh shaft ShaderMaterial (uniform apply,

@@ -91,8 +91,9 @@ func test_skeleton_scales_about_ice_plane() -> void:
 	assert_almost_eq(controller._skating.leg_scale, h, 0.0001, "gait leg scale set")
 
 	# Derived backhand ROM: whole chain (arm + drop) scales by h, so the
-	# solved reach is exactly h × the mesh-native solve.
-	var arm_eff: float = 0.70 * h * controller.rom_arm_extension
+	# solved reach is exactly h × the mesh-native solve. 0.66 = the two
+	# 0.33 arm bones (Skater exports).
+	var arm_eff: float = 0.66 * h * controller.rom_arm_extension
 	var drop: float = skater.shoulder_height - controller.hand_rest_y
 	assert_almost_eq(drop, 0.50 * h, 0.0001, "shoulder-to-hand drop proportional")
 	assert_almost_eq(controller.rom_backhand_reach_max,

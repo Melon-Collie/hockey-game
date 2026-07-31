@@ -39,6 +39,8 @@ var is_left_handed: bool = true
 var tape_code: int = StickTapeConfig.DEFAULT_CODE
 # SkinToneRegistry index (identity skin tone) — same late-joiner contract.
 var skin_tone: int = SkinToneRegistry.DEFAULT_INDEX
+# Packed GearStyleConfig code (skate/glove color) — same late-joiner contract.
+var gear_style_code: int = GearStyleConfig.DEFAULT_CODE
 # Per-player gameplay attribute levels (Speed/Agility/Size/Shot). Default to
 # all-medium so a record built without attribute data behaves like the
 # pre-attributes baseline.

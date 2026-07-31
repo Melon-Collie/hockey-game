@@ -16,6 +16,25 @@ func test_smaller_team_gets_next_player() -> void:
 func test_lopsided_filled_to_smaller() -> void:
 	assert_eq(PlayerRules.assign_team(3, 1), 1)
 
+# ── preferred_slot ───────────────────────────────────────────────────────────
+
+func test_5v5_seats_every_position_directly() -> void:
+	for position: int in PlayerRules.POSITION_NAMES.size():
+		assert_eq(PlayerRules.preferred_slot(position, 5), position)
+
+func test_3v3_merges_wing_and_defense_pairs_onto_their_side() -> void:
+	assert_eq(PlayerRules.preferred_slot(0, 3), 0, "C keeps the middle")
+	assert_eq(PlayerRules.preferred_slot(1, 3), 1, "LW holds the left")
+	assert_eq(PlayerRules.preferred_slot(3, 3), 1, "LD merges onto the left")
+	assert_eq(PlayerRules.preferred_slot(2, 3), 2, "RW holds the right")
+	assert_eq(PlayerRules.preferred_slot(4, 3), 2, "RD merges onto the right")
+
+func test_out_of_range_positions_clamp_to_the_ends() -> void:
+	assert_eq(PlayerRules.preferred_slot(-1, 3), 0, "below range clamps to C")
+	assert_eq(PlayerRules.preferred_slot(99, 5), PlayerRules.POSITION_NAMES.size() - 1,
+			"above range clamps to RD in 5v5")
+	assert_eq(PlayerRules.preferred_slot(99, 3), 2, "clamped RD merges right in 3v3")
+
 # ── faceoff_position ─────────────────────────────────────────────────────────
 
 func test_team_0_faceoff_positions_are_on_positive_z_side() -> void:

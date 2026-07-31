@@ -23,10 +23,11 @@ var _root: Control = null
 var _panel: PanelContainer = null
 var _player_card_name: Label = null
 var _player_card_number: Label = null
-var _player_card_hand: Label = null
+var _player_card_position: Label = null
 var _player_card_panel: PanelContainer = null
-var _player_card_normal: StyleBoxFlat = null
-var _player_card_hover: StyleBoxFlat = null
+var _player_card_style: StyleBoxFlat = null
+var _player_card_stripe_style: StyleBoxFlat = null
+var _player_card_text: Color = Color.WHITE   # ui_text of the current kit, for hover rest states
 var _player_card_edit_icon: TextureRect = null
 var _player_card_callout: Label = null
 var _player_card_callout_tween: Tween = null
@@ -272,79 +273,111 @@ func _build_panel() -> void:
 	_build_footer(vbox)
 
 
+# The player card — the entry to the player screen, dressed exactly like a
+# lobby slot card (SlotGridPanel): the preferred kit's UI palette as the card
+# body, its stripe as the left band, the big display-font number, the
+# uppercase name, and the position badge top-right wearing the handedness
+# chevron ("< C" lefty, "C >" righty). The edit pencil sits where the lobby
+# card keeps its status row. Repainted by _refresh_player_card whenever the
+# player screen applies a change.
 func _build_player_card(parent: VBoxContainer) -> void:
-	_player_card_normal = StyleBoxFlat.new()
-	_player_card_normal.bg_color = MenuStyle.PANEL_BG
-	_player_card_normal.set_corner_radius_all(6)
-	_player_card_normal.set_content_margin_all(14)
-	_player_card_normal.border_color = MenuStyle.TEAL_DIM
-	_player_card_normal.set_border_width_all(1)
-
-	_player_card_hover = StyleBoxFlat.new()
-	_player_card_hover.bg_color = MenuStyle.SURFACE_ELEV
-	_player_card_hover.set_corner_radius_all(6)
-	_player_card_hover.set_content_margin_all(14)
-	_player_card_hover.border_color = MenuStyle.TEAL
-	_player_card_hover.set_border_width_all(1)
+	_player_card_style = StyleBoxFlat.new()
+	_player_card_style.set_corner_radius_all(4)
+	_player_card_style.set_content_margin_all(12)
+	# Extra left slice so the inset stripe doesn't collide with the number.
+	_player_card_style.set_content_margin(SIDE_LEFT, 18)
+	_player_card_style.set_border_width_all(1)
+	_player_card_style.border_color = Color(0, 0, 0, 0)
 
 	_player_card_panel = PanelContainer.new()
-	_player_card_panel.add_theme_stylebox_override("panel", _player_card_normal)
+	_player_card_panel.add_theme_stylebox_override("panel", _player_card_style)
+	_player_card_panel.custom_minimum_size = Vector2(0, 96)
 	_player_card_panel.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_player_card_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	parent.add_child(_player_card_panel)
 
-	var hbox := HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 14)
-	_player_card_panel.add_child(hbox)
+	var content := Control.new()
+	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_player_card_panel.add_child(content)
 
-	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 4)
-	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hbox.add_child(vbox)
+	# Jersey-stripe band on the left edge — same construction as the lobby
+	# card: rounded outside, flat inside, escaping the content margin.
+	_player_card_stripe_style = StyleBoxFlat.new()
+	_player_card_stripe_style.corner_radius_top_left = 4
+	_player_card_stripe_style.corner_radius_bottom_left = 4
+	var stripe := Panel.new()
+	stripe.add_theme_stylebox_override("panel", _player_card_stripe_style)
+	stripe.set_anchors_preset(Control.PRESET_LEFT_WIDE)
+	stripe.offset_left = -18
+	stripe.offset_right = -12
+	stripe.offset_top = -12
+	stripe.offset_bottom = 12
+	stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content.add_child(stripe)
 
-	_player_card_name = Label.new()
-	_player_card_name.text = PlayerPrefs.player_name
-	_player_card_name.add_theme_font_override("font", MenuStyle.NAME_FONT)
-	_player_card_name.add_theme_font_size_override("font_size", 28)
-	_player_card_name.add_theme_color_override("font_color", MenuStyle.TEXT_TITLE)
-	vbox.add_child(_player_card_name)
-
-	var detail_row := HBoxContainer.new()
-	detail_row.add_theme_constant_override("separation", 10)
-	vbox.add_child(detail_row)
+	var main_row := HBoxContainer.new()
+	main_row.add_theme_constant_override("separation", 8)
+	main_row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	main_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content.add_child(main_row)
 
 	_player_card_number = Label.new()
-	_player_card_number.text = "#%d" % PlayerPrefs.jersey_number
 	_player_card_number.add_theme_font_override("font", MenuStyle.DISPLAY_FONT)
-	_player_card_number.add_theme_font_size_override("font_size", 18)
-	_player_card_number.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
-	detail_row.add_child(_player_card_number)
+	_player_card_number.add_theme_font_size_override("font_size", 50)
+	_player_card_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_player_card_number.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_player_card_number.custom_minimum_size = Vector2(56, 0)
+	main_row.add_child(_player_card_number)
 
-	_player_card_hand = Label.new()
-	_player_card_hand.text = "Shoots %s" % ("L" if PlayerPrefs.is_left_handed else "R")
-	_player_card_hand.add_theme_font_size_override("font_size", 14)
-	_player_card_hand.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
-	detail_row.add_child(_player_card_hand)
+	_player_card_name = Label.new()
+	_player_card_name.add_theme_font_override("font", MenuStyle.NAME_FONT)
+	_player_card_name.add_theme_font_size_override("font_size", 24)
+	_player_card_name.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_player_card_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_player_card_name.clip_text = true
+	main_row.add_child(_player_card_name)
+
+	# Right column mirrors the lobby card: position badge pinned top, the
+	# edit pencil sitting in the status row's spot at the bottom.
+	var right_col := VBoxContainer.new()
+	right_col.alignment = BoxContainer.ALIGNMENT_BEGIN
+	right_col.add_theme_constant_override("separation", 0)
+	right_col.custom_minimum_size = Vector2(56, 0)
+	main_row.add_child(right_col)
+
+	_player_card_position = Label.new()
+	_player_card_position.add_theme_font_size_override("font_size", 13)
+	_player_card_position.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_player_card_position.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right_col.add_child(_player_card_position)
+
+	var col_spacer := Control.new()
+	col_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	right_col.add_child(col_spacer)
 
 	_player_card_edit_icon = TextureRect.new()
 	_player_card_edit_icon.texture = load("res://Assets/Icons/edit.svg") as Texture2D
 	_player_card_edit_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_player_card_edit_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_player_card_edit_icon.custom_minimum_size = Vector2(16, 16)
-	_player_card_edit_icon.modulate = MenuStyle.TEXT_MUTED
 	_player_card_edit_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_player_card_edit_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	hbox.add_child(_player_card_edit_icon)
+	_player_card_edit_icon.size_flags_horizontal = Control.SIZE_SHRINK_END
+	right_col.add_child(_player_card_edit_icon)
+
+	_refresh_player_card()
 
 	# Focusable so a controller lands here first; focus_mode is switched on only in
 	# controller mode (in _apply_nav_focus). The card is the first nav item.
 	_player_card_panel.focus_mode = Control.FOCUS_NONE
 	_nav_items.append(_player_card_panel)
 	_nav_handlers.append(_on_player_card_pressed)
+	# Hover/focus reads as the app's teal focus language on the card border
+	# (like the lobby's your-slot ring); the pencil brightens from muted kit
+	# text to full.
 	var card_highlight := func(on: bool) -> void:
-		_player_card_panel.add_theme_stylebox_override("panel",
-				_player_card_hover if on else _player_card_normal)
-		_player_card_edit_icon.modulate = MenuStyle.TEAL_HOVER if on else MenuStyle.TEXT_MUTED
+		_player_card_style.border_color = MenuStyle.TEAL if on else Color(0, 0, 0, 0)
+		_player_card_edit_icon.modulate = _player_card_text if on \
+				else Color(_player_card_text, 0.6)
 	_player_card_panel.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			_on_player_card_pressed())
@@ -518,9 +551,12 @@ func _refresh_device_prompt(_is_gamepad: bool) -> void:
 
 func _build_popups() -> void:
 	_player_popup = PlayerSettingsPopup.new()
-	_player_popup.name_changed.connect(_on_player_name_changed)
-	_player_popup.jersey_number_changed.connect(_on_player_number_changed)
-	_player_popup.handedness_changed.connect(_on_player_handedness_changed)
+	# Any applied edit repaints the card wholesale — see _refresh_player_card.
+	_player_popup.name_changed.connect(func(_n: String) -> void: _refresh_player_card())
+	_player_popup.jersey_number_changed.connect(func(_n: int) -> void: _refresh_player_card())
+	_player_popup.handedness_changed.connect(func(_l: bool) -> void: _refresh_player_card())
+	_player_popup.position_changed.connect(func(_p: int) -> void: _refresh_player_card())
+	_player_popup.preferred_color_changed.connect(func(_s: int) -> void: _refresh_player_card())
 	add_child(_player_popup)
 
 	_play_popup = PlayPopup.new()
@@ -787,19 +823,29 @@ func _dismiss_player_card_callout() -> void:
 	_player_card_callout = null
 
 
-func _on_player_name_changed(new_name: String) -> void:
-	if _player_card_name != null:
-		_player_card_name.text = new_name
-
-
-func _on_player_number_changed(new_number: int) -> void:
-	if _player_card_number != null:
-		_player_card_number.text = "#%d" % new_number
-
-
-func _on_player_handedness_changed(is_left: bool) -> void:
-	if _player_card_hand != null:
-		_player_card_hand.text = "Shoots %s" % ("L" if is_left else "R")
+# Repaint the whole card from PlayerPrefs — one refresh for every edit the
+# player screen can apply (name, number, handedness, position, team), since
+# the kit palette tints all of it anyway.
+func _refresh_player_card() -> void:
+	if _player_card_panel == null:
+		return
+	var slot: int = PlayerPrefs.preferred_color_slot
+	if slot < 0:
+		slot = TeamColorRegistry.DEFAULT_HOME_SLOT
+	var colors: Dictionary = TeamColorRegistry.get_colors(slot, 0)
+	_player_card_text = colors.ui_text
+	_player_card_style.bg_color = colors.ui_base
+	_player_card_stripe_style.bg_color = colors.ui_stripe
+	_player_card_number.text = str(PlayerPrefs.jersey_number)
+	_player_card_number.add_theme_color_override("font_color", _player_card_text)
+	_player_card_name.text = PlayerPrefs.player_name.to_upper()
+	_player_card_name.add_theme_color_override("font_color", _player_card_text)
+	var badge: String = PlayerRules.position_name(PlayerPrefs.preferred_position)
+	_player_card_position.text = ("< %s" % badge) if PlayerPrefs.is_left_handed \
+			else ("%s >" % badge)
+	_player_card_position.add_theme_color_override("font_color",
+			Color(_player_card_text, 0.7))
+	_player_card_edit_icon.modulate = Color(_player_card_text, 0.6)
 
 
 func _on_play_pressed() -> void:
