@@ -1727,9 +1727,22 @@ func update_stick_mesh() -> void:
 	var dir: Vector3 = to_tip.normalized()
 	var butt_start: Vector3 = stick_origin - dir * SHAFT_BUTT_EXTEND_M
 	var shaft_len: float = to_tip.length() + SHAFT_BUTT_EXTEND_M + _SHAFT_TIP_OVERRUN_M
-	stick_mesh.position = butt_start + dir * (shaft_len * 0.5)
-	stick_mesh.scale.z = shaft_len
-	stick_mesh.look_at(upper_body.to_global(stick_origin + to_tip), Vector3.UP)
+	# Single local write, replacing position + scale.z + look_at (see
+	# _update_bone_mesh for why the trio is expensive). Unlike the arm bones the
+	# shaft is NOT rotationally symmetric — the handle-wrap paint reads its
+	# faces — so the up vector is carried through exactly rather than replaced by
+	# a convenience fallback: world UP pulled into upper-body space reproduces
+	# the previous roll, where any other choice would spin the wrap.
+	# Z scale is the only component this owns; x/y are the shaft thickness the
+	# sizing seams set, so they are read back rather than overwritten.
+	var shaft_scale: Vector3 = stick_mesh.scale
+	shaft_scale.z = shaft_len
+	var up_local: Vector3 = upper_body.global_transform.basis.inverse() * Vector3.UP
+	if absf(dir.dot(up_local.normalized())) > 0.999:
+		up_local = Vector3.FORWARD
+	stick_mesh.transform = Transform3D(
+			Basis.looking_at(dir, up_local).scaled_local(shaft_scale),
+			butt_start + dir * (shaft_len * 0.5))
 	# The handle-wrap paint (grip/candy-cane) measures real metres down the
 	# shaft, so the shader needs the live rendered length — node scale never
 	# reaches object space. Dirty-guarded like flex_m.
@@ -1762,14 +1775,25 @@ func _update_stick_knob(stick_origin: Vector3, to_shaft_end: Vector3) -> void:
 		return
 	if to_shaft_end.length_squared() < 0.0001:
 		return
-	var hand_w: Vector3 = upper_body.to_global(stick_origin)
-	var up_shaft_w: Vector3 = (hand_w - upper_body.to_global(stick_origin + to_shaft_end)).normalized()
+	# Entirely in upper-body space: the previous version pushed three points out
+	# to world purely to aim a look_at and pull the result back, when every
+	# input was already local and to_global is affine (so the direction is the
+	# same vector either way). One write, no round trip.
+	# The knob is a solid-coloured cylinder, so roll is unobservable and the
+	# up vector only has to dodge colinearity — unlike the shaft above.
+	var up_shaft: Vector3 = -to_shaft_end.normalized()
 	var knob_h: float = SkaterMeshBuilder.KNOB_HEIGHT_M
-	var butt_w: Vector3 = hand_w + up_shaft_w * SHAFT_BUTT_EXTEND_M
-	var knob_center_w: Vector3 = butt_w - up_shaft_w * (knob_h * 0.5 - _KNOB_PROUD_M)
-	stick_knob_mesh.position = upper_body.to_local(knob_center_w)
-	stick_knob_mesh.look_at(knob_center_w + up_shaft_w, _up_for_look_at(up_shaft_w))
-	stick_knob_mesh.rotate_object_local(Vector3.RIGHT, PI * 0.5)
+	var knob_center: Vector3 = stick_origin \
+			+ up_shaft * (SHAFT_BUTT_EXTEND_M - knob_h * 0.5 + _KNOB_PROUD_M)
+	# Post-multiplied X(+90°) maps the cylinder's long axis onto the aim, which
+	# is what rotate_object_local did. Safe to compose directly here because the
+	# knob carries no node scale (SkaterUniformCoordinator._rebuild_stick_knob
+	# never sets one) — with scale present this is the trap _update_cuff_transform
+	# documents.
+	stick_knob_mesh.transform = Transform3D(
+			Basis.looking_at(up_shaft, _up_for_look_at(up_shaft))
+					* Basis(Vector3.RIGHT, PI * 0.5),
+			knob_center)
 
 
 # ── Stick Flex (cosmetic) ─────────────────────────────────────────────────────
@@ -1881,16 +1905,41 @@ func update_bottom_arm_mesh() -> void:
 	_orient_shoulder_cap(bottom_shoulder.position, elbow_w)
 
 
+# One local-space transform write per bone, deliberately NOT position/scale/
+# look_at. That trio costs six transform operations, two of which resolve the
+# global chain: look_at() reads get_global_transform(), writes back through
+# set_global_transform() (which re-derives the local transform via the parent's
+# inverse), then restores scale through a get_scale()/set_scale() pair. Doing it
+# once in the parent's own space is a single assignment with no global
+# round-trip, and at four bones per skater it is the densest such site in the
+# rig. This is what the freeze sweep priced: the write COUNT dominates, not the
+# arithmetic feeding it.
+#
+# Orientation is built from the LOCAL span rather than the world one. The two
+# agree whenever upper_body's basis is a rotation, and the local form is the
+# more correct of the two under a scaled parent — it points the bone at the
+# endpoints the position term already uses (which were always local). The up
+# vector only has to avoid colinearity: the bone prism is rotationally
+# symmetric about its long axis, so roll is unobservable (see _up_for_look_at).
 func _update_bone_mesh(bone: Node3D, a_world: Vector3, b_world: Vector3) -> void:
 	if bone == null:
 		return
 	var a_local: Vector3 = upper_body.to_local(a_world)
 	var b_local: Vector3 = upper_body.to_local(b_world)
-	var length: float = (b_local - a_local).length()
-	bone.position = (a_local + b_local) * 0.5
-	bone.scale = Vector3(1.0, 1.0, maxf(length, 0.001))
-	if (b_world - a_world).length() > 0.0001:
-		bone.look_at(b_world, _up_for_look_at(b_world - a_world))
+	var span: Vector3 = b_local - a_local
+	var length: float = span.length()
+	var center: Vector3 = (a_local + b_local) * 0.5
+	if length < 0.0001:
+		bone.position = center
+		return
+	var dir: Vector3 = span / length
+	# scaled_local is basis·S, matching how set_scale composes rotation and
+	# scale. The plain scaled() is S·basis and would put the length on the wrong
+	# axes once the bone tilts — the same trap _update_cuff_transform documents.
+	bone.transform = Transform3D(
+			Basis.looking_at(dir, _up_for_look_at(dir)).scaled_local(
+					Vector3(1.0, 1.0, length)),
+			center)
 
 
 func _update_joint_sphere(sphere: MeshInstance3D, world_pos: Vector3) -> void:
