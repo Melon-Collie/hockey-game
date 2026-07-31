@@ -669,14 +669,19 @@ func _render_freeze_sweep() -> void:
 			lo = minf(lo, PerfProbe.mean_draws(m))
 			hi = maxf(hi, PerfProbe.mean_draws(m))
 		var spread: float = (hi - lo) / maxf(lo, 1.0)
-		_context(_band(spread, 0.08, 0.20), "Scene match", "%.0f%% draw-call spread" % (spread * 100.0),
-			"how alike the scenes each mode saw were; under ~8% they are comparable, high means the sweep needs longer")
+		_info("Scene spread", "%.0f%% draw-call range" % (spread * 100.0),
+			"how much the scene varied across modes. Expect this to stay HIGH and don't chase it — the camera follows the play, so there is no steady state to sample. Interleaving handles that: it makes the variance unbiased, not absent. Context only")
 		var parts: float = 0.0
 		for m: int in [PerfProbe.Mode.RIG, PerfProbe.Mode.HUD, PerfProbe.Mode.VFX]:
 			parts += base_main - PerfProbe.mean_main_ms(m)
 		var whole: float = base_main - PerfProbe.mean_main_ms(PerfProbe.Mode.ALL)
-		_info("Adds up", "parts %.2f ms vs ALL %.2f ms" % [parts, whole],
-			"the three savings should sum to ALL's; close agreement means the split is a real decomposition rather than noise landing in an order that looks sensible")
+		# The real validity test, and the only one that survives a scene which
+		# never repeats: the freezes are independent, so their savings must sum
+		# to ALL's. Scene bias would break that; scene VARIANCE does not.
+		var gap: float = absf(parts - whole)
+		_context(_band(gap / maxf(whole, 0.01), 0.10, 0.25), "Adds up",
+			"parts %.2f ms vs ALL %.2f ms" % [parts, whole],
+			"THE validity check — independent freezes must sum. Agreement means the split is a real decomposition; disagreement means the run is still noise")
 	# A debug build does NOT bias the three terms equally, so the split is
 	# readable but the verdict can be wrong. GDScript carries debug
 	# instrumentation (Script reads high), and an editor run shares the machine
