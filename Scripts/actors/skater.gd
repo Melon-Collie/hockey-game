@@ -718,6 +718,17 @@ func _process(delta: float) -> void:
 			update_arm_mesh()
 			update_bottom_arm_mesh()
 	_update_stick_flex(delta)
+	# World HUD (ring, name, chevrons, beacon) at RENDER rate. It used to run in
+	# _physics_process, rewriting the world transforms of ~10 top_level nodes per
+	# skater at 120 Hz to produce something the screen samples at half that — the
+	# case the hot-path rule names outright. Nothing reads these back and no
+	# gameplay depends on them, so the physics rate bought nothing; running here
+	# also aligns the markers with the pose actually being drawn.
+	# Its internal timers (ping bubble, ring recolour) are wall-clock accumulators
+	# over delta, so a different tick source changes when they fire by less than a
+	# frame, not how long they last.
+	if not PerfProbe.freeze_hud:
+		_hud.update(delta)
 
 
 # Returns true (and refreshes the snapshot) when any marker feeding the cosmetic
@@ -789,11 +800,6 @@ func _physics_process(delta: float) -> void:
 	_forced_lift_timer = maxf(_forced_lift_timer - delta, 0.0)
 	_update_blade_lift(delta)
 	_update_commit_lift(delta)
-	# Cosmetic world HUD (ring, name, chevrons, beacon) — note this runs at the
-	# PHYSICS rate, so its world-transform writes happen twice per rendered frame
-	# at 120 Hz. PerfProbe.freeze_hud exists to price that.
-	if not PerfProbe.freeze_hud:
-		_hud.update(delta)
 	# Position + velocity are now fully settled for this tick (move_and_slide,
 	# body-check collision resolution, and the rink clamp above have all run).
 	# The local controller captures its reconcile prediction snapshot here so it

@@ -643,21 +643,28 @@ func _render_freeze_sweep() -> void:
 	if PerfProbe.sample_count(PerfProbe.Mode.SCRATCH) > 0:
 		_lines.append("[color=#%s]· SCRATCH's saving lands in the main column whether it was CPU or GPU — its SubViewport is outside the root viewport's GPU timer[/color]" % COL_DIM)
 	if PerfProbe.auto_cycle:
-		_lines.append("[color=#%s]%s Sweep RUNNING — now: %s. Play normally; every mode needs %d frames.[/color]" % [
-			COL_WARN, DOT, PerfProbe.mode_name(), PerfProbe.MIN_SAMPLES_PER_MODE])
-	var base_main: float = PerfProbe.mean_main_ms(PerfProbe.Mode.NONE)
+		_lines.append("[color=#%s]%s Sweep RUNNING — now: %s. Play normally; every mode needs %d rotations.[/color]" % [
+			COL_WARN, DOT, PerfProbe.mode_name(), PerfProbe.MIN_ROTATIONS_PER_MODE])
+	# n is ROTATIONS, not frames — one 1 s window is one observation, and the ±
+	# is the spread across those windows. A gap smaller than the error bars is
+	# not a result no matter how many frames fed it.
+	var base_main: float = PerfProbe.rotation_mean_main_ms(PerfProbe.Mode.NONE)
 	for m: int in PerfProbe.MODE_COUNT:
-		var n: int = PerfProbe.sample_count(m)
-		if n == 0:
+		var k: int = PerfProbe.rotations(m)
+		if k == 0:
 			continue
+		var se: float = PerfProbe.rotation_stderr_main_ms(m)
+		var se_txt: String = "±%.2f" % se if is_finite(se) else "±?"
 		var delta_txt: String = ""
-		if m != PerfProbe.Mode.NONE and PerfProbe.sample_count(PerfProbe.Mode.NONE) > 0:
-			delta_txt = "  [color=#%s]%+.2f ms main[/color]" % [
-				COL_OK, PerfProbe.mean_main_ms(m) - base_main]
-		_lines.append("[color=#%s]·[/color] %-11s [color=#%s]%.2f ms frame · %.2f main · %.2f gpu · %.0f draws[/color]%s [color=#%s](n=%d)[/color]" % [
+		if m != PerfProbe.Mode.NONE and PerfProbe.rotations(PerfProbe.Mode.NONE) > 0:
+			var diff: float = PerfProbe.rotation_mean_main_ms(m) - base_main
+			var resolved: bool = PerfProbe.difference_resolved(m, PerfProbe.Mode.NONE)
+			delta_txt = "  [color=#%s]%+.2f ms%s[/color]" % [
+				COL_OK if resolved else COL_DIM, diff, "" if resolved else " (in the noise)"]
+		_lines.append("[color=#%s]·[/color] %-15s [color=#%s]%.2f %s main · %.2f frame · %.0f draws[/color]%s [color=#%s](%d rot)[/color]" % [
 			COL_DIM, PerfProbe.MODE_NAMES[m], COL_VAL,
-			PerfProbe.mean_frame_ms(m), PerfProbe.mean_main_ms(m),
-			PerfProbe.mean_gpu_ms(m), PerfProbe.mean_draws(m), delta_txt, COL_DIM, n])
+			PerfProbe.rotation_mean_main_ms(m), se_txt,
+			PerfProbe.mean_frame_ms(m), PerfProbe.mean_draws(m), delta_txt, COL_DIM, k])
 	if not PerfProbe.comparison_ready():
 		_lines.append("[color=#%s]%s Not enough frames yet — differences this early are noise, not findings.[/color]" % [
 			COL_WARN, DOT])
@@ -681,8 +688,8 @@ func _render_freeze_sweep() -> void:
 		var parts: float = 0.0
 		for m: int in [PerfProbe.Mode.RIG, PerfProbe.Mode.HUD, PerfProbe.Mode.VFX,
 				PerfProbe.Mode.SCRATCH]:
-			parts += base_main - PerfProbe.mean_main_ms(m)
-		var whole: float = base_main - PerfProbe.mean_main_ms(PerfProbe.Mode.ALL)
+			parts += base_main - PerfProbe.rotation_mean_main_ms(m)
+		var whole: float = base_main - PerfProbe.rotation_mean_main_ms(PerfProbe.Mode.ALL)
 		# The real validity test, and the only one that survives a scene which
 		# never repeats: the freezes are independent, so their savings must sum
 		# to ALL's. Scene bias would break that; scene VARIANCE does not.
@@ -744,17 +751,22 @@ func _freeze_sweep_dict() -> Dictionary:
 	for m: int in PerfProbe.MODE_COUNT:
 		if PerfProbe.sample_count(m) == 0:
 			continue
+		var se: float = PerfProbe.rotation_stderr_main_ms(m)
 		modes[PerfProbe.MODE_NAMES[m]] = {
-			"samples": PerfProbe.sample_count(m),
+			# Rotations are the sample size; frames are along for context only.
+			"rotations": PerfProbe.rotations(m),
+			"frames": PerfProbe.sample_count(m),
+			"main_thread_ms": PerfProbe.rotation_mean_main_ms(m),
+			"main_thread_stderr_ms": se if is_finite(se) else -1.0,
+			"resolved_vs_off": PerfProbe.difference_resolved(m, PerfProbe.Mode.NONE),
 			"frame_ms": PerfProbe.mean_frame_ms(m),
-			"main_thread_ms": PerfProbe.mean_main_ms(m),
 			"gpu_ms": PerfProbe.mean_gpu_ms(m),
 			"draw_calls": PerfProbe.mean_draws(m),
 		}
 	return {
 		"running": PerfProbe.auto_cycle,
 		"ready": PerfProbe.comparison_ready(),
-		"min_samples_per_mode": PerfProbe.MIN_SAMPLES_PER_MODE,
+		"min_rotations_per_mode": PerfProbe.MIN_ROTATIONS_PER_MODE,
 		"modes": modes,
 	}
 

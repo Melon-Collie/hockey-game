@@ -74,6 +74,9 @@ var _speed_lines: CPUParticles3D = null
 var _body_check_burst: CPUParticles3D = null
 var _prev_pos: Vector3 = Vector3.ZERO
 var _prev_vel: Vector3 = Vector3.ZERO
+# Edge-trigger for the measurement freeze, so emitters are silenced once on the
+# transition rather than written every frame while frozen.
+var _frozen: bool = false
 
 func _ready() -> void:
 	# Build left/right blade trail systems (same zero-gap GPU approach as puck).
@@ -109,11 +112,21 @@ func _ready() -> void:
 	_prev_pos = global_position
 
 func _process(_delta: float) -> void:
-	# Measurement freeze (see perf_probe.gd). Emitters keep whatever state they
-	# were left in, so this isolates the per-frame CPU bookkeeping — the GPU cost
-	# of the particles already alive stays on the frame.
+	# Measurement freeze (see perf_probe.gd). Emitters are silenced ON the freeze
+	# transition, not merely left alone: an early return skips the
+	# _set_blade_trails_emitting(false) below, so trails that were live when the
+	# freeze landed keep spawning forever. That made the frozen mode measure
+	# MORE expensive than the unfrozen one — a freeze that adds work prices the
+	# probe instead of the feature. Normal play re-enables them on the first
+	# unfrozen frame via the usual speed gates, so nothing needs restoring.
 	if PerfProbe.freeze_vfx:
+		if not _frozen:
+			_frozen = true
+			_set_blade_trails_emitting(false)
+			_stop_spray_emitter.emitting = false
+			_speed_lines.emitting = false
 		return
+	_frozen = false
 	var skater: Skater = get_parent() as Skater
 	if skater == null:
 		return

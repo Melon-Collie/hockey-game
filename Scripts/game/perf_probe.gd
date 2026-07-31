@@ -75,10 +75,13 @@ static var freeze_scratches: bool = false
 static var mode: int = Mode.NONE
 
 static var auto_cycle: bool = false
-# Short enough that a rotation samples one continuous "situation" rather than a
-# whole possession, so no mode systematically inherits the calm or busy parts of
-# play; long enough to clear SETTLE_SECONDS several times over.
-const AUTO_CYCLE_SECONDS: float = 2.0
+# One ROTATION is one observation (see the rotation-statistics block below), so
+# this is really "how fast do independent samples arrive". Short, because a
+# sweep's precision is set by the NUMBER of windows, not the frames inside them
+# — halving this doubles the observations per minute of play. The floor is
+# SETTLE_SECONDS, which is dead time in every window: at 1 s a quarter of the
+# sweep is discarded, which is the price paid for twice the statistical power.
+const AUTO_CYCLE_SECONDS: float = 1.0
 static var _auto_timer: float = 0.0
 
 # Frames discarded after a mode switch. The GPU timing query trails the CPU by a
@@ -114,6 +117,36 @@ static func _new_float_bins() -> PackedFloat64Array:
 	return a
 
 
+# ── Rotation statistics ──────────────────────────────────────────────────────
+# THE UNIT OF OBSERVATION IS A ROTATION, NOT A FRAME. Frames inside one window
+# share a camera angle and one moment of play, so they are not independent
+# samples of "what this mode costs" — they are ~200 near-copies of a single
+# sample. Averaging them as if they were independent is pseudo-replication, and
+# it makes a sweep look enormously precise while actually resting on three
+# observations per mode. That is how a run came back with three of four freezes
+# measuring SLOWER than doing the work, which is impossible: the spread between
+# windows dwarfed the effect, and nothing in the output admitted it.
+#
+# So each rotation contributes ONE number — its own mean — and the mode's
+# statistics are computed across those. That also buys an error bar, which is
+# the part that actually settles arguments: a 0.3 ms difference between modes
+# means nothing if the rotation-to-rotation spread is 1.5 ms, and now the panel
+# can say so instead of inviting the reader to believe the ranking.
+static var _rot_count: PackedInt64Array = _new_int_bins()
+static var _rot_sum: PackedFloat64Array = _new_float_bins()
+static var _rot_sum_sq: PackedFloat64Array = _new_float_bins()
+
+# Live rotation, flushed into the arrays above when the mode changes.
+static var _cur_frames: int = 0
+static var _cur_main_sum: float = 0.0
+# A rotation with too few frames (a hitch, or a switch right after settling) is
+# a noisy observation; dropping it beats letting it carry a full vote.
+const MIN_FRAMES_PER_ROTATION: int = 20
+# Rotations each mode needs before differences are worth reading. This is the
+# real sample size — 10 windows spread across the run, not 600 frames.
+const MIN_ROTATIONS_PER_MODE: int = 10
+
+
 # Advances to the next mode and returns its label for the caller to surface.
 static func cycle() -> String:
 	_set_mode((mode + 1) % MODE_COUNT)
@@ -121,6 +154,7 @@ static func cycle() -> String:
 
 
 static func _set_mode(m: int) -> void:
+	_flush_rotation()
 	mode = m
 	freeze_rig = mode == Mode.RIG or mode == Mode.ALL
 	freeze_hud = mode == Mode.HUD or mode == Mode.ALL
@@ -176,6 +210,58 @@ static func record(frame_ms: float, main_ms: float, gpu_ms: float, draws: int) -
 	_sum_main_ms[mode] += main_ms
 	_sum_gpu_ms[mode] += gpu_ms
 	_sum_draws[mode] += float(draws)
+	_cur_frames += 1
+	_cur_main_sum += main_ms
+
+
+# Closes the live rotation and banks its mean as ONE observation for the mode it
+# belonged to. Called on every mode change, so it always credits the outgoing
+# mode — never the incoming one.
+static func _flush_rotation() -> void:
+	if _cur_frames >= MIN_FRAMES_PER_ROTATION:
+		var rot_mean: float = _cur_main_sum / float(_cur_frames)
+		_rot_count[mode] += 1
+		_rot_sum[mode] += rot_mean
+		_rot_sum_sq[mode] += rot_mean * rot_mean
+	_cur_frames = 0
+	_cur_main_sum = 0.0
+
+
+static func rotations(m: int) -> int:
+	return _rot_count[m]
+
+
+# Mean of the per-rotation means — the headline number, and the one the error
+# bar below belongs to.
+static func rotation_mean_main_ms(m: int) -> float:
+	if _rot_count[m] == 0:
+		return 0.0
+	return _rot_sum[m] / float(_rot_count[m])
+
+
+# Standard error of that mean across rotations. This is the number that says
+# whether a gap between two modes is real; a difference inside a couple of these
+# is not a finding, however many frames fed it.
+static func rotation_stderr_main_ms(m: int) -> float:
+	var k: int = _rot_count[m]
+	if k < 2:
+		return INF
+	var mean: float = _rot_sum[m] / float(k)
+	var variance: float = (_rot_sum_sq[m] - float(k) * mean * mean) / float(k - 1)
+	if variance <= 0.0:
+		return 0.0
+	return sqrt(variance / float(k))
+
+
+# Whether a mode's gap from baseline clears the noise of BOTH measurements.
+# Two standard errors on the difference — the usual bar for "not chance".
+static func difference_resolved(m: int, baseline: int) -> bool:
+	var se_a: float = rotation_stderr_main_ms(m)
+	var se_b: float = rotation_stderr_main_ms(baseline)
+	if not is_finite(se_a) or not is_finite(se_b):
+		return false
+	var diff: float = absf(rotation_mean_main_ms(baseline) - rotation_mean_main_ms(m))
+	return diff > 2.0 * sqrt(se_a * se_a + se_b * se_b)
 
 
 static func sample_count(m: int) -> int:
@@ -201,11 +287,9 @@ static func mean_draws(m: int) -> float:
 # True once every mode carries enough frames that the means are worth reading.
 # Below this the spread between modes is smaller than the run-to-run noise, and
 # reporting a difference would repeat the mistake documented at the top.
-const MIN_SAMPLES_PER_MODE: int = 600
-
 static func comparison_ready() -> bool:
 	for m: int in MODE_COUNT:
-		if _samples[m] < MIN_SAMPLES_PER_MODE:
+		if _rot_count[m] < MIN_ROTATIONS_PER_MODE:
 			return false
 	return true
 
@@ -217,6 +301,11 @@ static func reset_stats() -> void:
 		_sum_main_ms[m] = 0.0
 		_sum_gpu_ms[m] = 0.0
 		_sum_draws[m] = 0.0
+		_rot_count[m] = 0
+		_rot_sum[m] = 0.0
+		_rot_sum_sq[m] = 0.0
+	_cur_frames = 0
+	_cur_main_sum = 0.0
 
 
 # Match teardown must not leave a freeze latched — the switches are static, so
