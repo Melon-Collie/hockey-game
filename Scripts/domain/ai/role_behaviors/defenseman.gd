@@ -262,9 +262,6 @@ static func _decide_back(ctx: RoleContext, side: float) -> RoleDecision:
 		x += clampf(ctx.snapshot.puck_state.position.x * DBACK_PUCK_SHADE,
 				-DBACK_SHADE_MAX_M, DBACK_SHADE_MAX_M)
 	var stand := Vector3(x, 0.0, own_dir * GameRules.BLUE_LINE_Z)
-	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
-	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
-	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
 	AIRoleHelpers.collect_counter_threats(
 			ctx, ctx.scratch_counter_states, ctx.scratch_counter_caps)
 	AIRoleHelpers.fill_counter_channels(ctx, ctx.scratch_counter_states,

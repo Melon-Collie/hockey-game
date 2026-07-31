@@ -1080,7 +1080,6 @@ static func fill_counter_channels(ctx: RoleContext,
 			and opp_states.size() == _race_key_count \
 			and variant == _race_key_variant \
 			and int(ctx.offsides_enforced) == _race_key_offsides and snap_id != 0:
-		_prepare_reach(ctx.self_max_speed, ctx.self_max_accel)
 		return
 	_race_key_snapshot_id = snap_id
 	_race_key_net_z = our_net.z
@@ -1187,8 +1186,14 @@ static func fill_counter_channels(ctx: RoleContext,
 				t_ret = AIActionScoring.time_to_arrive(
 						s.position, puck_pos, vel, speed)
 			_append_channel(puck_pos, t_ret, Vector3.ZERO, speed, accel)
+	# Invalidate the radii but do NOT rebuild them here. race_home_feasible is
+	# the sole preparer (it calls _prepare_reach unconditionally, at the caller's
+	# own race speed), and every consumer reaches the radii through it. Rebuilding
+	# a second time here — as the memo-hit path also used to, at the CRUISE speed
+	# rather than the sprint one — meant every station past the first paid two
+	# full rebuilds of the station grid and got the first one's answer thrown
+	# away. Splitting that responsibility is what let the two speeds disagree.
 	_race_key_speed = -1.0
-	_prepare_reach(self_race_vmax(ctx), ctx.self_max_accel)
 
 
 # Sprint-aware SELF cap for home/station races — the backchecking body
@@ -1197,7 +1202,8 @@ static func fill_counter_channels(ctx: RoleContext,
 # sagged earlier than the legs they model. Race length ≈ the trip home;
 # pool/lockout from our own replicated state. Every race_home_feasible /
 # most_forward_feasible caller passes THIS (not ctx.self_max_speed) so the
-# per-fill reach memo keys one consistent value.
+# per-fill reach memo keys one consistent value (see fill_counter_channels:
+# race_home_feasible is the only thing that builds them).
 static func self_race_vmax(ctx: RoleContext) -> float:
 	if ctx.snapshot == null:
 		return ctx.self_max_speed

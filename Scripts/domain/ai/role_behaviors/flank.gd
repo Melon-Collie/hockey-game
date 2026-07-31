@@ -48,9 +48,6 @@ static func decide(ctx: RoleContext, lateral_sign: float) -> RoleDecision:
 	# Race-home bound (see the header doc). Channels are built off the full
 	# opponent list, memoized per snapshot — the second flank's fill is a
 	# cache hit.
-	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
-	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
-	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
 	AIRoleHelpers.collect_counter_threats(
 			ctx, ctx.scratch_counter_states, ctx.scratch_counter_caps)
 	AIRoleHelpers.fill_counter_channels(ctx, ctx.scratch_counter_states,
