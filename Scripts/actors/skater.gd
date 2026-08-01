@@ -229,6 +229,14 @@ var is_local_skater: bool = false
 # ── Body Block Tuning ─────────────────────────────────────────────────────────
 @export var body_block_radius: float = 0.5
 @export var block_body_radius: float = 0.9
+# World-Y ceiling of the shot-block seal — the top of the KNEELING body (helmet
+# shell, ≈1.44 m at the default build; the standing head reaches ≈1.85 m). A
+# blocker who drops to a knee gives up everything above it, so elevating over
+# him beats the block. Authored rather than measured off the live pose on
+# purpose: the pose is a render-rate cosmetic (SkaterSkatingCoordinator), and
+# collision must not depend on when a frame happened to draw. Re-derive it if
+# the kneel angles move — test_shot_body_animation pins the two together.
+@export var block_seal_height: float = 1.45
 # Vertical center of the body-block sphere, in skater-local space (origin sits at
 # the hips). Raised to torso height so the PASSIVE sphere (body_block_radius)
 # clears a grounded puck (top ≈ ice_height + radius ≈ 0.12) — loose pucks on the
@@ -2348,11 +2356,11 @@ func set_block_stance(active: bool) -> void:
 # The body-block CYLINDER the analytic detector tests against (PuckController) — a vertical
 # cylinder at the skater's XZ axis matching the torso. PASSIVE: radius body_block_radius over a
 # torso band raised off the ice, so a grounded puck slides UNDER (a flat shot passes clean).
-# SHOT-BLOCK: the wider block_body_radius, banded from the ice up so a low shot is sealed —
-# the pose earns that width with the leg extended along the ice on one side and the stick
-# flat on the other. Reach is uniform across the band (unlike the old sphere, which bulged
-# at one height), and its full height is not the kneeling body's: an elevated shot still
-# meets the seal.
+# SHOT-BLOCK: the wider block_body_radius, banded from the ice up to block_seal_height so a
+# low shot is sealed. Both dimensions are the one-knee pose's — the leg extended along the
+# ice on one side and the stick flat on the other earn the width; the kneeling head caps the
+# height, so beating a committed blocker means going OVER him. Reach is uniform across the
+# band (unlike the old sphere, which bulged at one height).
 func get_body_block_radius() -> float:
 	return block_body_radius if _block_stance_active else body_block_radius
 
@@ -2360,8 +2368,9 @@ func get_body_block_radius() -> float:
 # World-Y extent [bottom, top] of the body-block cylinder.
 func get_body_block_y_range() -> Vector2:
 	if _block_stance_active:
-		# Seal the ice up through the body (a committed block stops a flat shot).
-		return Vector2(0.0, 2.0 * block_body_radius)
+		# Seal the ice up through the kneeling body (a committed block stops a
+		# flat shot; over the top of him it goes through).
+		return Vector2(0.0, block_seal_height)
 	# Torso band centred at body_block_height, raised off the ice so a grounded puck passes under.
 	var center_y: float = global_position.y + body_block_height
 	return Vector2(center_y - body_block_radius, center_y + body_block_radius)

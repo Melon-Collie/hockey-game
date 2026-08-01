@@ -236,6 +236,36 @@ func _foot_y(leg: int, shin: int) -> float:
 	return _skater.lower_body.position.y - 0.13 - span * cos(roll)
 
 
+func test_block_seal_height_matches_the_kneeling_body() -> void:
+	# Calibration: the block's collision seal is authored (collision can't read a
+	# render-rate pose), so it has to be re-derived whenever the kneel angles
+	# move. This pins the two together — the seal covers the kneeling head and
+	# stops there, rather than walling off a standing body that isn't there.
+	var controller: SkaterController = SkaterController.new()
+	autofree(controller)
+	var sm := SkaterStateMachine.new()
+	var pose := SkaterPoseCoordinator.new()
+	pose.setup(_skater, sm, SkaterAimingBehavior.new(), controller, _coord)
+	_skater.current_shot_state = State.SHOT_BLOCKING
+	sm.set_state(State.SHOT_BLOCKING)
+	_skater.set_block_stance(true)  # the collision half, normally flipped on entry
+	for _i: int in 120:
+		_coord.apply(DT)
+		pose.apply_upper_body(DT)
+	# Helmet centre in world Y, over the dropped and pitched torso. The skater
+	# body rides at FACEOFF_SPAWN_HEIGHT with the ice at 0.
+	var helmet_y: float = _skater.upper_bone_base_position(SkaterMeshBuilder.UpperBone.HELMET).y
+	var head_center: float = GameRules.FACEOFF_SPAWN_HEIGHT + _skater.upper_body.position.y \
+			+ helmet_y * cos(_skater.upper_body.rotation.x)
+	var seal: float = _skater.get_body_block_y_range().y
+	assert_gt(seal, head_center,
+			"the seal should cover the kneeling head (seal %.3f, head centre %.3f)"
+			% [seal, head_center])
+	assert_lt(seal, head_center + 0.25,
+			"the seal shouldn't wall off a body that isn't there (seal %.3f, head centre %.3f)"
+			% [seal, head_center])
+
+
 func test_block_tips_the_chest_onto_the_down_knee() -> void:
 	# The torso branch runs on the simulating machine via the pose coordinator;
 	# wire it the way SkaterController.setup does and hold SHOT_BLOCKING.
