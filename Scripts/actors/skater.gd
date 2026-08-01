@@ -703,7 +703,10 @@ func _process(delta: float) -> void:
 		# (facing, upper-body twist, blade IK) already ran in the physics tick.
 		if render_pose_update.is_valid():
 			render_pose_update.call(delta)
-		if _rig_pose_changed():
+		# The dirty check is deliberately INSIDE the freeze gate: skipping it lets
+		# the snapshot go stale, so the first unfrozen frame trips it and rebuilds
+		# rather than holding the frozen pose into the next rotation.
+		if not PerfProbe.freeze_rig_write and _rig_pose_changed():
 			update_stick_mesh()
 			update_arm_mesh()
 			update_bottom_arm_mesh()

@@ -42,22 +42,37 @@ extends Object
 
 enum Mode {
 	NONE,
-	RIG,      # marker-driven stick + arm mesh rebuild, render rate, ~20 transform writes/skater/frame
-	HUD,      # per-skater world HUD (ring, name, chevrons, beacon) — currently PHYSICS rate
-	VFX,      # SkaterVFX per-frame emitter bookkeeping
-	SCRATCH,  # IceScratchMap: per-frame skater sweep AND its 5.6 MP SubViewport repaint
+	RIG,        # the whole cosmetic rig: pose SOLVE + pose WRITE, render rate
+	RIG_WRITE,  # the WRITE half only — bone poses and the stick/arm rebuild
+	HUD,        # per-skater world HUD — now almost entirely ice-shader uniforms
+	VFX,        # SkaterVFX per-frame emitter bookkeeping
+	SCRATCH,    # IceScratchMap: per-frame skater sweep AND its SubViewport repaint
 	ALL,
 }
 
-const MODE_COUNT: int = 6
+const MODE_COUNT: int = 7
 const MODE_NAMES: Array[String] = [
-	"off", "RIG frozen", "HUD frozen", "VFX frozen", "SCRATCH frozen", "ALL frozen",
+	"off", "RIG frozen", "RIG writes frozen", "HUD frozen", "VFX frozen",
+	"SCRATCH frozen", "ALL frozen",
 ]
 
 # Read directly on hot paths, so they are plain bools rather than a mode compare
 # or an accessor call — checked once per skater per frame (RIG/VFX) or per tick
 # (HUD).
 static var freeze_rig: bool = false
+# Splits RIG in half. freeze_rig suppresses BOTH the pose solve (the gait, head
+# tracking and off-hand IK behind Skater.render_pose_update) and the pose write
+# (update_stick_mesh / update_arm_mesh / update_bottom_arm_mesh, which write bone
+# poses and dirty both skeletons). Those are very different things to fix, and
+# the sweep could not tell them apart — RIG measured 2.08 ms without saying
+# whether that was arithmetic or transform plumbing.
+#
+# This one suppresses ONLY the write half, so:
+#     write cost = off − RIG_WRITE
+#     solve cost = RIG_WRITE − RIG
+# Which one dominates decides whether the next move is cheaper math, or fewer /
+# rarer writes.
+static var freeze_rig_write: bool = false
 static var freeze_hud: bool = false
 static var freeze_vfx: bool = false
 # Unlike the other three, this one has a player-facing equivalent (Options →
@@ -157,6 +172,7 @@ static func _set_mode(m: int) -> void:
 	_flush_rotation()
 	mode = m
 	freeze_rig = mode == Mode.RIG or mode == Mode.ALL
+	freeze_rig_write = freeze_rig or mode == Mode.RIG_WRITE
 	freeze_hud = mode == Mode.HUD or mode == Mode.ALL
 	freeze_vfx = mode == Mode.VFX or mode == Mode.ALL
 	freeze_scratches = mode == Mode.SCRATCH or mode == Mode.ALL
