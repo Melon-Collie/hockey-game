@@ -193,6 +193,52 @@ The only route to a goalie skeleton is making its collision analytic the way
 skater-vs-skater already is. That is a gameplay change with its own risk, and a
 separate piece of work.
 
+## What it cost, measured after the fact
+
+**The performance premise of this work was wrong, and the numbers say so.** It is
+recorded here because the node counts left behind look like evidence for it.
+
+The conversion was justified on transform propagation: ~40 cosmetic nodes per
+skater, each write dirtying a subtree and pushing a global to the
+RenderingServer. The F7 sweep was run before and after. Freezing the cosmetic rig
+saved ~1.9 ms both times. **Skater went 67 nodes to 32 and the frame did not
+move.**
+
+Then the sweep was split (PerfProbe.RIG_WRITE) and a micro-benchmark built
+(`benchmarks/test_gait_micro_benchmark.gd`), and the picture came apart further:
+
+| | measured |
+|---|---|
+| freezing the whole rig | 1.9 ms / frame, 10 skaters |
+| freezing only the arm + stick WRITES | 0.12 ms ± 0.32 — unresolved |
+| the GDScript in the pose solve | 40 µs/skater → **0.4 ms** |
+| the GDScript in the pose writes | 20 µs/skater → **0.2 ms** |
+
+The script accounts for ~0.6 ms of a ~1.9 ms saving. **The missing ~1.3 ms is
+engine-side work the writes TRIGGER, not the writes themselves** — resolving both
+skeletons and re-uploading their bone data, plus propagating the crouch and
+marker nodes the solve still moves.
+
+That also explains the RIG_WRITE null result, which is otherwise baffling.
+Freezing the arm and stick writes does not let either skeleton go clean: the gait
+still writes four leg bones and the head yaw every frame, so both skeletons are
+dirty regardless and the engine pays anyway. Only freezing the WHOLE rig stops
+every bone write, and only then does that cost disappear.
+
+Two consequences for anyone optimising this next:
+
+- **The lever is frequency, not arithmetic.** Making the gait's maths faster
+  attacks 0.4 ms of a 1.9 ms bill. Making the poses change *less often* — rate
+  limiting, distance LOD, skipping unmoved skaters — removes the maths, the
+  skeleton resolve and the upload together. The gait costs 27-37 µs in every
+  state measured (rest, glide, skate, hockey stop, planted), so there is no cheap
+  branch to exploit either; it is uniformly expensive.
+- **A skinned rig is not automatically cheaper than nodes.** Bones trade N
+  transform propagations for one skeleton resolve plus a texture upload. At this
+  part count that came out even. Keep the rig because it is the right structure —
+  the argument at the top of this document stands on its own — but do not expect
+  frames from it.
+
 ## Tools
 
 - `tools/pose_capture.gd` (+ `pose_capture_runner.gd`) — the eleven-pose set and
