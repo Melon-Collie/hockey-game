@@ -48,12 +48,22 @@ enum Section {
 	SKATER_STEP,
 	AI_KICK,    # build_view + prep_for_decide + _stabilize_snapshot, per kick
 	WORKER,     # the off-thread decide() batch: context, NOT main-thread cost
+	# ── The rest of the host's physics tick ──────────────────────────────────
+	# Everything above is reached from GameManager's AI block. These are the
+	# other per-tick bodies, each summed over its actors, so the tick's cost is
+	# attributed rather than left in a residual.
+	SKATER_PHYS,   # Skater._physics_process, x10 — integrate, analytic contact, clamps
+	PUCK_PHYS,     # Puck._physics_process + PuckController._physics_process
+	GOALIE_PHYS,   # GoalieController._physics_process, x2
+	GM_TAIL,       # goal / bounds / ghost checks and the four trackers
+	NET_CAPTURE,   # end-of-tick ring capture + broadcast
 }
 
-const SECTION_COUNT: int = 7
+const SECTION_COUNT: int = 12
 const SECTION_NAMES: Array[String] = [
 	"snapshot", "brains", "dispatch (total)", "  dispatch: apply",
 	"    of which skater step", "  dispatch: kick", "worker (off-thread)",
+	"skater bodies", "puck", "goalies", "game tail", "capture + broadcast",
 ]
 
 # One publish per second of host simulation. Matches the cadence a reader can
@@ -174,6 +184,18 @@ static func main_thread_mean_us() -> float:
 # to quote when deciding whether the AI is worth optimising.
 static func ai_only_mean_us() -> float:
 	return maxf(main_thread_mean_us() - _pub_mean_us[Section.SKATER_STEP], 0.0)
+
+
+# Every attributed main-thread section of the host tick. Nested sections
+# (AI_APPLY, SKATER_STEP, AI_KICK) and the off-thread WORKER are left out. What
+# this MISSES is as informative as what it holds: the gap between this and the
+# engine's physics step is unattributed tick cost — engine-side transform
+# propagation, signal dispatch, and whatever body has not been instrumented.
+static func tick_total_mean_us() -> float:
+	return _pub_mean_us[Section.SNAPSHOT] + _pub_mean_us[Section.BRAINS] \
+			+ _pub_mean_us[Section.DISPATCH] + _pub_mean_us[Section.SKATER_PHYS] \
+			+ _pub_mean_us[Section.PUCK_PHYS] + _pub_mean_us[Section.GOALIE_PHYS] \
+			+ _pub_mean_us[Section.GM_TAIL] + _pub_mean_us[Section.NET_CAPTURE]
 
 
 # The worst main-thread AI tick in the window. Not the sum of the per-section

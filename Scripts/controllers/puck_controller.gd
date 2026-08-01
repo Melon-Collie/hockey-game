@@ -286,8 +286,10 @@ func _physics_process(delta: float) -> void:
 	if puck == null:
 		return
 	if is_server:
+		var t0: int = Time.get_ticks_usec()
 		_check_interactions()
 		_prev_puck_pos = puck.get_puck_position()
+		HostCostProbe.record(HostCostProbe.Section.PUCK_PHYS, Time.get_ticks_usec() - t0)
 		return
 	# A despawned / demoted remote carrier drops the pin back to interpolation.
 	if _remote_carrier_skater != null and not is_instance_valid(_remote_carrier_skater):

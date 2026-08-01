@@ -648,7 +648,7 @@ func _render_frame_cost() -> void:
 func _render_host_ai_cost() -> void:
 	if not HostCostProbe.has_data():
 		return
-	_section("Host AI cost (main thread, last 1 s)")
+	_section("Host tick cost (main thread, last 1 s)")
 	var tick_us: float = 1_000_000.0 / maxf(Engine.physics_ticks_per_second, 1.0)
 	for s: int in HostCostProbe.SECTION_COUNT:
 		var mean: float = HostCostProbe.mean_us(s)
@@ -669,6 +669,11 @@ func _render_host_ai_cost() -> void:
 		"the worst figure is the largest SINGLE section, not their sum — separate sections can peak on separate ticks and adding them would invent a tick that never ran")
 	_info("AI itself", "%.0f us mean (block minus the skater step)" % HostCostProbe.ai_only_mean_us(),
 		"the skater step above is the ordinary per-skater controller tick, paid for humans too — only THIS part gets cheaper by making the bots cheaper")
+	_context(_band(HostCostProbe.tick_total_mean_us() / tick_us, 0.40, 0.70),
+		"Tick attributed",
+		"%.0f us of %.0f us (%.0f%%)" % [HostCostProbe.tick_total_mean_us(), tick_us,
+			100.0 * HostCostProbe.tick_total_mean_us() / tick_us],
+		"every instrumented section summed. What is MISSING from it is the interesting part — engine-side transform propagation, signal dispatch, and any body not timed here")
 	_info("Worker behind", "%.0f%% of ticks" % HostCostProbe.worker_busy_pct(),
 		"share of ticks that could not kick a fresh AI batch because the previous one was still running; bots coast on their last decision through these, and the ticks that CAN kick are the expensive ones")
 
@@ -811,6 +816,7 @@ func _host_ai_cost_dict() -> Dictionary:
 		"tick_us": 1_000_000.0 / maxf(Engine.physics_ticks_per_second, 1.0),
 		"main_thread_mean_us": HostCostProbe.main_thread_mean_us(),
 		"ai_only_mean_us": HostCostProbe.ai_only_mean_us(),
+		"tick_attributed_mean_us": HostCostProbe.tick_total_mean_us(),
 		"main_thread_worst_section_us": HostCostProbe.main_thread_max_us(),
 		"worker_behind_pct": HostCostProbe.worker_busy_pct(),
 		"sections": sections,

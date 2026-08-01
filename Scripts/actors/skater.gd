@@ -747,6 +747,7 @@ func _rig_pose_changed() -> bool:
 
 
 func _physics_process(delta: float) -> void:
+	var _t0: int = Time.get_ticks_usec()
 	# _prev_blade_contact is captured at the top of each controller's tick, before
 	# the per-tick IK update runs (see Skater.capture_prev_blade_contact()).
 	# Capturing it here would read post-IK and miss the swing within the tick.
@@ -800,6 +801,7 @@ func _physics_process(delta: float) -> void:
 	# doc-comment). Blade elevation/lift above is cosmetic and doesn't touch the
 	# body position/velocity/upper-body fields the snapshot records.
 	post_move_integrated.emit()
+	HostCostProbe.record(HostCostProbe.Section.SKATER_PHYS, Time.get_ticks_usec() - _t0)
 
 
 # Sanitizes the body's velocity/position to finite values right before the Jolt

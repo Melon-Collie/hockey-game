@@ -602,7 +602,7 @@ func _physics_process(delta: float) -> void:
 			HostCostProbe.record(HostCostProbe.Section.DISPATCH,
 					Time.get_ticks_usec() - t_section)
 	HostCostProbe.record(HostCostProbe.Section.WORKER, _ai_coordinator.last_worker_us)
-	HostCostProbe.end_tick()
+	t_section = Time.get_ticks_usec()
 	_update_host_puck_tracking()
 	_check_goal_crossing()
 	_check_puck_out_of_bounds(delta)
@@ -612,6 +612,7 @@ func _physics_process(delta: float) -> void:
 	_hit_tracker.tick(delta)
 	_possession_tracker.tick(delta)
 	_pickup_claim.tick(delta)
+	HostCostProbe.record(HostCostProbe.Section.GM_TAIL, Time.get_ticks_usec() - t_section)
 
 
 # End-of-tick host capture + broadcast, invoked by PostPhysicsNetHook at
@@ -629,9 +630,15 @@ func _capture_and_broadcast_post_physics() -> void:
 		return
 	if NetworkManager.is_replay_mode():
 		return
+	var t0: int = Time.get_ticks_usec()
 	if _state_buffer_manager != null and puck_controller != null:
 		_state_buffer_manager.capture(_registry, puck_controller, goalie_controllers)
 		NetworkManager.try_broadcast()
+	HostCostProbe.record(HostCostProbe.Section.NET_CAPTURE, Time.get_ticks_usec() - t0)
+	# Closes the probe's window. GameManager is an autoload and ticks BEFORE the
+	# scene's bodies, so closing it there would push every body's section into the
+	# next window; this hook is the tick's documented last step.
+	HostCostProbe.end_tick()
 
 
 func _check_puck_out_of_bounds(delta: float) -> void:
