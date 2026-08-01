@@ -481,6 +481,52 @@ func test_last_man_still_declines_a_lost_race() -> void:
 	assert_true(lost, "the last man with nobody home still pre-contains")
 
 
+func test_a_puck_rimmed_into_our_own_corner_is_still_chased() -> void:
+	# The hole the goal-side read alone left. When the puck is the DEEPEST object
+	# in our own end — rimmed into our corner, past everybody — no teammate CAN
+	# be goal-side of it, so the containment valve was unsatisfiable exactly
+	# where declining costs the most: every eligible bot declined and the puck
+	# sat in our own corner untouched (93 of 98 idle ticks on the engagement
+	# harness, nearest man 13.4 m and closing).
+	#
+	# Our net is at +Z here (own_goal_dir +1), so a puck at z = +24 is behind us
+	# all. Both teammates are up-ice of it and neither can ever be goal-side —
+	# but both are sitting in front of our own net, so the house is covered and
+	# leaving to pressure is free. Doctrine: a loose puck in our end is always
+	# pressured; "don't chase" is about a puck CARRIER in a low-danger area.
+	var snap := WorldSnapshot.new()
+	snap.puck_state = PuckNetworkState.new()
+	snap.puck_state.position = Vector3(11, 0, 24)
+	snap.puck_state.velocity = Vector3.ZERO
+	snap.skater_states[1] = _skater(Vector3(6, 0, 20))              # us, nearest
+	snap.skater_states[2] = _skater(Vector3(1, 0, 21))              # mate, net front
+	snap.skater_states[3] = _skater(Vector3(-2, 0, 19))             # mate, slot
+	snap.skater_states[11] = _skater(Vector3(10, 0, 23),
+			Vector3(0, 0, 4))                                       # opponent, winning
+	var teams := {1: 0, 2: 0, 3: 0, 11: 1}
+	var lost: bool = AIRoleHelpers.loose_puck_race_lost(
+			snap, Vector3(6, 0, 20), Vector3.ZERO, REF, 0, teams, {}, 1, 1.0)
+	assert_false(lost,
+			"a puck behind our whole team is pressured while the house is covered")
+
+	# The contrast that keeps the last-man case alive: same puck, same lost
+	# race, but the mates are stranded up-ice at the far blue line. Nobody can
+	# hold the house, so the nearest man stops and covers the net front instead
+	# of chasing it into the corner.
+	var alone := WorldSnapshot.new()
+	alone.puck_state = PuckNetworkState.new()
+	alone.puck_state.position = Vector3(11, 0, 24)
+	alone.puck_state.velocity = Vector3.ZERO
+	alone.skater_states[1] = _skater(Vector3(6, 0, 20))
+	alone.skater_states[2] = _skater(Vector3(1, 0, -8))             # caught up-ice
+	alone.skater_states[3] = _skater(Vector3(-2, 0, -10))           # caught up-ice
+	alone.skater_states[11] = _skater(Vector3(10, 0, 23), Vector3(0, 0, 4))
+	var lost_alone: bool = AIRoleHelpers.loose_puck_race_lost(
+			alone, Vector3(6, 0, 20), Vector3.ZERO, REF, 0, teams, {}, 1, 1.0)
+	assert_true(lost_alone,
+			"with nobody able to hold the house the last man covers the net front")
+
+
 func test_a_ghosted_teammate_is_not_containment() -> void:
 	# A teammate serving an offside ghost can't play the puck or the body, so
 	# he can't be the reason we stop chasing.

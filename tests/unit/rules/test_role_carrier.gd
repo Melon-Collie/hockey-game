@@ -1868,6 +1868,106 @@ func test_best_dump_geometry_past_center_is_a_soft_flip_to_the_far_corner() -> v
 			"the dump-in comes to rest in the offensive zone")
 
 
+func test_dump_in_places_the_puck_by_pace_not_by_banking_off_a_wall() -> void:
+	# The dump-in searches BEARING x PACE. Bearing alone cannot place a dump:
+	# every pace the bot can produce out-slides the rink several times over, so
+	# at a fixed hot pace the only deliveries that die in the offensive zone are
+	# the ones banked steeply enough to shed 40-60% on contact — and a centre
+	# chip simply squares off the end boards and comes BACK to the neutral zone.
+	# With pace on the axis list the delivery lands deep and the launch is soft.
+	var self_pos := Vector3(2, 0, -4)
+	var ctx: RoleContext = _make_ctx(self_pos, [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(2, 0, -5)]])
+	var c := AIRoleCarrier.new()
+	c._build_action_opponents_lists(ctx)
+	var dump: Array = c._best_dump(ctx, AIRoleHelpers.resolve_our_goalie_pos(ctx))
+	var settle: Vector3 = dump[4]
+	gut.p("  dump-in settles at %s, launched at %.1f m/s" % [settle, dump[5]])
+	assert_true(
+			AIActionScoring.in_offensive_zone(settle, ctx.attacking_goal_pos),
+			"the dump-in comes to rest in the offensive zone")
+	# The pace is a real choice off the ladder, inside the producible release
+	# band — not the fixed quick-pass pace the release used to be stuck at.
+	assert_between(dump[5], GameRules.DEFAULT_WRISTER_POWER_MIN_M_S,
+			ctx.self_wrister_shot_speed,
+			"the launch pace sits in the band the release can actually fire")
+	# And the puck stops in play, short of the end boards it used to rattle off.
+	assert_lt(absf(settle.z), GameRules.GOAL_LINE_Z,
+			"a placed dump-in dies in the zone, not off the end wall")
+
+
+func test_dump_in_will_not_feed_the_keeper() -> void:
+	# The missing body in the dump's race. chase_recovery sees skaters only, so
+	# a puck dying on the doorstep — the spot position_potential rates highest
+	# on the whole rink — used to read as a FREE recovery, and the delivery
+	# search aimed there. It is the keeper's puck; he is standing on it.
+	var self_pos := Vector3(0, 0, -4)
+	var ctx: RoleContext = _make_ctx(self_pos, [[1, TEAM_ID, self_pos]])
+	var c := AIRoleCarrier.new()
+	c._build_action_opponents_lists(ctx)
+	var dump: Array = c._best_dump(ctx, AIRoleHelpers.resolve_our_goalie_pos(ctx))
+	var settle: Vector3 = dump[4]
+	var keeper: Vector3 = c._goalie_now(ctx)
+	gut.p("  dump-in settles at %s, keeper at %s" % [settle, keeper])
+	assert_false(
+			AIActionScoring.keeper_collects_first(
+					settle, keeper, [self_pos] as Array[Vector3],
+					AIActionScoring.SKATER_REF_SPEED_M_S),
+			"the chosen dump is not one the keeper simply collects")
+
+	# The primitive itself, both ways: a puck resting in the blue paint with our
+	# nearest man twenty metres out is his; the same puck in the corner is not,
+	# because 4.2 m/s cannot beat a winger's 9 to it.
+	var ours: Array[Vector3] = [Vector3(0, 0, -6)]
+	assert_true(AIActionScoring.keeper_collects_first(
+			Vector3(0, 0, -24.0), keeper, ours, AIActionScoring.SKATER_REF_SPEED_M_S),
+			"a puck dying on the doorstep belongs to the keeper")
+	assert_false(AIActionScoring.keeper_collects_first(
+			Vector3(11.5, 0, -23.0), keeper, ours, AIActionScoring.SKATER_REF_SPEED_M_S),
+			"…and a puck in the corner does not — he cannot get there first")
+
+
+func test_an_easy_entry_is_carried_not_dumped() -> void:
+	# The headline behavior. A carrier past centre with the ice in front of him
+	# genuinely open — one defender well wide of the lane — must take the entry,
+	# not fling it in. Three asymmetries used to hand this to the dump, all of
+	# them comparing a dumped puck's WHOLE play against a carry's next second:
+	# the settle spot's potential skipped the realization discount every carry
+	# candidate pays, the chase clock ran at an instant full-speed sprint no
+	# skater can produce, and the compete never saw the drive-in the carrier
+	# could simply take.
+	var self_pos := Vector3(0, 0, -2)
+	for label: String in ["wide D", "wide D, in stride"]:
+		var vel: Vector3 = Vector3(0, 0, -8) if label.ends_with("stride") \
+				else Vector3.ZERO
+		var ctx: RoleContext = _make_ctx(self_pos, [
+				[1, TEAM_ID, self_pos],
+				[3, 1, Vector3(-12, 0, -9)]])
+		ctx.self_velocity = vel
+		var c := AIRoleCarrier.new()
+		c.decide(ctx)
+		gut.p("  %s: intent=%d dump=%.4f carry=%.4f"
+				% [label, c.intended_action, c.debug_dump_score, c.debug_carry_score])
+		assert_ne(c.intended_action, AIRoleCarrier.INTENT_DUMP,
+				"%s: an open entry is skated in, not dumped" % label)
+
+	# The contrast that keeps this honest: the dump must still be REACHABLE.
+	# Wall it off with a real stand-up line and the compete stops preferring the
+	# carry — this is the flip, not a blanket ban on dumping.
+	var walled: RoleContext = _make_ctx(self_pos, [
+			[1, TEAM_ID, self_pos],
+			[3, 1, Vector3(-4, 0, -5)],
+			[4, 1, Vector3(0, 0, -4.5)],
+			[5, 1, Vector3(4, 0, -5)]])
+	var cw := AIRoleCarrier.new()
+	cw.decide(walled)
+	gut.p("  walled: intent=%d dump=%.4f carry=%.4f"
+			% [cw.intended_action, cw.debug_dump_score, cw.debug_carry_score])
+	assert_lt(cw.debug_carry_score, 0.30,
+			"a stand-up wall genuinely collapses the carry's value")
+
+
 func test_carrier_with_a_clean_outlet_does_not_dump() -> void:
 	# Un-pended by the meeting-strip crossing band (measured, protection-
 	# aware): the head-on forecheck meeting prices as the strip it is even
@@ -2248,6 +2348,56 @@ func test_committed_saucer_pass_caps_launch_at_the_receivability_bound() -> void
 
 # ─── puck-protect mirror (blade shielding read by the state machine) ─────────
 
+func test_no_shot_is_even_scored_from_outside_the_zone() -> void:
+	# The shot eval is skipped entirely outside the attacking zone while the
+	# keeper is HOME — the same proof threat_surface_shoot and _score_at already
+	# run, applied to the eval that costs the most (goalie hole geometry + the
+	# three-sample release sweep + the tip read, on every NZ/DZ dispatch, to
+	# compute ~0).
+	#
+	# It is a behavioural guarantee, not only a saving. SHOT_MIN_VALUE already
+	# made an own-zone shot unreachable in practice, but only by arithmetic
+	# downstream of two multipliers — the fire hysteresis and the smart-ping
+	# SHOOT bias — which both scale a live score up BEFORE the bar is checked.
+	# With no score computed there is nothing for either to lift.
+	var self_pos := Vector3(0.0, 0.0, 20.0)          # deep in our OWN zone
+	var ctx := _make_ctx(self_pos, [[1, TEAM_ID, self_pos]])
+	var home := GoalieNetworkState.new()
+	home.position_x = 0.0
+	home.position_z = OPP_NET_Z + 1.0                # keeper home in his crease
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = home
+	var c := AIRoleCarrier.new()
+	c.decide(ctx)
+	assert_lt(c.debug_shoot_score, 0.0,
+			"no shot is scored at all from our own zone against a home keeper")
+	assert_ne(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"…so SHOOT cannot win the compete by any route")
+
+	# Even ordered to shoot by a teammate's smart ping, which biases the shot
+	# score: the bias multiplies a score that was never computed.
+	var pinged := _make_ctx(self_pos, [[1, TEAM_ID, self_pos]])
+	pinged.snapshot.goalie_states[1 - TEAM_ID] = home
+	pinged.ping_shoot_active = true
+	var cp := AIRoleCarrier.new()
+	cp.decide(pinged)
+	assert_ne(cp.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"a shoot ping cannot manufacture an own-zone shot")
+
+	# The keeper-home condition is load-bearing, and is why this is not a blanket
+	# zone gate: a PULLED keeper voids the proof and an empty net genuinely
+	# scores from distance, so the shot must still be evaluated out here.
+	var empty := _make_ctx(self_pos, [[1, TEAM_ID, self_pos]])
+	var pulled := GoalieNetworkState.new()
+	pulled.position_x = 0.0
+	pulled.position_z = 0.0                          # off for an extra attacker
+	empty.snapshot.goalie_states[1 - TEAM_ID] = pulled
+	var ce := AIRoleCarrier.new()
+	ce.decide(empty)
+	assert_gt(ce.debug_shoot_score, 0.0,
+			"an empty net is still scored from outside the zone; got %f"
+			% ce.debug_shoot_score)
+
+
 func test_open_ice_carrier_feels_no_protect_gain() -> void:
 	# Nobody near the presented forward carry spot: shielding buys nothing, so the
 	# gain is 0 and the state machine keeps the plain forward carry aim.
@@ -2260,20 +2410,30 @@ func test_open_ice_carrier_feels_no_protect_gain() -> void:
 
 
 func test_frontal_stick_threat_pulls_the_puck_behind_the_body() -> void:
-	# A defender's stick parked right on the forward carry spot (2 m toward the
-	# attacking net, -Z): full protect pressure, and the protect offset pulls
-	# the puck to the far side of the body (+Z — back hip, body as the shield).
+	# A defender's stick parked right on the forward carry spot: full protect
+	# pressure, and the protect offset pulls the puck to the far side of the body
+	# (+Z — back hip, body as the shield).
+	#
+	# Re-pinned at 1.6 m rather than 2.2 m when the AIM seam became DIRECTED (see
+	# best_handle_protect_point). The GAIN model is untouched — it still reads the
+	# max-clearance seam — but the aim is now the least-committal SAFE point
+	# instead of the emptiest one, so the distance at which a stick genuinely
+	# takes the puck off the play line is a real boundary rather than a constant.
+	# At 2.2 m the directed seam returns ~the body itself: the presented spot is
+	# close enough to safe that no swing is warranted, which is the whole point of
+	# the change. 1.6 m is a stick actually ON the presented puck, which is what
+	# this test's name and doctrine are about.
 	var self_pos := Vector3(0, 0, 5)
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
-			[3, 1, self_pos + Vector3(0, 0, -2.2)],   # stick on the presented puck
+			[3, 1, self_pos + Vector3(0, 0, -1.6)],   # stick on the presented puck
 	]
 	var ctx := _make_ctx(self_pos, skaters)
 	var c := AIRoleCarrier.new()
 	c.decide(ctx)
 	assert_gt(c.protect_gain, 0.5,
 			"a stick on the presented spot, with a safe hip to hide it, is a strong shield")
-	assert_gt(c.protect_offset.z, 0.5, "the puck pulls to the protected side of the body")
+	assert_gt(c.protect_offset.z, 0.4, "the puck pulls to the protected side of the body")
 
 
 func test_protect_read_is_gated_by_the_cognition_tier() -> void:
@@ -2323,6 +2483,47 @@ func test_beaten_defender_behind_does_not_hold_the_shield() -> void:
 	assert_gt(cf.protect_gain, 0.5,
 			"a stick on the forward puck still earns a strong shield; got %f"
 			% cf.protect_gain)
+
+
+func test_the_shield_goes_only_as_far_off_the_play_line_as_it_must() -> void:
+	# The seam is DIRECTED at the presented-forward spot, not a max-clearance
+	# read. Asked for pure max clearance it returns the point diametrically
+	# opposite the checker — and a checker only makes shielding necessary by
+	# being in FRONT, so that point is behind the carrier. Measured on the old
+	# read: against any defender the carrier was skating toward, the seam came
+	# back 120-180 deg off the carry line at full gain, and the blade sat on the
+	# back hip for as long as the man was live. That is the "beats his man, then
+	# keeps carrying it behind him" look, and a puck on the back hip is not on a
+	# shot or a pass.
+	#
+	# What has to hold is that the shield GRADES: as the same defender moves off
+	# the carry line, the seam walks back toward it rather than staying pinned
+	# behind. Carrier driving at the -Z net at 7 m/s, containing defender ahead,
+	# swept laterally.
+	var self_pos := Vector3(0, 0, -2)
+	var vel := Vector3(0, 0, -7)
+	var angles: Array[float] = []
+	for dx: float in [0.0, 1.0, 2.0]:
+		var ctx: RoleContext = _make_ctx(self_pos, [
+				[1, TEAM_ID, self_pos, false, vel],
+				[3, 1, Vector3(dx, 0, -5.0), false, Vector3(0, 0, -3)]])
+		ctx.self_velocity = vel
+		var c := AIRoleCarrier.new()
+		c.decide(ctx)
+		# Signed angle of the seam off the carry line; 0 = on the play line,
+		# +/-180 = straight behind the body.
+		var off: Vector3 = c.protect_offset
+		var deg: float = absf(rad_to_deg(
+				Vector2(0, -1).angle_to(Vector2(off.x, off.z))))
+		angles.append(deg)
+		gut.p("  D %.1f m off the line: gain %.3f, seam %.0f deg off the carry"
+				% [dx, c.protect_gain, deg])
+	assert_gt(angles[0], 150.0,
+			"a checker dead on the carry line leaves only the back hip")
+	assert_lt(angles[1], angles[0],
+			"…step him off the line and the puck comes back toward it")
+	assert_lt(angles[2], 60.0,
+			"…and a checker well off the line barely moves the puck at all")
 
 
 func test_beaten_side_defender_still_shields() -> void:

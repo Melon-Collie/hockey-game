@@ -63,6 +63,24 @@ const SHOT_MIN_VALUE: float = 0.05
 # play). This bar only rejects a release into nothing: a numerical residual on
 # a dead lane, never a real outlet.
 const PASS_MIN_VALUE: float = 0.02
+# The DUMP's giveaway bar — the third way of surrendering the puck, and the one
+# that spent years without one. A shot must clear SHOT_MIN_VALUE and a pass
+# PASS_MIN_VALUE for the same stated reason: a release forfeits the puck while
+# carrying retains it AND its optionality, so a release that merely ties must
+# not win. A dump forfeits more than either — no receiver, no shot on goal, just
+# a race — yet it only had to out-score the carry by any epsilon, and a compete
+# decided at the fourth decimal place is what "dumps a puck it could have
+# skated in" looks like from the stands.
+#
+# It reads as a FRACTION rather than an absolute because, unlike a shot or a
+# pass, what a dump competes against is the carry itself, whose scale swings by
+# an order of magnitude between the defensive zone and the attacking blue line;
+# a fixed bar would be unreachable at one end and free at the other. The margin
+# is the optionality the carrier is spending — the passes and shots he can still
+# choose one beat from now and a dumped puck cannot — which the one-ply carry
+# score does not represent. A tactical bar, like the blue-line valve: it says
+# how sure the bot has to be before it concedes, not what it perceives.
+const DUMP_GIVEAWAY_MARGIN_FRAC: float = 0.15
 
 # Minimum forward distance (m) the PUCK must sit in front of the goal-line plane
 # for a direct shot to be scored at all — below it (on/behind the line, or right
@@ -469,6 +487,11 @@ const DUMP_AIM_STANDOFF_M: float = 20.0
 var dump_target: Vector3 = Vector3.INF
 var dump_is_soft: bool = false
 var dump_is_rim: bool = false
+# Launch pace (m/s) the soft dump-in's release must fire at — the winner of
+# solve_dump_in's pace ladder, and the whole reason that ladder can place a
+# puck. Only the soft dump-in reads it; the clear and the rim are fixed-pace
+# one-tick releases.
+var dump_launch_speed: float = AIActionScoring.PASS_SPEED_M_S
 
 # ── Puck-protect mirror (read by the state machine's carry blade aim) ────────
 # Where in the blade's handling envelope the puck is safest right now, as an
@@ -608,6 +631,9 @@ var _scratch_teammate_ids: Array[int] = []
 # index-matched so the threat prices each defender's real blade.
 var _scratch_our_defenders: Array[Vector3] = []
 var _scratch_our_defender_caps: Array[AISkaterCaps] = []
+# Teammate velocities, in the same order — the dump's chase clock is
+# momentum-honest (see _best_dump), so the race needs their motion too.
+var _scratch_our_defender_vels: Array[Vector3] = []
 # Caller-owned out-param for the dump-in landing solve, so the release search
 # returns its resting spot without allocating on the compete path.
 var _scratch_dump_landing: Array[Vector3] = [Vector3.ZERO]
@@ -816,6 +842,7 @@ func reset() -> void:
 	last_carry_anchor = Vector3.ZERO
 	dump_target = Vector3.INF
 	dump_is_soft = false
+	dump_launch_speed = AIActionScoring.PASS_SPEED_M_S
 	protect_offset = Vector3.ZERO
 	protect_gain = 0.0
 	evade_seam_world = Vector3.INF
@@ -850,6 +877,7 @@ func clear_intent() -> void:
 	pass_should_saucer = false
 	dump_target = Vector3.INF
 	dump_is_soft = false
+	dump_launch_speed = AIActionScoring.PASS_SPEED_M_S
 	_pick_action_cooldown = 0
 	_ticks_since_pick = 0
 	# A press bail re-enters CARRY mid-play with no live intent — the next
@@ -1006,7 +1034,10 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 				AIActionScoring.reach_clearance(fwd_spot, horizon,
 						_scratch_protect_opponents, _scratch_protect_vels,
 						_scratch_protect_caps))
-		protect_offset = AIActionScoring.best_handle_protect_point(
+		# HOW MUCH to shield and WHERE to put the puck are two questions answered
+		# by two seams (see best_handle_protect_point). The WEIGHT reads the
+		# MAX-clearance seam — the safety the best available shield buys.
+		var max_seam: Vector3 = AIActionScoring.best_handle_protect_point(
 				self_pos, ctx.self_velocity, _scratch_protect_opponents,
 				_scratch_protect_vels, ctx.self_handle_reach, _scratch_protect_caps)
 		# Shield WEIGHT = the safety the shield actually buys. best_handle_protect_point
@@ -1018,12 +1049,20 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 		# grounded alternative to a pressure floor, which would gate a raw coverage
 		# read by a hand-picked number and shield pre-emptively against near
 		# defenders who aren't actually threatening the puck.
-		var seam_world: Vector3 = self_pos + ctx.self_velocity * horizon + protect_offset
+		var seam_world: Vector3 = self_pos + ctx.self_velocity * horizon + max_seam
 		var seam_safety: float = AIActionScoring.clearance_to_safety(
 				AIActionScoring.reach_clearance(seam_world, horizon,
 						_scratch_protect_opponents, _scratch_protect_vels,
 						_scratch_protect_caps))
 		protect_gain = clampf(seam_safety - fwd_safety, 0.0, 1.0)
+		# …and the DIRECTION is the least-committal seam that is still safe,
+		# directed at the presented-forward spot. Shield strength is unchanged
+		# (that is the weight above); this only stops the blade going further off
+		# the play line than the safety actually requires.
+		protect_offset = AIActionScoring.best_handle_protect_point(
+				self_pos, ctx.self_velocity, _scratch_protect_opponents,
+				_scratch_protect_vels, ctx.self_handle_reach,
+				_scratch_protect_caps, fwd_spot)
 	else:
 		protect_gain = 0.0
 		protect_offset = Vector3.ZERO
@@ -1120,6 +1159,33 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 			* -signf(attacking_goal.z)
 	var shot_from_behind_line: bool = puck_forward_of_line <= SHOT_MIN_FORWARD_OF_LINE_M
 
+	# ...and no shot at all from OUTSIDE the attacking zone while the keeper is
+	# HOME. This is the same proof threat_surface_shoot and _score_at already
+	# run: at that range a direct shot is dead by score_shoot's own
+	# arrival-honest coverage math — he is square long before the puck arrives —
+	# so the goalie hole geometry, the three-sample release sweep and the tip
+	# read below all resolve to ~0 on every neutral- and defensive-zone dispatch.
+	#
+	# The reason to gate it is the GUARANTEE, not the cost: measured on the
+	# micro-bench's out-of-zone carrier the saving is ~26 us of a ~1850 us
+	# compete (~1.4%, inside the run-to-run noise), because the carry beam
+	# dominates that number. Do not cite this as a perf win. The giveaway bar
+	# (SHOT_MIN_VALUE) already made a own-zone shot unreachable in practice, but
+	# only by arithmetic that runs downstream of two multipliers — the fire
+	# hysteresis and the smart-ping SHOOT bias — both of which scale a live
+	# score upward before the bar is checked. With the score never computed there
+	# is nothing for either to lift: SHOOT cannot win a compete outside the zone
+	# by any route.
+	#
+	# The keeper-home condition is load-bearing and is why this is not a blanket
+	# zone gate: a DISPLACED or PULLED keeper voids the proof, and an empty net
+	# genuinely scores from centre ice. That shot has to stay available, exactly
+	# as it does in the other two consumers.
+	var shot_unavailable: bool = shot_from_behind_line \
+			or (not AIActionScoring.in_offensive_zone(self_pos, attacking_goal)
+					and goalie_now.distance_to(attacking_goal)
+							< AIActionScoring.THREAT_GOALIE_HOME_M)
+
 	# The five-hole as it physically exists RIGHT NOW, from the replicated pose:
 	# standing = the real ~0.20 m slot between the pads (sealable by dropping —
 	# the model gates on the reach time vs the drop), down = the residual leak.
@@ -1133,7 +1199,7 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 	_shot_env_hands = Vector4.INF
 	_shot_env_pads = Vector4.INF
 	var opp_goalie_state: GoalieNetworkState = ctx.snapshot.goalie_states.get(1 - ctx.team_id)
-	if opp_goalie_state != null:
+	if opp_goalie_state != null and not shot_unavailable:
 		_shot_env_goalie_down = opp_goalie_state.is_down()
 		# Hand + pad positions off the same replicated pose (hole-model v3):
 		# the HIGH cover races from where the glove/blocker actually are,
@@ -1177,7 +1243,7 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 	var usable_offset: float = _usable_release_offset(ctx.self_handle_reach)
 	_phase_shoot_score = -1.0
 	for frac: float in RELEASE_SAMPLE_FRACS:
-		if shot_from_behind_line:
+		if shot_unavailable:
 			break
 		var offset: Vector3 = forehand_perp * (frac * usable_offset)
 		var sample_speed: float = ctx.self_wrister_shot_speed
@@ -1248,7 +1314,7 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 	# — the tip's whole edge is the collapsed post-contact read, which the
 	# hole geometry prices via t_reach).
 	_shot_sample_is_tip = false
-	if not shot_from_behind_line and not _scratch_option_receiver_pos.is_empty():
+	if not shot_unavailable and not _scratch_option_receiver_pos.is_empty():
 		var tip_release: Vector3 = AIActionScoring.release_ahead_of_goalie(
 				wrister_base_release, attacking_goal, goalie_now)
 		for tip_man: Vector3 in _scratch_option_receiver_pos:
@@ -1347,9 +1413,10 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# must brake it out first — and omitting it here priced every carrier as if
 	# he were standing still, so a gliding mate was credited with momentum the
 	# man actually holding the puck was denied.
-	carry_score = maxf(carry_score, _receiver_drive_in_value(
+	var drive_in_value: float = _receiver_drive_in_value(
 			ctx, self_pos, ctx.self_wrister_shot_speed,
-			ctx.caps_by_peer.get(ctx.peer_id), ctx.self_velocity))
+			ctx.caps_by_peer.get(ctx.peer_id), ctx.self_velocity)
+	carry_score = maxf(carry_score, drive_in_value)
 
 	# Hysteresis on FIRE intents only — prevents flicker between two
 	# close-scoring fire options during pre-aim. Proportional (×(1 +
@@ -1481,7 +1548,32 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# beats flinging it to space whenever it out-values the dump. Without this
 	# the compete was intransitive: carry beat pass, dump beat (raw) carry,
 	# pass beat dump — and a pinned carrier dumped past a clean outlet.
-	var retention_hopeless: bool = dump_score > raw_carry_score
+	# What the dump is judged against. The honest raw carry always; PLUS the
+	# DRIVE-IN — the shot the carrier skates into by beating his man — but only
+	# against the dump-IN.
+	#
+	# The drive-in belongs here for the same reason it floors the fire compete:
+	# it is a real, contested-priced value of keeping the puck (carry_safety over
+	# the drive, so a carrier who will be stripped scores 0), and a compete blind
+	# to it under-rates carrying. Blind, the dump saw only the ONE-BEAT-AHEAD
+	# candidate, so a wide-open carrier compared "where I'll be in a second"
+	# against a dumped puck's whole play — and dumped a free entry.
+	#
+	# It may NOT judge the CLEAR, because the two are not the same currency: the
+	# drive-in is benefit-only (it subtracts no turnover cost) while the clear is
+	# priced as a pure concession, so a clear — always <= 0 — could never once
+	# beat a drive-in that is always >= 0, and the DZ clear would simply cease to
+	# exist. Against the dump-IN the mismatch is immaterial: its concession is
+	# taken deep in the ATTACKING end, where turnover cost is ~0 anyway.
+	var retention: float = raw_carry_score
+	if dump_result[2]:
+		retention = maxf(retention, drive_in_value)
+	# …and it must clear that retention by the dump's giveaway margin (see
+	# DUMP_GIVEAWAY_MARGIN_FRAC). Proportional and positive-only, so it scales
+	# with the compete's own magnitude and never turns a doomed carry (negative
+	# retention) into a reason to hold — a pinned carrier still concedes.
+	var retention_hopeless: bool = dump_score > retention \
+			+ maxf(retention, 0.0) * DUMP_GIVEAWAY_MARGIN_FRAC
 	# Fire if it beats retention (carrying + holding for the developing play) —
 	# or, when retention is hopeless anyway, if it beats the dump about to
 	# happen (the hold gate drops there too: holding IS retention). The giveaway
@@ -1594,6 +1686,7 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 		dump_target = dump_result[1]
 		dump_is_soft = dump_result[2]
 		dump_is_rim = dump_result[3]
+		dump_launch_speed = dump_result[5]
 	else:
 		# Not firing. Advance the hold clock only while the developing play is the
 		# reason (it out-scores plain carrying); a normal carry resets it so the
@@ -1625,6 +1718,7 @@ func _build_action_opponents_lists(ctx: RoleContext) -> void:
 	_scratch_opponents_release.clear()
 	_scratch_our_defenders.clear()
 	_scratch_our_defender_caps.clear()
+	_scratch_our_defender_vels.clear()
 	for peer_id: int in ctx.snapshot.skater_states:
 		if peer_id == ctx.peer_id:
 			continue
@@ -1640,6 +1734,7 @@ func _build_action_opponents_lists(ctx: RoleContext) -> void:
 			# Our teammate — a defender for the turnover-cost term.
 			_scratch_our_defenders.append(s.position)
 			_scratch_our_defender_caps.append(ctx.caps_by_peer.get(peer_id))
+			_scratch_our_defender_vels.append(s.velocity)
 	# Transition-exposure precompute (5v5): each teammate's ETA to the
 	# counter point is candidate-invariant, so race them once per re-eval
 	# instead of once per counter_rush_cost call (~25 calls/compete).
@@ -2583,8 +2678,8 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 
 
 # Last-resort DUMP, zone-gated. Returns
-# [dump_value, aim_point, is_soft, is_rim, settle_point]; -INF when no dump
-# applies here (own-side neutral zone, or already in the OZ).
+# [dump_value, aim_point, is_soft, is_rim, settle_point, launch_speed]; -INF
+# when no dump applies here (own-side neutral zone, or already in the OZ).
 #
 # The aim point and the settle point are DIFFERENT and both are returned. The
 # aim is where the stick points (a standoff down the launch line); the settle is
@@ -2622,7 +2717,7 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 			self_pos, attacking_goal)
 	if not in_own_zone and not (past_center
 			and not AIActionScoring.in_offensive_zone(self_pos, attacking_goal)):
-		return [-INF, Vector3.INF, false, false, Vector3.INF]
+		return [-INF, Vector3.INF, false, false, Vector3.INF, 0.0]
 
 	var origin: Vector3 = _pass_origin(ctx)
 	# Our chasers = teammates + ourselves; theirs = the opponents already gathered.
@@ -2647,18 +2742,23 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 			# Every launch reaches their goal line: there is no legal clear from
 			# here. Decline rather than ice it — the carry/pass compete is a
 			# better place to lose the puck than a whistle in our own end.
-			return [-INF, Vector3.INF, false, false, Vector3.INF]
+			return [-INF, Vector3.INF, false, false, Vector3.INF, 0.0]
 		settle = AITrajectory.puck_release_landing(origin, launch,
 				AIActionScoring.dump_loft_hang_s(ShotMechanics.ELEVATION_HIGH)).origin
 	else:
 		is_soft = true
 		_scratch_dump_landing[0] = origin
+		# The pace ladder runs over the dumper's OWN release band, and the
+		# winning pace is carried out to the release (dump_launch_speed) — a
+		# dump-in placed by a searched pace is only a placed dump if the puck
+		# actually leaves at that pace.
 		launch = AIActionScoring.solve_dump_in(
-				origin, attacking_goal, AIActionScoring.PASS_SPEED_M_S,
-				ShotMechanics.ELEVATION_LOW,
-				_scratch_our_chasers, _scratch_opponents, _scratch_dump_landing)
+				origin, attacking_goal, ctx.self_wrister_shot_speed,
+				ShotMechanics.ELEVATION_FLAT,
+				_scratch_our_chasers, _scratch_opponents, _goalie_now(ctx),
+				_scratch_dump_landing)
 		if launch == Vector3.ZERO:
-			return [-INF, Vector3.INF, false, false, Vector3.INF]
+			return [-INF, Vector3.INF, false, false, Vector3.INF, 0.0]
 		settle = _scratch_dump_landing[0]
 
 	# Everything below prices the RESTING spot.
@@ -2683,20 +2783,52 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 	# question, not something to settle with a term that happens to balance.
 	var gain: float = 0.0
 	if is_soft:
-		var nearest_our: float = INF
-		for c: Vector3 in _scratch_our_chasers:
-			nearest_our = minf(nearest_our, c.distance_to(settle))
-		var chase_decay: float = AIActionScoring.delay_discount(
-				nearest_our / maxf(ctx.self_max_speed, 0.001))
+		# MOMENTUM-HONEST chase clock, the same one every other arrival in the
+		# model uses. This was `nearest_distance / max_speed` — an instant
+		# full-speed sprint from a standstill — while the carry it competes with
+		# prices its arrival through time_to_arrive, ramp and all. Over a routine
+		# 11 m chase that lie is worth about a full second, and it is worth it in
+		# exactly one direction: the dump got to the puck at a pace no skater can
+		# produce while carrying paid the real one, so flinging it ahead beat
+		# skating it in over the SAME ground. Nearest by ETA, not by metres — the
+		# man already moving that way is the chaser even when someone flat-footed
+		# is standing closer.
+		var chase_t: float = AIActionScoring.time_to_arrive(
+				self_pos, settle, ctx.self_velocity, ctx.self_max_speed,
+				ctx.self_max_accel, ctx.self_lateral_grip)
+		for i: int in _scratch_our_defenders.size():
+			var mate_caps: AISkaterCaps = _scratch_our_defender_caps[i]
+			chase_t = minf(chase_t, AIActionScoring.time_to_arrive(
+					_scratch_our_defenders[i], settle, _scratch_our_defender_vels[i],
+					mate_caps.max_speed if mate_caps != null else ctx.self_max_speed,
+					mate_caps.max_accel if mate_caps != null else ctx.self_max_accel))
+		var chase_decay: float = AIActionScoring.delay_discount(chase_t)
+		# The settle spot's potential is FUTURE value — recovering the puck deep
+		# is not a shot, it is a spot the winner still has to skate in from — so
+		# it pays the same realization discount every other future-value read in
+		# the model pays (see potential_realization_discount). The dump was the
+		# one consumer that skipped it, and skipping it is what made this
+		# trigger-happy: a carry candidate's potential arrives here already
+		# discounted over the travel that cashes it, so an UNdiscounted deep
+		# settle spot was being compared against discounted neutral-zone ones —
+		# a deep spot's raw value against a near spot's realized value. With the
+		# term in, the two legs telescope on both sides (chase decay x settle
+		# realization = travel decay x candidate realization = the same
+		# realization from HERE), and the compete reduces to what it should
+		# always have been: recovery x potential(settle) against
+		# safety x lane x potential(candidate). Dump when the entry is
+		# genuinely contested; carry when it is not.
 		gain = recovery * AIActionScoring.position_potential(
-				settle, attacking_goal, _scratch_opponents) * chase_decay
+				settle, attacking_goal, _scratch_opponents) * chase_decay \
+				* AIActionScoring.potential_realization_discount(
+						settle, attacking_goal)
 
 	# The aim handed to the release is a point far down the chosen launch line,
 	# NOT the resting spot: the quick release takes its direction blade->cursor,
 	# and a cursor near the body has no direction in it (see the snap in
 	# SkaterAgentStateMachine._state_pass_pressed).
 	var aim: Vector3 = origin + launch.normalized() * DUMP_AIM_STANDOFF_M
-	return [gain - concede, aim, is_soft, false, settle]
+	return [gain - concede, aim, is_soft, false, settle, launch.length()]
 
 
 # EV of one movement carry candidate — the uniform scoring every

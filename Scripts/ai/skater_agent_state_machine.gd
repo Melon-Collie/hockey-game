@@ -958,14 +958,22 @@ var _shot_release_offset_locked: Vector3 = Vector3.ZERO
 # dumping; a normal PASS aims at its receiver lead. The dump reuses the
 # PASS_PRESSED plumbing (see _state_from_carrier_intent), so this sentinel is
 # what tells that state to aim at a LOCATION and skip the receiver-close bail.
-# `_dump_is_soft` picks the loft: false = HIGH chip to clear the zone into the
-# neutral ice, true = soft LOW flip to the corner (dump-in). Both fire as a
-# one-tick quick release at the fixed quick-shot pace — a dump is a last resort
-# under pressure, so getting the puck gone fast beats a 0.5 s charged wind-up
-# that gets stripped mid-swing, and the moderate fixed pace stays short of icing.
+# `_dump_is_soft` picks the loft AND the release: false = HIGH chip to clear the
+# zone into neutral ice, true = soft LOW flip to the corner (the OZ dump-in).
+#
+# The two dumps fire differently, because they are different errands. The CLEAR
+# (and the 5v5 rim) is a last resort under pressure, so it takes the one-tick
+# quick release at the fixed quick-pass pace — getting the puck gone NOW beats a
+# wind-up that gets stripped mid-swing. The offensive DUMP-IN is a chosen play,
+# and its whole value is placing the puck at a depth we can win it back at, which
+# is a PACE decision (AIActionScoring.solve_dump_in searches it): the fixed quick
+# pace out-slides the rink twice over, so a chip fired at it comes back off the
+# end boards. So the dump-in takes the charged wrister at `_dump_launch_speed` —
+# the same plumbing a charged pass uses, aimed at a location instead of a tape.
 var _dump_target: Vector3 = Vector3.INF
 var _dump_is_soft: bool = false
 var _dump_is_rim: bool = false
+var _dump_launch_speed: float = AIActionScoring.PASS_SPEED_M_S
 
 # Multi-tick wrister charge bookkeeping. SHOOT_PRESSED is no longer a
 # one-tick quick-shot — the bot holds shoot_held for BOT_WRISTER_CHARGE_TICKS
@@ -3205,6 +3213,7 @@ func _state_carry(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 			_dump_target = _carrier.dump_target
 			_dump_is_soft = _carrier.dump_is_soft
 			_dump_is_rim = _carrier.dump_is_rim
+			_dump_launch_speed = _carrier.dump_launch_speed
 		else:
 			_dump_target = Vector3.INF
 	debug_shoot_score = _carrier.debug_shoot_score
@@ -3966,18 +3975,30 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# runs until the boards take the speed out of it.
 	var is_dump: bool = _dump_target.is_finite()
 	if is_dump:
-		_pass_should_charge = false
 		_pass_should_saucer = false
 		_pass_target_peer_id = -1
-		# Delivery kind: soft LOW flip (dump-in), FLAT rim along our wall (the
-		# bank-pass delivery the posted winger meets — breakout plan §B), or
-		# the HIGH chip clear over every stick.
-		if _dump_is_soft:
-			input.elevation_level = ShotMechanics.ELEVATION_LOW
-		elif _dump_is_rim:
+		# Delivery kind: FLAT for the dump-in (below) and for the 5v5 rim (the
+		# bank-pass delivery the posted winger meets — breakout plan §B); the
+		# HIGH chip clear lifts over every stick between us and the blue line.
+		if _dump_is_soft or _dump_is_rim:
 			input.elevation_level = ShotMechanics.ELEVATION_FLAT
 		else:
 			input.elevation_level = ShotMechanics.ELEVATION_HIGH
+		# Only the dump-in charges (see _dump_launch_speed): its depth IS its
+		# pace, so it has to leave at the pace the search placed it with. The
+		# clear and the rim stay one-tick releases at the fixed quick pace.
+		#
+		# FLAT is load-bearing on the charged path, not a look: release_wrister
+		# builds a charged release as the direction (dir.x, tan, dir.z)
+		# NORMALIZED at `power`, so any loft spends part of the pace going up
+		# and the puck's ground speed is no longer the number the pace ladder
+		# solved the runout from. At FLAT the two are identical, which is what
+		# makes a searched landing spot the spot the puck reaches. (The clear
+		# keeps its HIGH chip: it fires on the quick-pass path, whose loft rides
+		# the fixed-vy pass table and leaves ground speed alone.)
+		_pass_should_charge = _dump_is_soft
+		if _dump_is_soft:
+			_pass_target_speed = _dump_launch_speed
 
 	_apply_brake_steering(input, snapshot, self_pos)
 	# Saucer: LOW loft so the pass flies over a contested mid-lane defender's
@@ -4129,6 +4150,10 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		_pass_target_peer_id = -1
 		_pass_should_charge = false
 		_pass_should_saucer = false
+		# The dump-in reaches its release HERE (it is the one charged dump), so
+		# this is where its aim has to be spent — the quick-release branch above
+		# never runs for it.
+		_dump_target = Vector3.INF
 		_set_state(State.CARRY)
 
 
