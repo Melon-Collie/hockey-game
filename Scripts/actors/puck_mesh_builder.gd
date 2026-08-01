@@ -16,8 +16,6 @@ const _PUCK_PROFILE: Array[Vector2] = [
 ]
 
 
-# Named apart from the inherited SkaterMeshBuilder.apply — GDScript forbids
-# overriding with a different signature.
 static func apply_puck(puck: Node3D) -> void:
 	_swap(puck, "MeshInstance3D", "puck", _build_puck)
 

@@ -76,11 +76,11 @@ func apply_uniform(colors: Dictionary) -> void:
 	var pads_mat: StandardMaterial3D = _make_solid_mat(colors.goalie_pads, _ROUGH_PADS)
 	_goalie.left_pad_mesh.material_override = pads_mat
 	_goalie.right_pad_mesh.material_override = pads_mat.duplicate()
-	_goalie.glove_ring_mesh.material_override = pads_mat.duplicate()
+	# The glove (rim + pocket + cuff) and the blocker (board + hand) are each one
+	# merged mesh now — they always wore one material, so the merge gave each a
+	# single paint target.
 	_goalie.glove_main_mesh.material_override = pads_mat.duplicate()
-	_goalie.glove_detail_mesh.material_override = pads_mat.duplicate()
 	_goalie.blocker_mesh.material_override = pads_mat.duplicate()
-	_goalie.blocker_hand_mesh.material_override = pads_mat.duplicate()
 
 	var arms: Dictionary = uniform.arms
 	_paint_cylinder_h(_goalie.glove_upper_arm, arms.upper)
@@ -113,9 +113,8 @@ func apply_uniform(colors: Dictionary) -> void:
 	# shaft through blade, the real-world goalie norm. The white tape knob is
 	# geometry-side (Goalie._init_stick_knob) and never repaints.
 	var stick_mat: StandardMaterial3D = StickStyle.make_goalie_stick_material()
+	# Shaft, paddle and blade are one merged mesh (see GoalieMeshBuilder).
 	_goalie.stick_shaft_mesh.material_override = stick_mat
-	_goalie.stick_paddle_mesh.material_override = stick_mat.duplicate()
-	_goalie.stick_blade_mesh.material_override = stick_mat.duplicate()
 
 	_rebuild_text_decal()
 
@@ -218,9 +217,10 @@ func _rebuild_text_decal() -> void:
 	_text_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 
-# Paints a Node3D arm bone wrapper (has a "Cylinder" MeshInstance3D child).
+# Paints an arm bone. The bone IS the MeshInstance3D now (Goalie._make_arm_bone);
+# it used to be a wrapper with a "Cylinder" child.
 func _paint_cylinder_h(bone: Node3D, segment: Dictionary) -> void:
-	var visual: MeshInstance3D = bone.get_node_or_null("Cylinder") as MeshInstance3D
+	var visual: MeshInstance3D = bone as MeshInstance3D
 	if visual == null:
 		return
 	_paint_mesh_h(visual, segment)

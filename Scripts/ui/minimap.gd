@@ -17,6 +17,21 @@ extends Control
 #
 # Toggled by PlayerPrefs.minimap_enabled (Options → Camera). Hidden during replays
 # (no local frame of reference — same reason the off-screen arrows bail).
+#
+# TWO LAYERS, redrawn on different clocks. The rink itself — bed, boards,
+# creases, faceoff spots, zone lines, nets — cannot change except when the attack
+# flip or the ends swap, but it was being rebuilt every frame alongside the dots:
+# two rounded style boxes, two re-tessellated crease polygons (each allocating a
+# fresh PackedVector2Array), a dozen circles and five lines, all to produce the
+# identical image. The profiler had Minimap._draw at 0.47 ms of a ~9.8 ms frame.
+# Godot keeps each CanvasItem's recorded command list and replays it for free
+# until something calls queue_redraw(), so the fix is structural rather than an
+# optimisation of the drawing: put the static half in its own CanvasItem and stop
+# queueing it. Only the dots redraw per frame now.
+#
+# The layers are children (not this node) because siblings draw in tree order and
+# children draw over their parent — the rink has to be UNDER the dots, so it
+# cannot be the parent's own _draw.
 
 # Ice draw area in virtual HUD pixels along the long (Z) axis; the short (X) axis
 # is derived from the true rink aspect so the map never distorts.
@@ -54,6 +69,28 @@ var _ice_style: StyleBoxFlat = null
 # ARC_RADIUS arc (the arc meets the straight sides at the caps, so no separate
 # side segments are needed). Built once; both ends map through it per frame.
 var _crease_template: PackedVector2Array = PackedVector2Array()
+
+# A bare Control whose _draw defers to a Callable, so both layers can share the
+# Minimap's drawing helpers without duplicating them or subclassing twice.
+class _Layer extends Control:
+	var painter: Callable
+
+	func _draw() -> void:
+		if painter.is_valid():
+			painter.call(self)
+
+var _static_layer: _Layer = null
+var _dynamic_layer: _Layer = null
+
+# What the static layer's image depends on. When any of these moves the rink is
+# repainted — once — and otherwise its command list is replayed untouched.
+# Tracked as separate scalars rather than a packed key so the comparison stays
+# allocation-free on the per-frame path.
+var _static_flip: bool = false
+var _static_goal_count: int = -1
+var _static_team_near: int = -1
+var _static_team_far: int = -1
+var _static_valid: bool = false
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -104,47 +141,85 @@ func _ready() -> void:
 				CreaseRules.ARC_RADIUS * cos(theta)))
 	_crease_template.append(Vector2(CreaseRules.HALF_WIDTH, 0.0))
 
+	# Static first, dynamic second: tree order is draw order, so the rink lands
+	# under the dots.
+	_static_layer = _make_layer(_paint_static)
+	_dynamic_layer = _make_layer(_paint_dynamic)
+
+func _make_layer(painter: Callable) -> _Layer:
+	var layer := _Layer.new()
+	layer.painter = painter
+	layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(layer)
+	return layer
+
 func _process(_delta: float) -> void:
-	# Only churn a redraw when the map is actually shown. Disabled or in a replay,
-	# _draw early-returns anyway — skip the queue so it costs literally nothing.
-	if PlayerPrefs.minimap_enabled and not NetworkManager.is_replay_mode():
-		queue_redraw()
-
-func _draw() -> void:
-	if not PlayerPrefs.minimap_enabled:
+	# Only churn a redraw when the map is actually shown. Disabled or in a replay
+	# both painters early-return anyway — skip the queue so it costs nothing.
+	var live: bool = PlayerPrefs.minimap_enabled and not NetworkManager.is_replay_mode()
+	if not live:
+		# Drop the cached rink so leaving a replay (or re-enabling the map)
+		# repaints it rather than replaying a command list built for the old
+		# flip or the old ends.
+		_static_valid = false
 		return
-	# Replay cuts to broadcast cameras with no local player, so there's no "attack
-	# direction" to orient by — same bail as OffScreenPlayerIndicators.
-	if NetworkManager.is_replay_mode():
-		return
+	_dynamic_layer.queue_redraw()
+	_refresh_static_if_changed()
 
+# Repaints the rink layer only when the image it would produce actually differs.
+# Everything compared here is read per frame regardless (the dots need the flip),
+# so this adds a handful of scalar compares, not a second pass over the geometry.
+func _refresh_static_if_changed() -> void:
 	var flip: bool = _local_attack_up_flip()
+	var goals: Array = GameManager.goals
+	var near_id: int = -1
+	var far_id: int = -1
+	if goals.size() > 0 and is_instance_valid(goals[0]):
+		near_id = (goals[0] as HockeyGoal).defending_team_id
+	if goals.size() > 1 and is_instance_valid(goals[1]):
+		far_id = (goals[1] as HockeyGoal).defending_team_id
+	if _static_valid and flip == _static_flip and goals.size() == _static_goal_count \
+			and near_id == _static_team_near and far_id == _static_team_far:
+		return
+	_static_flip = flip
+	_static_goal_count = goals.size()
+	_static_team_near = near_id
+	_static_team_far = far_id
+	_static_valid = true
+	_static_layer.queue_redraw()
+
+# The rink. Repainted only on a flip / ends change — see _refresh_static_if_changed.
+func _paint_static(ci: Control) -> void:
+	if not PlayerPrefs.minimap_enabled or NetworkManager.is_replay_mode():
+		return
+	var flip: bool = _static_flip
 
 	# Frame + ice bed.
-	draw_style_box(_bg_style, Rect2(Vector2.ZERO, size))
+	ci.draw_style_box(_bg_style, Rect2(Vector2.ZERO, ci.size))
 	var ice_rect := Rect2(Vector2(_MARGIN, _MARGIN), Vector2(_ice_width_px, _ICE_LENGTH_PX))
-	draw_style_box(_ice_style, ice_rect)
+	ci.draw_style_box(_ice_style, ice_rect)
 
 	# Crease fills before the lines, same layering as the painted ice — the goal
 	# line renders over the D.
-	_draw_crease(GameRules.GOAL_LINE_Z, flip)
-	_draw_crease(-GameRules.GOAL_LINE_Z, flip)
+	_draw_crease(ci, GameRules.GOAL_LINE_Z, flip)
+	_draw_crease(ci, -GameRules.GOAL_LINE_Z, flip)
 
 	# Faceoff spots first — static reference marks on the ice bed, under the lines
 	# and every dynamic dot. Center ice plus the neutral- and end-zone dots, drawn
 	# straight from the same geometry the faceoff staging uses.
-	_draw_faceoff_dot(Vector2.ZERO, flip)
+	_draw_faceoff_dot(ci, Vector2.ZERO, flip)
 	for dot: Vector2 in GameRules.NEUTRAL_ZONE_FACEOFF_DOTS:
-		_draw_faceoff_dot(dot, flip)
+		_draw_faceoff_dot(ci, dot, flip)
 	for dot: Vector2 in GameRules.END_ZONE_FACEOFF_DOTS:
-		_draw_faceoff_dot(dot, flip)
+		_draw_faceoff_dot(ci, dot, flip)
 
 	# Zone lines run across the short axis (constant world Z → constant map Y).
-	_draw_zone_line(0.0, flip, _CENTER_LINE_COLOR, 1.5)
-	_draw_zone_line(GameRules.BLUE_LINE_Z, flip, _BLUE_LINE_COLOR, 1.5)
-	_draw_zone_line(-GameRules.BLUE_LINE_Z, flip, _BLUE_LINE_COLOR, 1.5)
-	_draw_zone_line(GameRules.GOAL_LINE_Z, flip, _GOAL_LINE_COLOR, 1.0)
-	_draw_zone_line(-GameRules.GOAL_LINE_Z, flip, _GOAL_LINE_COLOR, 1.0)
+	_draw_zone_line(ci, 0.0, flip, _CENTER_LINE_COLOR, 1.5)
+	_draw_zone_line(ci, GameRules.BLUE_LINE_Z, flip, _BLUE_LINE_COLOR, 1.5)
+	_draw_zone_line(ci, -GameRules.BLUE_LINE_Z, flip, _BLUE_LINE_COLOR, 1.5)
+	_draw_zone_line(ci, GameRules.GOAL_LINE_Z, flip, _GOAL_LINE_COLOR, 1.0)
+	_draw_zone_line(ci, -GameRules.GOAL_LINE_Z, flip, _GOAL_LINE_COLOR, 1.0)
 
 	# Nets — a team-tinted box sitting behind each goal line (mouth on the line,
 	# NET_DEPTH toward the boards), outlined like the dots so the away team's
@@ -158,15 +233,25 @@ func _draw() -> void:
 		var a: Vector2 = _map_point(-GameRules.NET_HALF_WIDTH, gz, flip)
 		var b: Vector2 = _map_point(GameRules.NET_HALF_WIDTH, back_z, flip)
 		var net_rect: Rect2 = Rect2(a, Vector2.ZERO).expand(b)
-		draw_rect(net_rect, net_color, true)
-		draw_rect(net_rect, _DOT_OUTLINE, false, 1.0)
+		ci.draw_rect(net_rect, net_color, true)
+		ci.draw_rect(net_rect, _DOT_OUTLINE, false, 1.0)
+
+# The moving parts, and only these, per frame.
+func _paint_dynamic(ci: Control) -> void:
+	if not PlayerPrefs.minimap_enabled:
+		return
+	# Replay cuts to broadcast cameras with no local player, so there's no "attack
+	# direction" to orient by — same bail as OffScreenPlayerIndicators.
+	if NetworkManager.is_replay_mode():
+		return
+	var flip: bool = _static_flip
 
 	# Goalies (defending-team tint), then skaters, then the puck on top.
 	for goalie: Goalie in GameManager.goalies:
 		if not is_instance_valid(goalie):
 			continue
 		var gpos: Vector2 = _map_point(goalie.global_position.x, goalie.global_position.z, flip)
-		_draw_square(gpos, _GOALIE_HALF_SIZE, _goalie_team_color(goalie.global_position.z))
+		_draw_square(ci, gpos, _GOALIE_HALF_SIZE, _goalie_team_color(goalie.global_position.z))
 
 	var players: Dictionary[int, PlayerRecord] = GameManager.get_players()
 	for peer_id: int in players:
@@ -174,13 +259,13 @@ func _draw() -> void:
 		if record == null or record.skater == null:
 			continue
 		var pos: Vector2 = _map_point(record.skater.global_position.x, record.skater.global_position.z, flip)
-		_draw_dot(pos, _PLAYER_DOT_RADIUS, record.jersey_color, record.is_local)
+		_draw_dot(ci, pos, _PLAYER_DOT_RADIUS, record.jersey_color, record.is_local)
 
 	var puck: Puck = GameManager.puck
 	if puck != null and is_instance_valid(puck):
 		var ppos: Vector2 = _map_point(puck.global_position.x, puck.global_position.z, flip)
-		draw_circle(ppos, _PUCK_DOT_RADIUS + 1.0, _PUCK_OUTLINE)
-		draw_circle(ppos, _PUCK_DOT_RADIUS, _PUCK_FILL)
+		ci.draw_circle(ppos, _PUCK_DOT_RADIUS + 1.0, _PUCK_OUTLINE)
+		ci.draw_circle(ppos, _PUCK_DOT_RADIUS, _PUCK_FILL)
 
 # Maps a world XZ position into map-local pixels. Base orientation matches the
 # unflipped camera (world +X → right, world +Z → down); the attack-up flip
@@ -199,11 +284,11 @@ func _map_point(world_x: float, world_z: float, flip: bool) -> Vector2:
 # sit in the straight-wall middle, so they run the full width; the goal lines sit
 # past the corner center, so this insets them to the curved boards' actual width
 # there — otherwise they'd poke into the rounded-off corner void.
-func _draw_zone_line(world_z: float, flip: bool, color: Color, width: float) -> void:
+func _draw_zone_line(ci: Control, world_z: float, flip: bool, color: Color, width: float) -> void:
 	var hw: float = _rink_half_width_at_z(world_z)
 	var a: Vector2 = _map_point(-hw, world_z, flip)
 	var b: Vector2 = _map_point(hw, world_z, flip)
-	draw_line(a, b, color, width)
+	ci.draw_line(a, b, color, width)
 
 # The rink's half-width at a given world Z, following the rounded corners: full
 # width through the straight middle, shrinking along the corner arc past the
@@ -221,33 +306,33 @@ func _rink_half_width_at_z(world_z: float) -> float:
 # The filled crease D at a goal line. Template points are (x, depth) with depth
 # extending toward center ice, so the same template serves both ends; the
 # attack-up flip is handled per-vertex by _map_point like everything else.
-func _draw_crease(goal_line_z: float, flip: bool) -> void:
+func _draw_crease(ci: Control, goal_line_z: float, flip: bool) -> void:
 	var inward: float = -signf(goal_line_z)
 	var pts := PackedVector2Array()
 	pts.resize(_crease_template.size())
 	for i: int in _crease_template.size():
 		var t: Vector2 = _crease_template[i]
 		pts[i] = _map_point(t.x, goal_line_z + inward * t.y, flip)
-	draw_colored_polygon(pts, _CREASE_COLOR)
+	ci.draw_colored_polygon(pts, _CREASE_COLOR)
 
 # A single faceoff spot. spot is (world_x, world_z); drawn as a small faint mark
 # with no outline so it stays a background reference, never a foreground dot.
-func _draw_faceoff_dot(spot: Vector2, flip: bool) -> void:
+func _draw_faceoff_dot(ci: Control, spot: Vector2, flip: bool) -> void:
 	var pos: Vector2 = _map_point(spot.x, spot.y, flip)
-	draw_circle(pos, _FACEOFF_DOT_RADIUS, _FACEOFF_DOT_COLOR)
+	ci.draw_circle(pos, _FACEOFF_DOT_RADIUS, _FACEOFF_DOT_COLOR)
 
-func _draw_dot(pos: Vector2, radius: float, fill: Color, is_local: bool) -> void:
-	draw_circle(pos, radius + 1.0, _DOT_OUTLINE)
-	draw_circle(pos, radius, fill)
+func _draw_dot(ci: Control, pos: Vector2, radius: float, fill: Color, is_local: bool) -> void:
+	ci.draw_circle(pos, radius + 1.0, _DOT_OUTLINE)
+	ci.draw_circle(pos, radius, fill)
 	if is_local:
-		draw_arc(pos, radius + 2.5, 0.0, TAU, 20, _LOCAL_RING, 1.5, true)
+		ci.draw_arc(pos, radius + 2.5, 0.0, TAU, 20, _LOCAL_RING, 1.5, true)
 
 # Goalie marker: same outline treatment as the dots, but square — the shape
 # alone says "goalie", since goalies and skaters share the team jersey tint.
-func _draw_square(pos: Vector2, half: float, fill: Color) -> void:
+func _draw_square(ci: Control, pos: Vector2, half: float, fill: Color) -> void:
 	var o: float = half + 1.0
-	draw_rect(Rect2(pos - Vector2(o, o), Vector2(o * 2.0, o * 2.0)), _DOT_OUTLINE, true)
-	draw_rect(Rect2(pos - Vector2(half, half), Vector2(half * 2.0, half * 2.0)), fill, true)
+	ci.draw_rect(Rect2(pos - Vector2(o, o), Vector2(o * 2.0, o * 2.0)), _DOT_OUTLINE, true)
+	ci.draw_rect(Rect2(pos - Vector2(half, half), Vector2(half * 2.0, half * 2.0)), fill, true)
 
 # True when the camera is (or would be) yaw-flipped for the local player: the
 # "Always Attack Up" pref on and the local player on team 1. Mirrors the exact

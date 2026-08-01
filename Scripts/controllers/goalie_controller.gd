@@ -3531,7 +3531,58 @@ func _update_facing(delta: float) -> void:
 		goalie.set_goalie_rotation_y(new_y)
 
 # ── Body Parts ────────────────────────────────────────────────────────────────
+# ── Body-solve LOD ────────────────────────────────────────────────────────────
+# The full body solve (_pose.build + the seven-part apply) is 31% of the goalie
+# tick — 24.5 µs of 79.9, and 2.6x the next phase. It is also the one phase that
+# is provably unobservable at range: the pads, glove, blocker and stick carry
+# real colliders, so posing them IS gameplay when the puck can reach, and is
+# nothing at all when it cannot. Reach is the stick, about 2 m.
+#
+# This is not a bot-vs-human carve-out. Goalies are never human, so there is no
+# parity to break and no client reconciling one — the saving holds in a bot
+# lobby, a full human lobby, and on a dedicated server alike. That last case is
+# the point: headless, the control tick is essentially the whole bill.
+#
+# Waking is deliberately cheap and early. Every other phase keeps running, so
+# tracking and the state machine still see the play — and since `reacting` is a
+# wake condition, a shot re-arms the solve on the tick it is detected rather
+# than waiting on distance at all.
+const _BODY_SOLVE_WAKE_M: float = 14.0   # inside this, always solving
+const _BODY_SOLVE_SLEEP_M: float = 18.0  # beyond this, suspend
+var _body_solve_asleep: bool = false
+
+
+# True only when this goalie provably cannot interact with anything. Every
+# condition is a veto: any activity at all — a live read, a lunge, a clear
+# swing, any stance that is not the plain upright one — keeps the solve running
+# regardless of range. The distance test is last and hysteretic so the pair of
+# thresholds cannot chatter with a puck hovering on the line.
+func _suspend_body_solve() -> bool:
+	if _reaction.reacting:
+		_body_solve_asleep = false
+		return false
+	if _sm.current != GoalieStateMachine.State.STANDING \
+			and _sm.current != GoalieStateMachine.State.READY:
+		_body_solve_asleep = false
+		return false
+	if _lunge_active_timer > 0.0 or _clear.windup_timer > 0.0 or _clear.anim_timer > 0.0:
+		_body_solve_asleep = false
+		return false
+	var dist: float = goalie.global_position.distance_to(puck.global_position)
+	if dist < _BODY_SOLVE_WAKE_M:
+		_body_solve_asleep = false
+	elif dist > _BODY_SOLVE_SLEEP_M:
+		_body_solve_asleep = true
+	return _body_solve_asleep
+
+
 func _update_body_parts(delta: float) -> void:
+	# Suspended: hold the last pose. The lerp had already converged it to the
+	# ready stance well before the puck got this far, so a held pose is the same
+	# pose the solve would keep rebuilding — a goalie standing still while the
+	# play is at the other end is what it should look like.
+	if _suspend_body_solve():
+		return
 	_pose_inputs.state = _sm.current
 	_pose_inputs.five_hole_openness = _five_hole_openness
 	_pose_inputs.reading_pinned_windup = _reading_pinned_windup

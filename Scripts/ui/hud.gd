@@ -630,6 +630,11 @@ func _apply_spectator_chrome() -> void:
 func _build_offscreen_indicators() -> void:
 	var indicators := OffScreenPlayerIndicators.new()
 	add_child(indicators)
+	# Every skater's name plate in one canvas item, replacing a billboarded
+	# Label3D per skater. Sits alongside the arrows because it is the same kind
+	# of thing: world positions projected and drawn once.
+	var names := PlayerNameOverlay.new()
+	add_child(names)
 
 # Top-down rink minimap, bottom-left corner. Lives under _scale_root so it honors
 # the HUD-scale pref and anchors to the true screen corner; it self-gates on

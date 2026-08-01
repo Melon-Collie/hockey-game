@@ -1,17 +1,19 @@
 class_name SkaterMeshBuilder
 extends RefCounted
 
-# Low-poly faceted replacements for the skater's part meshes: shaped torso,
-# helmeted head, deltoid shoulder caps, hip/knee balls, thighs, socks, skate
-# cuffs, and boots with a blade runner (swapped in during Skater._ready()),
-# plus the shared_* meshes the code-created arm rig builds from (bone prisms,
-# joint balls, glove cuffs, stick knob). Cosmetic only — gameplay reads the
-# Marker3D anchors and collision shapes, never these meshes.
+# Low-poly faceted geometry for the skater: shaped torso, helmeted head, deltoid
+# shoulder caps, arm bone prisms, joint balls, glove fists and cuffs, hip/knee
+# balls, thighs, socks, skate collars, boots with a blade runner, and the stick
+# knob. Cosmetic only — gameplay reads the Marker3D anchors and collision
+# shapes, never these meshes.
 #
-# The arm-rig meshes are baked at UNIT radius and resized by node scale
-# (creation sites in Skater, per-attribute resizing in
-# SkaterAppearanceCoordinator) — never by mesh mutation, so every skater can
-# share one cached mesh.
+# The skater renders as TWO skinned meshes, not as a tree of MeshInstance3Ds:
+# shared_upper_skin_mesh (UpperBone / UpperSurface) and shared_leg_skin_mesh
+# (LegBone / LegSurface). Both are cached and shared by every skater on the ice —
+# per-skater colour is a surface override and per-build sizing rides the scale in
+# each bone's pose, so nothing here is ever mutated per instance. The goalie and
+# the puck still hang meshes on nodes and subclass this builder for the geometry
+# helpers (see _swap_instance).
 #
 # UV layouts replicate the Godot primitives they replace, because
 # SkaterUniformCoordinator paints against those exact conventions:
@@ -24,9 +26,20 @@ extends RefCounted
 # Change a painter convention there and the matching generator here together.
 #
 # Everything is flat-shaded (smooth_group(-1)) — the faceting IS the art
-# style; per-face normals are what make the shaped silhouettes read. Meshes
-# build once into a static cache shared by every skater: per-skater color is
-# material_override and body-build sizing is node scale, so sharing is safe.
+# style; per-face normals are what make the shaped silhouettes read.
+#
+# NORMALS UNDER SKINNING: Godot transforms a skinned normal by the bone matrix
+# itself, not by its inverse transpose, so a bone whose pose carries non-uniform
+# scale renders with skewed normals. _radial_side_normals fixes that where the
+# anisotropy is extreme (the arm bones, ~4:1). Do not reach for it elsewhere —
+# on a part scaled near 1:1 it costs more than it buys (see the note there).
+#
+# Some parts contribute SEVERAL surfaces to one bone — the boot carries its blade
+# steel and laces, the skate collar its accent stripe, the helmet the head/neck
+# skin — because a part that never moves relative to another does not need its
+# own bone, only its own material. Nothing may ever set material_override on
+# either skinned mesh: it overrides every surface at once. Paint through
+# surface_override() / the Skater seams instead.
 
 # Profiles are (y, radius) stations top→bottom in the part's mesh-local frame,
 # spanning the same envelope as the primitive each replaces (heights and radii
@@ -75,9 +88,9 @@ const _TORSO_Z_SCALE: float = 0.88
 const _TORSO_SIDES: int = 10   # back number spans ~3 facets — creased, still legible
 const _LEG_SIDES: int = 8
 
-# Head + helmet. The scene's Helmet node carries the helmet SHELL (painted
-# the kit's helmet color, scaled by the appearance rig); the builder parents
-# a "Head" MeshInstance3D under it so both share the node's transform. The
+# Head + helmet. The scene's Helmet node carries the helmet SHELL on surface 0
+# (painted the kit's helmet color, scaled by the appearance rig) and the
+# head/neck skin on surface 1 — one mesh, so both share its transform. The
 # shell's lower edge varies with azimuth — flat at brow height around the
 # face and temples, dropping to the nape over the back arc — see the rim
 # profile constants below (latitudes are equirect fractions; θ = 0 is +Z,
@@ -238,24 +251,10 @@ static var _cache: Dictionary = {}
 # Swaps every scene-primitive part mesh under the two body roots for its
 # cached low-poly build. Idempotent; safe before or after the coordinators
 # run (they touch material_override and node scale, never mesh identity).
-static func apply(upper_body: Node3D, lower_body: Node3D) -> void:
-	_swap(upper_body, "UpperBodyMesh", "torso", _build_torso)
-	_swap(upper_body, "Helmet", "helmet", _build_helmet)
-	_ensure_head(upper_body)
-	_swap(upper_body, "ShoulderL", "shoulder", _build_shoulder)
-	_swap(upper_body, "ShoulderR", "shoulder", _build_shoulder)
-	for side: String in ["L", "R"]:
-		_swap(lower_body, "Leg%s/Hip%s" % [side, side], "hip", _build_hip)
-		_swap(lower_body, "Leg%s/Thigh%s" % [side, side], "thigh", _build_thigh)
-		_swap(lower_body, "Leg%s/Knee%s" % [side, side], "knee", _build_knee)
-		_swap(lower_body, "Leg%s/Shin%s/Sock%s" % [side, side, side], "sock", _build_sock)
-		_swap(lower_body, "Leg%s/Shin%s/Skate%s" % [side, side, side], "skate", _build_skate)
-		_swap(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side], "boot", _build_boot)
-		_ensure_blade(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side])
-		_ensure_skate_stripe(lower_body, "Leg%s/Shin%s/Skate%s" % [side, side, side])
-		_ensure_laces(lower_body, "Leg%s/Shin%s/Foot%s" % [side, side, side])
-
-
+# Swaps a scene primitive for a generated build, in place. The skater no longer
+# uses this — every one of its parts is a surface of a skinned rig — but the
+# goalie and the puck still hang their meshes on nodes, and they subclass this
+# builder for the geometry helpers.
 static func _swap(root: Node3D, path: String, key: String, builder: Callable) -> void:
 	_swap_instance(root.get_node_or_null(path) as MeshInstance3D, key, builder)
 
@@ -291,7 +290,406 @@ static func _shared(key: String, builder: Callable) -> ArrayMesh:
 static func shared_arm_bone() -> ArrayMesh:
 	return _shared("arm_bone", func() -> ArrayMesh:
 		var profile: Array[Vector2] = [Vector2(0.5, 1.0), Vector2(-0.5, _ARM_TAPER)]
-		return _build_lathe(profile, _LEG_SIDES, 1.0, 1.0))
+		return _radial_side_normals(_build_lathe(profile, _LEG_SIDES, 1.0, 1.0)))
+
+
+# Rewrites a lathe's SIDE normals to be purely radial — no component along the
+# lathe axis — leaving the caps alone. Only the arm bones need this, and they
+# need it because they are the one part whose scale is strongly non-uniform.
+#
+# Godot's skinning transforms a normal by the bone matrix itself, not by its
+# inverse transpose (an ordinary MeshInstance3D gets the proper normal matrix).
+# Under a bone scale of (r, r, length) that skews any normal with an axial
+# component the WRONG way and by the ratio length/r — about 4:1 on an arm — so
+# the 6.8° taper cone shaded as a 27° one, and worse, the shading then changed
+# with the bone's length as the arm stretched on an over-reach.
+#
+# A normal with no axial component is immune: scaling it by (r, r, length)
+# multiplies it by r and normalizes back to itself.
+#
+# Baking the sides radial is not the art compromise it looks like. The proper
+# normal matrix divides the axial component by length while dividing the radial
+# one by r, so at an arm's r/length (~0.23) it was ALREADY flattening the 6.8°
+# taper to 1.6° off radial before this change — the node rig rendered these as
+# near-cylinders too. What baking it buys is that the shading no longer depends
+# on r/length at all, so an over-reach that stretches the forearm can no longer
+# change how it is lit. The pose diff holds this to the letter: every pose is
+# byte-identical to the node rig apart from one edge pixel.
+static func _radial_side_normals(src: ArrayMesh) -> ArrayMesh:
+	var arrays: Array = src.surface_get_arrays(0)
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	for i: int in normals.size():
+		var n: Vector3 = normals[i]
+		# Caps point straight up the axis; flattening them would zero them.
+		if absf(n.y) > 0.99:
+			continue
+		n.y = 0.0
+		normals[i] = n.normalized()
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	var out := ArrayMesh.new()
+	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return out
+
+
+# ── The leg rig: one skinned mesh, sixteen bones ─────────────────────────────
+# Same conversion as the arms (see the ArmPart block), with one structural
+# difference: the legs are a CHAIN, not siblings. LegL/R carry hip pitch and
+# roll, ShinL/R hang off them and carry the knee, and the six meshes per leg ride
+# whichever of the two they belonged to. The bone parents below mirror that
+# exactly, so a pose write composes down the chain the way the node transforms
+# did — flattening it would mean re-deriving the shin's world frame by hand on
+# every gait tick.
+#
+# Bone order is L then R, pivot first. LEG_* and SHIN_* carry no vertices; they
+# exist to be rotated, which is what a bone is for.
+enum LegBone {
+	LEG_L, HIP_L, THIGH_L, KNEE_L, SHIN_L, SOCK_L, SKATE_L, FOOT_L,
+	LEG_R, HIP_R, THIGH_R, KNEE_R, SHIN_R, SOCK_R, SKATE_R, FOOT_R,
+}
+const LEG_BONE_COUNT: int = 16
+# Parent per bone, index-aligned with LegBone. -1 = attached to the skeleton
+# root (LowerBody's frame).
+const LEG_BONE_PARENT: Array[int] = [
+	-1, LegBone.LEG_L, LegBone.LEG_L, LegBone.LEG_L,
+	LegBone.LEG_L, LegBone.SHIN_L, LegBone.SHIN_L, LegBone.SHIN_L,
+	-1, LegBone.LEG_R, LegBone.LEG_R, LegBone.LEG_R,
+	LegBone.LEG_R, LegBone.SHIN_R, LegBone.SHIN_R, LegBone.SHIN_R,
+]
+# Scene node name per bone, index-aligned with LegBone. Skater._build_leg_rig
+# reads each one's local transform before freeing the subtree, so the .tscn stays
+# the place leg proportions are authored.
+const LEG_BONE_NODE: Array[String] = [
+	"LegL", "LegL/HipL", "LegL/ThighL", "LegL/KneeL",
+	"LegL/ShinL", "LegL/ShinL/SockL", "LegL/ShinL/SkateL", "LegL/ShinL/FootL",
+	"LegR", "LegR/HipR", "LegR/ThighR", "LegR/KneeR",
+	"LegR/ShinR", "LegR/ShinR/SockR", "LegR/ShinR/SkateR", "LegR/ShinR/FootR",
+]
+
+# Surfaces of the leg mesh. Not one per bone: the skate collar carries its accent
+# stripe and the boot carries its steel and laces, so those parts contribute
+# several surfaces to one bone (they were already merged meshes as nodes).
+enum LegSurface {
+	HIP_L, THIGH_L, KNEE_L, SOCK_L,
+	SKATE_L_COLLAR, SKATE_L_STRIPE,
+	FOOT_L_SHELL, FOOT_L_BLADE, FOOT_L_LACES,
+	HIP_R, THIGH_R, KNEE_R, SOCK_R,
+	SKATE_R_COLLAR, SKATE_R_STRIPE,
+	FOOT_R_SHELL, FOOT_R_BLADE, FOOT_R_LACES,
+}
+const LEG_SURFACE_COUNT: int = 18
+
+
+static func shared_leg_skin_mesh() -> ArrayMesh:
+	return _shared("leg_skin", func() -> ArrayMesh:
+		var m := ArrayMesh.new()
+		var hip: ArrayMesh = _shared("hip", _build_hip)
+		var thigh: ArrayMesh = _shared("thigh", _build_thigh)
+		var knee: ArrayMesh = _shared("knee", _build_knee)
+		var sock: ArrayMesh = _shared("sock", _build_sock)
+		var skate: ArrayMesh = shared_skate_assembly()
+		var boot: ArrayMesh = shared_boot_assembly()
+		# Appended in LegSurface order — see the enum.
+		for side: int in 2:
+			var leg: int = LegBone.LEG_L if side == 0 else LegBone.LEG_R
+			var shin: int = LegBone.SHIN_L if side == 0 else LegBone.SHIN_R
+			_append_skinned_surface(m, hip, leg + 1)
+			_append_skinned_surface(m, thigh, leg + 2)
+			_append_skinned_surface(m, knee, leg + 3)
+			_append_skinned_surface(m, sock, shin + 1)
+			_append_skinned_surface(m, skate, shin + 2, SKATE_SURF_COLLAR)
+			_append_skinned_surface(m, skate, shin + 2, SKATE_SURF_STRIPE)
+			_append_skinned_surface(m, boot, shin + 3, BOOT_SURF_SHELL)
+			_append_skinned_surface(m, boot, shin + 3, BOOT_SURF_BLADE)
+			_append_skinned_surface(m, boot, shin + 3, BOOT_SURF_LACES)
+		return m)
+
+
+static func shared_leg_skin() -> Skin:
+	if _leg_skin == null:
+		_leg_skin = Skin.new()
+		for i: int in LEG_BONE_COUNT:
+			_leg_skin.add_bind(i, Transform3D.IDENTITY)
+	return _leg_skin
+
+
+static var _leg_skin: Skin = null
+
+
+# ── Merged assemblies ────────────────────────────────────────────────────────
+# Parts that never move relative to their parent do not need to be nodes. Each
+# one used to be a MeshInstance3D child purely because it needed its OWN
+# material — the steel is bright, the laces take a gear colour — and a child was
+# the only place to hang one. A multi-surface mesh with per-surface overrides
+# gives the same result with one node instead of three.
+#
+# The cost of a node here is not the draw call: these are children of a foot the
+# gait moves every frame, so each one is a transform to propagate and a global
+# to recompute, per skater, per frame.
+#
+# NON-NEGOTIABLE for any merged mesh: nothing may set material_override on it.
+# That property overrides EVERY surface at once, so it would erase the steel and
+# the laces the moment the boot was painted. The parent's own colour lives on
+# surface 0 like everything else — see SkaterUniformCoordinator's BOOT_* slots.
+const BOOT_SURF_SHELL: int = 0
+const BOOT_SURF_BLADE: int = 1
+const BOOT_SURF_LACES: int = 2
+const SKATE_SURF_COLLAR: int = 0
+const SKATE_SURF_STRIPE: int = 1
+const HELMET_SURF_SHELL: int = 0
+const HELMET_SURF_SKIN: int = 1
+
+
+# The per-instance material for one surface, created from the surface's shared
+# default on first use. Every writer must go through this: the default lives on
+# the CACHED mesh that all skaters share, so painting it directly would repaint
+# the whole roster. Returns a material that is safe to mutate.
+static func surface_override(mesh: MeshInstance3D, surface: int) -> StandardMaterial3D:
+	var mat: StandardMaterial3D = mesh.get_surface_override_material(surface) as StandardMaterial3D
+	if mat != null:
+		return mat
+	var shared: StandardMaterial3D = mesh.mesh.surface_get_material(surface) as StandardMaterial3D
+	mat = shared.duplicate() as StandardMaterial3D if shared != null else StandardMaterial3D.new()
+	mesh.set_surface_override_material(surface, mat)
+	return mat
+
+
+static func shared_skate_assembly() -> ArrayMesh:
+	return _shared("skate_assembly", _build_skate_assembly)
+
+
+static func _build_skate_assembly() -> ArrayMesh:
+	var m := ArrayMesh.new()
+	_append_surface(m, _shared("skate", _build_skate))
+	# The stripe carried its offset and radius as node transform, so unlike the
+	# boot's parts it has to be baked. Safe because the collar's own scaling is
+	# axis-aligned and the stripe has no rotation — diagonal scales commute, so
+	# baking cannot shear it the way a rotated child would.
+	_append_surface(m, shared_skate_stripe(), Transform3D(
+			Basis.IDENTITY.scaled(Vector3(_SKATE_STRIPE_RADIUS, 1.0, _SKATE_STRIPE_RADIUS)),
+			Vector3(0.0, _SKATE_STRIPE_Y, 0.0)))
+	var stripe := StandardMaterial3D.new()
+	stripe.albedo_color = Color(0.08, 0.08, 0.08)
+	stripe.roughness = 0.42
+	BodyRim.apply(stripe)
+	m.surface_set_material(SKATE_SURF_STRIPE, stripe)
+	return m
+
+
+static func shared_helmet_assembly() -> ArrayMesh:
+	return _shared("helmet_assembly", _build_helmet_assembly)
+
+
+static func _build_helmet_assembly() -> ArrayMesh:
+	var m := ArrayMesh.new()
+	_append_surface(m, _shared("helmet", _build_helmet))
+	# Head and neck were separate nodes but always wore the SAME skin material,
+	# so they collapse into one surface rather than two — one skin colour to
+	# paint, and Skater.set_skin_tone has a single target.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.append_from(_shared("head", _build_head), 0,
+			Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, -_HEAD_FORWARD_M)))
+	st.append_from(_shared("neck", _build_neck), 0, Transform3D.IDENTITY)
+	st.commit(m)
+	m.surface_set_material(HELMET_SURF_SKIN, _make_skin_mat())
+	return m
+
+
+static func shared_boot_assembly() -> ArrayMesh:
+	return _shared("boot_assembly", _build_boot_assembly)
+
+
+static func _build_boot_assembly() -> ArrayMesh:
+	var m := ArrayMesh.new()
+	_append_surface(m, _shared("boot", _build_boot))
+	_append_surface(m, _shared("skate_blade", _build_skate_blade))
+	_append_surface(m, shared_laces())
+	# Defaults for the two merged surfaces, standing in for the material_override
+	# their child nodes used to carry — so an unpainted rig (workbench preview,
+	# a spawn before the uniform pass) still shows steel and white laces rather
+	# than untextured white. Surface 0 is left null on purpose: _swap_instance
+	# carries the scene primitive's material onto it, exactly as before.
+	var steel := StandardMaterial3D.new()
+	steel.albedo_color = _BLADE_STEEL_COLOR
+	steel.roughness = 0.25
+	BodyRim.apply(steel)
+	m.surface_set_material(BOOT_SURF_BLADE, steel)
+	var lace := StandardMaterial3D.new()
+	lace.albedo_color = _LACE_COLOR
+	lace.roughness = 0.9
+	BodyRim.apply(lace)
+	m.surface_set_material(BOOT_SURF_LACES, lace)
+	return m
+
+
+# Appends `src`'s surface 0 to `target` as a new surface. The children this
+# replaces all sat at identity relative to their parent, so no transform is
+# baked — which is also why the merge cannot change the rendered geometry.
+static func _append_surface(target: ArrayMesh, src: ArrayMesh,
+		xform: Transform3D = Transform3D.IDENTITY) -> void:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.append_from(src, 0, xform)
+	st.commit(target)
+
+
+# The same prism with the old wrapper's 90°-about-X baked into the vertices, so
+# its long axis is local Z — the axis the arm rig's looking_at basis aims. The
+# mesh's long axis used to disagree with the aiming axis, which is the only
+# reason each bone needed a rotated child; baking the rotation let one transform
+# carry (radius, radius, length).
+static func shared_arm_bone_z() -> ArrayMesh:
+	return _shared("arm_bone_z", func() -> ArrayMesh:
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		st.append_from(shared_arm_bone(), 0,
+				Transform3D(Basis(Vector3.RIGHT, PI * 0.5), Vector3.ZERO))
+		return st.commit())
+
+
+# ── The upper-body rig: one skinned mesh, one Skeleton3D ─────────────────────
+# Fourteen parts that used to be fourteen MeshInstance3D children of UpperBody —
+# both arms, the torso, the helmet/head unit and the two deltoid caps — each
+# carrying a shared mesh and its own per-frame transform. They are now fourteen
+# bones of one skeleton driving one mesh, which is how an articulated body is
+# supposed to be built, and it takes the per-frame cost from a Node3D transform
+# write each (dirtying a subtree and pushing a global to the RenderingServer)
+# down to entries in the skeleton's pose array.
+#
+# WHY IT IS EXACT, not merely close: every vertex is weighted 1.0 to a single
+# bone, the bone rests are identity, and the skin binds are identity. A skinned
+# vertex is then `bone_pose * v`, which is precisely what a child node with that
+# local transform produced. The parts' geometry is left in its own local space
+# (untransformed) for the same reason — it is already the space the shared
+# meshes were authored in. So `set_bone_pose(part, X)` takes the SAME X the old
+# `node.transform = X` took, and the pose diff can hold the renderer to it.
+#
+# The flat bone list (no parents) is deliberate and matches the old layout: all
+# fourteen were siblings under UpperBody, each posed independently in that space.
+# A hierarchy would compose transforms the old rig never composed. (The legs are
+# the opposite case — see LegBone.)
+enum UpperBone {
+	TOP_UPPER_ARM,
+	TOP_FOREARM,
+	BOTTOM_UPPER_ARM,
+	BOTTOM_FOREARM,
+	TOP_ELBOW,
+	BOTTOM_ELBOW,
+	TOP_HAND,
+	BOTTOM_HAND,
+	TOP_CUFF,
+	BOTTOM_CUFF,
+	TORSO,
+	HELMET,
+	SHOULDER_L,
+	SHOULDER_R,
+}
+const UPPER_BONE_COUNT: int = 14
+
+# Surfaces. One per bone for the first thirteen; the helmet is the exception,
+# carrying the shell and the head/neck skin as two surfaces of one bone (they
+# never moved relative to each other, only needed separate materials). Merging
+# the arm parts that share a material would cut draw calls further, but that is a
+# different change with a different risk (crossed paint) — see skater_matrix.gd.
+enum UpperSurface {
+	TOP_UPPER_ARM,
+	TOP_FOREARM,
+	BOTTOM_UPPER_ARM,
+	BOTTOM_FOREARM,
+	TOP_ELBOW,
+	BOTTOM_ELBOW,
+	TOP_HAND,
+	BOTTOM_HAND,
+	TOP_CUFF,
+	BOTTOM_CUFF,
+	TORSO,
+	HELMET_SHELL,
+	HELMET_SKIN,
+	SHOULDER_L,
+	SHOULDER_R,
+}
+const UPPER_SURFACE_COUNT: int = 15
+# Scene node name per bone for the four parts whose placement is authored in
+# Scenes/Skater.tscn rather than derived (the arm parts are placed by IK). Read
+# by Skater._build_upper_rig, which then frees them — same deal as LEG_BONE_NODE.
+# Indices 0-9 are unused; the arm parts have no scene node.
+const UPPER_BONE_NODE: Array[String] = [
+	"", "", "", "", "", "", "", "", "", "",
+	"UpperBodyMesh", "Helmet", "ShoulderL", "ShoulderR",
+]
+
+
+static func shared_upper_skin_mesh() -> ArrayMesh:
+	return _shared("upper_skin", func() -> ArrayMesh:
+		var m := ArrayMesh.new()
+		var bone: ArrayMesh = shared_arm_bone_z()
+		var ball: ArrayMesh = shared_joint_ball()
+		var fist: ArrayMesh = shared_glove_fist()
+		var cuff: ArrayMesh = shared_cuff()
+		var helmet: ArrayMesh = shared_helmet_assembly()
+		var shoulder: ArrayMesh = _shared("shoulder", _build_shoulder)
+		# Appended in UpperSurface order. For the ten arm parts the surface index
+		# and the bone index coincide, which is why they can share a number.
+		_append_skinned_surface(m, bone, UpperBone.TOP_UPPER_ARM)
+		_append_skinned_surface(m, bone, UpperBone.TOP_FOREARM)
+		_append_skinned_surface(m, bone, UpperBone.BOTTOM_UPPER_ARM)
+		_append_skinned_surface(m, bone, UpperBone.BOTTOM_FOREARM)
+		_append_skinned_surface(m, ball, UpperBone.TOP_ELBOW)
+		_append_skinned_surface(m, ball, UpperBone.BOTTOM_ELBOW)
+		_append_skinned_surface(m, fist, UpperBone.TOP_HAND)
+		_append_skinned_surface(m, fist, UpperBone.BOTTOM_HAND)
+		_append_skinned_surface(m, cuff, UpperBone.TOP_CUFF)
+		_append_skinned_surface(m, cuff, UpperBone.BOTTOM_CUFF)
+		_append_skinned_surface(m, _shared("torso", _build_torso), UpperBone.TORSO)
+		_append_skinned_surface(m, helmet, UpperBone.HELMET, HELMET_SURF_SHELL)
+		_append_skinned_surface(m, helmet, UpperBone.HELMET, HELMET_SURF_SKIN)
+		_append_skinned_surface(m, shoulder, UpperBone.SHOULDER_L)
+		_append_skinned_surface(m, shoulder, UpperBone.SHOULDER_R)
+		return m)
+
+
+# Identity binds, so the skinned vertex is the bone pose alone. Shared by every
+# skater: Godot builds a per-instance SkinReference from one Skin resource.
+static func shared_upper_skin() -> Skin:
+	if _upper_skin == null:
+		_upper_skin = Skin.new()
+		for i: int in UPPER_BONE_COUNT:
+			_upper_skin.add_bind(i, Transform3D.IDENTITY)
+	return _upper_skin
+
+
+static var _upper_skin: Skin = null
+
+
+# Copies a single-surface mesh into `target` verbatim, adding the bone/weight
+# attributes that make every one of its vertices rigid to `bone`.
+#
+# Goes through surface_get_arrays rather than SurfaceTool because SurfaceTool
+# re-processes what it is given — it would re-index and could re-derive normals,
+# and this mesh has to be vertex-for-vertex what the unskinned one was or the
+# pose diff is comparing two different models. Copying the arrays and adding two
+# more changes nothing else.
+static func _append_skinned_surface(target: ArrayMesh, src: ArrayMesh, bone: int,
+		src_surface: int = 0) -> void:
+	var arrays: Array = src.surface_get_arrays(src_surface)
+	var vertex_count: int = (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	var bones := PackedInt32Array()
+	bones.resize(vertex_count * 4)
+	var weights := PackedFloat32Array()
+	weights.resize(vertex_count * 4)
+	# resize() zero-fills, so influences 1-3 are already bone 0 at weight 0.
+	for i: int in vertex_count:
+		bones[i * 4] = bone
+		weights[i * 4] = 1.0
+	arrays[Mesh.ARRAY_BONES] = bones
+	arrays[Mesh.ARRAY_WEIGHTS] = weights
+	target.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	# Carry the source surface's shared default across, so surface_override()
+	# still has something to duplicate for parts that ship with one (the boot's
+	# steel and laces).
+	var shared: Material = src.surface_get_material(src_surface)
+	if shared != null:
+		target.surface_set_material(target.get_surface_count() - 1, shared)
 
 
 # Elbow ball, unit radius.
@@ -452,29 +850,6 @@ static func _build_helmet() -> ArrayMesh:
 	_cap(st, rings[lat], apex, Vector2(0.5, 0.9), false, 0.05)
 	st.generate_normals()
 	return st.commit()
-
-
-# The head ball and neck under the helmet shell. Created (not swapped — no
-# scene nodes exist for them) as children of the Helmet MeshInstance3D so
-# they ride the same appearance-rig scaling and skeleton offsets.
-# SkaterUniformCoordinator resolves both by name for ghost fades; the skin
-# material lives here because no kit color paints skin — the player's
-# identity tone does (Skater.set_skin_tone).
-static func _ensure_head(upper_body: Node3D) -> void:
-	var helmet: MeshInstance3D = upper_body.get_node_or_null("Helmet") as MeshInstance3D
-	if helmet == null or helmet.get_node_or_null("Head") != null:
-		return
-	var head := MeshInstance3D.new()
-	head.name = "Head"
-	head.position = Vector3(0.0, 0.0, -_HEAD_FORWARD_M)
-	head.mesh = _shared("head", _build_head)
-	head.material_override = _make_skin_mat()
-	helmet.add_child(head)
-	var neck := MeshInstance3D.new()
-	neck.name = "Neck"
-	neck.mesh = _shared("neck", _build_neck)
-	neck.material_override = _make_skin_mat()
-	helmet.add_child(neck)
 
 
 static func _build_neck() -> ArrayMesh:
@@ -696,60 +1071,6 @@ static func _build_skate_blade() -> ArrayMesh:
 			Vector3(0.0035, 0.098, _BLADE_ICE_Z))                            # steel runner
 	st.generate_normals()
 	return st.commit()
-
-
-# The accent stripe is a CHILD of the collar mesh so it rides the same node
-# scaling and stride animation. Default-painted boot-dark (the classic look);
-# SkaterUniformCoordinator repaints it with the player's skate-color pick.
-static func _ensure_skate_stripe(lower_body: Node3D, skate_path: String) -> void:
-	var collar: MeshInstance3D = lower_body.get_node_or_null(skate_path) as MeshInstance3D
-	if collar == null or collar.get_node_or_null("Stripe") != null:
-		return
-	var stripe := MeshInstance3D.new()
-	stripe.name = "Stripe"
-	stripe.mesh = shared_skate_stripe()
-	stripe.position = Vector3(0.0, _SKATE_STRIPE_Y, 0.0)
-	stripe.scale = Vector3(_SKATE_STRIPE_RADIUS, 1.0, _SKATE_STRIPE_RADIUS)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.08, 0.08, 0.08)
-	mat.roughness = 0.42
-	BodyRim.apply(mat)
-	stripe.material_override = mat
-	collar.add_child(stripe)
-
-
-# The laces are a CHILD of the boot mesh (same frame, like the blade steel),
-# placeholder-white until the uniform pass paints the lace pick.
-static func _ensure_laces(lower_body: Node3D, foot_path: String) -> void:
-	var foot: MeshInstance3D = lower_body.get_node_or_null(foot_path) as MeshInstance3D
-	if foot == null or foot.get_node_or_null("Laces") != null:
-		return
-	var laces := MeshInstance3D.new()
-	laces.name = "Laces"
-	laces.mesh = shared_laces()
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = _LACE_COLOR
-	mat.roughness = 0.9
-	BodyRim.apply(mat)
-	laces.material_override = mat
-	foot.add_child(laces)
-
-
-# The steel is a CHILD of the foot's boot mesh with its own bright material —
-# the whole point of splitting it out of the boot solid.
-static func _ensure_blade(lower_body: Node3D, foot_path: String) -> void:
-	var foot: MeshInstance3D = lower_body.get_node_or_null(foot_path) as MeshInstance3D
-	if foot == null or foot.get_node_or_null("Blade") != null:
-		return
-	var blade := MeshInstance3D.new()
-	blade.name = "Blade"
-	blade.mesh = _shared("skate_blade", _build_skate_blade)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = _BLADE_STEEL_COLOR
-	mat.roughness = 0.25
-	BodyRim.apply(mat)
-	blade.material_override = mat
-	foot.add_child(blade)
 
 
 # Boot cross-section at one station: narrowed top, full-width sidewall, tucked

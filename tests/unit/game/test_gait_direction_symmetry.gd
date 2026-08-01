@@ -1,5 +1,12 @@
 extends GutTest
 
+# The gait's rotations and the sizing seam's positions live on the leg rig's
+# bones now, not on Node3Ds — see Skater.leg_bone_euler / leg_bone_position.
+const _LEG_L: int = SkaterMeshBuilder.LegBone.LEG_L
+const _LEG_R: int = SkaterMeshBuilder.LegBone.LEG_R
+const _SHIN_L: int = SkaterMeshBuilder.LegBone.SHIN_L
+const _SHIN_R: int = SkaterMeshBuilder.LegBone.SHIN_R
+
 # Gait world-direction symmetry — the stride must be IDENTICAL whether the
 # skater travels up-ice (−Z) or down-ice (+Z) with facing aligned to travel.
 # The gait is meant to be purely body-frame (velocity decomposed through the
@@ -32,17 +39,13 @@ func _run_direction(travel: Vector2) -> Array:
 	# intent so this guards the real stride, not the no-keys glide pose.
 	skater.move_intent = travel
 
-	var leg_l: Node3D = skater.get_node("MeshRoot/LowerBody/LegL") as Node3D
-	var leg_r: Node3D = skater.get_node("MeshRoot/LowerBody/LegR") as Node3D
-	var shin_l: Node3D = skater.get_node("MeshRoot/LowerBody/LegL/ShinL") as Node3D
-	var shin_r: Node3D = skater.get_node("MeshRoot/LowerBody/LegR/ShinR") as Node3D
 
 	var samples: Array = []
 	for _i: int in TICKS:
 		coord.apply(DT)
 		samples.append([
-			leg_l.rotation, leg_r.rotation,
-			shin_l.rotation.x, shin_r.rotation.x,
+			skater.leg_bone_euler(_LEG_L), skater.leg_bone_euler(_LEG_R),
+			skater.leg_bone_euler(_SHIN_L).x, skater.leg_bone_euler(_SHIN_R).x,
 			coord.travel_align_yaw, coord.stop_yaw_offset,
 			coord.trunk_pitch_add, coord.trunk_roll_add,
 		])
@@ -108,8 +111,6 @@ func _run_full_pipeline(travel: Vector2) -> Array:
 	# internal facing var (desyncing them was the old spawn-twist bug).
 	controller.set_spawn_facing(travel)
 
-	var leg_l: Node3D = skater.get_node("MeshRoot/LowerBody/LegL") as Node3D
-	var leg_r: Node3D = skater.get_node("MeshRoot/LowerBody/LegR") as Node3D
 	var upper: Node3D = skater.get_node("MeshRoot/UpperBody") as Node3D
 	var lower: Node3D = skater.get_node("MeshRoot/LowerBody") as Node3D
 	var facing_target: float = atan2(-travel.x, -travel.y)
@@ -123,7 +124,7 @@ func _run_full_pipeline(travel: Vector2) -> Array:
 				+ Vector3(travel.x, 0.0, travel.y) * 4.0
 		controller._process_input(input, DT)
 		samples.append([
-			leg_l.rotation, leg_r.rotation,
+			skater.leg_bone_euler(_LEG_L), skater.leg_bone_euler(_LEG_R),
 			upper.rotation, lower.rotation,
 			angle_difference(facing_target, skater.rotation.y),
 			Vector2(skater.velocity.x, skater.velocity.z).length(),

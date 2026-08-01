@@ -46,41 +46,38 @@ extends RefCounted
 # by its own mild table and never stretches with height — real adult heads are
 # nearly constant across statures, and the constancy is what sells a tall
 # build as big rather than zoomed.
-const _TORSO_PATHS: Array[String] = [
-	"UpperBody/UpperBodyMesh",
+# The upper-body parts are bones of the upper rig now, not nodes.
+const _SHOULDER_BONES: Array[int] = [
+	SkaterMeshBuilder.UpperBone.SHOULDER_L, SkaterMeshBuilder.UpperBone.SHOULDER_R,
 ]
-const _SHOULDER_PATHS: Array[String] = [
-	"UpperBody/ShoulderL", "UpperBody/ShoulderR",
+# The leg parts are bones of the leg rig, not nodes, so they are addressed by
+# LegBone index (see SkaterMeshBuilder). Same groups as before.
+const _THIGH_BONES: Array[int] = [
+	SkaterMeshBuilder.LegBone.HIP_L,   SkaterMeshBuilder.LegBone.HIP_R,
+	SkaterMeshBuilder.LegBone.THIGH_L, SkaterMeshBuilder.LegBone.THIGH_R,
+	SkaterMeshBuilder.LegBone.KNEE_L,  SkaterMeshBuilder.LegBone.KNEE_R,
 ]
-const _HELMET_PATH: String = "UpperBody/Helmet"
-const _THIGH_PATHS: Array[String] = [
-	"LowerBody/LegL/HipL",   "LowerBody/LegR/HipR",
-	"LowerBody/LegL/ThighL", "LowerBody/LegR/ThighR",
-	"LowerBody/LegL/KneeL",  "LowerBody/LegR/KneeR",
+const _CALF_BONES: Array[int] = [
+	SkaterMeshBuilder.LegBone.SOCK_L,  SkaterMeshBuilder.LegBone.SOCK_R,
+	SkaterMeshBuilder.LegBone.SKATE_L, SkaterMeshBuilder.LegBone.SKATE_R,
 ]
-const _CALF_PATHS: Array[String] = [
-	"LowerBody/LegL/ShinL/SockL",  "LowerBody/LegR/ShinR/SockR",
-	"LowerBody/LegL/ShinL/SkateL", "LowerBody/LegR/ShinR/SkateR",
-]
-# Leg pivot chain (Node3D, not leaves) — POSITIONS scale with height so the
-# skeleton's segment lengths ride m_height (hip 0.87 → 0.87·h world, knee
-# 0.31·h below it). The gait rotates these same nodes; positions here,
-# rotations there — never the same property.
-const _LEG_PIVOT_PATHS: Array[String] = [
-	"LowerBody/LegL", "LowerBody/LegR",
-	"LowerBody/LegL/ShinL", "LowerBody/LegR/ShinR",
+# Leg pivot chain (no geometry) — POSITIONS scale with height so the skeleton's
+# segment lengths ride m_height (hip 0.87 → 0.87·h world, knee 0.31·h below it).
+# The gait rotates these same bones; positions here, rotations there — never the
+# same component.
+const _LEG_PIVOT_BONES: Array[int] = [
+	SkaterMeshBuilder.LegBone.LEG_L,  SkaterMeshBuilder.LegBone.LEG_R,
+	SkaterMeshBuilder.LegBone.SHIN_L, SkaterMeshBuilder.LegBone.SHIN_R,
 ]
 # Feet are excluded from the mesh-scaling rig (rotated local frame — see the
 # FootL/R note above), but their POSITION is in the shin's frame, so the Y
 # offset still scales with the lengthened shin.
-const _FOOT_PATHS: Array[String] = [
-	"LowerBody/LegL/ShinL/FootL", "LowerBody/LegR/ShinR/FootR",
+const _FOOT_BONES: Array[int] = [
+	SkaterMeshBuilder.LegBone.FOOT_L, SkaterMeshBuilder.LegBone.FOOT_R,
 ]
 
 var _skater: Skater = null
 var _captured: bool = false
-var _base_scales: Dictionary = {}     # mesh_root-relative path -> Vector3
-var _base_positions: Dictionary = {}  # mesh_root-relative path -> Vector3
 var _base_arm_radius: float = 0.0
 var _base_elbow_sphere_radius: float = 0.0
 var _base_hand_sphere_radius: float = 0.0
@@ -101,94 +98,78 @@ func apply(attrs: PlayerAttributes) -> void:
 	var m_head:     float = attrs.head_bulk_mult()
 	var m_thigh:    float = attrs.thigh_mult()
 	var m_calf:     float = attrs.calf_mult()
-	for path: String in _TORSO_PATHS:
-		_apply_scale(path, m_torso, m_height, m_torso)
-	for path: String in _SHOULDER_PATHS:
-		_apply_scale(path, m_shoulder, m_height, m_shoulder)
-	_apply_scale(_HELMET_PATH, m_head, m_head, m_head)
-	for path: String in _THIGH_PATHS:
-		_apply_scale(path, m_thigh, m_height, m_thigh)
-	for path: String in _CALF_PATHS:
-		_apply_scale(path, m_calf, m_height, m_calf)
+	_apply_upper_scale(SkaterMeshBuilder.UpperBone.TORSO, m_torso, m_height, m_torso)
+	for bone: int in _SHOULDER_BONES:
+		_apply_upper_scale(bone, m_shoulder, m_height, m_shoulder)
+	_apply_upper_scale(SkaterMeshBuilder.UpperBone.HELMET, m_head, m_head, m_head)
+	for bone: int in _THIGH_BONES:
+		_apply_leg_scale(bone, m_thigh, m_height, m_thigh)
+	for bone: int in _CALF_BONES:
+		_apply_leg_scale(bone, m_calf, m_height, m_calf)
 	# Positions: keep the upper-body parts assembled across builds. Y rides
 	# height for everything (the torso cylinder's center rises with its
 	# stretch, the shoulder balls sit at its top, the helmet above them).
 	# Shoulder-ball X rides TORSO bulk — the deltoid sits on the torso
 	# surface, so it's the torso's width that pushes it out, while
 	# the ball's own size keeps reading Physical via _apply_scale above.
-	for path: String in _TORSO_PATHS:
-		_apply_position(path, 1.0, m_height)
-	for path: String in _SHOULDER_PATHS:
-		_apply_position(path, m_torso, m_height)
-	_apply_position(_HELMET_PATH, 1.0, m_height)
+	_apply_upper_position(SkaterMeshBuilder.UpperBone.TORSO, 1.0, m_height)
+	for bone: int in _SHOULDER_BONES:
+		_apply_upper_position(bone, m_torso, m_height)
+	_apply_upper_position(SkaterMeshBuilder.UpperBone.HELMET, 1.0, m_height)
 	# Skeleton height: raise the body roots and scale every leg-chain Y offset
 	# so the whole rig scales about the ice plane (see the class doc block).
 	# The leaf meshes' Y scale already rides m_height above, so the stretched
 	# meshes exactly fill the lengthened segments.
 	_skater.set_skeleton_root_offset(
 			(m_height - 1.0) * GameRules.FACEOFF_SPAWN_HEIGHT)
-	for path: String in _LEG_PIVOT_PATHS:
-		_apply_position(path, 1.0, m_height)
-	for path: String in _THIGH_PATHS:
-		_apply_position(path, 1.0, m_height)
-	for path: String in _CALF_PATHS:
-		_apply_position(path, 1.0, m_height)
-	for path: String in _FOOT_PATHS:
-		_apply_position(path, 1.0, m_height)
+	for bone: int in _LEG_PIVOT_BONES:
+		_apply_leg_position(bone, m_height)
+	for bone: int in _THIGH_BONES:
+		_apply_leg_position(bone, m_height)
+	for bone: int in _CALF_BONES:
+		_apply_leg_position(bone, m_height)
+	for bone: int in _FOOT_BONES:
+		_apply_leg_position(bone, m_height)
 	_apply_arm_thickness(attrs.forearm_bulk_mult(), attrs.upper_arm_bulk_mult())
 
 
 func _capture_baselines() -> void:
-	for path: String in _TORSO_PATHS:
-		_capture_scale(path)
-	for path: String in _SHOULDER_PATHS:
-		_capture_scale(path)
-	_capture_scale(_HELMET_PATH)
-	for path: String in _THIGH_PATHS:
-		_capture_scale(path)
-	for path: String in _CALF_PATHS:
-		_capture_scale(path)
-	# Pivots and feet only move — no mesh scale to capture.
-	for path: String in _LEG_PIVOT_PATHS:
-		_capture_position(path)
-	for path: String in _FOOT_PATHS:
-		_capture_position(path)
-	# All four arm bones are created in Skater._ready() from the same
-	# arm_mesh_thickness; joint balls carry their radius as node scale on the
-	# shared unit-radius mesh (see _resolve_or_create_joint_sphere).
+	# Both rigs captured their own baselines off the scene subtree before freeing
+	# it (Skater._build_leg_rig / _build_upper_rig), so there is nothing to
+	# capture here.
+	# The arm parts have no scene node — they are placed by IK — so their
+	# baselines come off the @exports the rig was seeded from.
 	_base_arm_radius = _skater.arm_mesh_thickness * 0.5
-	_base_elbow_sphere_radius = _sphere_radius(_skater.top_elbow_sphere)
-	_base_hand_sphere_radius  = _sphere_radius(_skater.top_hand_sphere)
+	_base_elbow_sphere_radius = _skater.arm_ball_radius(
+			SkaterMeshBuilder.UpperBone.TOP_ELBOW)
+	_base_hand_sphere_radius = _skater.arm_ball_radius(
+			SkaterMeshBuilder.UpperBone.TOP_HAND)
 	_captured = true
 
 
-func _capture_scale(path: String) -> void:
-	var node: Node3D = _skater.mesh_root.get_node_or_null(path) as Node3D
-	if node != null:
-		_base_scales[path] = node.scale
-		_base_positions[path] = node.position
+func _apply_upper_scale(bone: int, x_mult: float, y_mult: float, z_mult: float) -> void:
+	var base: Vector3 = _skater.upper_bone_base_scale(bone)
+	_skater.set_upper_bone_scale(bone,
+			Vector3(base.x * x_mult, base.y * y_mult, base.z * z_mult))
 
 
-func _capture_position(path: String) -> void:
-	var node: Node3D = _skater.mesh_root.get_node_or_null(path) as Node3D
-	if node != null:
-		_base_positions[path] = node.position
+func _apply_upper_position(bone: int, x_mult: float, y_mult: float) -> void:
+	var base: Vector3 = _skater.upper_bone_base_position(bone)
+	_skater.set_upper_bone_position(bone,
+			Vector3(base.x * x_mult, base.y * y_mult, base.z))
 
 
-func _apply_scale(path: String, x_mult: float, y_mult: float, z_mult: float) -> void:
-	var node: Node3D = _skater.mesh_root.get_node_or_null(path) as Node3D
-	if node == null:
-		return
-	var base: Vector3 = _base_scales.get(path, Vector3.ONE)
-	node.scale = Vector3(base.x * x_mult, base.y * y_mult, base.z * z_mult)
+func _apply_leg_scale(bone: int, x_mult: float, y_mult: float, z_mult: float) -> void:
+	var base: Vector3 = _skater.leg_bone_base_scale(bone)
+	_skater.set_leg_bone_scale(bone,
+			Vector3(base.x * x_mult, base.y * y_mult, base.z * z_mult))
 
 
-func _apply_position(path: String, x_mult: float, y_mult: float) -> void:
-	var node: Node3D = _skater.mesh_root.get_node_or_null(path) as Node3D
-	if node == null:
-		return
-	var base: Vector3 = _base_positions.get(path, Vector3.ZERO)
-	node.position = Vector3(base.x * x_mult, base.y * y_mult, base.z)
+# Leg positions only ever ride height on Y — the X multiplier the upper-body
+# parts use has no leg equivalent (nothing moves a knee sideways with build).
+func _apply_leg_position(bone: int, y_mult: float) -> void:
+	var base: Vector3 = _skater.leg_bone_base_position(bone)
+	_skater.set_leg_bone_position(bone, Vector3(base.x, base.y * y_mult, base.z))
 
 
 # Arm bulk is split at the elbow so two stats read off one limb: Hands drives the
@@ -198,57 +179,27 @@ func _apply_position(path: String, x_mult: float, y_mult: float) -> void:
 func _apply_arm_thickness(forearm_mult: float, upper_mult: float) -> void:
 	var fore_radius:  float = _base_arm_radius * forearm_mult
 	var upper_radius: float = _base_arm_radius * upper_mult
-	_set_bone_radius(_skater.upper_arm_mesh,        upper_radius)
-	_set_bone_radius(_skater.bottom_upper_arm_mesh, upper_radius)
-	_set_bone_radius(_skater.forearm_mesh,          fore_radius)
-	_set_bone_radius(_skater.bottom_forearm_mesh,   fore_radius)
+	_skater.set_arm_bone_radius(SkaterMeshBuilder.UpperBone.TOP_UPPER_ARM, upper_radius)
+	_skater.set_arm_bone_radius(SkaterMeshBuilder.UpperBone.BOTTOM_UPPER_ARM, upper_radius)
+	_skater.set_arm_bone_radius(SkaterMeshBuilder.UpperBone.TOP_FOREARM, fore_radius)
+	_skater.set_arm_bone_radius(SkaterMeshBuilder.UpperBone.BOTTOM_FOREARM, fore_radius)
 	# The elbow ball is Shot's joint, but it must stay proud of BOTH adjoining
 	# cylinders — a thick-forearm / thin-bicep build (high Hands, low Shot)
 	# otherwise leaves the forearm cylinder's flat end cap poking out around a
 	# smaller sphere. maxf keeps the joint reading as a bulge on every combo.
 	var elbow_mult: float = maxf(upper_mult, forearm_mult)
-	_set_sphere_radius(_skater.top_elbow_sphere,    _base_elbow_sphere_radius * elbow_mult)
-	_set_sphere_radius(_skater.bottom_elbow_sphere, _base_elbow_sphere_radius * elbow_mult)
-	_set_sphere_radius(_skater.top_hand_sphere,     _base_hand_sphere_radius * forearm_mult)
-	_set_sphere_radius(_skater.bottom_hand_sphere,  _base_hand_sphere_radius * forearm_mult)
+	var elbow_radius: float = _base_elbow_sphere_radius * elbow_mult
+	var hand_radius: float = _base_hand_sphere_radius * forearm_mult
+	_skater.set_arm_ball_radius(SkaterMeshBuilder.UpperBone.TOP_ELBOW, elbow_radius)
+	_skater.set_arm_ball_radius(SkaterMeshBuilder.UpperBone.BOTTOM_ELBOW, elbow_radius)
+	_skater.set_arm_ball_radius(SkaterMeshBuilder.UpperBone.TOP_HAND, hand_radius)
+	_skater.set_arm_ball_radius(SkaterMeshBuilder.UpperBone.BOTTOM_HAND, hand_radius)
 	# Glove cuffs ride the forearm coaxially, so their radius must scale with
 	# it — at Hands 4 the fixed cuff radius exactly equaled the scaled forearm
 	# radius (coaxial cylinders, identical radii → z-fighting at the wrist).
-	# Stamp the mult on the skater so _rebuild_glove_cuffs (uniform re-applies
-	# recreate the cuffs) sizes fresh cuffs the same way, then resize any live
-	# ones for the attrs-after-uniform order.
+	# Stamp the mult on the skater so the uniform pass sizes the cuff the same
+	# way whichever of the two runs last.
 	_skater.forearm_visual_mult = forearm_mult
 	var cuff_radius: float = _skater.arm_mesh_thickness * 0.6 * forearm_mult
-	_set_cuff_radius(_skater.top_cuff_mesh, cuff_radius)
-	_set_cuff_radius(_skater.bot_cuff_mesh, cuff_radius)
-
-
-# Arm-rig meshes are shared unit-radius builds (SkaterMeshBuilder.shared_*),
-# so all resizing below is node scale — never mesh mutation, which would leak
-# one skater's build into every other skater on the ice.
-func _set_bone_radius(bone: Node3D, radius: float) -> void:
-	var mi: MeshInstance3D = _skater.bone_visual(bone)
-	if mi == null:
-		return
-	# Cross-section only: the visual's local Y is the bone's length axis,
-	# owned by the wrapper's per-frame Z scale (see _resolve_or_create_bone_mesh).
-	mi.scale = Vector3(radius, 1.0, radius)
-
-
-func _set_cuff_radius(mi: MeshInstance3D, radius: float) -> void:
-	if mi == null or not is_instance_valid(mi):
-		return
-	# Height stays baked (CUFF_HEIGHT_M — the wrist placement offsets by it).
-	mi.scale = Vector3(radius, 1.0, radius)
-
-
-func _set_sphere_radius(mi: MeshInstance3D, radius: float) -> void:
-	if mi == null:
-		return
-	mi.scale = Vector3.ONE * radius
-
-
-static func _sphere_radius(mi: MeshInstance3D) -> float:
-	if mi == null:
-		return 0.0
-	return mi.scale.x
+	_skater.set_arm_cuff_radius(SkaterMeshBuilder.UpperBone.TOP_CUFF, cuff_radius)
+	_skater.set_arm_cuff_radius(SkaterMeshBuilder.UpperBone.BOTTOM_CUFF, cuff_radius)

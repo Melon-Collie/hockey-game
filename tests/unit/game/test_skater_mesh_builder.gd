@@ -187,37 +187,6 @@ func test_skate_blade_reaches_the_lifted_ice_depth() -> void:
 			"the boot sole should ride on the blade, clear of the ice")
 
 
-func test_apply_swaps_scene_primitives_and_keeps_default_materials() -> void:
-	# Miniature stand-in for the Skater scene hierarchy: one lathed part and
-	# one ball part with the scene's primitive meshes and default materials.
-	# The cache is cleared first because the first swap wins the right to stamp
-	# its default material on the shared mesh — a real Skater spawned by an
-	# earlier test would otherwise have claimed it already.
-	SkaterMeshBuilder._cache.clear()
-	var upper := Node3D.new()
-	var lower := Node3D.new()
-	add_child_autofree(upper)
-	add_child_autofree(lower)
-	var torso := MeshInstance3D.new()
-	torso.name = "UpperBodyMesh"
-	var cyl := CylinderMesh.new()
-	var default_mat := StandardMaterial3D.new()
-	cyl.material = default_mat
-	torso.mesh = cyl
-	upper.add_child(torso)
-	var helmet := MeshInstance3D.new()
-	helmet.name = "Helmet"
-	helmet.mesh = SphereMesh.new()
-	upper.add_child(helmet)
-
-	SkaterMeshBuilder.apply(upper, lower)
-
-	assert_true(torso.mesh is ArrayMesh, "torso primitive should be swapped")
-	assert_true(helmet.mesh is ArrayMesh, "helmet primitive should be swapped")
-	assert_eq((torso.mesh as ArrayMesh).surface_get_material(0), default_mat,
-			"the scene default material should ride the swapped mesh")
-
-
 func _signed_volume(mesh: ArrayMesh) -> float:
 	var arrays: Array = mesh.surface_get_arrays(0)
 	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
@@ -225,3 +194,46 @@ func _signed_volume(mesh: ArrayMesh) -> float:
 	for i in range(0, verts.size(), 3):
 		total += verts[i].dot(verts[i + 1].cross(verts[i + 2])) / 6.0
 	return total
+
+
+# The upper-body and leg rigs are only exact replacements for the nodes they replaced
+# because every vertex is RIGID — weight 1.0 on one bone, nothing on the other
+# three. Blended weights would make a bone pose an approximation of the node
+# transform it stands in for, and the pose diff would start reporting drift with
+# no obvious cause. Cheap to check here, invisible in a render.
+func test_skinned_rigs_are_rigidly_weighted() -> void:
+	var rigs: Array = [
+		["upper", SkaterMeshBuilder.shared_upper_skin_mesh(),
+				SkaterMeshBuilder.UPPER_SURFACE_COUNT, SkaterMeshBuilder.UPPER_BONE_COUNT],
+		["leg", SkaterMeshBuilder.shared_leg_skin_mesh(),
+				SkaterMeshBuilder.LEG_SURFACE_COUNT, SkaterMeshBuilder.LEG_BONE_COUNT],
+	]
+	for rig: Array in rigs:
+		var label: String = rig[0]
+		var mesh: ArrayMesh = rig[1]
+		assert_eq(mesh.get_surface_count(), int(rig[2]),
+				"%s rig surface count must match its enum" % label)
+		for surface: int in mesh.get_surface_count():
+			var arrays: Array = mesh.surface_get_arrays(surface)
+			var bones: PackedInt32Array = arrays[Mesh.ARRAY_BONES]
+			var weights: PackedFloat32Array = arrays[Mesh.ARRAY_WEIGHTS]
+			var verts: int = (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+			assert_eq(bones.size(), verts * 4,
+					"%s surface %d needs four bone influences per vertex" % [label, surface])
+			var bone: int = bones[0]
+			assert_between(bone, 0, int(rig[3]) - 1,
+					"%s surface %d bone index in range" % [label, surface])
+			var uniform_bone: bool = true
+			var rigid: bool = true
+			for v: int in verts:
+				if bones[v * 4] != bone:
+					uniform_bone = false
+				if not is_equal_approx(weights[v * 4], 1.0) \
+						or weights[v * 4 + 1] != 0.0 \
+						or weights[v * 4 + 2] != 0.0 \
+						or weights[v * 4 + 3] != 0.0:
+					rigid = false
+			assert_true(uniform_bone,
+					"%s surface %d must ride ONE bone" % [label, surface])
+			assert_true(rigid,
+					"%s surface %d must be weight 1.0 on that bone alone" % [label, surface])

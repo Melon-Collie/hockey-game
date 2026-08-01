@@ -59,6 +59,48 @@ var _dot: Label
 var _fps_label: Label
 var _dot_timer: float = 0.0
 const DOT_REFRESH_SECONDS: float = 0.5
+# Panel text rebuild rate. Rebuilding ~40 BBCode lines every frame cost ~1.25 ms
+# on a 5v5 frame — the overlay was a measurable slice of the very frame it exists
+# to measure, and it inflated the main-thread residual by its own cost. Nothing
+# on the panel needs frame cadence: telemetry refreshes at 1 Hz, the frame-cost
+# EMAs are smoothed over ~0.3 s, and the peak monitors publish at 1 Hz. Sampling
+# still runs every frame — only the string building is throttled.
+const PANEL_REFRESH_SECONDS: float = 0.15
+var _panel_timer: float = 0.0
+
+# Frame-cost measurement (the "what is capping my FPS?" section). Splitting the
+# frame into GPU / render-thread CPU / script time is the only way to tell a
+# fill-rate problem from a draw-call problem from a per-tick simulation
+# regression — they all present identically as "FPS dropped".
+#
+# viewport_set_measure_render_time inserts GPU timestamp queries around the
+# viewport's passes, which is not free, so it is armed only while the F3 panel
+# is open and disarmed on close (and on exit). The measured numbers cover the
+# ROOT viewport; SubViewports (ice scratch map, jersey decals, jumbotron) are
+# measured separately by the engine and are NOT included here — their cost
+# still shows in the draw-call and primitive counts, which are engine-wide.
+var _vp_rid: RID
+var _measuring: bool = false
+# Exponential moving averages — raw per-frame GPU/CPU times are far too noisy to
+# read off a screen. The time constant is a readability choice: fast enough that
+# toggling a video option shows its effect within a beat, slow enough that the
+# digits hold still.
+const FRAME_COST_EMA_TAU: float = 0.30
+var _ema_gpu_ms: float = 0.0
+var _ema_cpu_render_ms: float = 0.0
+var _ema_frame_ms: float = 0.0
+# Performance.TIME_PROCESS / TIME_PHYSICS_PROCESS are NOT per-frame averages and
+# must not be smoothed or compared against the EMAs above. The engine publishes
+# them once per second, holding one value for that whole second, and the value is
+# the MAXIMUM single step observed in it (Main::iteration's process_max /
+# physics_process_max). Verified against 4.6.2: the monitor reads identically on
+# every frame for ~1 s, then jumps. Smoothing a held 1 Hz value just reproduces
+# the value; ranking a worst-case step against mean per-frame render times says
+# nothing. They are read raw and reported as what they are — peaks.
+# Main-thread cost is instead derived as the frame's unexplained residual, which
+# IS a true per-frame number on the same footing as the render terms.
+var _peak_process_ms: float = 0.0
+var _peak_physics_ms: float = 0.0
 
 # Built fresh each frame: collected metric lines + the worst health seen, which
 # rolls up into the header verdict.
@@ -67,6 +109,7 @@ var _worst: Health = Health.OK
 
 func _ready() -> void:
 	layer = 100
+	_vp_rid = get_viewport().get_viewport_rid()
 	_panel = PanelContainer.new()
 	_panel.anchor_left = 1.0
 	_panel.anchor_right = 1.0
@@ -150,12 +193,29 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.keycode == KEY_F3:
 		_showing = not _showing
 		_panel.visible = _showing
+		_set_measuring(_showing)
 	elif event.keycode == KEY_F4:
 		_log_felt_lag()
 	elif event.keycode == KEY_C and _showing:
 		# Only while the F3 panel is open, so a bare C keypress in gameplay
 		# never gets swallowed here.
 		_copy_session_digest()
+	elif event.keycode == KEY_F6 and _showing:
+		# Panel-open gated like C: freezing the cosmetic rig makes the game look
+		# broken, so it must not be one stray keypress away during normal play.
+		# Available in exported builds too — a debug build inflates GDScript
+		# specifically, so the honest version of this measurement is a release one.
+		PerfProbe.auto_cycle = false
+		_toast.text = "Cosmetic freeze: %s" % PerfProbe.cycle()
+		_toast.show()
+		_toast_timer = TOAST_SECONDS
+	elif event.keycode == KEY_F7 and _showing:
+		var on: bool = not PerfProbe.auto_cycle
+		PerfProbe.set_auto_cycle(on)
+		_toast.text = ("Freeze sweep RUNNING — play normally for ~2 min"
+				if on else "Freeze sweep stopped")
+		_toast.show()
+		_toast_timer = TOAST_SECONDS
 
 # A tester pressing F4 flags "this felt laggy right now." We snapshot the most
 # diagnostic LIVE values and append a marker to the session summary so the
@@ -201,6 +261,38 @@ func _copy_session_digest() -> void:
 		"role": "host" if NetworkManager.is_host else "client",
 		"net_sim_active": NetworkSimManager.enabled,
 		"game_id": GameManager.get_game_id(),
+		# Local frame cost rides along so a pasted digest can answer "GPU or CPU?"
+		# on its own. Live EMAs, not session aggregates — the digest is copied from
+		# the open panel, so they describe the moment the tester chose to capture.
+		# Skater count makes the digest self-describing about roster size, which
+		# every per-actor cost scales with.
+		"frame_cost": {
+			# Explicit rather than inferred from game_version's "dev" convention:
+			# every absolute number below means something different in a debug
+			# build, and a pasted digest has to carry that on its face.
+			"debug_build": OS.is_debug_build(),
+			# Which cosmetic work was suppressed while these numbers were taken.
+			# Anything but "off" means this digest is one half of an A/B, not a
+			# measurement of the real game.
+			"cosmetic_freeze": PerfProbe.mode_name(),
+			"skaters": get_tree().get_nodes_in_group("skaters").size(),
+			"frame_ms": _ema_frame_ms,
+			"gpu_ms": _ema_gpu_ms,
+			"cpu_render_ms": _ema_cpu_render_ms,
+			"main_thread_ms": _main_thread_ms(_ema_frame_ms),
+			# Named "peak" deliberately: these are the engine's worst single step
+			# in the last second, not per-frame averages like the three above.
+			"peak_process_ms": _peak_process_ms,
+			"peak_physics_ms": _peak_physics_ms,
+			"draw_calls": int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
+			"objects": int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)),
+			"primitives": int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)),
+			"nodes": int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)),
+			"physics_active_objects": int(Performance.get_monitor(Performance.PHYSICS_3D_ACTIVE_OBJECTS)),
+		},
+		# The whole freeze A/B, so one paste carries the comparison instead of
+		# five separate captures that each measured a different moment.
+		"freeze_sweep": _freeze_sweep_dict(),
 		"metrics": t.session.to_dict(),
 	}
 	DisplayServer.clipboard_set(JSON.stringify(digest, "\t"))
@@ -220,16 +312,73 @@ func _process(delta: float) -> void:
 		_fps_label.visible = fps_on
 	if fps_on:
 		_fps_label.text = "FPS: %d" % Engine.get_frames_per_second()
-	# Panel open: rebuild every frame. Panel closed: still evaluate the verdict
-	# (for the always-on dot) but only on a throttle, since the full-text build
-	# isn't needed and telemetry only changes at 1 Hz.
+	# Both paths are throttled, for different reasons: open, so the overlay isn't
+	# a measurable slice of the frame it reports (see PANEL_REFRESH_SECONDS);
+	# closed, because only the dot's verdict is needed and telemetry moves at 1 Hz.
 	if _showing:
-		_refresh()
+		_sample_frame_cost(delta)
+		_panel_timer -= delta
+		if _panel_timer <= 0.0:
+			_panel_timer = PANEL_REFRESH_SECONDS
+			_refresh()
 	else:
 		_dot_timer -= delta
 		if _dot_timer <= 0.0:
 			_dot_timer = DOT_REFRESH_SECONDS
 			_refresh()
+
+# GPU timestamp queries cost something to collect, so the measurement only runs
+# while someone is looking at the panel.
+func _set_measuring(on: bool) -> void:
+	if on == _measuring or not _vp_rid.is_valid():
+		return
+	_measuring = on
+	RenderingServer.viewport_set_measure_render_time(_vp_rid, on)
+	if not on:
+		return
+	# Start each arming from a clean slate — stale averages from the last time
+	# the panel was open would blend into the first seconds of the new reading.
+	_ema_gpu_ms = 0.0
+	_ema_cpu_render_ms = 0.0
+	_ema_frame_ms = 0.0
+	_peak_process_ms = 0.0
+	_peak_physics_ms = 0.0
+
+
+func _exit_tree() -> void:
+	_set_measuring(false)
+	# The freeze switches are static, so they outlive this scene — a freeze left
+	# latched at match teardown would silently cripple the next session's visuals
+	# and its numbers. The tool that arms it disarms it.
+	PerfProbe.reset()
+
+
+func _sample_frame_cost(delta: float) -> void:
+	if not _measuring:
+		return
+	# Frame-rate-independent EMA: a fixed per-frame weight would smooth over a
+	# different real duration at 60 fps than at 240.
+	var a: float = 1.0 - exp(-delta / FRAME_COST_EMA_TAU)
+	_ema_gpu_ms = lerpf(_ema_gpu_ms,
+			RenderingServer.viewport_get_measured_render_time_gpu(_vp_rid), a)
+	_ema_cpu_render_ms = lerpf(_ema_cpu_render_ms,
+			RenderingServer.viewport_get_measured_render_time_cpu(_vp_rid), a)
+	_ema_frame_ms = lerpf(_ema_frame_ms, delta * 1000.0, a)
+	# Raw, unsmoothed — already 1 Hz aggregates (see the field doc-block).
+	_peak_process_ms = float(Performance.get_monitor(Performance.TIME_PROCESS)) * 1000.0
+	_peak_physics_ms = float(Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS)) * 1000.0
+
+	# Feed the freeze sweep from RAW per-frame values, not the EMAs above: the
+	# sweep's own per-mode mean is the smoothing, and pre-smoothed input would
+	# carry cost across a mode switch — blurring the difference it exists to find.
+	PerfProbe.tick(delta)
+	var raw_frame_ms: float = delta * 1000.0
+	var raw_gpu_ms: float = RenderingServer.viewport_get_measured_render_time_gpu(_vp_rid)
+	var raw_render_ms: float = maxf(raw_gpu_ms,
+			RenderingServer.viewport_get_measured_render_time_cpu(_vp_rid))
+	PerfProbe.record(raw_frame_ms, maxf(raw_frame_ms - raw_render_ms, 0.0), raw_gpu_ms,
+			int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)))
+
 
 func _refresh() -> void:
 	_lines.clear()
@@ -255,6 +404,9 @@ func _refresh() -> void:
 	else:
 		role = "CLIENT"
 		_render_client(t)
+
+	if _showing:
+		_render_frame_cost()
 
 	# Verdict is known once all lines are collected; drive the always-on dot.
 	# Hide it while the F3 panel is open — they share the top-right corner and the
@@ -338,10 +490,6 @@ func _render_client(t: NetworkTelemetry) -> void:
 
 	_info("Bandwidth", "%.1f KB/s down" % (t.bytes_received_per_sec / 1024.0),
 		"game data received per second (payload only, excludes Steam framing)")
-	# The always-on FPS readout hides while this panel owns the corner, so carry
-	# the number here (host/solo already get it via _frame_health).
-	_info("Render FPS", "%d" % int(Engine.get_frames_per_second()),
-		"your draw rate; server tick health is host-side")
 
 	_render_watch(t)
 
@@ -394,7 +542,9 @@ func _render_solo(t: NetworkTelemetry) -> void:
 # frames (steps run inside the main loop), so its percentiles read high even when the
 # sim is perfectly real-time — at >tick-rate FPS the gap alternates 1-2 frames. So we
 # report what actually matters: the effective rate (mean gap → Hz; "are we keeping
-# real-time?"), the worst stall (max gap), and render FPS for context.
+# real-time?") and the worst stall (max gap). What this pair CANNOT tell you is how
+# EXPENSIVE the sim is: a tick that eats most of the frame budget still reports a
+# perfect rate right up until it overruns. "Frame cost → Script" is that number.
 func _frame_health(t: NetworkTelemetry) -> void:
 	if t.host_effective_tick_hz <= 0.0:
 		return
@@ -406,11 +556,220 @@ func _frame_health(t: NetworkTelemetry) -> void:
 	elif ratio < 0.97:
 		sim_h = Health.WARN
 	_metric(sim_h, "Sim rate", "%.0f Hz (target %d)" % [t.host_effective_tick_hz, target_hz],
-		"physics keeping real-time; well below target = host overloaded, sim runs slow-motion")
-	_info("Render FPS", "%d" % int(Engine.get_frames_per_second()),
-		"your draw rate; physics ticks land on render frames, so a tick spacing of 1-2 frames is normal")
+		"physics keeping real-time; well below target = host overloaded, sim runs slow-motion. Says nothing about tick COST — see Frame cost → Script")
 	_metric(_band(t.host_physics_tick_max_ms, 33.0, 66.0), "Worst stall", "%.0f ms" % t.host_physics_tick_max_ms,
-		"longest pause between ticks in the last second; under ~33ms is fine, a big spike = a hitch everyone feels")
+		"longest pause between ticks in the last second; ticks land on render frames so 1-2 frames' spacing is normal, but a big spike = a hitch everyone feels")
+
+# Local frame cost — the answer to "why is my FPS down?", which the network
+# metrics above cannot give. Three costs can independently cap the frame rate and
+# they present identically as lost FPS:
+#   • GPU        — pixels and shading. Moves with resolution, MSAA, shadow map
+#                  count, transparent overdraw, post-processing.
+#   • CPU render — the render thread turning the visible scene into draw
+#                  commands. Moves with the NUMBER of visible mesh instances,
+#                  not their size, and every shadow-casting light re-submits the
+#                  casters in its range. A hundred small MeshInstance3Ds cost
+#                  here, not on the GPU.
+#   • Script     — _process + _physics_process on the main thread. At a 120 Hz
+#                  sim, roughly one physics tick runs inside every rendered
+#                  frame, so per-tick work is charged straight to frame time.
+#                  Note this stays invisible to "Sim rate": the sim can hold a
+#                  perfect 120 Hz while still eating half the frame budget.
+# Verdict-neutral throughout (_context / _info) — the header verdict is about the
+# NETWORK, and a GPU-bound frame is not a network problem.
+func _render_frame_cost() -> void:
+	_section("Frame cost (your machine)")
+	if _ema_frame_ms <= 0.0:
+		_info("Measuring", "…", "sampling starts when this panel opens; give it a second")
+		return
+	var frame_ms: float = _ema_frame_ms
+	var main_ms: float = _main_thread_ms(frame_ms)
+	_info("Frame", "%.2f ms (%.0f fps)" % [frame_ms, 1000.0 / maxf(frame_ms, 0.001)],
+		"wall-clock per rendered frame; the three costs below run CONCURRENTLY (the GPU and render thread trail the main thread by a frame), so the frame is set by the largest, not their sum")
+	_context(_band(_frac(_ema_gpu_ms, frame_ms), 0.60, 0.85), "GPU",
+		"%.2f ms (%.0f%% of frame)" % [_ema_gpu_ms, _frac(_ema_gpu_ms, frame_ms) * 100.0],
+		"drawing cost — resolution, MSAA, shadow maps, transparent overdraw, post FX")
+	_context(_band(_frac(_ema_cpu_render_ms, frame_ms), 0.60, 0.85), "CPU render",
+		"%.2f ms (%.0f%% of frame)" % [_ema_cpu_render_ms, _frac(_ema_cpu_render_ms, frame_ms) * 100.0],
+		"render thread building draw commands; scales with the draw-call count below, not with pixels")
+	_context(_band(_frac(main_ms, frame_ms), 0.60, 0.85), "Main thread",
+		"%.2f ms (%.0f%% of frame)" % [main_ms, _frac(main_ms, frame_ms) * 100.0],
+		"the frame MINUS the render terms — your _process/_physics_process, Jolt, and engine work. Not measured directly: it is what neither the GPU nor the render thread accounts for, so an idle wait on vsync lands here too (the verdict rules that out first)")
+	_info("Peak step (last 1 s)", "process %.2f ms · physics %.2f ms" % [_peak_process_ms, _peak_physics_ms],
+		"engine's WORST single step in the last second, not an average — a peak above the frame budget is a hitch you feel, but it does not mean the typical step costs this")
+	_info("Scene", "%d draws · %d objects · %.1f M prims" % [
+			int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
+			int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)),
+			Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME) / 1_000_000.0],
+		"what the frame submits, engine-wide (includes shadow passes and every SubViewport); draw calls are the CPU render driver")
+	# Jolt's own load. Skaters integrate analytically (CharacterBody3D, no
+	# move_and_slide) and the puck is custom-integrated, so nothing should be
+	# under simulation — active bodies above ~0 means a body slipped back into
+	# the solver, and the number separates "the physics SERVER is expensive" from
+	# "our _physics_process is expensive", which the frame residual cannot.
+	_info("Physics 3D", "%d active · %d pairs · %d islands" % [
+			int(Performance.get_monitor(Performance.PHYSICS_3D_ACTIVE_OBJECTS)),
+			int(Performance.get_monitor(Performance.PHYSICS_3D_COLLISION_PAIRS)),
+			int(Performance.get_monitor(Performance.PHYSICS_3D_ISLAND_COUNT))],
+		"bodies Jolt is actually simulating; expected ~0 here — everything is analytic, so a nonzero count is a regression, not a cost centre")
+	_info("Skaters on ice", "%d · %d nodes in tree" % [
+			get_tree().get_nodes_in_group("skaters").size(),
+			int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT))],
+		"3v3 is 6, 5v5 is 10. Node count matters on its own: every per-frame transform write crosses the script/engine boundary and dirties the chain, so it drives main-thread cost the same way it drives draw calls")
+	_info("Bound by", _frame_bound_verdict(frame_ms, main_ms),
+		"the cost that is actually capping the frame rate — optimize this one, the others are free wins on paper only")
+	_render_freeze_sweep()
+
+
+# The cosmetic-freeze A/B. Everything here is a MEAN over many frames per mode,
+# collected while auto-cycle interleaves the modes — see perf_probe.gd for why
+# the obvious protocol (hold one mode, take a reading, move on) measures the
+# moment instead of the mode and produced a self-contradicting result.
+func _render_freeze_sweep() -> void:
+	if PerfProbe.mode != PerfProbe.Mode.NONE and not PerfProbe.auto_cycle:
+		_lines.append("[color=#%s]%s Cosmetic freeze: %s[/color]  [color=#%s](held manually — the frame above is NOT shippable. F7 runs the proper interleaved sweep)[/color]" % [
+			COL_BAD, DOT, PerfProbe.mode_name(), COL_DIM])
+		return
+	if not PerfProbe.auto_cycle and PerfProbe.sample_count(PerfProbe.Mode.NONE) == 0:
+		_lines.append("[color=#%s]· F7 runs the cosmetic-freeze sweep (rig / HUD / VFX priced against each other) · F6 steps one mode by hand[/color]" % COL_DIM)
+		return
+
+	_section("Cosmetic freeze sweep (mean per mode)")
+	# The GPU column covers the ROOT viewport only — SubViewports carry their own
+	# RID and are timed separately, so the ice scratch map's render cost is
+	# invisible there and falls into the residual instead. A large SCRATCH saving
+	# in the main column therefore does NOT prove the saving was CPU work; it may
+	# be that 5.6 MP repaint. Every other mode is genuinely main-thread.
+	if PerfProbe.sample_count(PerfProbe.Mode.SCRATCH) > 0:
+		_lines.append("[color=#%s]· SCRATCH's saving lands in the main column whether it was CPU or GPU — its SubViewport is outside the root viewport's GPU timer[/color]" % COL_DIM)
+	if PerfProbe.auto_cycle:
+		_lines.append("[color=#%s]%s Sweep RUNNING — now: %s. Play normally; every mode needs %d rotations.[/color]" % [
+			COL_WARN, DOT, PerfProbe.mode_name(), PerfProbe.MIN_ROTATIONS_PER_MODE])
+	# n is ROTATIONS, not frames — one 1 s window is one observation, and the ±
+	# is the spread across those windows. A gap smaller than the error bars is
+	# not a result no matter how many frames fed it.
+	var base_main: float = PerfProbe.rotation_mean_main_ms(PerfProbe.Mode.NONE)
+	for m: int in PerfProbe.MODE_COUNT:
+		var k: int = PerfProbe.rotations(m)
+		if k == 0:
+			continue
+		var se: float = PerfProbe.rotation_stderr_main_ms(m)
+		var se_txt: String = "±%.2f" % se if is_finite(se) else "±?"
+		var delta_txt: String = ""
+		if m != PerfProbe.Mode.NONE and PerfProbe.rotations(PerfProbe.Mode.NONE) > 0:
+			var diff: float = PerfProbe.rotation_mean_main_ms(m) - base_main
+			var resolved: bool = PerfProbe.difference_resolved(m, PerfProbe.Mode.NONE)
+			delta_txt = "  [color=#%s]%+.2f ms%s[/color]" % [
+				COL_OK if resolved else COL_DIM, diff, "" if resolved else " (in the noise)"]
+		_lines.append("[color=#%s]·[/color] %-15s [color=#%s]%.2f %s main · %.2f frame · %.0f draws[/color]%s [color=#%s](%d rot)[/color]" % [
+			COL_DIM, PerfProbe.MODE_NAMES[m], COL_VAL,
+			PerfProbe.rotation_mean_main_ms(m), se_txt,
+			PerfProbe.mean_frame_ms(m), PerfProbe.mean_draws(m), delta_txt, COL_DIM, k])
+	if not PerfProbe.comparison_ready():
+		_lines.append("[color=#%s]%s Not enough frames yet — differences this early are noise, not findings.[/color]" % [
+			COL_WARN, DOT])
+	# Two self-checks the reader would otherwise have to run by eye. Draw-call
+	# spread says whether the modes actually saw comparable scenes — if the
+	# camera showed one mode a scrum and another an empty end, the timings are
+	# not comparable no matter how many frames were collected. Additivity says
+	# whether the parts explain the whole: the freezes are independent, so the
+	# single-system savings must sum to ALL's. When they do, the split is real.
+	if PerfProbe.sample_count(PerfProbe.Mode.NONE) > 0:
+		var lo: float = PerfProbe.mean_draws(PerfProbe.Mode.NONE)
+		var hi: float = lo
+		for m: int in PerfProbe.MODE_COUNT:
+			if PerfProbe.sample_count(m) == 0:
+				continue
+			lo = minf(lo, PerfProbe.mean_draws(m))
+			hi = maxf(hi, PerfProbe.mean_draws(m))
+		var spread: float = (hi - lo) / maxf(lo, 1.0)
+		_info("Scene spread", "%.0f%% draw-call range" % (spread * 100.0),
+			"how much the scene varied across modes. Expect this to stay HIGH and don't chase it — the camera follows the play, so there is no steady state to sample. Interleaving handles that: it makes the variance unbiased, not absent. Context only")
+		var parts: float = 0.0
+		for m: int in [PerfProbe.Mode.RIG, PerfProbe.Mode.HUD, PerfProbe.Mode.VFX,
+				PerfProbe.Mode.SCRATCH]:
+			parts += base_main - PerfProbe.rotation_mean_main_ms(m)
+		var whole: float = base_main - PerfProbe.rotation_mean_main_ms(PerfProbe.Mode.ALL)
+		# The real validity test, and the only one that survives a scene which
+		# never repeats: the freezes are independent, so their savings must sum
+		# to ALL's. Scene bias would break that; scene VARIANCE does not.
+		var gap: float = absf(parts - whole)
+		_context(_band(gap / maxf(whole, 0.01), 0.10, 0.25), "Adds up",
+			"parts %.2f ms vs ALL %.2f ms" % [parts, whole],
+			"THE validity check — independent freezes must sum. Agreement means the split is a real decomposition; disagreement means the run is still noise")
+	# A debug build does NOT bias the three terms equally, so the split is
+	# readable but the verdict can be wrong. GDScript carries debug
+	# instrumentation (Script reads high), and an editor run shares the machine
+	# with the editor process (everything reads high). The counts below Frame are
+	# scene composition and are exact in any build — as is the DIFFERENCE between
+	# two runs of the same build, which is why a 3v3-vs-5v5 A/B is trustworthy
+	# here even when the absolute numbers are not.
+	if OS.is_debug_build():
+		_lines.append("[color=#%s]%s[/color] [color=#%s]Debug build — Script is inflated by GDScript debug instrumentation and the editor shares the machine. Draw/object counts are exact; compare runs, not absolutes.[/color]" % [
+			COL_WARN, DOT, COL_DIM])
+
+
+# Main-thread cost, derived rather than measured: the part of the frame that
+# neither the GPU nor the render thread explains. The three run concurrently
+# (Godot's render thread and the GPU each trail the main thread by a frame), so
+# the frame length is set by the LARGEST of them, not their sum — which makes
+# `frame - max(render terms)` a sound lower bound on what the main thread cost.
+# It is a lower bound, not an exact figure: when the frame rate is capped, the
+# idle wait is charged here too, which is why the verdict rules the cap out
+# before naming this.
+func _main_thread_ms(frame_ms: float) -> float:
+	return maxf(frame_ms - maxf(_ema_gpu_ms, _ema_cpu_render_ms), 0.0)
+
+
+# Names the cost that owns the frame. Order matters: a capped frame rate inflates
+# the main-thread residual with pure idle wait, so the cap has to be ruled out
+# before any cost is blamed, or every vsynced session reads as main-thread bound.
+func _frame_bound_verdict(frame_ms: float, main_ms: float) -> String:
+	var fps: float = 1000.0 / maxf(frame_ms, 0.001)
+	if Engine.max_fps > 0 and fps >= float(Engine.max_fps) * 0.95:
+		return "nothing — sitting at the %d fps cap, so these costs are upper bounds" % Engine.max_fps
+	var refresh: float = DisplayServer.screen_get_refresh_rate()
+	if DisplayServer.window_get_vsync_mode() != DisplayServer.VSYNC_DISABLED \
+			and refresh > 0.0 and fps >= refresh * 0.95:
+		return "nothing — sitting at the display's %.0f Hz vsync ceiling, so these costs are upper bounds" % refresh
+	if main_ms >= maxf(_ema_gpu_ms, _ema_cpu_render_ms):
+		return "Main thread — script + Jolt + engine, NOT rendering; graphics settings cannot help this"
+	if _ema_gpu_ms >= _ema_cpu_render_ms:
+		return "GPU — cut resolution / MSAA / shadow-casting lights / transparent overdraw"
+	return "CPU render — cut VISIBLE MESH COUNT (draws), not polygons; shadow-casting lights multiply it"
+
+
+func _frac(part: float, whole: float) -> float:
+	return part / maxf(whole, 0.001)
+
+
+# Per-mode means for the digest. `ready` states outright whether the sample
+# counts justify reading a difference off these numbers, so a pasted digest
+# can't be over-read the way the first hand-run sweep was.
+func _freeze_sweep_dict() -> Dictionary:
+	var modes: Dictionary = {}
+	for m: int in PerfProbe.MODE_COUNT:
+		if PerfProbe.sample_count(m) == 0:
+			continue
+		var se: float = PerfProbe.rotation_stderr_main_ms(m)
+		modes[PerfProbe.MODE_NAMES[m]] = {
+			# Rotations are the sample size; frames are along for context only.
+			"rotations": PerfProbe.rotations(m),
+			"frames": PerfProbe.sample_count(m),
+			"main_thread_ms": PerfProbe.rotation_mean_main_ms(m),
+			"main_thread_stderr_ms": se if is_finite(se) else -1.0,
+			"resolved_vs_off": PerfProbe.difference_resolved(m, PerfProbe.Mode.NONE),
+			"frame_ms": PerfProbe.mean_frame_ms(m),
+			"gpu_ms": PerfProbe.mean_gpu_ms(m),
+			"draw_calls": PerfProbe.mean_draws(m),
+		}
+	return {
+		"running": PerfProbe.auto_cycle,
+		"ready": PerfProbe.comparison_ready(),
+		"min_rotations_per_mode": PerfProbe.MIN_ROTATIONS_PER_MODE,
+		"modes": modes,
+	}
+
 
 # Watch metrics: shown only when they leave the healthy band, so the client view
 # stays quiet until something is actually wrong. When all clear, one calm line.
