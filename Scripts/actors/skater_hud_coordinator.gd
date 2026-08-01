@@ -104,12 +104,21 @@ var _stamina_visible: bool = false
 var _stamina_fill: float = 1.0
 var _stamina_color: Color = Color.WHITE
 
-# Overhead self-beacon. `_self_beacon` is top_level (world transform rewritten
+# Overhead self-beacon. LAZY — null until the ring-relation resolver reports
+# SELF, and freed again if it stops (see _apply_self_beacon_relation), so exactly
+# one exists in the scene rather than one per skater. It was built eagerly in
+# setup(), which put three nodes and two materials on all ten skaters at 5v5 so
+# that ONE could show a marker; with Self Marker DISABLED it was thirty nodes for
+# nothing. Same idiom as the ping bubble below, and the same reasoning that moved
+# the flat-on-ice chrome into the shader — this one just cannot go there, because
+# it floats above the head.
+#
+# `_self_beacon` is top_level (world transform rewritten
 # each tick, like the name label) and parents an outline + fill MeshInstance.
 # `_self_beacon_active` latches whether the resolver currently reports SELF;
 # actual visibility also gates on ghost/replay/spectator state.
-var _self_beacon: Node3D
-var _self_beacon_fill_mat: StandardMaterial3D
+var _self_beacon: Node3D = null
+var _self_beacon_fill_mat: StandardMaterial3D = null
 var _self_beacon_active: bool = false
 # Crowd-gate state. `_beacon_crowded` is the latched "enough skaters nearby"
 # result; `_beacon_linger_timer` holds it on briefly after the crowd clears.
@@ -189,34 +198,6 @@ func setup(skater: Skater) -> void:
 	_skater = skater
 
 
-	# Overhead self-beacon. Built once and hidden until the ring-relation
-	# resolver reports SELF. top_level so its world transform is rewritten each
-	# tick independent of the skater's body rotation (mirrors the name label).
-	# Outline (larger, dark) draws behind the bright fill via render_priority;
-	# both are no-depth-test so the marker stays readable through a scrum.
-	_self_beacon = Node3D.new()
-	_self_beacon.name = "SelfBeacon"
-	_self_beacon.top_level = true
-	_self_beacon.visible = false
-	_skater.add_child(_self_beacon)
-
-	var beacon_outline := MeshInstance3D.new()
-	beacon_outline.name = "Outline"
-	beacon_outline.mesh = _create_beacon_mesh(
-			_BEACON_HALF_W * _BEACON_OUTLINE_SCALE, _BEACON_HALF_H * _BEACON_OUTLINE_SCALE)
-	beacon_outline.material_override = _make_beacon_material(_BEACON_OUTLINE_COLOR, 0)
-	_self_beacon.add_child(beacon_outline)
-
-	# Fill shares the local player's self ring color (kept in sync live by
-	# _apply_self_beacon_relation); seed it from the picked color here.
-	var self_col: Color = PlayerPrefs.ring_color_self
-	_self_beacon_fill_mat = _make_beacon_material(
-			Color(self_col.r, self_col.g, self_col.b, _BEACON_OPACITY), 1)
-	var beacon_fill := MeshInstance3D.new()
-	beacon_fill.name = "Fill"
-	beacon_fill.mesh = _create_beacon_mesh(_BEACON_HALF_W, _BEACON_HALF_H)
-	beacon_fill.material_override = _self_beacon_fill_mat
-	_self_beacon.add_child(beacon_fill)
 
 
 
@@ -453,6 +434,15 @@ func _refresh_ring_color() -> void:
 # spectator hiding gates it.
 func _apply_self_beacon_relation(relation: int) -> void:
 	_self_beacon_active = (relation == RingRelation.SELF)
+	if _self_beacon_active:
+		_ensure_self_beacon()
+	elif _self_beacon != null:
+		# Stopped being the local player's skater — a slot swap or a spectator
+		# takeover. Drop it so the invariant stays "at most one in the scene";
+		# rebuilding on the next latch is a swap-time cost, not a per-frame one.
+		_self_beacon.queue_free()
+		_self_beacon = null
+		_self_beacon_fill_mat = null
 	if _self_beacon_active and _self_beacon_fill_mat != null:
 		var col: Color = _ring_color_for_relation(RingRelation.SELF)
 		_self_beacon_fill_mat.albedo_color = Color(col.r, col.g, col.b, _BEACON_OPACITY)
@@ -478,6 +468,37 @@ func _update_beacon_visibility() -> void:
 			and gate
 			and not _hidden_for_replay
 			and not _force_world_hud_hidden)
+
+
+# Builds the beacon on first SELF latch. Outline (larger, dark) draws behind the
+# bright fill via render_priority; both are no-depth-test so the marker stays
+# readable through a scrum.
+func _ensure_self_beacon() -> void:
+	if _self_beacon != null:
+		return
+	_self_beacon = Node3D.new()
+	_self_beacon.name = "SelfBeacon"
+	_self_beacon.top_level = true
+	_self_beacon.visible = false
+	_skater.add_child(_self_beacon)
+
+	var beacon_outline := MeshInstance3D.new()
+	beacon_outline.name = "Outline"
+	beacon_outline.mesh = _create_beacon_mesh(
+			_BEACON_HALF_W * _BEACON_OUTLINE_SCALE, _BEACON_HALF_H * _BEACON_OUTLINE_SCALE)
+	beacon_outline.material_override = _make_beacon_material(_BEACON_OUTLINE_COLOR, 0)
+	_self_beacon.add_child(beacon_outline)
+
+	# Fill shares the local player's self ring color (kept in sync live by
+	# _apply_self_beacon_relation); seed it from the picked color here.
+	var self_col: Color = PlayerPrefs.ring_color_self
+	_self_beacon_fill_mat = _make_beacon_material(
+			Color(self_col.r, self_col.g, self_col.b, _BEACON_OPACITY), 1)
+	var beacon_fill := MeshInstance3D.new()
+	beacon_fill.name = "Fill"
+	beacon_fill.mesh = _create_beacon_mesh(_BEACON_HALF_W, _BEACON_HALF_H)
+	beacon_fill.material_override = _self_beacon_fill_mat
+	_self_beacon.add_child(beacon_fill)
 
 
 # Coarse-interval proximity scan + linger timer that drives _beacon_crowded.
