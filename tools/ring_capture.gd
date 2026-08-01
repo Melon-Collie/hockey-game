@@ -39,10 +39,13 @@ func _init() -> void:
 	pos[0] = Vector4(-2.0, 0.0, 0.45, 0.39); col[0] = Vector4(1,0.3,0.3,0.85)
 	pos[1] = Vector4(0.5, 0.0, 0.45, 0.39);  col[1] = Vector4(0.3,1,0.4,0.85)
 	pos[2] = Vector4(3.0, 0.0, 0.45, 0.39);  col[2] = Vector4(0.4,0.6,1,0.85)
-	# 1, 2 and 3 stacked chevrons, apex offset to the side of each ring.
-	chev[0] = Vector4(-2.0, 0.55, 1.0, 0.0)
-	chev[1] = Vector4(0.5, 0.55, 2.0, 0.0)
-	chev[2] = Vector4(3.0, 0.55, 3.0, 0.0)
+	# 1, 2 and 3 stacked chevrons — one per loft rung above flat (LOW/MID/HIGH).
+	# Apexes sit well clear of the rings: the marks stack screen-UP from the
+	# apex, so a 3-stack placed at the game's own chevron radius would put its
+	# second and third marks inside the ring and prove nothing.
+	chev[0] = Vector4(-2.0, 0.95, 1.0, 0.0)
+	chev[1] = Vector4(0.5, 0.95, 2.0, 0.0)
+	chev[2] = Vector4(3.0, 0.95, 3.0, 0.0)
 	m.set_shader_parameter("ring_pos", pos); m.set_shader_parameter("ring_col", col)
 	m.set_shader_parameter("ring_count", 3)
 	m.set_shader_parameter("chevron_pos", chev)

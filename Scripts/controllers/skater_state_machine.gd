@@ -9,7 +9,11 @@ enum State {
 	SLAPPER_CHARGE_WITHOUT_PUCK,
 	FOLLOW_THROUGH,
 	SHOT_BLOCKING,
+	ONE_TIMER_RETENTION,
 }
+# The wire packs shot_state into 3 bits (WorldStateCodec's skater flags byte), so
+# this enum is FULL at 8 values. A ninth state costs a flags-byte repack and a
+# PROTOCOL_VERSION bump.
 
 
 # States in which the skater is handling the puck — carrying, aiming a wrister, or
@@ -24,7 +28,8 @@ static func state_has_puck(state: int) -> bool:
 			or state == State.SLAPPER_CHARGE_WITH_PUCK
 
 # States in which the puck is RIGIDLY PINNED to the carrier's body rather than
-# riding a live, sweeping blade — the two shot wind-ups. WRISTER_AIM freezes the
+# riding a live, sweeping blade — the shot wind-ups plus the one-timer retention
+# hold, which keeps the wind-up's pin while the shaft loads. WRISTER_AIM freezes the
 # blade at its body-local pose (SkaterIKCoordinator.apply_blade_from_mouse under
 # hold_blade, which also carries the smoothed blade along with skater
 # translation); SLAPPER_CHARGE_WITH_PUCK pins to a fixed skater-local offset
@@ -44,7 +49,8 @@ static func state_has_puck(state: int) -> bool:
 # separately — see GoalieController._reading_planted_windup.
 static func state_pins_puck(state: int) -> bool:
 	return state == State.WRISTER_AIM \
-			or state == State.SLAPPER_CHARGE_WITH_PUCK
+			or state == State.SLAPPER_CHARGE_WITH_PUCK \
+			or state == State.ONE_TIMER_RETENTION
 
 # Controller operations injected at setup. All methods that need @export params
 # or actor/puck references stay on SkaterController and are wired as Callables
@@ -66,9 +72,12 @@ class Callbacks:
 	var release_wrister: Callable                 # (input: InputState)
 	var fire_quick_pass: Callable                 # (input: InputState) — instant quick pass
 	var release_slapper: Callable                 # (input: InputState)
-	# puck distance check + ShotMechanics + signal.
-	# Returns { fired: bool, direction: Vector3, follow_through_duration: float }
-	var try_one_timer_release: Callable           # (input: InputState) -> Dictionary
+	# One-timer retention: the swing commits, the shaft loads for one beat, THEN
+	# the shot leaves. `enter` arms the hold timer; `release` fires whichever
+	# one-timer path applies once it expires and returns
+	# { fired: bool, direction: Vector3, follow_through_duration: float }.
+	var enter_one_timer_retention: Callable       # ()
+	var release_retained_one_timer: Callable      # (input: InputState) -> Dictionary
 	# Per-frame updates that need @export params from SkaterController
 	var update_wrister_charge: Callable           # (input: InputState)
 	var update_slapper_charge: Callable           # (delta: float)
@@ -125,6 +134,8 @@ func dispatch(skater: Skater, input: InputState, delta: float, has_puck: bool, i
 			_state_follow_through(skater, input, delta, has_puck, is_movement_locked)
 		State.SHOT_BLOCKING:
 			_state_shot_blocking(skater, input, delta, has_puck, is_movement_locked)
+		State.ONE_TIMER_RETENTION:
+			_state_one_timer_retention(skater, input, delta, has_puck, is_movement_locked)
 
 # ── State handlers ────────────────────────────────────────────────────────────
 
@@ -186,7 +197,12 @@ func _state_slapper_charge_with_puck(_skater: Skater, input: InputState, delta: 
 			_cancel_slapper_internal()
 			return
 		if not input.slap_held:
-			_cb.release_slapper.call(input)
+			# A one-timer does not leave on the button edge: the swing commits
+			# into the retention hold (puck stays pinned, shaft loads) and the
+			# shot fires at the end of it. A plain carried slapshot — no window
+			# armed — still releases immediately below.
+			_cb.enter_one_timer_retention.call()
+			_state = State.ONE_TIMER_RETENTION
 			return
 
 	_cb.update_slapper_charge.call(delta)
@@ -208,22 +224,43 @@ func _state_slapper_charge_without_puck(_skater: Skater, input: InputState, delt
 	_cb.apply_slapper_blade_position.call()
 
 	if not input.slap_held:
-		# Release buffer: check if the puck is close enough to count as a
-		# one-timer even if it hasn't entered the pickup zone yet. This lets
-		# the player release on the beat without having to time it early.
-		var result: Dictionary = _cb.try_one_timer_release.call(input)
-		if result.get("fired", false):
-			shot_dir = result.direction
-		else:
-			# Whiffed one-timer: the swing is already committed — play the
-			# full follow-through through empty air (shot_dir stays zero;
-			# the pose falls back to locked_slapper_dir) instead of the old
-			# instant cancel, which snapped the wind-up away with no swing.
-			shot_dir = Vector3.ZERO
-		follow_through_is_slapper = true
-		_state = State.FOLLOW_THROUGH
-		follow_through_timer = result.get("follow_through_duration", 0.5)
-		follow_through_duration_total = follow_through_timer
+		# The swing commits here but the puck does NOT leave yet — the blade has
+		# to travel down to it. ONE_TIMER_RETENTION holds that beat; the range
+		# check and the shot itself run at the end of it (see
+		# _state_one_timer_retention).
+		_cb.enter_one_timer_retention.call()
+		_state = State.ONE_TIMER_RETENTION
+
+
+# The one-timer's catch-and-load beat. The swing is already committed — no input
+# is read here, not even a cancel — so the ONLY exit is the shot (or its whiff)
+# at the end of the hold. The blade holds its wind-up pose and the shaft loads
+# (Skater._update_stick_flex keys the bow off this state), which is the visible
+# "caught it, now it's loading" read; the plant keeps dragging velocity off so
+# the shooter stays set through the beat.
+#
+# The range check and every downstream consequence (the lag-comped one-timer
+# claim, the host's authoritative fire, the local prediction seed) run at the END
+# of the hold, unchanged — retention shifts WHEN they run, not what they do.
+func _state_one_timer_retention(_skater: Skater, input: InputState, delta: float, has_puck: bool, _is_movement_locked: bool) -> void:
+	_cb.apply_slapper_blade_position.call()
+	if has_puck:
+		_cb.apply_slapper_velocity_drag.call(delta)
+	_aiming.tick_one_timer_retention(delta)
+	if _aiming.one_timer_retention_timer > 0.0:
+		return
+	var result: Dictionary = _cb.release_retained_one_timer.call(input)
+	if result.get("fired", false):
+		shot_dir = result.direction
+	else:
+		# Whiffed one-timer: the swing is already committed — play the full
+		# follow-through through empty air (shot_dir stays zero; the pose falls
+		# back to locked_slapper_dir) rather than snapping the wind-up away.
+		shot_dir = Vector3.ZERO
+	follow_through_is_slapper = true
+	_state = State.FOLLOW_THROUGH
+	follow_through_timer = result.get("follow_through_duration", 0.5)
+	follow_through_duration_total = follow_through_timer
 
 
 func _state_follow_through(_skater: Skater, _input: InputState, delta: float, _has_puck: bool, _is_movement_locked: bool) -> void:

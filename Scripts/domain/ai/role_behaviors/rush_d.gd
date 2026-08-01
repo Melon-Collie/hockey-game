@@ -63,7 +63,21 @@ const GAP_UP_WALL_M: float = 2.0
 # of the ice) so the retreat path steers him toward the boards: take away the
 # middle, give the outside. A defender sitting dead on the retreat line offers
 # both lanes equally, which is how a carrier walks straight into the slot.
-const ANGLE_INSIDE_M: float = 1.1
+#
+# The DEPTH of that shade scales with how far off centre the carrier already is:
+# none at centre ice, full at the end-zone dot lane and beyond. A carrier in the
+# middle has no inside to take away — both lanes are the same lane — so a fixed
+# shade there had to pick a side arbitrarily, and it flipped a full 2×
+# ANGLE_INSIDE_M the instant he crossed x = 0. That discontinuity landed exactly
+# on the mid-lane drive, and with no incumbent hysteresis on this target the
+# stand jumped side to side under a carrier driving straight at the net. Scaling
+# it to zero at centre removes the jump rather than damping it: where the sign is
+# ambiguous the magnitude is nil, so the two sides meet continuously.
+const ANGLE_INSIDE_M: float = 1.5
+# Lateral offset at which the shade reaches full depth — the end-zone dot lane.
+# Inside the dots a carrier is still IN the middle and there is no outside to
+# concede yet; at the dots the inside/outside split is real.
+const ANGLE_INSIDE_FULL_X_M: float = GameRules.END_ZONE_FACEOFF_DOT_X
 
 # ── Odd-man lane fan (moved from AIRoleContain, unchanged in substance) ──────
 const RUSH_LANE_FAN_FRACTIONS: Array[float] = [0.25, 0.5, 0.75, 1.0]
@@ -74,6 +88,13 @@ const LANE_PLAY_DANGER_BAR: float = 0.5
 # man to pick up, measured along the threat axis. Just above the house gate —
 # he is the layer behind RUSH_D1, not a second body on the puck.
 const D2_MID_DEPTH_M: float = 12.0
+# How far off centre an attacker may be and still count as the MID-LANE drive
+# D2 exists to take: the end-zone dot lane, which is what bounds the middle of
+# the ice. Without this the pick was argmin|x| over the whole rush, so a lone
+# second attacker hugging the boards read as "the mid-lane man" and pulled D2
+# off mid-ice — vacating the exact lane the layered defense keeps him in. A wide
+# man is the mid trackers' pickup as he cuts in, not D2's to chase.
+const D2_MID_LANE_HALF_WIDTH_M: float = GameRules.END_ZONE_FACEOFF_DOT_X
 # How far weak-side of centre D2 shades while holding mid-ice.
 const D2_WEAK_SHADE_M: float = 2.0
 
@@ -218,12 +239,17 @@ static func _should_gap_up(ctx: RoleContext, read: AIRushRead,
 # line, signed toward centre.
 static func _angle_inside(stand: Vector3, carrier_pos: Vector3,
 		dir_net: Vector3) -> Vector3:
+	# Depth first: nil at centre, full at the dot lane (see ANGLE_INSIDE_M).
+	var depth: float = ANGLE_INSIDE_M * minf(
+			absf(carrier_pos.x) / ANGLE_INSIDE_FULL_X_M, 1.0)
+	if depth < 0.001:
+		return stand   # dead centre — no inside to take, and no side to pick
 	# Perpendicular to the retreat line, in XZ.
 	var perp := Vector3(-dir_net.z, 0.0, dir_net.x)
 	# Point it toward the middle of the ice (x = 0) relative to the carrier.
 	if perp.x * -signf(carrier_pos.x) < 0.0:
 		perp = -perp
-	var shaded: Vector3 = stand + perp * ANGLE_INSIDE_M
+	var shaded: Vector3 = stand + perp * depth
 	return shaded if AIRoleHelpers.is_legal_position(shaded) else stand
 
 
@@ -256,11 +282,13 @@ static func _decide_d2(ctx: RoleContext) -> RoleDecision:
 	return d
 
 
-# The attacker (excluding the carrier) nearest the middle of the ice, as his
-# velocity-led point. Vector3.INF when there is none.
+# The attacker (excluding the carrier) driving the MIDDLE — the most central one
+# inside the mid-lane band, as his velocity-led point. Vector3.INF when nobody is
+# in the middle, which is D2's cue to hold his post rather than chase a wide man
+# (see D2_MID_LANE_HALF_WIDTH_M).
 static func _mid_lane_man(read: AIRushRead) -> Vector3:
 	var best: Vector3 = Vector3.INF
-	var best_x: float = INF
+	var best_x: float = D2_MID_LANE_HALF_WIDTH_M
 	for i: int in read.attackers.size():
 		if read.attackers[i] == read.carrier_peer:
 			continue

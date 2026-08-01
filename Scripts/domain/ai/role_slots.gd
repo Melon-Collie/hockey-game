@@ -115,15 +115,32 @@ enum Slot {
 	TRACK_MID,        # The single mid tracker (3v3) — centre lane, no side split.
 }
 
-# Hysteresis for the soonest-to-arrive elections: a peer that didn't
-# have the slot last tick pays this many seconds of effective arrival
-# time to take it. Sticky enough to prevent flicker between
-# kinematically-similar peers, loose enough that natural play movement
-# triggers role swaps. Same margin as AILoosePuckChase.HYSTERESIS_S,
-# so the two election seams stay consistent. ≈ 1 m of positional
-# difference at the calibrated ETA's close-range standing-start rate
-# (~2 m at cruise) — re-derived when time_to_arrive moved from the
-# free-ramp heuristic to the measured phase model.
+# Hysteresis for the soonest-to-arrive elections: a peer that didn't hold the
+# slot last tick pays this many seconds of effective arrival time to take it.
+#
+# This is a STABILITY MARGIN, not an evaluator constant — it damps an argmin, it
+# does not measure anything about the situation — so it is hand-set, and the
+# tuning note below is the honest signal of that. What keeps it from being
+# arbitrary is a scale check and a coupling:
+#
+#   SCALE. In seconds so it composes with time_to_arrive directly. The distance
+#   it corresponds to depends on the challenger's speed: ≈1 m from a standing
+#   start, ≈1.8 m at cruise — which lands on ANTI_CROWD_RADIUS_M, the span
+#   inside which two bots count as occupying the same spot. So a challenger has
+#   to be better placed than "we would be standing on each other" before the
+#   slot changes hands, which is the right order of magnitude for the thing it
+#   is preventing. It is also ~1.2 brain ticks (6 Hz), so it outlives the
+#   re-election cadence rather than fighting it.
+#
+#   COUPLING. Deliberately the same margin as AILoosePuckChase.HYSTERESIS_S, and
+#   re-derived with it when time_to_arrive moved from the free-ramp heuristic to
+#   the measured phase model. The chase election and the slot elections race the
+#   same bodies over the same ETA model; if their stickiness disagreed, a bot
+#   could hold the chase while losing the slot that assumes it. AIRoleSlots5
+#   references this constant rather than copying it, for the same reason.
+#
+# Tuning: raise if kinematically-similar peers still trade slots mid-play; lower
+# if a genuinely better-placed teammate takes too long to take over.
 const HYSTERESIS_PENALTY_S: float = 0.2
 
 # Hysteresis for the NEUTRAL flank L/R split, which is an X-axis SIDE
@@ -381,7 +398,7 @@ static func _pick_soonest_with_hysteresis(
 # (BREAKOUT_STRONG / OUTLET / FINISHER) and the trailing support
 # (BREAKOUT_WEAK / SUPPORT) — lets the peer that was the up-ice guy stay the
 # up-ice guy (and the trailer stay the trailer) through the rename. The bonus
-# is only HYSTERESIS_PENALTY_S (0.12 s), so a genuine kinematic advantage still
+# is only HYSTERESIS_PENALTY_S, so a genuine kinematic advantage still
 # swaps them; it only settles the near-ties that used to flicker. Every other
 # slot maps to itself (exact-match, unchanged).
 static func _hysteresis_class(slot: int) -> int:

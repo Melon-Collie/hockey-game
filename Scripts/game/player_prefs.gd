@@ -422,8 +422,9 @@ const REPLAY_KEEP_MAX: int = 100
 # _load() defensive-casts whatever ConfigFile returns.
 # TUTORIAL_COURSE_VERSION gates a completion wipe on load: bump it whenever the
 # course is restructured enough that everyone should replay it (v2 = the
-# six-part Movement→Rules course).
-const TUTORIAL_COURSE_VERSION: int = 2
+# six-part Movement→Rules course; v3 = the loft ladder's fourth rung, which
+# added the doorstep wave and re-cut the shooting course's elevation lessons).
+const TUTORIAL_COURSE_VERSION: int = 3
 var tutorial_completion: Dictionary = {}
 
 func _get_save_path() -> String:

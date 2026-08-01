@@ -17,7 +17,7 @@ extends GutTest
 # teams settle into ORGANIC shapes with real velocities before the trigger
 # event (a forced turnover / dump) puts the puck loose. Hand-placed frozen
 # poses biased v1: still skaters can't express the wheel's has-a-step
-# trigger, and pre-contested races suppress RETRIEVAL by construction.
+# trigger, rather than from hand-placed frozen poses.
 # Trials are jittered deterministically (PlayerRules.stagger01) for sample
 # size without RNG.
 #
@@ -30,7 +30,7 @@ extends GutTest
 # rim wraps the corner arc off the real board model and the retrieval race
 # is the one the live game actually plays.
 #
-# Each trial also records a TRACE: whether RETRIEVAL engaged, the first
+# Each trial also records a TRACE: the first
 # touch, and the first team-0 release with its intent + compete scores
 # (from the duel harness's enriched release records) and its fate — the
 # causal story behind the outcome label, and the raw material for the
@@ -173,7 +173,6 @@ func _run_trial(scenario: String, mirror: float, jitter: int,
 	var t: float = 0.0
 	var outcome: String = "timeout"
 	var cough_danger: float = -1.0
-	var retrieval_seen: bool = false
 	var first_touch_peer: int = -1
 	var first_touch_t: float = -1.0
 	var intercept_pos := Vector3.INF
@@ -231,8 +230,6 @@ func _run_trial(scenario: String, mirror: float, jitter: int,
 			_probe.append({"ev": pending_probe.ev,
 					"completed": duel.team_map.get(duel.carrier_id, -1) == 0})
 			pending_probe = {}
-		if (duel.brains[0] as TeamBrain).state == AIPossessionState.State.RETRIEVAL:
-			retrieval_seen = true
 		var cid: int = duel.carrier_id
 		if first_touch_peer == -1 and cid != -1:
 			first_touch_peer = cid
@@ -281,7 +278,7 @@ func _run_trial(scenario: String, mirror: float, jitter: int,
 			first_release = rec
 			break
 	_rows.append({"scenario": scenario, "mirror": mirror, "jitter": jitter,
-			"outcome": outcome, "t": t, "retrieval": retrieval_seen,
+			"outcome": outcome, "t": t,
 			"touch_peer": first_touch_peer, "touch_t": first_touch_t,
 			"release": first_release, "intercept": intercept_pos,
 			"chaser_trace": chaser_trace, "cough_danger": cough_danger})
@@ -307,20 +304,17 @@ func _report() -> void:
 			LIMIT_S, _rows.size()])
 	var counts: Dictionary = {}
 	var exit_times: Array[float] = []
-	var retrieval_fires: int = 0
 	for row: Dictionary in _rows:
 		counts[row.outcome] = int(counts.get(row.outcome, 0)) + 1
 		if String(row.outcome).ends_with("exit"):
 			exit_times.append(row.t)
-		if row.retrieval:
-			retrieval_fires += 1
 		var rel_bit: String = _intent_label(row.release)
 		var danger_bit: String = ""
 		if float(row.cough_danger) >= 0.0:
 			danger_bit = " dgr%.2f" % float(row.cough_danger)
-		gut.p("  %-16s m%+d j%d → %-10s %5.1fs%s retr:%s touch:%d@%.1fs 1st:%s" % [
+		gut.p("  %-16s m%+d j%d → %-10s %5.1fs%s touch:%d@%.1fs 1st:%s" % [
 				row.scenario, int(row.mirror), int(row.jitter), row.outcome,
-				row.t, danger_bit, "Y" if row.retrieval else "n",
+				row.t, danger_bit,
 				int(row.touch_peer), float(row.touch_t), rel_bit])
 		if int(row.jitter) == 0 and not (row.chaser_trace as Array).is_empty():
 			for line: String in row.chaser_trace:
@@ -350,12 +344,11 @@ func _report() -> void:
 		gut.p("  mean cough danger (local threat at concede): %.3f over %d coughs" % [
 				danger_sum / danger_n, danger_n])
 	var n: int = _rows.size()
-	gut.p("  totals: clean %d/%d, clear %d/%d, cough %d/%d, timeout %d/%d | retrieval fired %d/%d" % [
+	gut.p("  totals: clean %d/%d, clear %d/%d, cough %d/%d, timeout %d/%d" % [
 			int(counts.get("clean-exit", 0)), n,
 			int(counts.get("clear-exit", 0)), n,
 			int(counts.get("cough-up", 0)), n,
-			int(counts.get("timeout", 0)), n,
-			retrieval_fires, n])
+			int(counts.get("timeout", 0)), n])
 	if not exit_times.is_empty():
 		var sum: float = 0.0
 		for et: float in exit_times:

@@ -1,7 +1,7 @@
 class_name IceRingField
 extends Node
 
-# Feeds the ice shader's analytic on-ice HUD — player rings, elevation chevrons
+# Feeds the ice shader's analytic on-ice HUD — player rings, elevation chevrons,
 # the slapper one-timer indicator and the stamina gauge (see
 # Shaders/ice.gdshader).
 #
@@ -13,9 +13,8 @@ extends Node
 # differently near a position, so the ice shader computes it directly and this
 # node's whole job is to hand it the positions.
 #
-# The chevrons, the slapper indicator and the stamina gauge followed for the
-# same reason.
-# The slapper indicator is the starkest case: five nodes on EVERY skater — a
+# The chevrons, the slapper indicator and the stamina gauge followed for the same
+# reason. The slapper indicator is the starkest case: five nodes on EVERY skater — a
 # reticle, an arrow root, an arrow and a gapped convergence ring — plus an
 # ArrayMesh rebuilt on convergence ticks, all so that at most ONE skater could
 # show them. Being self-only, it needs no array here at all — nor does the
@@ -46,7 +45,8 @@ var _material: ShaderMaterial = null
 var _positions: PackedVector4Array = PackedVector4Array()
 var _colors: PackedVector4Array = PackedVector4Array()
 # Elevation chevrons ride along: xy = first apex, z = how many are stacked. The
-# shader stacks the rest itself, so a skater at HIGH loft is still one entry.
+# shader stacks the rest itself, so a skater at HIGH loft — three marks, one per
+# rung above flat — is still one entry.
 var _chevrons: PackedVector4Array = PackedVector4Array()
 
 
@@ -65,6 +65,8 @@ func setup(material: ShaderMaterial) -> void:
 	_material.set_shader_parameter(&"hud_line_thin", MenuStyle.HUD_LINE_THIN)
 	_material.set_shader_parameter(&"reticle_half_len",
 			SkaterHUDCoordinator.RETICLE_HALF_LENGTH)
+	_material.set_shader_parameter(&"chevron_stack_gap",
+			SkaterHUDCoordinator.CHEVRON_STACK_GAP)
 	_material.set_shader_parameter(&"stamina_inner_r",
 			SkaterHUDCoordinator.STAMINA_RING_INNER_R)
 	_material.set_shader_parameter(&"stamina_outer_r",

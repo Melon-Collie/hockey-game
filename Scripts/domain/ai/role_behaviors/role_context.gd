@@ -287,13 +287,6 @@ var scratch_teammates: Array[Vector3] = []
 # reads, priced at each teammate's real blade/pace instead of league.
 var scratch_teammate_caps: Array[AISkaterCaps] = []
 var scratch_opp_receivers: Array[Vector3] = []
-# Counter-threat states + index-matched caps for fill_counter_channels — the
-# ATTACKER-FILTERED subset of the opponents (AIRoleHelpers.collect_counter_threats).
-# Separate from scratch_opp_* because the O-zone stations need both at once: the
-# full opponent list for their shot-lane reads, the filtered one for their
-# race-home bound.
-var scratch_counter_states: Array[SkaterNetworkState] = []
-var scratch_counter_caps: Array[AISkaterCaps] = []
 # Per-decide option-value upper bounds for the pruned carrier_best_option
 # (see AIRoleHelpers.carrier_option_bases).
 var scratch_option_bases: Array[float] = []

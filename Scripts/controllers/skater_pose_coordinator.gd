@@ -200,7 +200,8 @@ func _apply_lean() -> void:
 func apply_facing(input: InputState, delta: float) -> void:
 	var s: SkaterStateMachine.State = _sm.get_state()
 	if not (s == State.WRISTER_AIM or s == State.SLAPPER_CHARGE_WITH_PUCK
-			or s == State.SLAPPER_CHARGE_WITHOUT_PUCK or s == State.SHOT_BLOCKING):
+			or s == State.SLAPPER_CHARGE_WITHOUT_PUCK or s == State.SHOT_BLOCKING
+			or s == State.ONE_TIMER_RETENTION):
 		var prev_angle: float = _skater.rotation.y
 		var mouse_world: Vector3 = input.mouse_world_pos
 		var to_mouse: Vector2 = Vector2(
@@ -275,7 +276,12 @@ func apply_upper_body(delta: float) -> void:
 		return
 
 	var charge_state: SkaterStateMachine.State = _sm.get_state()
-	if charge_state == State.SLAPPER_CHARGE_WITH_PUCK or charge_state == State.SLAPPER_CHARGE_WITHOUT_PUCK:
+	# ONE_TIMER_RETENTION rides this branch too: the wind-up charge timer is
+	# frozen through the hold, so the coil simply holds at its apex — loaded and
+	# still — instead of unwinding to the generic tracking pose for a beat.
+	if charge_state == State.SLAPPER_CHARGE_WITH_PUCK \
+			or charge_state == State.SLAPPER_CHARGE_WITHOUT_PUCK \
+			or charge_state == State.ONE_TIMER_RETENTION:
 		# Hold upper body facing the locked shot direction throughout the wind-up,
 		# then layer the coil rotation on top: back shoulder pulls away from the
 		# target as the wind-up timer fills, ending in a loaded stance with the

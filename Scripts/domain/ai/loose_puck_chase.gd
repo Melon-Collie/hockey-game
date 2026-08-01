@@ -51,7 +51,7 @@ const MAX_LEAD_S: float = 0.5
 # inside T. Slow pucks keep the cheap bounded-lead read (path ≈ position).
 const FAST_PUCK_SPEED_M_S: float = 4.0
 const RACE_LOOKAHEAD_S: float = 3.0
-# 0.25 s steps — fine enough that the RETRIEVAL enter margin (0.25 s) can
+# 0.25 s steps — fine enough that the race-read margins can
 # still resolve between quantized path times.
 const RACE_STEPS: int = 12
 
@@ -107,7 +107,7 @@ static func is_fast_puck(puck_vel: Vector3) -> bool:
 # sprints), pool and lockout from the replicated skater state, race length
 # approximated by the straight distance to the puck's current spot. THE seam
 # through which Speed's sprint separation reaches every race read — election,
-# RETRIEVAL margin, and the race-lost decline all price with it, so they
+# and the race-lost decline both price with it, so they
 # can't disagree about who has the extra gear.
 static func race_vmax(s: SkaterNetworkState, caps: AISkaterCaps,
 		puck_pos: Vector3) -> float:
@@ -121,7 +121,7 @@ static func race_vmax(s: SkaterNetworkState, caps: AISkaterCaps,
 
 # The shared predicted path for one race — memoized on the exact puck state,
 # because every consumer in one AI tick (both teams' elections, the brain's
-# RETRIEVAL read, each chaser's race-lost decline) races the SAME puck: one
+# each chaser's race-lost decline) races the SAME puck: one
 # walk per tick, not one per caller. Callers must treat the returned array
 # as read-only.
 static var _traj_cache_pos: Vector3 = Vector3.INF
@@ -384,7 +384,7 @@ static func elect(
 
 # Raw best intercept time (seconds) among `ids` to the loose puck — the
 # race-read half of the election, with no hysteresis and no winner identity.
-# Used by the TeamBrain's RETRIEVAL upgrade (docs/breakout-plan.md Phase A)
+# A team's best intercept time for a loose puck
 # to compare OUR best against THEIRS with the same intercept model the
 # chase election runs, so "who wins the race" and "who is elected to run
 # it" can never disagree. INF when no eligible skater.

@@ -27,12 +27,17 @@ const _STAMINA_LOCKED_FLASH_HZ: float = 2.5
 const _STAMINA_LOW_COLOR := Color(0.95, 0.65, 0.20, 1.0)  # amber when running low
 const STAMINA_TRACK_COLOR := Color(0.06, 0.08, 0.11, 0.55)  # read by IceRingField
 
-# Player-name placement — billboarded Label3D just outside the slot ring.
+# Player-name placement — the world point PlayerNameOverlay projects to screen.
+# It was a billboarded Label3D sitting just outside the slot ring; the anchor
+# outlived the node (see name_plate_anchor).
 const _NAME_RADIUS: float   = RING_OUTER_R + 0.10
 const _CHEVRON_RADIUS: float = RING_OUTER_R + 0.10
 const _CHEVRON_OFFSET_DEG: float = 60.0
-# Screen-up gap between the stacked chevrons: one "^" = LOW loft, "^^" = HIGH.
-const _CHEVRON_STACK_GAP: float = 0.11
+# Screen-up gap between the stacked chevrons — one per loft rung above flat:
+# "^" = LOW, "^^" = MID, "^^^" = HIGH. PUBLIC because the ice shader draws them
+# now: IceRingField hands this over at setup so the spacing has one home rather
+# than a copy in the shader that silently drifts from this one.
+const CHEVRON_STACK_GAP: float = 0.11
 
 # Overhead self-beacon. A billboarded downward-arrow that floats above ONLY the
 # local player's own skater so "which one is me" is answered pre-attentively

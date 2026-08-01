@@ -187,6 +187,18 @@ const FLEX_LOW: int = 0          # whippy: −power ceiling, shortest runway/win
 const FLEX_MEDIUM: int = 1
 const FLEX_HIGH: int = 2         # stiff: +power ceiling, longest runway/wind-up
 
+# The retail stiffness ladder — the flex numbers sticks actually ship in. The
+# workbench shows the build's real number (see flex_number); the gameplay leans
+# never read it, they stay on the relative pick.
+const FLEX_LADDER: Array[int] = [65, 75, 85, 100, 110]
+
+# Shaft stiffness per pound of body at a matched fit. The half-bodyweight rule
+# of thumb overshoots what players actually shoot (big NHL forwards routinely
+# sit well under it — release beats ceiling); 0.42 puts the 201 lb neutral on
+# an 85, the most-shipped number, and leaves exactly one rung of headroom at
+# both ends of the ladder for the gear pick to shift into.
+const _MATCHED_FLEX_PER_LB: float = 0.42
+
 const LENGTH_SHORT: int = 0      # −reach, snappiest reversal, finest close control
 const LENGTH_STANDARD: int = 1
 const LENGTH_LONG: int = 2       # +reach / tip speed / contest momentum, +inertia
@@ -556,6 +568,25 @@ func curve_backhand_mult() -> float: return _CURVE_BACKHAND_LEAN[curve]
 # shot lean on the slapper min/max; wristers deliberately stay flex-only.
 func curve_slap_mult() -> float: return _CURVE_SLAP_LEAN[curve]
 
+# The stick's real stiffness number, for display. Weight picks the matched
+# rung of the retail ladder; the FLEX slot shifts it one rung either way. The
+# numbers OVERLAP across bodies by construction — an 85 is the plank a 165 lb
+# winger picks stiff and the noodle a 240 lb defenseman picks whippy — which is
+# how stick fitting actually works, and is why the leans above ride the
+# relative pick instead of this number: a number-driven lean would route weight
+# into the shot-power axis, which is height's by design.
+func flex_number() -> int:
+	return flex_number_for(weight, flex)
+
+
+static func flex_number_for(lbs: int, p_flex: int) -> int:
+	# The matched rung is clamped off both ends of the ladder, so the gear
+	# shift always lands on a real rung instead of saturating.
+	var matched: int = clampi(_nearest_flex_rung(float(lbs) * _MATCHED_FLEX_PER_LB),
+			1, FLEX_LADDER.size() - 2)
+	return FLEX_LADDER[matched + _clamp_gear(p_flex) - GEAR_BALANCED]
+
+
 # Reception ceiling lean — scales the deflect ceiling + squared-up bonus a
 # receiver's blade can soak (PuckReceptionRules decision sites). Physical
 # framing: the blown-open force limit of the blade shape, not a hands stat.
@@ -745,3 +776,12 @@ static func coerce_height(v: int) -> int:
 
 static func _clamp_gear(v: int) -> int:
 	return clampi(v, 0, 2)
+
+
+# Nearest rung of the retail flex ladder to a raw stiffness value.
+static func _nearest_flex_rung(value: float) -> int:
+	var best: int = 0
+	for i: int in range(1, FLEX_LADDER.size()):
+		if absf(value - float(FLEX_LADDER[i])) < absf(value - float(FLEX_LADDER[best])):
+			best = i
+	return best
