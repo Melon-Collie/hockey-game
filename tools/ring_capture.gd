@@ -55,6 +55,13 @@ func _init() -> void:
 	m.set_shader_parameter("slapper_arrow", true)
 	m.set_shader_parameter("slapper_zone", Vector4(-1.6, -1.7, 0.5, 0.55))
 	m.set_shader_parameter("slapper_dir", Vector2(0.35, -1.0).normalized())
+	# Stamina gauge at 35% under the middle ring — the fill should start at the
+	# top and sweep toward screen-left, with the faint track completing the annulus.
+	m.set_shader_parameter("stamina_active", true)
+	m.set_shader_parameter("stamina_zone", Vector4(0.5, 1.6, 0.35, 0.0))
+	m.set_shader_parameter("stamina_up", Vector2(0.0, -1.0))
+	m.set_shader_parameter("stamina_fill_col", Vector4(0.20, 0.95, 0.40, 0.85))
+	m.set_shader_parameter("stamina_track_col", Vector4(0.06, 0.08, 0.11, 0.47))
 	m.set_shader_parameter("hud_screen_down", Vector2(0,1))
 	plane.material_override = m; root.add_child(plane)
 func _process(_d: float) -> bool:

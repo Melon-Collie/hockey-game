@@ -2409,6 +2409,23 @@ func chevron_field_apex() -> Vector2:
 	return _hud.chevron_apex()
 
 
+# ── Stamina gauge (read by IceRingField, drawn by the ice shader) ────────────
+func stamina_field_visible() -> bool:
+	return _hud.stamina_gauge_visible()
+
+
+func stamina_field_fill() -> float:
+	return _hud.stamina_gauge_fill()
+
+
+func stamina_field_color() -> Color:
+	return _hud.stamina_gauge_color()
+
+
+func stamina_field_up() -> Vector2:
+	return _hud.stamina_gauge_up()
+
+
 # ── Slapper indicator (read by IceRingField, drawn by the ice shader) ────────
 func slapper_field_visible() -> bool:
 	return _hud.slapper_visible()

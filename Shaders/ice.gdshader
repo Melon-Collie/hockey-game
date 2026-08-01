@@ -69,6 +69,21 @@ uniform vec4 slapper_zone = vec4(0.0);
 uniform vec2 slapper_dir = vec2(0.0, 1.0);
 uniform bool slapper_active = false;
 uniform bool slapper_arrow = false;
+// ── Stamina gauge ────────────────────────────────────────────────────────────
+// Self-only too, so scalars again. The fill sweeps from 12 o'clock, which is
+// camera screen-UP rather than any body direction — stamina_up carries it, the
+// same way the node rig re-aligned the ring's yaw to the camera every frame.
+// stamina_zone: xy = world (x, z) centre, z = fill fraction 0..1.
+// The two colours arrive with HUD_OPACITY already folded into alpha, because
+// the track is deliberately fainter than the fill (0.55 vs 1.0) and a single
+// opacity uniform would flatten that.
+uniform vec4 stamina_zone = vec4(0.0);
+uniform vec2 stamina_up = vec2(0.0, -1.0);
+uniform vec4 stamina_fill_col = vec4(0.0);
+uniform vec4 stamina_track_col = vec4(0.0);
+uniform float stamina_inner_r = 0.31;
+uniform float stamina_outer_r = 0.37;
+uniform bool stamina_active = false;
 // Stroke width and reticle arm length in world metres — MenuStyle.HUD_LINE_THIN
 // and SkaterHUDCoordinator's reticle half-length, mirrored here because the ice
 // shader has no way to read a GDScript constant. Keep them in sync.
@@ -76,6 +91,7 @@ uniform float hud_line_thin = 0.03;
 uniform float reticle_half_len = 0.06;
 // Arrow proportions, in multiples of the zone radius (the unit space the node
 // rig authored them in).
+const float TAU_C = 6.28318530718;
 const float ARROW_SHAFT_HALF_W = 0.06;
 const float ARROW_TIP_DISTANCE = 1.8;
 const float ARROW_HEAD_LEN = 0.30;
@@ -271,6 +287,38 @@ void fragment() {
 		float a = mark * hud_stroke_col.a;
 		hud_rgb = hud_rgb * (1.0 - a) + hud_stroke_col.rgb * a;
 		hud_cover = hud_cover * (1.0 - a) + a;
+	}
+
+	// Stamina gauge: an annulus split by an angular mask into a bright fill and a
+	// faint remaining track. It was a 64-segment MeshInstance3D whose UV.x baked
+	// the clockwise-from-12 parameter; here that parameter is the angle itself,
+	// which also means the arc's ends are analytically antialiased rather than
+	// landing on a segment boundary.
+	if (stamina_active) {
+		vec2 rel = ice_xz - stamina_zone.xy;
+		float rad = length(rel);
+		// Band edges feathered like every other HUD mark.
+		float band = max(stamina_inner_r - rad, rad - stamina_outer_r);
+		float aa_b = max(fwidth(band), 0.0001);
+		float in_band = 1.0 - smoothstep(-aa_b, aa_b, band);
+		if (in_band > 0.0) {
+			// t runs 0..1 the way the mesh's UV.x did: 0 at screen-up, advancing
+			// toward `left`. Reproducing that convention is what keeps the gauge
+			// draining in the direction players already read.
+			vec2 up = normalize(stamina_up);
+			vec2 left = vec2(up.y, -up.x);
+			vec2 n = rel / max(rad, 0.0001);
+			float t = fract(atan(dot(n, left), dot(n, up)) / TAU_C);
+			float aa_t = max(fwidth(t), 0.0001);
+			// Guard the wrap seam: fwidth explodes across t's 1→0 discontinuity,
+			// which would smear the whole gauge on that one texel column.
+			float edge = (aa_t > 0.25) ? step(t, stamina_zone.z)
+					: smoothstep(stamina_zone.z + aa_t, stamina_zone.z - aa_t, t);
+			vec4 col = mix(stamina_track_col, stamina_fill_col, edge);
+			float a = in_band * col.a;
+			hud_rgb = hud_rgb * (1.0 - a) + col.rgb * a;
+			hud_cover = hud_cover * (1.0 - a) + a;
+		}
 	}
 
 	// Resolve the unshaded HUD layer over the lit ice. The engine computes

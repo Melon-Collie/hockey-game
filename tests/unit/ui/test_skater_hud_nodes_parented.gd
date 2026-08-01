@@ -14,10 +14,11 @@ extends GutTest
 
 const SKATER_SCENE: PackedScene = preload("res://Scenes/Skater.tscn")
 
-# Shrinks as world HUD moves out of the node tree. The slapper indicator left
-# when it became ice-shader uniforms; what stays here is what is still a node.
+# Shrinks as world HUD moves out of the node tree. The slapper indicator and the
+# stamina gauge left when they became ice-shader uniforms; the beacon is what is
+# still a node, because it floats above the head and the ice shader cannot draw
+# it at all.
 const _EXPECTED_HUD_NODES: Array[String] = [
-	"StaminaRing",
 	"SelfBeacon",
 ]
 

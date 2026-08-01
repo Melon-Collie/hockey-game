@@ -2,7 +2,8 @@ class_name IceRingField
 extends Node
 
 # Feeds the ice shader's analytic on-ice HUD — player rings, elevation chevrons
-# and the slapper one-timer indicator (see Shaders/ice.gdshader).
+# the slapper one-timer indicator and the stamina gauge (see
+# Shaders/ice.gdshader).
 #
 # Each ring used to be a MeshInstance3D per skater: a 48-segment alpha-blended
 # disc, parented to the skater, sitting a few millimetres above the ice. Ten of
@@ -12,11 +13,13 @@ extends Node
 # differently near a position, so the ice shader computes it directly and this
 # node's whole job is to hand it the positions.
 #
-# The elevation chevrons and the slapper indicator followed for the same reason.
+# The chevrons, the slapper indicator and the stamina gauge followed for the
+# same reason.
 # The slapper indicator is the starkest case: five nodes on EVERY skater — a
 # reticle, an arrow root, an arrow and a gapped convergence ring — plus an
 # ArrayMesh rebuilt on convergence ticks, all so that at most ONE skater could
-# show them. Being self-only, it needs no array here at all.
+# show them. Being self-only, it needs no array here at all — nor does the
+# stamina gauge.
 #
 # The per-frame cost that replaces all of it is a handful of
 # set_shader_parameter calls, regardless of roster size. What it buys beyond the
@@ -62,6 +65,12 @@ func setup(material: ShaderMaterial) -> void:
 	_material.set_shader_parameter(&"hud_line_thin", MenuStyle.HUD_LINE_THIN)
 	_material.set_shader_parameter(&"reticle_half_len",
 			SkaterHUDCoordinator.RETICLE_HALF_LENGTH)
+	_material.set_shader_parameter(&"stamina_inner_r",
+			SkaterHUDCoordinator.STAMINA_RING_INNER_R)
+	_material.set_shader_parameter(&"stamina_outer_r",
+			SkaterHUDCoordinator.STAMINA_RING_OUTER_R)
+	_material.set_shader_parameter(&"stamina_track_col",
+			_linear_hud_rgba(SkaterHUDCoordinator.STAMINA_TRACK_COLOR))
 
 
 # The shader's colour uniforms are LINEAR — see the note on ring_col in
@@ -73,6 +82,14 @@ func setup(material: ShaderMaterial) -> void:
 static func _linear_rgba(c: Color) -> Vector4:
 	var lin: Color = c.srgb_to_linear()
 	return Vector4(lin.r, lin.g, lin.b, MenuStyle.HUD_OPACITY)
+
+
+# As above, but KEEPING the colour's own alpha (scaled by the HUD opacity) rather
+# than replacing it. The stamina gauge's track is deliberately fainter than its
+# fill, so the two cannot share one opacity the way the rings do.
+static func _linear_hud_rgba(c: Color) -> Vector4:
+	var lin: Color = c.srgb_to_linear()
+	return Vector4(lin.r, lin.g, lin.b, c.a * MenuStyle.HUD_OPACITY)
 
 
 func _process(_delta: float) -> void:
@@ -90,6 +107,8 @@ func _process(_delta: float) -> void:
 	# reporting it wins. Checked BEFORE the ring gate below — the two are
 	# independent pieces of chrome and one must not suppress the other.
 	var slapper_seen: bool = false
+	# Self-only for the same reason as the slapper indicator.
+	var stamina_seen: bool = false
 	for node: Node in get_tree().get_nodes_in_group("skaters"):
 		var skater: Skater = node as Skater
 		if skater == null:
@@ -102,6 +121,14 @@ func _process(_delta: float) -> void:
 			_material.set_shader_parameter(&"slapper_dir", skater.slapper_field_arrow_dir())
 			_material.set_shader_parameter(&"slapper_arrow",
 					skater.slapper_field_arrow_visible())
+		if not stamina_seen and skater.stamina_field_visible():
+			stamina_seen = true
+			var body: Vector3 = skater.global_position
+			_material.set_shader_parameter(&"stamina_zone", Vector4(
+					body.x, body.z, skater.stamina_field_fill(), 0.0))
+			_material.set_shader_parameter(&"stamina_up", skater.stamina_field_up())
+			_material.set_shader_parameter(&"stamina_fill_col",
+					_linear_hud_rgba(skater.stamina_field_color()))
 		if count >= MAX_RINGS or not skater.ring_field_visible():
 			continue
 		screen_down = skater.hud_screen_down()
@@ -130,3 +157,4 @@ func _process(_delta: float) -> void:
 	# Cleared explicitly: a stale `true` would leave the last charge's reticle
 	# painted on the ice for the rest of the period.
 	_material.set_shader_parameter(&"slapper_active", slapper_seen)
+	_material.set_shader_parameter(&"stamina_active", stamina_seen)

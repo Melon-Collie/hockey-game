@@ -25,7 +25,7 @@ const _STAMINA_SHOW_BELOW: float = 0.999  # hidden while (effectively) full
 const _STAMINA_LOW_FRACTION: float = 0.3
 const _STAMINA_LOCKED_FLASH_HZ: float = 2.5
 const _STAMINA_LOW_COLOR := Color(0.95, 0.65, 0.20, 1.0)  # amber when running low
-const _STAMINA_TRACK_COLOR := Color(0.06, 0.08, 0.11, 0.55)
+const STAMINA_TRACK_COLOR := Color(0.06, 0.08, 0.11, 0.55)  # read by IceRingField
 
 # Player-name placement — billboarded Label3D just outside the slot ring.
 const _NAME_RADIUS: float   = RING_OUTER_R + 0.10
@@ -87,30 +87,7 @@ const RETICLE_HALF_LENGTH: float       = 0.06   # read by IceRingField
 const _RING_SEGMENTS: int              = 48
 const _SLAPPER_HUD_Y: float            = 0.05
 
-# Stamina ring shader: angle-mask radial gauge. Fill goes clockwise from
-# 12 o'clock (UV.x of the procedural ring encodes 0..1 clockwise); the
-# depleted remainder renders as a faint track so the fraction stays readable.
-# Fill color is picked CPU-side (normal / low / lockout flash) — it changes
-# rarely, so the shader stays a dumb two-color mask.
-const _STAMINA_RING_SHADER_CODE := """
-shader_type spatial;
-render_mode unshaded, blend_mix, depth_draw_opaque, cull_disabled;
-
-uniform float fill : hint_range(0.0, 1.0) = 1.0;
-uniform vec4 fill_color;
-uniform vec4 track_color;
-uniform float opacity = 0.7;
-
-void fragment() {
-	if (UV.x <= fill) {
-		ALBEDO = fill_color.rgb;
-		ALPHA = opacity * fill_color.a;
-	} else {
-		ALBEDO = track_color.rgb;
-		ALPHA = opacity * track_color.a;
-	}
-}
-"""
+# Stamina gauge geometry, mirrored in Shaders/ice.gdshader which draws it.
 
 # Slot-ring relationship to the LOCAL player, resolved live so a late-spawning
 # local player and mid-game slot swaps self-correct. UNKNOWN keeps the neutral
@@ -119,8 +96,13 @@ enum RingRelation { UNKNOWN = -1, SELF = 0, TEAMMATE = 1, ENEMY = 2 }
 
 var _skater: Skater
 
-var _stamina_ring_mesh: MeshInstance3D
-var _stamina_ring_mat: ShaderMaterial
+# Drawn by the ice shader (see IceRingField), so what survives is the state it
+# needs. The gauge was a 64-segment MeshInstance3D carrying its own ShaderMaterial
+# whose world transform was rewritten every frame to follow the skater and
+# re-align the fill origin to the camera.
+var _stamina_visible: bool = false
+var _stamina_fill: float = 1.0
+var _stamina_color: Color = Color.WHITE
 
 # Overhead self-beacon. `_self_beacon` is top_level (world transform rewritten
 # each tick, like the name label) and parents an outline + fill MeshInstance.
@@ -170,8 +152,6 @@ var _cached_cam_basis_y: Vector3 = Vector3.ZERO
 var _cached_screen_down: Vector2 = Vector2(0.0, 1.0)
 var _cached_arc_base_angle: float = 0.0
 var _cached_chevron_dir: Vector3 = Vector3(0.0, 0.0, 1.0)
-var _last_stamina_fill: float = -1.0
-var _last_stamina_color: Color = Color(0, 0, 0, 0)  # unreachable sentinel
 
 # Slot-ring relationship tint. The resolver (installed by PlayerRegistry)
 # returns a RingRelation each refresh; recolor is re-evaluated on a coarse
@@ -208,18 +188,6 @@ var _hidden_for_replay: bool = false
 func setup(skater: Skater) -> void:
 	_skater = skater
 
-	# Stamina ring: top_level so its world transform is rewritten each tick —
-	# parented transform would spin the gauge's 12-o'clock fill origin with the
-	# skater's facing. Hidden until the local player's pool dips below full
-	# (see _update_stamina_ring).
-	_stamina_ring_mesh = MeshInstance3D.new()
-	_stamina_ring_mesh.name = "StaminaRing"
-	_stamina_ring_mesh.top_level = true
-	_stamina_ring_mesh.mesh = _create_ring_mesh_with_uv(STAMINA_RING_INNER_R, STAMINA_RING_OUTER_R, 64)
-	_stamina_ring_mat = _make_stamina_ring_material()
-	_stamina_ring_mesh.material_override = _stamina_ring_mat
-	_stamina_ring_mesh.visible = false
-	_skater.add_child(_stamina_ring_mesh)
 
 	# Overhead self-beacon. Built once and hidden until the ring-relation
 	# resolver reports SELF. top_level so its world transform is rewritten each
@@ -257,7 +225,7 @@ func update(delta: float) -> void:
 		if not _hidden_for_replay:
 			_hidden_for_replay = true
 			_ring_visible = false
-			if _stamina_ring_mesh != null: _stamina_ring_mesh.visible = false
+			_stamina_visible = false
 			_name_visible = false
 			if _self_beacon != null: _self_beacon.visible = false
 			if _ping_label != null:
@@ -266,9 +234,9 @@ func update(delta: float) -> void:
 		return
 	if _hidden_for_replay:
 		_hidden_for_replay = false
-		# Restore the always-visible nodes. _stamina_ring_mesh,
-		# the slapper indicator, and the beacon are gated by their own show logic
-		# (driven from skater / stamina state) and re-enable themselves as needed.
+		# Restore the always-visible chrome. The stamina gauge, the slapper
+		# indicator and the beacon are gated by their own show logic (driven from
+		# skater / stamina state) and re-enable themselves as needed.
 		_ring_visible = true
 		_name_visible = true
 		_update_beacon_visibility()
@@ -329,47 +297,52 @@ func update(delta: float) -> void:
 # except on the frame it actually changes. Stays visible while ghosted —
 # sprinting back to tag up is exactly when the gauge matters.
 func _update_stamina_ring() -> void:
-	if _stamina_ring_mesh == null:
-		return
 	var controller: SkaterController = null
 	if _ring_relation_cached == RingRelation.SELF:
 		var record: PlayerRecord = GameManager.get_local_player()
 		controller = record.controller if record != null else null
 	if controller == null:
-		if _stamina_ring_mesh.visible:
-			_stamina_ring_mesh.visible = false
+		_stamina_visible = false
 		return
 	var s: float = clampf(controller.stamina, 0.0, 1.0)
 	var locked: bool = controller.is_sprint_exhausted()
 	# Hidden while full (the BOTW rule): the gauge only earns screen space
 	# while the pool is actually in play.
-	var show: bool = s < _STAMINA_SHOW_BELOW or locked
-	if _stamina_ring_mesh.visible != show:
-		_stamina_ring_mesh.visible = show
-	if not show:
+	_stamina_visible = s < _STAMINA_SHOW_BELOW or locked
+	if not _stamina_visible:
 		return
-	# Follow the skater; re-align the fill's 12-o'clock origin to camera
-	# screen-up so the gauge reads the same regardless of body facing.
-	_stamina_ring_mesh.global_position = Vector3(
-			_skater.global_position.x, 0.05, _skater.global_position.z)
-	_stamina_ring_mesh.rotation = Vector3(0.0, _cached_arc_base_angle, 0.0)
-	if not is_equal_approx(s, _last_stamina_fill):
-		_last_stamina_fill = s
-		_stamina_ring_mat.set_shader_parameter("fill", s)
+	_stamina_fill = s
 	# Fill color: normal tracks the player's own picked ring color (the gauge
 	# reads as part of "you"); amber when low; flashing red while locked out.
 	var col: Color
 	if locked:
 		var flash_t: float = 0.5 + 0.5 * sin(
 				Time.get_ticks_msec() * 0.001 * TAU * _STAMINA_LOCKED_FLASH_HZ)
-		col = MenuStyle.DANGER.lerp(_STAMINA_TRACK_COLOR, flash_t * 0.6)
+		col = MenuStyle.DANGER.lerp(STAMINA_TRACK_COLOR, flash_t * 0.6)
 	elif s < _STAMINA_LOW_FRACTION:
 		col = _STAMINA_LOW_COLOR
 	else:
 		col = PlayerPrefs.ring_color_self
-	if col != _last_stamina_color:
-		_last_stamina_color = col
-		_stamina_ring_mat.set_shader_parameter("fill_color", col)
+	_stamina_color = col
+
+
+# ── Read by IceRingField each frame (stamina gauge) ─────────────────────────
+func stamina_gauge_visible() -> bool:
+	return _stamina_visible
+
+
+func stamina_gauge_fill() -> float:
+	return _stamina_fill
+
+
+func stamina_gauge_color() -> Color:
+	return _stamina_color
+
+
+# The gauge's 12 o'clock is camera screen-UP, not a body direction — the node
+# rig got that by yawing the ring to _cached_arc_base_angle every frame.
+func stamina_gauge_up() -> Vector2:
+	return -_cached_screen_down
 
 
 # Y-anchor write only when skater's vertical position changes. Skater Y is
@@ -560,7 +533,7 @@ func set_world_hud_hidden(hidden: bool) -> void:
 	if hidden:
 		_hidden_for_replay = true
 		_ring_visible = false
-		if _stamina_ring_mesh != null: _stamina_ring_mesh.visible = false
+		_stamina_visible = false
 		_name_visible = false
 		_slapper_indicator_on = false
 		_slapper_arrow_on = false
@@ -716,40 +689,6 @@ func _store_slapper_zone(offset_x: float, offset_z: float, radius: float) -> voi
 
 # ── Private: mesh builders ────────────────────────────────────────────────────
 
-func _create_ring_mesh_with_uv(inner_r: float, outer_r: float, segments: int) -> ArrayMesh:
-	var verts := PackedVector3Array()
-	var normals := PackedVector3Array()
-	var uvs := PackedVector2Array()
-	var indices := PackedInt32Array()
-	for i: int in segments:
-		var t0: float = float(i) / float(segments)
-		var t1: float = float(i + 1) / float(segments)
-		var a0: float = -PI * 0.5 - t0 * TAU
-		var a1: float = -PI * 0.5 - t1 * TAU
-		var base: int = verts.size()
-		verts.append(Vector3(cos(a0) * inner_r, 0.0, sin(a0) * inner_r))
-		verts.append(Vector3(cos(a0) * outer_r, 0.0, sin(a0) * outer_r))
-		verts.append(Vector3(cos(a1) * inner_r, 0.0, sin(a1) * inner_r))
-		verts.append(Vector3(cos(a1) * outer_r, 0.0, sin(a1) * outer_r))
-		uvs.append(Vector2(t0, 0.0))
-		uvs.append(Vector2(t0, 1.0))
-		uvs.append(Vector2(t1, 0.0))
-		uvs.append(Vector2(t1, 1.0))
-		for _n: int in 4:
-			normals.append(Vector3.UP)
-		indices.append_array([base, base + 1, base + 2, base + 1, base + 3, base + 2])
-	var arrays: Array = []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = normals
-	arrays[Mesh.ARRAY_TEX_UV] = uvs
-	arrays[Mesh.ARRAY_INDEX] = indices
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return mesh
-
-
-# Centre crosshair for the slapper one-timer reticle.
 func _create_beacon_mesh(half_w: float, half_h: float) -> ArrayMesh:
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
@@ -797,15 +736,5 @@ func _make_hud_ice_material() -> StandardMaterial3D:
 	return mat
 
 
-func _make_stamina_ring_material() -> ShaderMaterial:
-	var shader := Shader.new()
-	shader.code = _STAMINA_RING_SHADER_CODE
-	var mat := ShaderMaterial.new()
-	mat.shader = shader
-	mat.set_shader_parameter("fill", 1.0)
-	mat.set_shader_parameter("fill_color", MenuStyle.HUD_RING_SELF)
-	mat.set_shader_parameter("track_color", _STAMINA_TRACK_COLOR)
-	mat.set_shader_parameter("opacity", MenuStyle.HUD_OPACITY)
-	return mat
 
 
