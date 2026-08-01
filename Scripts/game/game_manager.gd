@@ -535,6 +535,10 @@ func _physics_process(delta: float) -> void:
 	# objects. Reads the ring captured at the END of the previous tick — the
 	# identical content the old start-of-this-tick capture produced, so AI
 	# data age is unchanged by the capture move.
+	# Section timings for the F3 "Host AI cost" panel. Four get_ticks_usec reads
+	# per tick, gated on the host — see HostCostProbe for why the AI is timed in
+	# place rather than freeze-swept like the cosmetics.
+	var t_section: int = Time.get_ticks_usec()
 	if _state_buffer_manager != null:
 		# Fresh ground-truth snapshot — bots track every position/velocity in
 		# real time (so a receiver aims at the puck's ACTUAL spot, not a stale
@@ -550,6 +554,7 @@ func _physics_process(delta: float) -> void:
 			current_snapshot.accel_by_peer = _accel_tracker.accel_by_peer
 			current_snapshot.heading_omega_by_peer = _accel_tracker.heading_omega_by_peer
 			_apply_bot_carrier_reaction_delay(current_snapshot, delta)
+	HostCostProbe.record(HostCostProbe.Section.SNAPSHOT, Time.get_ticks_usec() - t_section)
 	# Centralized AI dispatch. Brains run first (team strategy) so each bot reads
 	# this tick's fresh slot assignments, then every bot dispatches against the
 	# SAME enriched snapshot the brains saw — unified perception (bots no longer
@@ -558,8 +563,14 @@ func _physics_process(delta: float) -> void:
 	# per-bot dispatch moved here from AIController._physics_process (was prio -1).
 	if current_snapshot != null:
 		if not team_brains.is_empty():
+			t_section = Time.get_ticks_usec()
 			for brain: TeamBrain in team_brains:
 				brain.tick(delta, current_snapshot)
+			# Charged before the shape tally below, which is a debug instrument
+			# armed by F6 and absent from a shipped run — folding it in would
+			# price the measurement into what is being measured.
+			HostCostProbe.record(HostCostProbe.Section.BRAINS,
+					Time.get_ticks_usec() - t_section)
 			# Shape-occupancy sample (debug instrument, F6). Sampled against the
 			# PUBLISHED state so it measures the shape actually being run, and
 			# only during live play — shares should describe hockey, not the
@@ -585,8 +596,13 @@ func _physics_process(delta: float) -> void:
 			# The coordinator freezes each brain's view (build_view) at the point it
 			# hands work to the worker — only while the worker is idle, so the view
 			# the worker reads is never rebuilt mid-batch.
+			t_section = Time.get_ticks_usec()
 			_ai_coordinator.dispatch(
 					_registry.ai_controllers(), team_brains, current_snapshot, delta)
+			HostCostProbe.record(HostCostProbe.Section.DISPATCH,
+					Time.get_ticks_usec() - t_section)
+	HostCostProbe.record(HostCostProbe.Section.WORKER, _ai_coordinator.last_worker_us)
+	HostCostProbe.end_tick(_ai_coordinator.worker_in_flight())
 	_update_host_puck_tracking()
 	_check_goal_crossing()
 	_check_puck_out_of_bounds(delta)
@@ -922,6 +938,11 @@ func on_host_started() -> void:
 	# Sync the bots' shot model to the tier — otherwise they score their shots
 	# against a Hard goalie's reads and pass up looks that beat a weaker one.
 	AIActionScoring.set_goalie_profile(goalie_skill_profile)
+	# Arm the host AI timings for this match. Reset as well as enable: the probe
+	# is static and survives between matches, so a previous match's session
+	# maximum would otherwise be reported as this one's.
+	HostCostProbe.enabled = true
+	HostCostProbe.reset()
 	_carrier_belief.reset()
 	_spawn_world()
 	if not NetworkManager.pending_lobby_slots.is_empty():
@@ -4335,6 +4356,7 @@ func on_scene_exit() -> void:
 	# Stop + join the AI worker thread (no-op unless threaded and started), so a
 	# torn-down match never leaves a live thread referencing freed controllers.
 	_ai_coordinator.shutdown()
+	HostCostProbe.enabled = false
 	# Null PhaseCoordinator's _state_machine before stopping the driver so
 	# any replay_stopped signal that fires during teardown returns early from
 	# _on_goal_replay_stopped's guard rather than calling handle_phase_entered

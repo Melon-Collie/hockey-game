@@ -54,6 +54,13 @@ var _worker_delta: float = 0.0
 var last_worker_us: int = 0
 
 
+# Whether a batch is kicked and not yet harvested. A tick that finds this true
+# skips both the decision apply and the kick, so the host's AI cost is bimodal
+# by construction — HostCostProbe counts these to say how often.
+func worker_in_flight() -> bool:
+	return _run_in_flight
+
+
 # Host per-frame entry: brains have already ticked + built their views on the
 # main thread; `bots` is the live AIController list; `snapshot` is this frame's
 # enriched snapshot.

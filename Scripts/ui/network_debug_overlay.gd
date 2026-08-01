@@ -308,6 +308,9 @@ func _copy_session_digest() -> void:
 		# The whole freeze A/B, so one paste carries the comparison instead of
 		# five separate captures that each measured a different moment.
 		"freeze_sweep": _freeze_sweep_dict(),
+		# Host-only, and empty on a client. The sweep above is entirely cosmetic,
+		# so without this a pasted digest cannot say anything at all about the AI.
+		"host_ai_cost": _host_ai_cost_dict(),
 		"metrics": t.session.to_dict(),
 	}
 	DisplayServer.clipboard_set(JSON.stringify(digest, "\t"))
@@ -633,7 +636,39 @@ func _render_frame_cost() -> void:
 		"3v3 is 6, 5v5 is 10. Node count matters on its own: every per-frame transform write crosses the script/engine boundary and dirties the chain, so it drives main-thread cost the same way it drives draw calls")
 	_info("Bound by", _frame_bound_verdict(frame_ms, main_ms),
 		"the cost that is actually capping the frame rate — optimize this one, the others are free wins on paper only")
+	_render_host_ai_cost()
 	_render_freeze_sweep()
+
+
+# Host-only: the main-thread AI work the cosmetic sweep cannot see, because it
+# cannot be frozen without changing the game it is measuring (see
+# host_cost_probe.gd). Read the MAX column, not the mean — the brains tick at
+# 6 Hz and the dispatch alternates with the worker, so both are spikes wearing a
+# small average.
+func _render_host_ai_cost() -> void:
+	if not HostCostProbe.has_data():
+		return
+	_section("Host AI cost (main thread, last 1 s)")
+	var tick_us: float = 1_000_000.0 / maxf(Engine.physics_ticks_per_second, 1.0)
+	for s: int in HostCostProbe.SECTION_COUNT:
+		var mean: float = HostCostProbe.mean_us(s)
+		var peak: float = HostCostProbe.max_us(s)
+		# Off-thread work does not compete for the tick, so it gets no health
+		# band — a long batch costs the host nothing and shows up instead as the
+		# worker-busy share below.
+		var h: Health = Health.OK if s == HostCostProbe.Section.WORKER \
+				else _band(peak / tick_us, 0.25, 0.50)
+		_context(h, HostCostProbe.SECTION_NAMES[s],
+			"%.0f us mean · %.0f us peak (worst tick %.0f)" % [
+				mean, peak, HostCostProbe.session_max_us(s)],
+			"peak far above mean means this is a SPIKE, not a steady cost — that is what an inconsistent frame rate is made of")
+	_context(_band(HostCostProbe.main_thread_max_us() / tick_us, 0.25, 0.50),
+		"AI total (main)",
+		"%.0f us mean · %.0f us worst section, of a %.0f us tick" % [
+			HostCostProbe.main_thread_mean_us(), HostCostProbe.main_thread_max_us(), tick_us],
+		"the worst figure is the largest SINGLE section, not their sum — separate sections can peak on separate ticks and adding them would invent a tick that never ran")
+	_info("Worker behind", "%.0f%% of ticks" % HostCostProbe.worker_busy_pct(),
+		"share of ticks that could not kick a fresh AI batch because the previous one was still running; bots coast on their last decision through these, and the ticks that CAN kick are the expensive ones")
 
 
 # The cosmetic-freeze A/B. Everything here is a MEAN over many frames per mode,
@@ -756,6 +791,27 @@ func _frame_bound_verdict(frame_ms: float, main_ms: float) -> String:
 	if _ema_gpu_ms >= _ema_cpu_render_ms:
 		return "GPU — cut resolution / MSAA / shadow-casting lights / transparent overdraw"
 	return "CPU render — cut VISIBLE MESH COUNT (draws), not polygons; shadow-casting lights multiply it"
+
+
+# Per-section host AI timings for the digest. Microseconds, matching the panel —
+# the tick length rides along so a reader needs no other number to size them.
+func _host_ai_cost_dict() -> Dictionary:
+	if not HostCostProbe.has_data():
+		return {}
+	var sections: Dictionary = {}
+	for s: int in HostCostProbe.SECTION_COUNT:
+		sections[HostCostProbe.SECTION_NAMES[s]] = {
+			"mean_us": HostCostProbe.mean_us(s),
+			"peak_us": HostCostProbe.max_us(s),
+			"session_worst_us": HostCostProbe.session_max_us(s),
+		}
+	return {
+		"tick_us": 1_000_000.0 / maxf(Engine.physics_ticks_per_second, 1.0),
+		"main_thread_mean_us": HostCostProbe.main_thread_mean_us(),
+		"main_thread_worst_section_us": HostCostProbe.main_thread_max_us(),
+		"worker_behind_pct": HostCostProbe.worker_busy_pct(),
+		"sections": sections,
+	}
 
 
 # Empty when the sweep's numbers can be trusted; otherwise why they cannot.
