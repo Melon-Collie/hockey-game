@@ -191,15 +191,10 @@ func apply_uniform(colors: Dictionary) -> void:
 	# Butt-end knob — recreated here so the tape color tracks the kit.
 	_rebuild_stick_knob()
 
-	# Gloves: the hands wear the kit's glove color; the gear style's glove
-	# pick paints only the wrist CUFF rings — the glove's accent stripe
-	# (TEAM resolves to the kit color, i.e. no visible stripe).
+	# Gloves: the gear style's glove MODEL paints the body and the wrist cuff
+	# rings, each from black / white / the kit's own glove color.
 	_kit_gloves = uniform.gloves
-	var gloves_mat: StandardMaterial3D = _make_solid_mat(uniform.gloves)
-	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperBone.TOP_HAND, gloves_mat)
-	_skater.set_upper_surface_material(
-			SkaterMeshBuilder.UpperBone.BOTTOM_HAND, gloves_mat.duplicate())
-	_paint_glove_cuffs(_resolve_glove_color())
+	_repaint_gloves()
 
 	# Arms — upper + lower bone cylinders, each painted with horizontal
 	# stripes (or solid if the stripes array is empty).
@@ -235,17 +230,11 @@ func apply_uniform(colors: Dictionary) -> void:
 	_skater.set_leg_surface_material(
 			SkaterMeshBuilder.LegSurface.SOCK_R, sock_mat.duplicate())
 
-	# Skates — the boot and collar stay fixed dark; the gear style's skate
-	# pick paints only the collar's accent stripe band (BLACK by default ≈
-	# invisible on the dark boot, TEAM resolves to the accent). Set
-	# explicitly so ghost mode never leaves a blank gray override behind.
-	var skate_mat: StandardMaterial3D = _make_solid_mat(Color(0.08, 0.08, 0.08), _ROUGH_SKATE)
-	for surface: int in [SkaterMeshBuilder.LegSurface.SKATE_L_COLLAR,
-			SkaterMeshBuilder.LegSurface.SKATE_R_COLLAR,
-			SkaterMeshBuilder.LegSurface.FOOT_L_SHELL,
-			SkaterMeshBuilder.LegSurface.FOOT_R_SHELL]:
-		_skater.set_leg_surface_material(surface, skate_mat.duplicate())
-	_repaint_skate_stripes()
+	# Skates — the gear style's skate MODEL paints the boot, the ankle collar
+	# and the accent band ringing it. Painted unconditionally (not only when a
+	# model asks for color) so ghost mode never leaves a blank gray override
+	# behind.
+	_repaint_skates()
 	_repaint_laces()
 
 
@@ -475,26 +464,36 @@ func _rebuild_blade() -> void:
 	_blade_mesh.add_child(_blade_tape)
 
 
-func _resolve_glove_color() -> Color:
-	if _skater.gear_style.glove_color == TapeColorRegistry.TEAM_INDEX:
-		return _kit_gloves
-	return TapeColorRegistry.resolve(_skater.gear_style.glove_color, _kit_gloves)
+func _skate_zone_color(zone: int) -> Color:
+	return GearModelRegistry.skate_color(_skater.gear_style.skate_model, zone, _team_accent)
 
 
-func _resolve_skate_color() -> Color:
-	return TapeColorRegistry.resolve(_skater.gear_style.skate_color, _team_accent)
+func _glove_zone_color(zone: int) -> Color:
+	return GearModelRegistry.glove_color(_skater.gear_style.glove_model, zone, _kit_gloves)
 
 
 func _resolve_lace_color() -> Color:
 	return TapeColorRegistry.resolve(_skater.gear_style.lace_color, _team_accent)
 
 
-func _repaint_skate_stripes() -> void:
-	var stripe_mat: StandardMaterial3D = _make_solid_mat(_resolve_skate_color(), _ROUGH_SKATE)
-	_skater.set_leg_surface_material(
-			SkaterMeshBuilder.LegSurface.SKATE_L_STRIPE, stripe_mat.duplicate())
-	_skater.set_leg_surface_material(
-			SkaterMeshBuilder.LegSurface.SKATE_R_STRIPE, stripe_mat.duplicate())
+# Boot shell, ankle collar and the accent band ringing it — the three zones a
+# skate model paints. Both feet wear the pair.
+func _repaint_skates() -> void:
+	var boot_mat: StandardMaterial3D = _make_solid_mat(
+			_skate_zone_color(GearModelRegistry.SKATE_BOOT), _ROUGH_SKATE)
+	var collar_mat: StandardMaterial3D = _make_solid_mat(
+			_skate_zone_color(GearModelRegistry.SKATE_COLLAR), _ROUGH_SKATE)
+	var stripe_mat: StandardMaterial3D = _make_solid_mat(
+			_skate_zone_color(GearModelRegistry.SKATE_STRIPE), _ROUGH_SKATE)
+	for surface: int in [SkaterMeshBuilder.LegSurface.FOOT_L_SHELL,
+			SkaterMeshBuilder.LegSurface.FOOT_R_SHELL]:
+		_skater.set_leg_surface_material(surface, boot_mat.duplicate())
+	for surface: int in [SkaterMeshBuilder.LegSurface.SKATE_L_COLLAR,
+			SkaterMeshBuilder.LegSurface.SKATE_R_COLLAR]:
+		_skater.set_leg_surface_material(surface, collar_mat.duplicate())
+	for surface: int in [SkaterMeshBuilder.LegSurface.SKATE_L_STRIPE,
+			SkaterMeshBuilder.LegSurface.SKATE_R_STRIPE]:
+		_skater.set_leg_surface_material(surface, stripe_mat.duplicate())
 
 
 func _repaint_laces() -> void:
@@ -505,12 +504,12 @@ func _repaint_laces() -> void:
 			SkaterMeshBuilder.LegSurface.FOOT_R_LACES, lace_mat.duplicate())
 
 
-# Repaints the gear-style accents (glove cuff rings, skate collar bands,
-# laces) for a live gear-color change without touching the rest of the
-# uniform. Same live-cosmetic contract as refresh_tape below.
+# Repaints the gear-style pieces (both skates, both gloves, the laces) for a
+# live model or lace change without touching the rest of the uniform. Same
+# live-cosmetic contract as refresh_tape below.
 func refresh_gear_style() -> void:
-	_paint_glove_cuffs(_resolve_glove_color())
-	_repaint_skate_stripes()
+	_repaint_gloves()
+	_repaint_skates()
 	_repaint_laces()
 
 
@@ -544,6 +543,16 @@ func _rebuild_stick_knob() -> void:
 	m.material_override = _make_solid_mat(color, _ROUGH_CLOTH)
 	_skater.stick_knob_mesh = m
 	_skater.upper_body.add_child(m)
+
+
+# Glove body (the fists) and cuff rings — the two zones a glove model paints.
+func _repaint_gloves() -> void:
+	var body_mat: StandardMaterial3D = _make_solid_mat(
+			_glove_zone_color(GearModelRegistry.GLOVE_BODY))
+	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperBone.TOP_HAND, body_mat)
+	_skater.set_upper_surface_material(
+			SkaterMeshBuilder.UpperBone.BOTTOM_HAND, body_mat.duplicate())
+	_paint_glove_cuffs(_glove_zone_color(GearModelRegistry.GLOVE_CUFF))
 
 
 # The cuff rings are surfaces of the arm rig's shared mesh, so a gear-colour

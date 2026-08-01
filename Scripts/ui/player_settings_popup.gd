@@ -75,8 +75,8 @@ var _pending_curve: int = PlayerAttributes.GEAR_BALANCED
 var _pending_flex: int = PlayerAttributes.GEAR_BALANCED
 var _pending_length: int = PlayerAttributes.GEAR_BALANCED
 var _pending_tape: int = StickTapeConfig.DEFAULT_CODE
-var _pending_skate_color: int = GearStyleConfig.SKATE_DEFAULT_INDEX
-var _pending_glove_color: int = TapeColorRegistry.TEAM_INDEX
+var _pending_skate_model: int = 0
+var _pending_glove_model: int = 0
 var _pending_lace_color: int = GearStyleConfig.LACE_DEFAULT_INDEX
 var _name_valid: bool = true
 var _number_valid: bool = true
@@ -276,21 +276,21 @@ func _on_stick_edited(curve: int, flex: int, length: int, tape_code: int) -> voi
 
 
 func _open_gear_editor() -> void:
-	# TEAM color chips resolve against the pending team pick — accent for the
-	# skates and laces, the kit's glove color for the gloves.
+	# A model's TEAM zones resolve against the pending team pick — the accent
+	# for the skates and laces, the kit's glove color for the gloves.
 	var team_colors: Dictionary = _pending_team_colors()
 	_gear_popup.set_focus_scope(self, null)
-	_gear_popup.open(_pending_profile, _pending_skate_color, _pending_glove_color,
+	_gear_popup.open(_pending_profile, _pending_skate_model, _pending_glove_model,
 			_pending_lace_color, _build_locked, team_colors.primary, team_colors.gloves,
 			_pending_attributes())
 
 
-func _on_gear_edited(profile: int, skate_color: int, glove_color: int,
+func _on_gear_edited(profile: int, skate_model: int, glove_model: int,
 		lace_color: int) -> void:
 	if not _build_locked:
 		_pending_profile = profile
-	_pending_skate_color = skate_color
-	_pending_glove_color = glove_color
+	_pending_skate_model = skate_model
+	_pending_glove_model = glove_model
 	_pending_lace_color = lace_color
 	_update_apply_state()
 
@@ -681,7 +681,7 @@ func _pending_team_colors() -> Dictionary:
 
 
 func _pending_gear_code() -> int:
-	return GearStyleConfig.new(_pending_skate_color, _pending_glove_color,
+	return GearStyleConfig.new(_pending_skate_model, _pending_glove_model,
 			_pending_lace_color).to_code()
 
 
@@ -813,8 +813,8 @@ func _restore_from_snapshot() -> void:
 	_pending_tape = int(_snapshot.get("tape", StickTapeConfig.DEFAULT_CODE))
 	var gear := GearStyleConfig.from_code(
 			int(_snapshot.get("gear", GearStyleConfig.DEFAULT_CODE)))
-	_pending_skate_color = gear.skate_color
-	_pending_glove_color = gear.glove_color
+	_pending_skate_model = gear.skate_model
+	_pending_glove_model = gear.glove_model
 	_pending_lace_color = gear.lace_color
 	_name_field.text = _pending_name
 	_number_field.text = str(_pending_number)

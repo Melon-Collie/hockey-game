@@ -214,3 +214,17 @@ here whenever you bump, in the same format.
 #      joiner's preferred position (POSITION_NAMES index) for lobby seating.
 #      The lobby-only update_lobby_attributes/update_lobby_tape RPCs were
 #      removed with the lobby build editor, shifting the RPC ordering.
+# v51: four loft levels — the input's loft field widens to 2 bits (FLAT/LOW/
+#      MID/HIGH) and each level is a set launch angle from the blade curve's
+#      ladder. No codec change, but a v50 peer reads the new HIGH level as
+#      FLAT and replays a different shot, so mixed builds must be refused.
+# v52: one-timer retention — shot_state's legal range grows to 8, filling the
+#      field's headroom. A v51 peer decodes the new state as an unknown one
+#      and mispredicts the swing, so mixed builds must be refused.
+# v53: skates and gloves are MODELS, not accent colors — the packed
+#      GearStyleConfig code's low two fields now carry GearModelRegistry
+#      indices (whole designs painting boot / collar / band and glove body /
+#      cuff) where they carried TapeColorRegistry color picks. Same code
+#      width, new meaning: a v52 peer would read a model index as a color
+#      index and dress every player in the wrong gear, so mixed builds must
+#      be refused.

@@ -13,8 +13,8 @@ extends SceneTree
 # Locally any GPU works: drop the env var and xvfb-run. Output path prints on
 # save (user:// — never the repo tree, so captures can't be committed).
 
-# [height in, weight lbs, jersey name, team color slot, lace, skate stripe,
-#  blade tape, skin tone] per column.
+# [height in, weight lbs, jersey name, team color slot, lace, blade tape,
+#  skin tone] per column.
 #
 # The gear indices are deliberately loud and all different, because this tool's
 # other job is proving that a mesh change did not cross a paint wire. Merging a
@@ -24,12 +24,17 @@ extends SceneTree
 # default-colourway render would hide completely, since half these parts share
 # a near-black default. TapeColorRegistry indices: 1 white, 2 black, 3 red,
 # 4 blue, 5 yellow, 6 green, 7 orange, 8 purple, 9 pink, 10 teal.
+#
+# Skates and gloves are MODELS, not free colors, so they are not columns: every
+# build wears the two designs whose zones are all different (skate PRO —
+# black boot, team collar, white band; glove CONTRAST — black body, team cuff),
+# which is the loudest the catalogue can be about a crossed surface index.
 const BUILDS: Array = [
-	[67, 162, "MIN", 7, 3, 8, 5, 0],
-	[67, 185, "STOCK", 8, 5, 10, 9, 2],
-	[73, 201, "NEUT", 1, 9, 7, 4, 4],
-	[80, 209, "SLIM", 4, 6, 3, 10, 1],
-	[80, 264, "TANK", 2, 4, 5, 6, 3],
+	[67, 162, "MIN", 7, 3, 5, 0],
+	[67, 185, "STOCK", 8, 5, 9, 2],
+	[73, 201, "NEUT", 1, 9, 4, 4],
+	[80, 209, "SLIM", 4, 6, 10, 1],
+	[80, 264, "TANK", 2, 4, 6, 3],
 ]
 
 var _frames: int = 0
@@ -100,10 +105,11 @@ func _spawn_builds() -> void:
 		# a crossed surface index visible instead of plausible.
 		var gear: GearStyleConfig = s.get("gear_style")
 		gear.lace_color = int(b[4])
-		gear.skate_color = int(b[5])
+		gear.skate_model = GearModelRegistry.SKATE_PRO
+		gear.glove_model = GearModelRegistry.GLOVE_CONTRAST
 		var tape: StickTapeConfig = s.get("tape_config")
-		tape.blade_color = int(b[6])
-		s.call("set_skin_tone", int(b[7]))
+		tape.blade_color = int(b[5])
+		s.call("set_skin_tone", int(b[6]))
 		s.call("set_uniform", TeamColorRegistry.get_colors(int(b[3]), 0))
 		s.call("set_jersey_info", String(b[2]), int(b[1]) % 100)
 		s.call("apply_appearance", attrs)
