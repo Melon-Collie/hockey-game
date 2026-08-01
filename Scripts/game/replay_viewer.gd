@@ -177,12 +177,11 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 			is_left, _puck, self, attrs)
 	var skater: Skater = spawned.skater
 	var controller: RemoteController = spawned.controller
-	# Skater._physics_process calls move_and_slide each tick using whatever
-	# velocity apply_replay_state set last. When the viewer is paused, the
-	# replay engine isn't running so velocity isn't refreshed — the skater
-	# coasts on its stale velocity until unpause snaps it back. Disable
-	# physics processing entirely; apply_replay_state covers all visual
-	# updates (position, blade, IK) on its own.
+	# Skater._physics_process integrates position from whatever velocity
+	# apply_replay_state set last. When the viewer is paused, the replay engine
+	# isn't running so velocity isn't refreshed — the skater coasts on its stale
+	# velocity until unpause snaps it back. Disable physics processing entirely;
+	# apply_replay_state covers all visual updates (position, blade, IK) itself.
 	skater.set_physics_process(false)
 	# Latch off the flat-on-ice slot rings, name labels, stamina rings, and
 	# slapper indicators — they're designed for the local player's top-down
