@@ -315,7 +315,7 @@ func _build_preview(vbox: VBoxContainer) -> void:
 	_blade = MeshInstance3D.new()
 	_blade.mesh = SkaterMeshBuilder.shared_skate_blade()
 	var steel_mat := StandardMaterial3D.new()
-	steel_mat.albedo_color = Color(0.82, 0.85, 0.88)
+	steel_mat.albedo_color = SkaterMeshBuilder.BLADE_STEEL_COLOR
 	steel_mat.roughness = 0.25
 	_blade.set_surface_override_material(SkaterMeshBuilder.BLADE_PART_RUNNER, steel_mat)
 	_blade.transform = Transform3D(_BOOT_ROT, skate_at)

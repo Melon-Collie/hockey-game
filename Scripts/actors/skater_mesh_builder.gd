@@ -201,11 +201,18 @@ const _BOOT_STATIONS: Array[Vector4] = [
 ]
 # Skate blade — its own steel-colored child mesh under each Foot node (the
 # boot paints dark, so a fused same-color fin never read as a blade). Same
-# rotated frame as _BOOT_STATIONS: toe −Y, +Z down. Two holder posts drop
-# from the sole with daylight between them at the arch; the thin runner
-# spans the length and bottoms out at the replaced sphere's ice-contact
-# depth (z = 0.080).
-const _BLADE_STEEL_COLOR := Color(0.82, 0.85, 0.88)
+# rotated frame as _BOOT_STATIONS: toe −Y, +Z down. The holder's two towers
+# drop from the sole and are bridged by a bottom rail, leaving the arch open
+# between them; the thin runner spans the length and bottoms out at the
+# replaced sphere's ice-contact depth (z = 0.080).
+#
+# Steel is a MID gray, not the near-white it was: the holder is a paintable
+# zone now, and a white holder sitting on a near-white runner loses the
+# skate's bottom edge entirely. Dark enough to separate from GearModelRegistry
+# .WHITE, bright enough to still read against a black boot. Public because the
+# workbench preview and the capture tool dress their own runners with it —
+# three copies of this color is how it went stale in the first place.
+const BLADE_STEEL_COLOR := Color(0.62, 0.66, 0.70)
 # On-skates stance lift: the scene's part layout is tuned as STANDING height,
 # so the skate stack raises both body roots (applied in Skater._ready before
 # the default-height captures — the same root-raise mechanism the height
@@ -539,7 +546,7 @@ static func _build_boot_assembly() -> ArrayMesh:
 	# than untextured white. Surface 0 is left null on purpose: _swap_instance
 	# carries the scene primitive's material onto it, exactly as before.
 	var steel := StandardMaterial3D.new()
-	steel.albedo_color = _BLADE_STEEL_COLOR
+	steel.albedo_color = BLADE_STEEL_COLOR
 	steel.roughness = 0.25
 	BodyRim.apply(steel)
 	m.surface_set_material(BOOT_SURF_RUNNER, steel)

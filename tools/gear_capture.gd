@@ -18,7 +18,6 @@ extends SceneTree
 
 const _BOOT_ROT := Basis(Vector3(0, 0, -1), Vector3(1, 0, 0), Vector3(0, -1, 0))
 const _BLADE_ICE_M: float = 0.080 + SkaterMeshBuilder.SKATE_LIFT_M
-const _STEEL_COLOR := Color(0.82, 0.85, 0.88)
 const _LACE_COLOR := Color(0.88, 0.88, 0.86)
 # A loud kit color, so the models' TEAM zones are unmistakable against the
 # black and white ones.
@@ -144,7 +143,7 @@ func _build_skate(holder: Node3D, model: int) -> void:
 	blade.set_surface_override_material(SkaterMeshBuilder.BLADE_PART_HOLDER,
 			_mat(_skate_zone(model, GearModelRegistry.SKATE_HOLDER), 0.42))
 	blade.set_surface_override_material(SkaterMeshBuilder.BLADE_PART_RUNNER,
-			_mat(_STEEL_COLOR, 0.25))
+			_mat(SkaterMeshBuilder.BLADE_STEEL_COLOR, 0.25))
 	holder.add_child(blade)
 
 	var laces := MeshInstance3D.new()

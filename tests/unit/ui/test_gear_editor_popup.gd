@@ -94,7 +94,7 @@ func test_split_pieces_paint_apart() -> void:
 	assert_eq(_surface_color("_blade", SkaterMeshBuilder.BLADE_PART_HOLDER),
 			GearModelRegistry.WHITE, "Pro's holder is white")
 	assert_eq(_surface_color("_blade", SkaterMeshBuilder.BLADE_PART_RUNNER),
-			Color(0.82, 0.85, 0.88), "the runner stays steel")
+			SkaterMeshBuilder.BLADE_STEEL_COLOR, "the runner stays steel")
 
 
 func test_done_hands_back_the_picks() -> void:
