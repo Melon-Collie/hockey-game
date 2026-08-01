@@ -271,6 +271,21 @@ func _copy_session_digest() -> void:
 			# every absolute number below means something different in a debug
 			# build, and a pasted digest has to carry that on its face.
 			"debug_build": OS.is_debug_build(),
+			# Frame PACING, which decides whether main_thread_ms below is a cost at
+			# all. That figure is a residual (frame minus render), so anything that
+			# parks the main thread — a cap, or vsync quantising the frame to whole
+			# refresh periods — is charged to it. Under FIFO vsync a mode that saves
+			# real CPU can read as saving nothing (the frame still lands on the same
+			# refresh) or as saving far more than it did (it flipped the frame onto
+			# an earlier one), so a freeze sweep taken there is not comparable to one
+			# taken uncapped. The on-screen panel rules this out in its "Bound by"
+			# line; without these fields a PASTED digest could not.
+			# Read from DisplayServer/Engine, not PlayerPrefs: the applied state is
+			# what shaped the numbers, and the two can diverge.
+			"vsync_mode": _vsync_mode_name(),
+			"fps_cap": Engine.max_fps,
+			"refresh_hz": DisplayServer.screen_get_refresh_rate(),
+			"bound_by": _frame_bound_verdict(_ema_frame_ms, _main_thread_ms(_ema_frame_ms)),
 			# Which cosmetic work was suppressed while these numbers were taken.
 			# Anything but "off" means this digest is one half of an A/B, not a
 			# measurement of the real game.
@@ -642,6 +657,10 @@ func _render_freeze_sweep() -> void:
 	# be that 5.6 MP repaint. Every other mode is genuinely main-thread.
 	if PerfProbe.sample_count(PerfProbe.Mode.SCRATCH) > 0:
 		_lines.append("[color=#%s]· SCRATCH's saving lands in the main column whether it was CPU or GPU — its SubViewport is outside the root viewport's GPU timer[/color]" % COL_DIM)
+	var pacing: String = _sweep_pacing_warning()
+	if pacing != "":
+		_lines.append("[color=#%s]%s %s[/color]" % [COL_BAD, DOT, pacing])
+		_worst = Health.BAD
 	if PerfProbe.auto_cycle:
 		_lines.append("[color=#%s]%s Sweep RUNNING — now: %s. Play normally; every mode needs %d rotations.[/color]" % [
 			COL_WARN, DOT, PerfProbe.mode_name(), PerfProbe.MIN_ROTATIONS_PER_MODE])
@@ -739,6 +758,40 @@ func _frame_bound_verdict(frame_ms: float, main_ms: float) -> String:
 	return "CPU render — cut VISIBLE MESH COUNT (draws), not polygons; shadow-casting lights multiply it"
 
 
+# Empty when the sweep's numbers can be trusted; otherwise why they cannot.
+#
+# The sweep compares main_thread_ms across modes, and that figure is a residual
+# (frame minus render). Anything that decides frame length independently of how
+# much work the main thread did therefore destroys the comparison rather than
+# merely adding noise to it:
+#   • An fps cap idles the main thread by exactly the work a freeze removed, so
+#     every mode reads the same and real savings vanish.
+#   • FIFO vsync (Enabled, and Adaptive until it drops) quantises the frame to
+#     whole refresh periods. This bites BELOW the ceiling too, which is the
+#     trap: a saving only shows when it flips a frame onto an earlier refresh,
+#     so the measured gap is a function of where the distribution happened to
+#     sit — it can read as zero or as several times the true figure.
+# Mailbox is exempt: it is triple-buffered and not capped to refresh, so the
+# frame still ends when the work does.
+func _sweep_pacing_warning() -> String:
+	if Engine.max_fps > 0:
+		return "Frame rate capped at %d — the sweep cannot resolve savings. Set Video → FPS Cap to Unlimited and re-run." % Engine.max_fps
+	var vsync: int = int(DisplayServer.window_get_vsync_mode())
+	if vsync == PlayerPrefs.VSYNC_ENABLED or vsync == PlayerPrefs.VSYNC_ADAPTIVE:
+		return "V-Sync is %s — frames are quantised to the display, so these gaps are not true costs. Set Video → V-Sync to Disabled and re-run." % PlayerPrefs.VSYNC_LABELS[vsync]
+	return ""
+
+
+# PlayerPrefs.VSYNC_LABELS is indexed by the DisplayServer.VSyncMode enum (see
+# the note on the constants there), so the applied mode reads straight through
+# it rather than needing a second table to fall out of step with.
+func _vsync_mode_name() -> String:
+	var mode: int = int(DisplayServer.window_get_vsync_mode())
+	if mode < 0 or mode >= PlayerPrefs.VSYNC_LABELS.size():
+		return "unknown (%d)" % mode
+	return PlayerPrefs.VSYNC_LABELS[mode]
+
+
 func _frac(part: float, whole: float) -> float:
 	return part / maxf(whole, 0.001)
 
@@ -766,6 +819,9 @@ func _freeze_sweep_dict() -> Dictionary:
 	return {
 		"running": PerfProbe.auto_cycle,
 		"ready": PerfProbe.comparison_ready(),
+		# Non-empty means the modes below are not comparable at all — a stronger
+		# statement than `ready`, which only speaks to sample size.
+		"pacing_warning": _sweep_pacing_warning(),
 		"min_rotations_per_mode": PerfProbe.MIN_ROTATIONS_PER_MODE,
 		"modes": modes,
 	}
