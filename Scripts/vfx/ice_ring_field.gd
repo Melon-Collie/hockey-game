@@ -1,7 +1,8 @@
 class_name IceRingField
 extends Node
 
-# Feeds the ice shader's analytic player rings (see Shaders/ice.gdshader).
+# Feeds the ice shader's analytic on-ice HUD — player rings, elevation chevrons
+# and the slapper one-timer indicator (see Shaders/ice.gdshader).
 #
 # Each ring used to be a MeshInstance3D per skater: a 48-segment alpha-blended
 # disc, parented to the skater, sitting a few millimetres above the ice. Ten of
@@ -11,8 +12,15 @@ extends Node
 # differently near a position, so the ice shader computes it directly and this
 # node's whole job is to hand it the positions.
 #
-# The per-frame cost that replaces all of it is three set_shader_parameter calls,
-# regardless of roster size. What it buys beyond the node count:
+# The elevation chevrons and the slapper indicator followed for the same reason.
+# The slapper indicator is the starkest case: five nodes on EVERY skater — a
+# reticle, an arrow root, an arrow and a gapped convergence ring — plus an
+# ArrayMesh rebuilt on convergence ticks, all so that at most ONE skater could
+# show them. Being self-only, it needs no array here at all.
+#
+# The per-frame cost that replaces all of it is a handful of
+# set_shader_parameter calls, regardless of roster size. What it buys beyond the
+# node count:
 #   • No transparency pass. Ten coplanar alpha quads used to be depth-sorted
 #     against each other and everything else; the ring is now part of an opaque
 #     surface.
@@ -47,9 +55,13 @@ func _init() -> void:
 
 func setup(material: ShaderMaterial) -> void:
 	_material = material
-	# Every chevron shares the neutral HUD stroke, so it is a uniform written
-	# once rather than a per-frame array like the rings.
-	_material.set_shader_parameter(&"chevron_col", _linear_rgba(MenuStyle.HUD_ICE))
+	# The neutral HUD stroke and the fixed stroke sizes never change, so they are
+	# written once rather than per frame like the rings.
+	_material.set_shader_parameter(&"hud_stroke_col", _linear_rgba(MenuStyle.HUD_ICE))
+	# World-metre stroke sizes the shader cannot read from GDScript.
+	_material.set_shader_parameter(&"hud_line_thin", MenuStyle.HUD_LINE_THIN)
+	_material.set_shader_parameter(&"reticle_half_len",
+			SkaterHUDCoordinator.RETICLE_HALF_LENGTH)
 
 
 # The shader's colour uniforms are LINEAR — see the note on ring_col in
@@ -73,11 +85,24 @@ func _process(_delta: float) -> void:
 	# recomputed here, so the camera-change check that maintains it stays in one
 	# place (SkaterHUDCoordinator) instead of being duplicated.
 	var screen_down: Vector2 = Vector2(0.0, 1.0)
+	# The slapper indicator is SELF-ONLY: at most one skater ever shows it, so it
+	# is a handful of scalar uniforms rather than an array, and the first skater
+	# reporting it wins. Checked BEFORE the ring gate below — the two are
+	# independent pieces of chrome and one must not suppress the other.
+	var slapper_seen: bool = false
 	for node: Node in get_tree().get_nodes_in_group("skaters"):
-		if count >= MAX_RINGS:
-			break
 		var skater: Skater = node as Skater
-		if skater == null or not skater.ring_field_visible():
+		if skater == null:
+			continue
+		if not slapper_seen and skater.slapper_field_visible():
+			slapper_seen = true
+			var centre: Vector2 = skater.slapper_field_center()
+			_material.set_shader_parameter(&"slapper_zone", Vector4(centre.x, centre.y,
+					skater.slapper_field_radius(), skater.slapper_field_ring_scale()))
+			_material.set_shader_parameter(&"slapper_dir", skater.slapper_field_arrow_dir())
+			_material.set_shader_parameter(&"slapper_arrow",
+					skater.slapper_field_arrow_visible())
+		if count >= MAX_RINGS or not skater.ring_field_visible():
 			continue
 		screen_down = skater.hud_screen_down()
 		var stack: int = skater.chevron_field_stack()
@@ -102,3 +127,6 @@ func _process(_delta: float) -> void:
 	_material.set_shader_parameter(&"chevron_pos", _chevrons)
 	_material.set_shader_parameter(&"chevron_count", chevron_count)
 	_material.set_shader_parameter(&"hud_screen_down", screen_down)
+	# Cleared explicitly: a stale `true` would leave the last charge's reticle
+	# painted on the ice for the rest of the period.
+	_material.set_shader_parameter(&"slapper_active", slapper_seen)

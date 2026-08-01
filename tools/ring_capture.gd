@@ -47,7 +47,14 @@ func _init() -> void:
 	m.set_shader_parameter("ring_count", 3)
 	m.set_shader_parameter("chevron_pos", chev)
 	m.set_shader_parameter("chevron_count", 3)
-	m.set_shader_parameter("chevron_col", Vector4(1,1,1,0.9))
+	m.set_shader_parameter("hud_stroke_col", Vector4(1,1,1,0.9))
+	# Slapper one-timer indicator (self-only, so a single set of uniforms).
+	# Placed off to the right of the rings with a live aim and a half-converged
+	# ring, which is the state that exercises every stroke at once.
+	m.set_shader_parameter("slapper_active", true)
+	m.set_shader_parameter("slapper_arrow", true)
+	m.set_shader_parameter("slapper_zone", Vector4(-1.6, -1.7, 0.5, 0.55))
+	m.set_shader_parameter("slapper_dir", Vector2(0.35, -1.0).normalized())
 	m.set_shader_parameter("hud_screen_down", Vector2(0,1))
 	plane.material_override = m; root.add_child(plane)
 func _process(_d: float) -> bool:

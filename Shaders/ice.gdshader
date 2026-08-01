@@ -45,13 +45,41 @@ uniform vec4 ring_col[12];
 uniform int ring_count = 0;
 // Elevation chevrons — the stacked "^" marks beside a skater. Same deal as the
 // rings: xy = world (x, z) of the FIRST apex, z = how many are stacked (1-3).
-// They share one colour (the neutral HUD stroke) rather than carrying their own.
+// They share hud_stroke_col rather than carrying their own.
 uniform vec4 chevron_pos[12];
 uniform int chevron_count = 0;
-// Linear, like ring_col. IceRingField writes MenuStyle.HUD_ICE here once at
-// setup; the default is only what the editor preview shows before that runs, so
-// do not treat it as the source of truth for the HUD stroke colour.
-uniform vec4 chevron_col = vec4(0.04, 0.07, 0.15, 0.85);
+// The neutral HUD stroke (MenuStyle.HUD_ICE), shared by the chevrons and the
+// slapper indicator. Linear, like ring_col — IceRingField writes it once at
+// setup, so the default here is only what the editor preview shows before that
+// runs; do not treat it as the source of truth.
+uniform vec4 hud_stroke_col = vec4(0.04, 0.07, 0.15, 0.85);
+// ── Slapper one-timer indicator ──────────────────────────────────────────────
+// SELF-ONLY, so unlike the rings there is exactly one of these and it needs no
+// array. It used to be five nodes on EVERY skater — a reticle, an arrow root, an
+// arrow and a gapped ring, all flat on the ice — so that at most one skater
+// could show them. Same trade as the rings: five nodes x roster becomes a
+// handful of uniforms, and the strokes get analytic antialiasing for free.
+//
+// slapper_zone: xy = world (x, z) centre, z = zone radius in metres, w = the
+// convergence ring's scale within it (0 = ring hidden).
+// slapper_dir: world XZ unit vector the arrow points along. It orients the whole
+// indicator, not just the arrow — the ring's gap sits on the shaft's tail — so
+// it is live whenever the indicator is, and slapper_arrow gates the strokes.
+uniform vec4 slapper_zone = vec4(0.0);
+uniform vec2 slapper_dir = vec2(0.0, 1.0);
+uniform bool slapper_active = false;
+uniform bool slapper_arrow = false;
+// Stroke width and reticle arm length in world metres — MenuStyle.HUD_LINE_THIN
+// and SkaterHUDCoordinator's reticle half-length, mirrored here because the ice
+// shader has no way to read a GDScript constant. Keep them in sync.
+uniform float hud_line_thin = 0.03;
+uniform float reticle_half_len = 0.06;
+// Arrow proportions, in multiples of the zone radius (the unit space the node
+// rig authored them in).
+const float ARROW_SHAFT_HALF_W = 0.06;
+const float ARROW_TIP_DISTANCE = 1.8;
+const float ARROW_HEAD_LEN = 0.30;
+const float ARROW_HEAD_HALF_W = 0.20;
 // Screen-down in world XZ. The chevrons point screen-UP and stack screen-up from
 // each other, so their whole orientation comes from this one vector — which is
 // why they can be uniforms at all instead of nodes carrying a camera-derived
@@ -173,10 +201,76 @@ void fragment() {
 			float aa = max(fwidth(d), 0.0001);
 			float mark = 1.0 - smoothstep(chevron_half_thickness - aa,
 					chevron_half_thickness + aa, d);
-			float a = mark * chevron_col.a;
-			hud_rgb = hud_rgb * (1.0 - a) + chevron_col.rgb * a;
+			float a = mark * hud_stroke_col.a;
+			hud_rgb = hud_rgb * (1.0 - a) + hud_stroke_col.rgb * a;
 			hud_cover = hud_cover * (1.0 - a) + a;
 		}
+	}
+
+	// Slapper one-timer indicator: reticle, convergence ring and aim arrow, all
+	// in WORLD metres in the arrow's own frame. The node rig built this in unit
+	// space and carried the zone radius as parent scale, which is why it had to
+	// counter-scale the reticle and the stroke widths to keep them at fixed world
+	// size; working directly in metres here means those counter-scales simply do
+	// not exist. Geometry constants are the unit-space ones multiplied by the
+	// zone radius, so the shape is the one SkaterHUDCoordinator authored.
+	if (slapper_active) {
+		vec2 rel = ice_xz - slapper_zone.xy;
+		float zone_r = max(slapper_zone.z, 0.0001);
+		float half_t = hud_line_thin * 0.5;
+		// Centre crosshair: two bars, fixed world size regardless of the zone.
+		float cross = min(
+				max(abs(rel.x) - reticle_half_len, abs(rel.y) - half_t),
+				max(abs(rel.x) - half_t, abs(rel.y) - reticle_half_len));
+		float aa_c = max(fwidth(cross), 0.0001);
+		float mark = 1.0 - smoothstep(-aa_c, aa_c, cross);
+
+		// Indicator frame: +Y of this basis is the aim direction (the node rig's
+		// local +Z), +X its right. The node rig parented the ring UNDER the arrow
+		// root, so both share this frame — which is what puts the ring's gap on
+		// the shaft's tail.
+		vec2 fwd = normalize(slapper_dir);
+		vec2 right = vec2(fwd.y, -fwd.x);
+		vec2 q = vec2(dot(rel, right), dot(rel, fwd));
+		float w = ARROW_SHAFT_HALF_W * zone_r;
+		float ring_r = slapper_zone.w * zone_r;
+
+		if (slapper_arrow) {
+			float tip_y = ARROW_TIP_DISTANCE * zone_r;
+			float shoulder_y = tip_y - ARROW_HEAD_LEN * zone_r;
+			float head_w = ARROW_HEAD_HALF_W * zone_r;
+			// The shaft starts where it clears the convergence ring, so the two
+			// never overlap — the same sqrt the node rig used.
+			float base_y = (ring_r > w) ? sqrt(ring_r * ring_r - w * w) : 0.0;
+			float d = 1e9;
+			if (base_y < shoulder_y) {
+				d = min(d, seg_dist(q, vec2(-w, base_y), vec2(-w, shoulder_y)));
+				d = min(d, seg_dist(q, vec2(w, base_y), vec2(w, shoulder_y)));
+			}
+			vec2 tip = vec2(0.0, tip_y);
+			d = min(d, seg_dist(q, vec2(-w, shoulder_y), vec2(-head_w, shoulder_y)));
+			d = min(d, seg_dist(q, vec2(w, shoulder_y), vec2(head_w, shoulder_y)));
+			d = min(d, seg_dist(q, vec2(-head_w, shoulder_y), tip));
+			d = min(d, seg_dist(q, vec2(head_w, shoulder_y), tip));
+			float aa_a = max(fwidth(d), 0.0001);
+			mark = max(mark, 1.0 - smoothstep(half_t - aa_a, half_t + aa_a, d));
+		}
+
+		// Convergence ring: an annulus with a gap where the arrow shaft leaves
+		// it, so the tail reads as continuous with the stroke.
+		if (ring_r > w + hud_line_thin) {
+			float gap_half = asin(clamp(w / ring_r, -1.0, 1.0));
+			// Angle measured from the shaft (+Y) so the gap sits on the tail.
+			float ang = abs(atan(q.x, q.y));
+			float band = abs(length(q) - (ring_r - half_t)) - half_t;
+			float aa_r = max(fwidth(band), 0.0001);
+			float ring = 1.0 - smoothstep(-aa_r, aa_r, band);
+			ring *= smoothstep(gap_half - 0.02, gap_half + 0.02, ang);
+			mark = max(mark, ring);
+		}
+		float a = mark * hud_stroke_col.a;
+		hud_rgb = hud_rgb * (1.0 - a) + hud_stroke_col.rgb * a;
+		hud_cover = hud_cover * (1.0 - a) + a;
 	}
 
 	// Resolve the unshaded HUD layer over the lit ice. The engine computes

@@ -14,10 +14,11 @@ extends GutTest
 
 const SKATER_SCENE: PackedScene = preload("res://Scenes/Skater.tscn")
 
+# Shrinks as world HUD moves out of the node tree. The slapper indicator left
+# when it became ice-shader uniforms; what stays here is what is still a node.
 const _EXPECTED_HUD_NODES: Array[String] = [
 	"StaminaRing",
 	"SelfBeacon",
-	"SlapperIndicator",
 ]
 
 

@@ -2409,6 +2409,31 @@ func chevron_field_apex() -> Vector2:
 	return _hud.chevron_apex()
 
 
+# ── Slapper indicator (read by IceRingField, drawn by the ice shader) ────────
+func slapper_field_visible() -> bool:
+	return _hud.slapper_visible()
+
+
+func slapper_field_arrow_visible() -> bool:
+	return _hud.slapper_arrow_visible()
+
+
+func slapper_field_center() -> Vector2:
+	return _hud.slapper_center()
+
+
+func slapper_field_radius() -> float:
+	return _hud.slapper_zone_radius()
+
+
+func slapper_field_ring_scale() -> float:
+	return _hud.slapper_ring_scale()
+
+
+func slapper_field_arrow_dir() -> Vector2:
+	return _hud.slapper_arrow_dir()
+
+
 func hud_screen_down() -> Vector2:
 	return _hud.screen_down()
 

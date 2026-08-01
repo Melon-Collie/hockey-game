@@ -76,14 +76,14 @@ const _BEACON_CROWD_COUNT: int            = 2
 const _BEACON_CROWD_LINGER: float         = 1.0
 const _BEACON_CROWD_CHECK_INTERVAL: float = 0.2
 
-# Slapper one-timer reticle. All geometry is built in unit (1 m) space;
-# _slapper_indicator.scale = (radius, 1, radius) carries the zone radius.
+# Slapper one-timer indicator proportions, in multiples of the zone radius.
+# MIRRORED in Shaders/ice.gdshader, which draws it — keep the two in sync.
 const _SLAPPER_RING_MIN_SCALE: float   = 0.15
 const _ARROW_TIP_DISTANCE_UNIT: float  = 1.8
 const _ARROW_HEAD_LEN_UNIT: float      = 0.30
 const _ARROW_HEAD_HALF_W_UNIT: float   = 0.20
 const _ARROW_SHAFT_HALF_W_UNIT: float  = 0.06
-const _RETICLE_HALF_LENGTH: float      = 0.06
+const RETICLE_HALF_LENGTH: float       = 0.06   # read by IceRingField
 const _RING_SEGMENTS: int              = 48
 const _SLAPPER_HUD_Y: float            = 0.05
 
@@ -140,12 +140,17 @@ var _beacon_linger_timer: float = 0.0
 var _ping_label: Label3D = null
 var _ping_bubble_time_left: float = 0.0
 
-var _slapper_indicator: Node3D
-var _slapper_indicator_mat: StandardMaterial3D
-var _slapper_reticle_node: MeshInstance3D
-var _slapper_arrow_root: Node3D
-var _slapper_arrow_mesh: MeshInstance3D
-var _slapper_ring_mesh: MeshInstance3D
+# Slapper one-timer indicator, drawn by the ice shader (see IceRingField). It was
+# five nodes — indicator root, reticle, arrow root, arrow, ring — on EVERY
+# skater, so that at most one could show them. What survives is the state the
+# shader needs; the placement, rotation and stroke geometry it used to carry in
+# transforms and rebuilt ArrayMeshes are now the shader's job.
+var _slapper_indicator_on: bool = false   # reticle + convergence ring
+var _slapper_arrow_on: bool = false
+# Skater-LOCAL, exactly as the indicator node's transform was: the world frame is
+# derived at read time, so the indicator still swings with the body.
+var _slapper_offset_local: Vector3 = Vector3.ZERO
+var _slapper_arrow_angle: float = 0.0
 
 var _slapper_zone_radius_cached: float = 0.5
 var _slapper_current_ring_scale: float = 1.0
@@ -156,22 +161,6 @@ var _slapper_current_ring_scale: float = 1.0
 # Latched once at setup; persists for the actor's lifetime.
 var _force_world_hud_hidden: bool = false
 
-# Reusable resources + buffers — _rebuild_slapper_geometry() can fire every
-# physics tick during a slapper charge, so the ArrayMeshes it fills and the
-# PackedArrays it uses are allocated once and refilled in place to keep GC
-# pressure off the hot path. `_last_rebuild_*` short-circuits when nothing
-# has changed since the previous rebuild.
-var _arrow_mesh_resource: ArrayMesh = ArrayMesh.new()
-var _ring_mesh_resource: ArrayMesh = ArrayMesh.new()
-var _arrow_verts: PackedVector3Array = PackedVector3Array()
-var _arrow_normals: PackedVector3Array = PackedVector3Array()
-var _arrow_indices: PackedInt32Array = PackedInt32Array()
-var _ring_verts: PackedVector3Array = PackedVector3Array()
-var _ring_normals: PackedVector3Array = PackedVector3Array()
-var _ring_indices: PackedInt32Array = PackedInt32Array()
-var _last_rebuild_ring_scale: float = -1.0
-var _last_rebuild_radius: float = -1.0
-var _last_rebuild_ring_visible: bool = false
 
 # Per-tick caches. `update()` runs every physics tick across every skater, so anything
 # derived from infrequently-changing inputs (camera orientation, skater Y,
@@ -261,39 +250,6 @@ func setup(skater: Skater) -> void:
 	beacon_fill.material_override = _self_beacon_fill_mat
 	_self_beacon.add_child(beacon_fill)
 
-	# Slapper one-timer reticle. The parent _slapper_indicator carries the
-	# zone offset + radius scale. Arrow + ring share _slapper_arrow_root's
-	# rotation so the ring gap stays glued to the arrow tail.
-	_slapper_indicator = Node3D.new()
-	_slapper_indicator.name = "SlapperIndicator"
-	_slapper_indicator.visible = true
-	_skater.add_child(_slapper_indicator)
-	_slapper_indicator_mat = _make_hud_ice_material()
-
-	_slapper_reticle_node = _create_reticle_mesh(_RETICLE_HALF_LENGTH)
-	_slapper_reticle_node.material_override = _slapper_indicator_mat
-	_slapper_reticle_node.visible = false
-	_slapper_reticle_node.position = Vector3(0.0, _SLAPPER_HUD_Y, 0.0)
-	_slapper_indicator.add_child(_slapper_reticle_node)
-
-	_slapper_arrow_root = Node3D.new()
-	_slapper_arrow_root.name = "SlapperArrow"
-	_slapper_arrow_root.position = Vector3(0.0, _SLAPPER_HUD_Y, 0.0)
-	_slapper_indicator.add_child(_slapper_arrow_root)
-
-	_slapper_arrow_mesh = MeshInstance3D.new()
-	_slapper_arrow_mesh.material_override = _slapper_indicator_mat
-	_slapper_arrow_mesh.visible = false
-	_slapper_arrow_mesh.mesh = _arrow_mesh_resource
-	_slapper_arrow_root.add_child(_slapper_arrow_mesh)
-
-	_slapper_ring_mesh = MeshInstance3D.new()
-	_slapper_ring_mesh.material_override = _slapper_indicator_mat
-	_slapper_ring_mesh.visible = false
-	_slapper_ring_mesh.mesh = _ring_mesh_resource
-	_slapper_arrow_root.add_child(_slapper_ring_mesh)
-
-	update_slapper_indicator_convergence(1.0)
 
 
 func update(delta: float) -> void:
@@ -303,8 +259,6 @@ func update(delta: float) -> void:
 			_ring_visible = false
 			if _stamina_ring_mesh != null: _stamina_ring_mesh.visible = false
 			_name_visible = false
-			if _slapper_indicator != null: _slapper_indicator.visible = false
-			if _slapper_ring_mesh != null: _slapper_ring_mesh.visible = false
 			if _self_beacon != null: _self_beacon.visible = false
 			if _ping_label != null:
 				_ping_label.visible = false
@@ -313,12 +267,10 @@ func update(delta: float) -> void:
 	if _hidden_for_replay:
 		_hidden_for_replay = false
 		# Restore the always-visible nodes. _stamina_ring_mesh,
-		# _slapper_indicator children, and _slapper_ring_mesh are gated by
-		# their own show logic (driven from skater / stamina state) and will
-		# re-enable themselves as needed.
+		# the slapper indicator, and the beacon are gated by their own show logic
+		# (driven from skater / stamina state) and re-enable themselves as needed.
 		_ring_visible = true
 		_name_visible = true
-		if _slapper_indicator != null: _slapper_indicator.visible = true
 		_update_beacon_visibility()
 
 	_refresh_height_anchors_if_skater_moved()
@@ -429,10 +381,9 @@ func _refresh_height_anchors_if_skater_moved() -> void:
 	if is_equal_approx(y, _last_skater_y):
 		return
 	_last_skater_y = y
-	# The slot ring needs no anchoring any more — the ice shader draws it at the
-	# ice surface by construction, which is what this was re-pinning it to.
-	if _slapper_indicator != null:
-		_slapper_indicator.global_position.y = 0.0
+	# Nothing to re-anchor any more — the ice shader draws the slot ring and the
+	# slapper indicator at the ice surface by construction, which is what this
+	# was re-pinning them to.
 
 
 # Screen-down + chevron direction depend only on the local camera's orientation.
@@ -611,52 +562,72 @@ func set_world_hud_hidden(hidden: bool) -> void:
 		_ring_visible = false
 		if _stamina_ring_mesh != null: _stamina_ring_mesh.visible = false
 		_name_visible = false
-		if _slapper_indicator != null: _slapper_indicator.visible = false
-		if _slapper_ring_mesh != null: _slapper_ring_mesh.visible = false
+		_slapper_indicator_on = false
+		_slapper_arrow_on = false
 		if _self_beacon != null: _self_beacon.visible = false
 
 
 func update_slapper_indicator_convergence(ratio: float) -> void:
 	_slapper_current_ring_scale = lerpf(
 			_SLAPPER_RING_MIN_SCALE, 1.0, clampf(ratio, 0.0, 1.0))
-	_rebuild_slapper_geometry()
 
 
 func set_slapshot_arrow(active: bool, offset_x: float = 0.0, offset_z: float = 0.0, radius: float = -1.0) -> void:
-	if _slapper_arrow_mesh == null:
-		return
 	if not active:
-		_slapper_arrow_mesh.visible = false
+		_slapper_arrow_on = false
 		return
-	var r: float = radius if radius > 0.0 else _slapper_zone_radius_cached
-	_apply_slapshot_zone_transform(offset_x, offset_z, r)
-	_slapper_arrow_mesh.visible = true
-	_rebuild_slapper_geometry()
+	_store_slapper_zone(offset_x, offset_z,
+			radius if radius > 0.0 else _slapper_zone_radius_cached)
+	_slapper_arrow_on = true
 
 
 func update_slapshot_arrow_direction(world_dir: Vector3) -> void:
-	if _slapper_arrow_root == null or not _slapper_arrow_mesh.visible:
-		return
-	if world_dir.length() < 0.001:
+	if not _slapper_arrow_on:
 		return
 	var local_dir: Vector3 = _skater.global_transform.basis.inverse() * world_dir
 	local_dir.y = 0.0
 	if local_dir.length() < 0.001:
 		return
-	_slapper_arrow_root.rotation.y = atan2(local_dir.x, local_dir.z)
+	_slapper_arrow_angle = atan2(local_dir.x, local_dir.z)
 
 
 func set_slapper_indicator(active: bool, offset_x: float = 0.0, offset_z: float = 0.0, radius: float = 0.5) -> void:
-	if _slapper_ring_mesh == null or _slapper_reticle_node == null:
-		return
 	if not active:
-		_slapper_ring_mesh.visible = false
-		_slapper_reticle_node.visible = false
+		_slapper_indicator_on = false
 		return
-	_apply_slapshot_zone_transform(offset_x, offset_z, radius)
-	_slapper_ring_mesh.visible = true
-	_slapper_reticle_node.visible = true
+	_store_slapper_zone(offset_x, offset_z, radius)
+	_slapper_indicator_on = true
 	update_slapper_indicator_convergence(1.0)
+
+
+# ── Read by IceRingField each frame ──────────────────────────────────────────
+# Local-to-world happens here rather than at store time so the indicator tracks
+# the body the way a child node did.
+func slapper_visible() -> bool:
+	return _slapper_indicator_on and not _skater.is_ghost
+
+
+func slapper_arrow_visible() -> bool:
+	return _slapper_arrow_on and not _skater.is_ghost
+
+
+func slapper_center() -> Vector2:
+	var world: Vector3 = _skater.global_transform * _slapper_offset_local
+	return Vector2(world.x, world.z)
+
+
+func slapper_zone_radius() -> float:
+	return _slapper_zone_radius_cached
+
+
+func slapper_ring_scale() -> float:
+	return _slapper_current_ring_scale
+
+
+func slapper_arrow_dir() -> Vector2:
+	var local := Vector3(sin(_slapper_arrow_angle), 0.0, cos(_slapper_arrow_angle))
+	var world: Vector3 = _skater.global_transform.basis * local
+	return Vector2(world.x, world.z)
 
 
 func set_slapper_indicator_ready(_is_ready: bool) -> void:
@@ -728,13 +699,8 @@ func apply_ghost(ghost: bool) -> void:
 	_name_visible = not ghost and not hud_hidden
 	# The stamina ring is left alone: like the beacon, it stays useful while
 	# ghosted (sprinting back to tag up), and its own show logic re-gates it.
-	if ghost:
-		if _slapper_arrow_mesh != null:
-			_slapper_arrow_mesh.visible = false
-		if _slapper_ring_mesh != null:
-			_slapper_ring_mesh.visible = false
-		if _slapper_reticle_node != null:
-			_slapper_reticle_node.visible = false
+	# The slapper indicator reads _skater.is_ghost directly (see slapper_visible),
+	# so ghosting needs no latch of its own here.
 	# set_ghost() writes _skater.is_ghost before calling here, so the gate sees
 	# the up-to-date ghost state (beacon stays visible while ghosted).
 	_update_beacon_visibility()
@@ -742,105 +708,14 @@ func apply_ghost(ghost: bool) -> void:
 
 # ── Private: zone transform ───────────────────────────────────────────────────
 
-func _apply_slapshot_zone_transform(offset_x: float, offset_z: float, radius: float) -> void:
+func _store_slapper_zone(offset_x: float, offset_z: float, radius: float) -> void:
 	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
-	_slapper_indicator.position = Vector3(blade_side_sign * offset_x, 0.0, offset_z)
-	_slapper_indicator.scale = Vector3(radius, 1.0, radius)
-	# Re-anchor to ice level — the Skater root sits at body-center height, so
-	# the local Y=0 just written puts the ring at chest height in world. The
-	# per-frame anchor in _refresh_height_anchors_if_skater_moved would catch
-	# this on a Y change, but skater Y is constant during play so it never
-	# re-fires after the initial frame; do it explicitly here every time we
-	# rebase the position. Setting global Y rebases local Y without touching XZ.
-	_slapper_indicator.global_position.y = 0.0
+	_slapper_offset_local = Vector3(blade_side_sign * offset_x, 0.0, offset_z)
 	_slapper_zone_radius_cached = radius
-	# Counter-scale the centre crosshair so it stays at fixed world size
-	# regardless of the parent indicator's radius scale.
-	if _slapper_reticle_node != null:
-		var inv: float = 1.0 / max(radius, 0.001)
-		_slapper_reticle_node.scale = Vector3(inv, 1.0, inv)
-
-
-# ── Private: slapper geometry rebuild ────────────────────────────────────────
-
-func _rebuild_slapper_geometry() -> void:
-	if _slapper_arrow_mesh == null or _slapper_ring_mesh == null:
-		return
-	# Short-circuit when nothing's changed. Convergence ticks where the puck
-	# is momentarily stationary, plus all calls after the charge ends, hit
-	# this path and skip allocating + uploading identical geometry.
-	var ring_visible: bool = _slapper_ring_mesh.visible
-	if (is_equal_approx(_slapper_current_ring_scale, _last_rebuild_ring_scale)
-			and is_equal_approx(_slapper_zone_radius_cached, _last_rebuild_radius)
-			and ring_visible == _last_rebuild_ring_visible):
-		return
-	_last_rebuild_ring_scale = _slapper_current_ring_scale
-	_last_rebuild_radius = _slapper_zone_radius_cached
-	_last_rebuild_ring_visible = ring_visible
-
-	var r: float = _slapper_current_ring_scale
-	var w: float = _ARROW_SHAFT_HALF_W_UNIT
-	# Counter-scale stroke thickness so lines stay at HUD_LINE_THIN world meters.
-	var t_unit: float = MenuStyle.HUD_LINE_THIN / max(_slapper_zone_radius_cached, 0.001)
-	var tip_z: float = _ARROW_TIP_DISTANCE_UNIT
-	var head_len: float = _ARROW_HEAD_LEN_UNIT
-	var head_half_w: float = _ARROW_HEAD_HALF_W_UNIT
-	var shoulder_z: float = tip_z - head_len
-
-	# ── Arrow mesh (shaft sides + shoulders + head diagonals) ──
-	_arrow_verts.clear()
-	_arrow_normals.clear()
-	_arrow_indices.clear()
-	var shaft_base_z: float = 0.0
-	if ring_visible and r > w:
-		shaft_base_z = sqrt(r * r - w * w)
-	if shaft_base_z < shoulder_z:
-		for sign_x: float in [-1.0, 1.0]:
-			var shaft_tail := Vector2(sign_x * w, shaft_base_z)
-			var shaft_top  := Vector2(sign_x * w, shoulder_z)
-			_append_strip(_arrow_verts, _arrow_normals, _arrow_indices, shaft_tail, shaft_top, t_unit)
-	var tip := Vector2(0.0, tip_z)
-	for sign_x_h: float in [-1.0, 1.0]:
-		var shoulder_in  := Vector2(sign_x_h * w, shoulder_z)
-		var shoulder_out := Vector2(sign_x_h * head_half_w, shoulder_z)
-		_append_strip(_arrow_verts, _arrow_normals, _arrow_indices, shoulder_in, shoulder_out, t_unit)
-		_append_strip(_arrow_verts, _arrow_normals, _arrow_indices, shoulder_out, tip, t_unit)
-	_upload_to_mesh(_arrow_mesh_resource, _arrow_verts, _arrow_normals, _arrow_indices)
-
-	# ── Ring mesh (partial-arc annulus with gap on the arrow tail side) ──
-	_ring_verts.clear()
-	_ring_normals.clear()
-	_ring_indices.clear()
-	if r > w + t_unit:
-		var gap_half: float = asin(clampf(w / r, -1.0, 1.0))
-		var sweep_total: float = TAU - 2.0 * gap_half
-		var seg_count: int = max(8, int(ceil(_RING_SEGMENTS * sweep_total / TAU)))
-		_append_partial_ring(_ring_verts, _ring_normals, _ring_indices,
-				r - t_unit, r,
-				gap_half, TAU - gap_half, seg_count)
-	_upload_to_mesh(_ring_mesh_resource, _ring_verts, _ring_normals, _ring_indices)
-
-
-func _upload_to_mesh(
-		mesh: ArrayMesh,
-		verts: PackedVector3Array,
-		normals: PackedVector3Array,
-		indices: PackedInt32Array) -> void:
-	mesh.clear_surfaces()
-	if verts.size() == 0:
-		return
-	var arrays: Array = []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = normals
-	arrays[Mesh.ARRAY_INDEX] = indices
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 
 
 # ── Private: mesh builders ────────────────────────────────────────────────────
 
-# Bakes a clockwise-from-12-o'clock UV.x onto every vertex so the charge-ring
-# shader can use it as an angular fill mask.
 func _create_ring_mesh_with_uv(inner_r: float, outer_r: float, segments: int) -> ArrayMesh:
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
@@ -875,88 +750,6 @@ func _create_ring_mesh_with_uv(inner_r: float, outer_r: float, segments: int) ->
 
 
 # Centre crosshair for the slapper one-timer reticle.
-func _create_reticle_mesh(half_len: float) -> MeshInstance3D:
-	var thickness: float = MenuStyle.HUD_LINE_THIN
-	var verts := PackedVector3Array()
-	var normals := PackedVector3Array()
-	var indices := PackedInt32Array()
-	var half_t: float = thickness * 0.5
-	_append_quad(verts, normals, indices,
-			-half_len, -half_t, -half_len, half_t,
-			half_len, half_t, half_len, -half_t)
-	_append_quad(verts, normals, indices,
-			-half_t, -half_len, -half_t, half_len,
-			half_t, half_len, half_t, -half_len)
-	var arrays: Array = []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = normals
-	arrays[Mesh.ARRAY_INDEX] = indices
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	var inst := MeshInstance3D.new()
-	inst.mesh = mesh
-	return inst
-
-
-func _append_strip(
-		verts: PackedVector3Array, normals: PackedVector3Array, indices: PackedInt32Array,
-		a_pt: Vector2, b_pt: Vector2, thickness: float) -> void:
-	var edge: Vector2 = b_pt - a_pt
-	var edge_len: float = edge.length()
-	if edge_len < 0.0001:
-		return
-	var edge_dir: Vector2 = edge / edge_len
-	var edge_perp := Vector2(-edge_dir.y, edge_dir.x)
-	var half_t: float = thickness * 0.5
-	var p0: Vector2 = a_pt + edge_perp * half_t
-	var p1: Vector2 = a_pt - edge_perp * half_t
-	var p2: Vector2 = b_pt - edge_perp * half_t
-	var p3: Vector2 = b_pt + edge_perp * half_t
-	_append_quad(verts, normals, indices,
-			p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y)
-
-
-func _append_partial_ring(
-		verts: PackedVector3Array, normals: PackedVector3Array, indices: PackedInt32Array,
-		inner_r: float, outer_r: float,
-		start_angle: float, end_angle: float, segments: int) -> void:
-	if segments <= 0:
-		return
-	var sweep: float = end_angle - start_angle
-	for i: int in segments:
-		var t0: float = float(i) / float(segments)
-		var t1: float = float(i + 1) / float(segments)
-		var a0: float = start_angle + sweep * t0
-		var a1: float = start_angle + sweep * t1
-		var s0: float = sin(a0); var c0: float = cos(a0)
-		var s1: float = sin(a1); var c1: float = cos(a1)
-		var base: int = verts.size()
-		verts.append(Vector3(s0 * inner_r, 0.0, c0 * inner_r))
-		verts.append(Vector3(s0 * outer_r, 0.0, c0 * outer_r))
-		verts.append(Vector3(s1 * inner_r, 0.0, c1 * inner_r))
-		verts.append(Vector3(s1 * outer_r, 0.0, c1 * outer_r))
-		for _n: int in 4:
-			normals.append(Vector3.UP)
-		indices.append_array([base, base + 1, base + 2, base + 1, base + 3, base + 2])
-
-
-func _append_quad(
-		verts: PackedVector3Array, normals: PackedVector3Array, indices: PackedInt32Array,
-		x0: float, z0: float, x1: float, z1: float,
-		x2: float, z2: float, x3: float, z3: float) -> void:
-	var base: int = verts.size()
-	verts.append(Vector3(x0, 0.0, z0))
-	verts.append(Vector3(x1, 0.0, z1))
-	verts.append(Vector3(x2, 0.0, z2))
-	verts.append(Vector3(x3, 0.0, z3))
-	for _n: int in 4:
-		normals.append(Vector3.UP)
-	indices.append_array([base, base + 1, base + 2, base, base + 2, base + 3])
-
-
-# Downward-pointing triangle in the local XY plane (billboard space): the apex
-# sits at the bottom and points down at the skater; the base spans the top.
 func _create_beacon_mesh(half_w: float, half_h: float) -> ArrayMesh:
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
