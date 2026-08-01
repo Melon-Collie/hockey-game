@@ -629,7 +629,7 @@ func _step_def_for(step_id: int) -> TutorialStep:
 			return _step(
 				"Shot Block",
 				"A shot is coming at you. Hold {block} to drop into a blocking stance, get your body in its path, and eat it.",
-				"Line up with the puck — the crouch widens you. The step completes when a shot actually hits you.")
+				"Line up with the puck — dropping to a knee widens you. The step completes when a shot actually hits you.")
 		STEP_OFFSIDES:
 			return _step(
 				"Offsides",

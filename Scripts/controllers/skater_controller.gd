@@ -808,14 +808,19 @@ var show_one_timer_indicator: bool = false
 @export var block_hand_forward: float = 0.3  # forward push of the top hand (m, local −Z)
 @export var block_hand_x: float = 0.1        # lateral top-hand offset to the stick side (m)
 @export var block_hand_y: float = -0.10      # top-hand height while blocking (m, local; matches mesh-native hand_rest_y)
-# Cosmetic block BODY pose (gait + pose coordinator): the blocker drops into a
-# low, wide wall — deep knee bend with the matching whole-body sink, both legs
-# spread into a braced V, and the chest folds over the knees — instead of the
-# old bolt-upright mannequin with straight legs. Keyed off the replicated
-# current_shot_state, so remote blockers read identically.
-@export var block_stance: float = 0.9            # stance-crouch floor while blocking (fraction of stance_hip_deg)
-@export var block_spread_deg: float = 16.0       # both legs splay outward — the braced wall base
-@export var block_trunk_pitch_deg: float = 14.0  # chest folds forward over the knees
+# Cosmetic block BODY pose (gait + pose coordinator): the one-knee drop a real
+# skater blocks with — the stick-side knee sinks toward the ice with the shin
+# folded back along it, the far leg extends out to the other side sealing the
+# ice the stick can't cover, and the chest tips forward over the down knee.
+# These three leg angles fully determine the pose: the kneeling hip height falls
+# out of the down leg, and the extended leg's abduction is solved from that
+# height so its skate stays on the ice (SkaterSkatingCoordinator). Keyed off the
+# replicated current_shot_state, so remote blockers read identically.
+@export var block_kneel_hip_deg: float = 30.0    # down-leg thigh, forward of vertical
+@export var block_kneel_shin_deg: float = 76.0   # down-leg shin, from vertical (90 = flat on the ice)
+@export var block_extend_knee_deg: float = 10.0  # residual flex in the extended leg — never locked straight
+@export var block_trunk_pitch_deg: float = 16.0  # chest tips forward over the down knee
+@export var block_trunk_roll_deg: float = 10.0   # ...and rolls onto it, off the extended leg
 @export var block_pose_blend_speed: float = 12.0 # snap-in speed of the body pose (the plant is committed)
 
 # ── Goalie Body Block ─────────────────────────────────────────────────────────
@@ -2178,7 +2183,7 @@ func _enter_shot_block() -> void:
 	# (authored in upper-body-local space) points straight along the snapped
 	# facing instead of inheriting residual twist from the prior state. The
 	# torso pipeline's block branch holds the yaw square for the duration and
-	# eases only the chest-over-knees pitch in from this cleared baseline.
+	# eases only the tip onto the down knee in from this cleared baseline.
 	_pose.reset_lean_and_lag()
 	skater.set_upper_body_rotation(0.0)
 	skater.set_upper_body_lean(0.0)

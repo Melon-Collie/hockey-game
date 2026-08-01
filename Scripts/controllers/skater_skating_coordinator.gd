@@ -127,9 +127,9 @@ var _slap_load: float = 0.0         # smoothed 0..1 wind-up engagement
 var _shot_kick_t: float = -1.0      # seconds into the release kick; <0 = idle
 var _shot_kick_power: float = 0.0   # load latched at release (min-pop floored)
 var _shot_kick_is_slap: bool = false
-# Smoothed shot-block engagement: the braced wall pose (deep sit, wide V legs)
-# snaps in with the committed plant and eases back out on release. Keyed off
-# the replicated current_shot_state like the shot signals above.
+# Smoothed shot-block engagement: the one-knee drop snaps in with the committed
+# plant and eases back out on release. Keyed off the replicated
+# current_shot_state like the shot signals above.
 var _block_blend: float = 0.0
 # Check-delivery drive: the hitter's shoulder finishing through the contact.
 # Started by SkaterController.start_check_drive off the host-authoritative
@@ -225,7 +225,7 @@ func apply(delta: float) -> void:
 	var ground_speed: float = Vector2(vel.x, vel.z).length()
 	var speed_t: float = clampf(ground_speed / maxf(_controller.max_speed, 0.001), 0.0, 1.0)
 
-	# Plant the legs while shot-blocking (the braced wall pose below owns them);
+	# Plant the legs while shot-blocking (the one-knee drop below owns them);
 	# otherwise drive intensity from speed — GATED BY INTENT: no movement keys
 	# means a glide, so the legs settle to rest and ride the edges even at full
 	# speed. The stride is something the player DOES, not something speed does
@@ -331,7 +331,7 @@ func apply(delta: float) -> void:
 		else:
 			kick_env = sin(PI * pow(kt, _controller.follow_through_arc_skew)) * _shot_kick_power
 	# Shot-block engagement: fast into the committed plant, eased back out on
-	# release so the wall doesn't pop back to a stride.
+	# release so the knee drop doesn't pop back to a stride.
 	_block_blend = lerpf(_block_blend, 1.0 if planted else 0.0,
 			minf(_controller.block_pose_blend_speed * delta, 1.0))
 	# Check-delivery drive envelope: an explosive rise (peaks ~15% in) easing
@@ -640,10 +640,6 @@ func apply(delta: float) -> void:
 	var kick_stance: float = _controller.slapper_kick_stance if _shot_kick_is_slap \
 			else _controller.wrister_kick_stance
 	stance = maxf(stance, kick_stance * kick_env)
-	# The shot block sits DEEP — the wall is low, knees bent under the dropped
-	# torso (Skater's block_crouch_depth lowers the chest; this bends the legs
-	# to match instead of leaving them straight).
-	stance = maxf(stance, _controller.block_stance * _block_blend)
 	# A landed check drives with the LEGS — the finishing base under the
 	# shoulder — and a stick lift works from a light coil.
 	stance = maxf(stance, _controller.check_drive_stance * drive_env)
@@ -763,16 +759,6 @@ func apply(delta: float) -> void:
 			r_pitch -= kick_back
 		else:
 			l_pitch -= kick_back
-
-	# Shot-block wall: both legs splay outward into a wide braced V under the
-	# deep sit (the reversal-plant idiom, held instead of momentary). Splayed
-	# legs shorten their vertical span, so fold the small-angle deficit into
-	# the body drop — the skates stay planted instead of floating.
-	if _block_blend > 0.001:
-		var block_spread: float = deg_to_rad(_controller.block_spread_deg) * _block_blend
-		l_roll -= block_spread
-		r_roll += block_spread
-		drop += leg_scale * (_THIGH_LEN + _SHIN_LEN) * (1.0 - cos(block_spread))
 
 	# Forward / backward gait. Shared side-to-side roll rocks the lower body onto
 	# alternating edges (each leg pivots about its own hip, so the same roll
@@ -1043,6 +1029,51 @@ func apply(delta: float) -> void:
 		var wobble_phase: float = _controller.stagger_timer * TAU * _controller.stagger_wobble_hz
 		trunk_pitch_add += wobble_amp * sin(wobble_phase)
 		trunk_roll_add += wobble_amp * 0.7 * sin(wobble_phase * 1.31)
+
+	# ── Shot block: the one-knee drop ─────────────────────────────────────────
+	# The block a real skater plays. The STICK-SIDE knee sinks toward the ice
+	# with the shin folded back along it; the far leg extends out to the other
+	# side, shin low and skate on the ice. Body and stick then seal opposite
+	# halves of the lane — the blade lies flat on the stick side
+	# (SkaterShotPoseCoordinator.apply_block_blade_position), the extended pad
+	# covers the other, which is why the block's reach is wider than the torso.
+	#
+	# Geometry, not authored numbers: the kneeling hip height falls out of the
+	# down leg's thigh/shin angles, and the extended leg's abduction is SOLVED
+	# from that same height (its vertical span is exactly leg·cos(roll), since
+	# the knee folds in the rolled leg's own sagittal plane) so its skate lands
+	# on the ice instead of floating above it or scissoring through it.
+	#
+	# The pose REPLACES the stance rather than layering on it — lerped on
+	# _block_blend like the knockdown crumple below, which supersedes it (a
+	# blocker who gets run over goes down, he doesn't hold the knee).
+	if _block_blend > 0.001:
+		var kneel_hip: float = deg_to_rad(_controller.block_kneel_hip_deg)
+		var kneel_shin: float = deg_to_rad(_controller.block_kneel_shin_deg)
+		var hip_h: float = leg_scale \
+				* (_THIGH_LEN * cos(kneel_hip) + _SHIN_LEN * cos(kneel_shin))
+		var ext_knee: float = deg_to_rad(_controller.block_extend_knee_deg)
+		var ext_len: float = leg_scale * (_THIGH_LEN + _SHIN_LEN * cos(ext_knee))
+		var ext_roll: float = acos(clampf(hip_h / maxf(ext_len, 0.001), -1.0, 1.0))
+		# Knee value is the total fold (hip + shin-from-vertical), negative-folds-
+		# back, matching the stance_knee convention above. The extended leg rolls
+		# AWAY from the body: left toward −X (negative roll), right toward +X.
+		var down_knee: float = -(kneel_hip + kneel_shin)
+		if stick_side > 0.0:
+			r_pitch = lerpf(r_pitch, kneel_hip, _block_blend)
+			r_roll = lerpf(r_roll, 0.0, _block_blend)
+			r_knee = lerpf(r_knee, down_knee, _block_blend)
+			l_pitch = lerpf(l_pitch, 0.0, _block_blend)
+			l_roll = lerpf(l_roll, -ext_roll, _block_blend)
+			l_knee = lerpf(l_knee, -ext_knee, _block_blend)
+		else:
+			l_pitch = lerpf(l_pitch, kneel_hip, _block_blend)
+			l_roll = lerpf(l_roll, 0.0, _block_blend)
+			l_knee = lerpf(l_knee, down_knee, _block_blend)
+			r_pitch = lerpf(r_pitch, 0.0, _block_blend)
+			r_roll = lerpf(r_roll, ext_roll, _block_blend)
+			r_knee = lerpf(r_knee, -ext_knee, _block_blend)
+		drop = lerpf(drop, leg_scale * (_THIGH_LEN + _SHIN_LEN) - hip_h, _block_blend)
 
 	# Knockdown crumple: sink the body toward the ice and let the stride swing go
 	# limp, blended by kd_t so a downed body doesn't keep pumping strides while it

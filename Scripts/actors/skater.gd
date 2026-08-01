@@ -229,14 +229,13 @@ var is_local_skater: bool = false
 # ── Body Block Tuning ─────────────────────────────────────────────────────────
 @export var body_block_radius: float = 0.5
 @export var block_body_radius: float = 0.9
-@export var block_crouch_depth: float = 0.35
 # Vertical center of the body-block sphere, in skater-local space (origin sits at
 # the hips). Raised to torso height so the PASSIVE sphere (body_block_radius)
 # clears a grounded puck (top ≈ ice_height + radius ≈ 0.12) — loose pucks on the
 # ice slip under/between the legs, enabling nutmegs. The WIDER explicit-block
 # sphere (block_body_radius, Ctrl) is what stops a low puck: set_block_stance
 # rebases it to seal from the ice up (the hip-height origin puts this local
-# offset at the torso, so without the rebase a flat shot slid under the crouch).
+# offset at the torso, so without the rebase a flat shot slid under the block).
 # Mirrors the grounded-vs-airborne split the blade already uses.
 @export var body_block_height: float = 0.7
 
@@ -1386,9 +1385,8 @@ func set_skeleton_root_offset(offset: float) -> void:
 
 
 func _apply_body_height() -> void:
-	var block_depth: float = block_crouch_depth if _block_stance_active else 0.0
 	upper_body.position.y = _default_upper_body_y + _skeleton_root_offset \
-			- block_depth - _skating_crouch_drop
+			- _skating_crouch_drop
 	lower_body.position.y = _default_lower_body_y + _skeleton_root_offset \
 			- _skating_crouch_drop
 
@@ -2339,17 +2337,22 @@ func set_ghost(ghost: bool) -> void:
 
 
 # ── Shot-Block Stance ─────────────────────────────────────────────────────────
+# The block's BODY pose (the one-knee drop) is the gait's, off the replicated
+# shot state — this flag is the collision half: the wider block cylinder below,
+# and a blade that stops corralling (it's committed flat to the ice).
 func set_block_stance(active: bool) -> void:
 	_block_stance_active = active
-	_apply_body_height()
 	_blade_area.collision_layer = 0 if active else Constants.LAYER_BLADE_AREAS
 
 
 # The body-block CYLINDER the analytic detector tests against (PuckController) — a vertical
 # cylinder at the skater's XZ axis matching the torso. PASSIVE: radius body_block_radius over a
 # torso band raised off the ice, so a grounded puck slides UNDER (a flat shot passes clean).
-# SHOT-BLOCK crouch: the wider block_body_radius, banded from the ice up so a low shot is
-# sealed. Reach is uniform across the band (unlike the old sphere, which bulged at one height).
+# SHOT-BLOCK: the wider block_body_radius, banded from the ice up so a low shot is sealed —
+# the pose earns that width with the leg extended along the ice on one side and the stick
+# flat on the other. Reach is uniform across the band (unlike the old sphere, which bulged
+# at one height), and its full height is not the kneeling body's: an elevated shot still
+# meets the seal.
 func get_body_block_radius() -> float:
 	return block_body_radius if _block_stance_active else body_block_radius
 
@@ -2357,7 +2360,7 @@ func get_body_block_radius() -> float:
 # World-Y extent [bottom, top] of the body-block cylinder.
 func get_body_block_y_range() -> Vector2:
 	if _block_stance_active:
-		# Seal the ice up through the body (a crouched block stops a flat shot).
+		# Seal the ice up through the body (a committed block stops a flat shot).
 		return Vector2(0.0, 2.0 * block_body_radius)
 	# Torso band centred at body_block_height, raised off the ice so a grounded puck passes under.
 	var center_y: float = global_position.y + body_block_height
