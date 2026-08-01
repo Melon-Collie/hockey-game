@@ -8,33 +8,41 @@ extends RefCounted
 # slots real gear is built out of — black, white, and the wearer's team color —
 # so a design reads as itself on every kit while still belonging to it.
 #
-# Zones are the paintable surfaces the rig already carries: a skate is
-# BOOT / COLLAR / STRIPE (the band ringing the ankle collar), a glove is
-# BODY / CUFF. Laces are NOT part of a model — players pick those apart from
-# the skate, as they do at the rink.
+# Zones are the paintable surfaces the rig carries: a skate is QUARTER (the
+# boot's heel-through-instep shell) / TOE cap / COLLAR / STRIPE (the band
+# ringing the ankle collar) / HOLDER (the plastic the steel bolts into), a
+# glove is BODY (the back of the hand) / FINGERS / CUFF. The steel RUNNER is
+# deliberately not a zone — it is steel in life and stays steel here. Laces
+# are not part of a model either; players pick those apart from the skate, as
+# they do at the rink.
 #
 # The catalogue is wire data: model indices travel in the packed GearStyleConfig
 # code, so rows must only ever be APPENDED — reordering or removing one silently
 # re-equips every player who had picked it.
 #
-# Index 0 of each list is the design the game shipped before models existed
-# (all-black skate, kit-colored glove), so an untouched player looks unchanged.
+# Index 0 of each list is the stock design (all-black skate, kit-colored
+# glove), which is what an untouched player wears. The one deliberate
+# departure from the pre-models look is the blade HOLDER: it used to render
+# steel along with the runner, which read as one gray lump under the boot.
+# Real holders are molded plastic, so the stock skate now wears a black one.
 
 enum Paint { BLACK, WHITE, TEAM }
 
 # Zone order within a model row — also the left-to-right order the workbench
 # draws a model's swatch strip in, outermost piece first.
-const SKATE_BOOT: int = 0
-const SKATE_COLLAR: int = 1
-const SKATE_STRIPE: int = 2
-const SKATE_ZONE_COUNT: int = 3
+const SKATE_QUARTER: int = 0
+const SKATE_TOE: int = 1
+const SKATE_COLLAR: int = 2
+const SKATE_STRIPE: int = 3
+const SKATE_HOLDER: int = 4
+const SKATE_ZONE_COUNT: int = 5
 const GLOVE_BODY: int = 0
-const GLOVE_CUFF: int = 1
-const GLOVE_ZONE_COUNT: int = 2
+const GLOVE_FINGERS: int = 1
+const GLOVE_CUFF: int = 2
+const GLOVE_ZONE_COUNT: int = 3
 
 # Synthetic-leather black and the off-white real gear is dyed in. BLACK matches
-# the boot dark every skater wore before models existed, so model 0 is a
-# pixel-identical skate.
+# the boot dark every skater wore before models existed.
 const BLACK := Color(0.08, 0.08, 0.08)
 const WHITE := Color(0.90, 0.90, 0.90)
 
@@ -56,14 +64,21 @@ const SKATE_NAME_KEYS: Array[StringName] = [
 	&"GEAR_MODEL_PRO",
 ]
 
-# (boot, collar, stripe) per model, index-aligned with SKATE_NAME_KEYS.
-const _SKATE_MODELS: Array[Vector3i] = [
-	Vector3i(Paint.BLACK, Paint.BLACK, Paint.BLACK),   # Blackout — the stock pro skate
-	Vector3i(Paint.BLACK, Paint.BLACK, Paint.TEAM),    # Team — black boot, team band
-	Vector3i(Paint.BLACK, Paint.WHITE, Paint.BLACK),   # Retro — the old white ankle cuff
-	Vector3i(Paint.WHITE, Paint.WHITE, Paint.TEAM),    # Whiteout — white boot, team band
-	Vector3i(Paint.WHITE, Paint.BLACK, Paint.BLACK),   # Two-Tone — white boot, black cuff
-	Vector3i(Paint.BLACK, Paint.TEAM, Paint.WHITE),    # Pro — team cuff under a white band
+# (quarter, toe, collar, stripe, holder) per model, index-aligned with
+# SKATE_NAME_KEYS.
+const _SKATE_MODELS: Array[Array] = [
+	# Blackout — the stock pro skate, black to the holder.
+	[Paint.BLACK, Paint.BLACK, Paint.BLACK, Paint.BLACK, Paint.BLACK],
+	# Team — black boot, the kit on the band and the holder.
+	[Paint.BLACK, Paint.BLACK, Paint.BLACK, Paint.TEAM, Paint.TEAM],
+	# Retro — the old white ankle cuff over a black boot, on a white holder.
+	[Paint.BLACK, Paint.BLACK, Paint.WHITE, Paint.BLACK, Paint.WHITE],
+	# Whiteout — white through the boot with a team band.
+	[Paint.WHITE, Paint.WHITE, Paint.WHITE, Paint.TEAM, Paint.WHITE],
+	# Two-Tone — white quarter, black toe cap and cuff.
+	[Paint.WHITE, Paint.BLACK, Paint.BLACK, Paint.BLACK, Paint.BLACK],
+	# Pro — black boot, white toe cap, team band, white holder.
+	[Paint.BLACK, Paint.WHITE, Paint.BLACK, Paint.TEAM, Paint.WHITE],
 ]
 
 const GLOVE_TEAM: int = 0
@@ -82,14 +97,14 @@ const GLOVE_NAME_KEYS: Array[StringName] = [
 	&"GEAR_MODEL_TWO_TONE",
 ]
 
-# (body, cuff) per model, index-aligned with GLOVE_NAME_KEYS.
-const _GLOVE_MODELS: Array[Vector2i] = [
-	Vector2i(Paint.TEAM, Paint.TEAM),     # Team — the kit glove, cuff and all
-	Vector2i(Paint.TEAM, Paint.WHITE),    # Pro — kit body, white cuff
-	Vector2i(Paint.BLACK, Paint.BLACK),   # Blackout
-	Vector2i(Paint.BLACK, Paint.TEAM),    # Contrast — black body, team cuff
-	Vector2i(Paint.WHITE, Paint.TEAM),    # Vintage — white body, team cuff
-	Vector2i(Paint.TEAM, Paint.BLACK),    # Two-Tone — kit body, black cuff
+# (body, fingers, cuff) per model, index-aligned with GLOVE_NAME_KEYS.
+const _GLOVE_MODELS: Array[Array] = [
+	[Paint.TEAM, Paint.TEAM, Paint.TEAM],     # Team — the kit glove, cuff and all
+	[Paint.TEAM, Paint.TEAM, Paint.WHITE],    # Pro — kit glove, white cuff
+	[Paint.BLACK, Paint.BLACK, Paint.BLACK],  # Blackout
+	[Paint.BLACK, Paint.TEAM, Paint.TEAM],    # Contrast — black back, kit fingers
+	[Paint.WHITE, Paint.TEAM, Paint.TEAM],    # Vintage — white back, kit fingers
+	[Paint.TEAM, Paint.BLACK, Paint.BLACK],   # Two-Tone — kit back, black fingers
 ]
 
 
@@ -114,15 +129,15 @@ static func is_valid_glove(model: int) -> bool:
 # out-of-range model (a forged wire code, a future catalogue) paints model 0,
 # matching from_code's clamp rather than throwing at the paint seam.
 static func skate_color(model: int, zone: int, team_color: Color) -> Color:
-	var row: Vector3i = _SKATE_MODELS[model] if is_valid_skate(model) else _SKATE_MODELS[0]
-	return resolve(row[zone], team_color)
+	var row: Array = _SKATE_MODELS[model] if is_valid_skate(model) else _SKATE_MODELS[0]
+	return resolve(int(row[zone]), team_color)
 
 
 # The paint for one zone of a glove model. `team_color` is the kit's GLOVE
 # color, so a TEAM zone matches the jersey's gloves rather than the accent.
 static func glove_color(model: int, zone: int, team_color: Color) -> Color:
-	var row: Vector2i = _GLOVE_MODELS[model] if is_valid_glove(model) else _GLOVE_MODELS[0]
-	return resolve(row[zone], team_color)
+	var row: Array = _GLOVE_MODELS[model] if is_valid_glove(model) else _GLOVE_MODELS[0]
+	return resolve(int(row[zone]), team_color)
 
 
 static func resolve(paint: int, team_color: Color) -> Color:

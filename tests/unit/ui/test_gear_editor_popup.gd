@@ -51,11 +51,15 @@ func test_reopening_does_not_stack_items() -> void:
 	assert_eq(_glove_btn().selected, GearModelRegistry.GLOVE_PRO)
 
 
+func _surface_color(node_name: String, surface: int) -> Color:
+	var mi: MeshInstance3D = _popup.get(node_name) as MeshInstance3D
+	return (mi.get_surface_override_material(surface) as StandardMaterial3D).albedo_color
+
+
 func test_a_pick_repaints_the_turntable() -> void:
 	_open(GearModelRegistry.SKATE_BLACKOUT, GearModelRegistry.GLOVE_TEAM)
-	var boot: MeshInstance3D = _popup.get("_boot") as MeshInstance3D
 	var cuff: MeshInstance3D = _popup.get("_cuff") as MeshInstance3D
-	assert_eq((boot.material_override as StandardMaterial3D).albedo_color,
+	assert_eq(_surface_color("_boot", SkaterMeshBuilder.BOOT_PART_QUARTER),
 			GearModelRegistry.BLACK, "the stock skate stands on the disc in black")
 	assert_eq((cuff.material_override as StandardMaterial3D).albedo_color,
 			_KIT_GLOVES, "the stock glove cuff wears the kit")
@@ -63,10 +67,34 @@ func test_a_pick_repaints_the_turntable() -> void:
 	# Whiteout's boot is white; Pro's cuff is white. Selecting must reach both.
 	_skate_btn().item_selected.emit(GearModelRegistry.SKATE_WHITEOUT)
 	_glove_btn().item_selected.emit(GearModelRegistry.GLOVE_PRO)
-	assert_eq((boot.material_override as StandardMaterial3D).albedo_color,
+	assert_eq(_surface_color("_boot", SkaterMeshBuilder.BOOT_PART_QUARTER),
 			GearModelRegistry.WHITE, "the picked boot repaints")
 	assert_eq((cuff.material_override as StandardMaterial3D).albedo_color,
 			GearModelRegistry.WHITE, "the picked cuff repaints")
+
+
+# The zones that only exist because a piece was SPLIT are the ones a wrong
+# surface index would paint silently — pin that each lands on its own piece.
+func test_split_pieces_paint_apart() -> void:
+	# Two-Tone: white quarter, black toe cap. Pro: white holder under a black
+	# boot. Two-Tone gloves: kit back, black fingers.
+	_open(GearModelRegistry.SKATE_TWO_TONE, GearModelRegistry.GLOVE_TWO_TONE)
+	assert_eq(_surface_color("_boot", SkaterMeshBuilder.BOOT_PART_QUARTER),
+			GearModelRegistry.WHITE, "the quarter is white")
+	assert_eq(_surface_color("_boot", SkaterMeshBuilder.BOOT_PART_TOE),
+			GearModelRegistry.BLACK, "the toe cap is black")
+	assert_eq(_surface_color("_fist", SkaterMeshBuilder.FIST_PART_BACK),
+			_KIT_GLOVES, "the back of the hand keeps the kit")
+	assert_eq(_surface_color("_fist", SkaterMeshBuilder.FIST_PART_FINGERS),
+			GearModelRegistry.BLACK, "the fingers are black")
+	# The steel runner is never a zone, whatever the model says.
+	assert_eq(_surface_color("_blade", SkaterMeshBuilder.BLADE_PART_HOLDER),
+			GearModelRegistry.BLACK, "Two-Tone's holder is black")
+	_skate_btn().item_selected.emit(GearModelRegistry.SKATE_PRO)
+	assert_eq(_surface_color("_blade", SkaterMeshBuilder.BLADE_PART_HOLDER),
+			GearModelRegistry.WHITE, "Pro's holder is white")
+	assert_eq(_surface_color("_blade", SkaterMeshBuilder.BLADE_PART_RUNNER),
+			Color(0.82, 0.85, 0.88), "the runner stays steel")
 
 
 func test_done_hands_back_the_picks() -> void:

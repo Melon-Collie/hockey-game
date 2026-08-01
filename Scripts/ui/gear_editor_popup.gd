@@ -4,11 +4,12 @@ extends Control
 # The gear workbench: the equipment picks that live below the stick — SKATE
 # PROFILE (the blade grind, the one gameplay row), the skate and glove MODELS,
 # and the lace color — arranged as compact rows around a live turntable preview
-# assembled from the skater's own shared meshes (boot on steel with its ankle
-# collar, gloved fist with its cuff ring). A model paints the WHOLE piece from
-# GearModelRegistry's black / white / team slots, so the turntable shows the
-# design you are buying, exactly as the rink renders it; each row's dropdown
-# carries a swatch strip of the model's zones next to its name.
+# assembled from the skater's own shared meshes (boot on its holder and steel
+# with its ankle collar, gloved fist with its cuff ring). A model paints the
+# WHOLE piece from GearModelRegistry's black / white / team slots, so the
+# turntable shows the design you are buying, exactly as the rink renders it;
+# each row's dropdown carries a swatch strip of the model's zones next to its
+# name.
 #
 # Same sub-editor contract as StickEditorPopup: opened by PlayerSettingsPopup
 # over its own modal, it edits pending values and hands them back through
@@ -38,7 +39,8 @@ const _FIST_SCALE: float = 0.085
 const _CUFF_RADIUS: float = 0.065
 
 # The model swatch strip drawn on each dropdown row: one band per paint zone,
-# outermost piece first (boot → collar → stripe; glove body → cuff).
+# in GearModelRegistry's zone order (quarter → toe → collar → band → holder;
+# glove body → fingers → cuff).
 const _SWATCH_W: int = 36
 const _SWATCH_H: int = 18
 
@@ -65,6 +67,7 @@ var _lock_label: Label = null
 var _viewport: SubViewport = null
 var _turntable: Node3D = null
 var _boot: MeshInstance3D = null
+var _blade: MeshInstance3D = null
 var _collar: MeshInstance3D = null
 var _skate_stripe: MeshInstance3D = null
 var _laces: MeshInstance3D = null
@@ -298,8 +301,10 @@ func _build_preview(vbox: VBoxContainer) -> void:
 	_turntable = Node3D.new()
 	_viewport.add_child(_turntable)
 
-	# Skate: boot + steel share the rotated boot frame, seated so the runner
-	# stands on the disc.
+	# Skate: boot + blade share the rotated boot frame, seated so the runner
+	# stands on the disc. Both are multi-surface pieces (quarter/toe,
+	# holder/runner), so they are painted per SURFACE — a material_override
+	# would flatten each pair into one color.
 	var skate_at := Vector3(-0.16, _BLADE_ICE_M, 0.0)
 	_skate_at = skate_at
 	_boot = MeshInstance3D.new()
@@ -307,14 +312,14 @@ func _build_preview(vbox: VBoxContainer) -> void:
 	_boot.transform = Transform3D(_BOOT_ROT, skate_at)
 	_turntable.add_child(_boot)
 
-	var steel := MeshInstance3D.new()
-	steel.mesh = SkaterMeshBuilder.shared_skate_blade()
+	_blade = MeshInstance3D.new()
+	_blade.mesh = SkaterMeshBuilder.shared_skate_blade()
 	var steel_mat := StandardMaterial3D.new()
 	steel_mat.albedo_color = Color(0.82, 0.85, 0.88)
 	steel_mat.roughness = 0.25
-	steel.material_override = steel_mat
-	steel.transform = Transform3D(_BOOT_ROT, skate_at)
-	_turntable.add_child(steel)
+	_blade.set_surface_override_material(SkaterMeshBuilder.BLADE_PART_RUNNER, steel_mat)
+	_blade.transform = Transform3D(_BOOT_ROT, skate_at)
+	_turntable.add_child(_blade)
 
 	_laces = MeshInstance3D.new()
 	_laces.mesh = SkaterMeshBuilder.shared_laces()
@@ -510,22 +515,34 @@ func _swatch_strip(zones: Array[Color]) -> ImageTexture:
 
 
 # Repaints the turntable pieces with the current picks — same finishes as the
-# rink (skate leather 0.42, glove cloth 0.9; the steel stays steel). The models
-# paint every zone, so what stands on the disc is the pair you are equipping.
+# rink (skate leather 0.42, glove cloth 0.9; the steel runner stays steel). The
+# models paint every zone, so what stands on the disc is the pair you are
+# equipping.
 func _repaint_preview() -> void:
 	if _boot == null:
 		return
-	_boot.material_override = _preview_mat(
-			_skate_zone(GearModelRegistry.SKATE_BOOT), 0.42)
+	_paint_surface(_boot, SkaterMeshBuilder.BOOT_PART_QUARTER,
+			_skate_zone(GearModelRegistry.SKATE_QUARTER), 0.42)
+	_paint_surface(_boot, SkaterMeshBuilder.BOOT_PART_TOE,
+			_skate_zone(GearModelRegistry.SKATE_TOE), 0.42)
+	_paint_surface(_blade, SkaterMeshBuilder.BLADE_PART_HOLDER,
+			_skate_zone(GearModelRegistry.SKATE_HOLDER), 0.42)
 	_collar.material_override = _preview_mat(
 			_skate_zone(GearModelRegistry.SKATE_COLLAR), 0.42)
 	_skate_stripe.material_override = _preview_mat(
 			_skate_zone(GearModelRegistry.SKATE_STRIPE), 0.42)
 	_laces.material_override = _preview_mat(_resolved_lace(), 0.9)
-	_fist.material_override = _preview_mat(
+	_paint_surface(_fist, SkaterMeshBuilder.FIST_PART_BACK,
 			_glove_zone(GearModelRegistry.GLOVE_BODY), 0.9)
+	_paint_surface(_fist, SkaterMeshBuilder.FIST_PART_FINGERS,
+			_glove_zone(GearModelRegistry.GLOVE_FINGERS), 0.9)
 	_cuff.material_override = _preview_mat(
 			_glove_zone(GearModelRegistry.GLOVE_CUFF), 0.9)
+
+
+func _paint_surface(mi: MeshInstance3D, surface: int, color: Color,
+		roughness: float) -> void:
+	mi.set_surface_override_material(surface, _preview_mat(color, roughness))
 
 
 func _preview_mat(color: Color, roughness: float) -> StandardMaterial3D:

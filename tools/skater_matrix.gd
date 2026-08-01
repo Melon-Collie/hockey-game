@@ -4,7 +4,7 @@ extends SceneTree
 # height extremes around the neutral — each skater dressed, given the
 # appearance pass, and the controller's visual arm/shoulder scalings, so
 # "does this build look right?" is answerable without launching the game.
-# Sister tool to skate_capture.gd; same runner:
+# Sister tool to gear_capture.gd; same runner:
 #
 #   LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a godot --path . \
 #       --rendering-driver opengl3 --audio-driver Dummy \
