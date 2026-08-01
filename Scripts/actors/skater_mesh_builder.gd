@@ -1118,18 +1118,26 @@ static func _commit_sweep_segment(target: ArrayMesh, loops: Array[PackedVector3A
 	st.commit(target)
 
 
-# The blade as its two pieces: the HOLDER posts on surface 0 and the steel
-# RUNNER on surface 1 (see the _BLADE_* constants' doc). They are separate
-# surfaces because they are separate materials in life — the holder is molded
-# plastic a player picks the color of, the runner is steel and always will be.
-# The posts tuck up into the sole (z 0.042 < the boot's 0.045 sole line).
+# The blade as its two pieces: the HOLDER on surface 0 and the steel RUNNER on
+# surface 1 (see the _BLADE_* constants' doc). They are separate surfaces
+# because they are separate materials in life — the holder is molded plastic a
+# player picks the color of, the runner is steel and always will be.
+#
+# The holder is one piece, not two posts: two towers dropping from the sole
+# (they tuck up into it — z 0.042 < the boot's 0.045 sole line) bridged along
+# the bottom by the RAIL the runner seats into, so only the steel's last few
+# millimetres show below it. The arch between the towers stays open above the
+# rail, which is the window a real holder is recognised by.
 static func _build_skate_blade() -> ArrayMesh:
 	var m := ArrayMesh.new()
 	var holder := SurfaceTool.new()
 	holder.begin(Mesh.PRIMITIVE_TRIANGLES)
 	holder.set_smooth_group(-1)  # flat shading — see class doc block
-	_box(holder, Vector3(-0.008, 0.036, 0.042), Vector3(0.008, 0.094, 0.098))    # heel post
-	_box(holder, Vector3(-0.008, -0.080, 0.042), Vector3(0.008, -0.026, 0.098))  # toe post
+	_box(holder, Vector3(-0.008, 0.036, 0.042), Vector3(0.008, 0.094, 0.098))    # heel tower
+	_box(holder, Vector3(-0.008, -0.080, 0.042), Vector3(0.008, -0.026, 0.098))  # toe tower
+	# Rail: tower to tower along the bottom, ending where the towers do, so the
+	# runner's heel and toe tips still show past it.
+	_box(holder, Vector3(-0.008, -0.080, 0.084), Vector3(0.008, 0.094, 0.098))
 	holder.generate_normals()
 	holder.commit(m)
 	var runner := SurfaceTool.new()
