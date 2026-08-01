@@ -602,7 +602,7 @@ func _physics_process(delta: float) -> void:
 			HostCostProbe.record(HostCostProbe.Section.DISPATCH,
 					Time.get_ticks_usec() - t_section)
 	HostCostProbe.record(HostCostProbe.Section.WORKER, _ai_coordinator.last_worker_us)
-	HostCostProbe.end_tick(_ai_coordinator.worker_in_flight())
+	HostCostProbe.end_tick()
 	_update_host_puck_tracking()
 	_check_goal_crossing()
 	_check_puck_out_of_bounds(delta)

@@ -36,12 +36,17 @@ enum Section {
 	SNAPSHOT,   # get_state_delayed + _enrich_snapshot_for_ai + accel tracker
 	BRAINS,     # the TeamBrain.tick loop — 6 Hz strategy plus forced re-ticks
 	DISPATCH,   # AICoordinator.dispatch, MAIN-thread portion only
+	# DISPATCH's two halves, split for the same reason PerfProbe splits the rig:
+	# knowing the total is 0.6 ms says nothing about what to do next.
+	AI_APPLY,   # harvest + begin_tick + apply_decision, per bot
+	AI_KICK,    # build_view + prep_for_decide + _stabilize_snapshot, per kick
 	WORKER,     # the off-thread decide() batch: context, NOT main-thread cost
 }
 
-const SECTION_COUNT: int = 4
+const SECTION_COUNT: int = 6
 const SECTION_NAMES: Array[String] = [
-	"snapshot", "brains", "dispatch", "worker (off-thread)",
+	"snapshot", "brains", "dispatch (total)", "  dispatch: apply",
+	"  dispatch: kick", "worker (off-thread)",
 ]
 
 # One publish per second of host simulation. Matches the cadence a reader can
@@ -96,14 +101,14 @@ static func record(section: int, us: int) -> void:
 		_session_max_us[section] = v
 
 
-# Closes the host tick. `worker_busy` is whether the AI worker was still in
-# flight, i.e. this tick could not kick a fresh batch.
-static func end_tick(worker_busy: bool) -> void:
+# Closes the host tick. The worker-busy share is collected by the coordinator
+# itself via note_worker_busy — read at the point the kick decision is made,
+# because after dispatch returns a batch has just been kicked and the in-flight
+# flag is true on every healthy tick.
+static func end_tick() -> void:
 	if not enabled:
 		return
 	_ticks += 1
-	if worker_busy:
-		_worker_busy_ticks += 1
 	if _ticks < WINDOW_TICKS:
 		return
 	for s: int in SECTION_COUNT:
@@ -115,6 +120,14 @@ static func end_tick(worker_busy: bool) -> void:
 	_pub_ticks = _ticks
 	_ticks = 0
 	_worker_busy_ticks = 0
+
+
+# Called once per dispatch, with the kick decision as the coordinator saw it:
+# true means the previous batch was STILL RUNNING, so no fresh one could be
+# started and every bot coasts on its last decision this tick.
+static func note_worker_busy(busy: bool) -> void:
+	if enabled and busy:
+		_worker_busy_ticks += 1
 
 
 static func has_data() -> bool:
@@ -142,6 +155,8 @@ static func worker_busy_pct() -> float:
 # The sum of the MAIN-thread sections' means — what AI costs the host tick on
 # average. WORKER is excluded: it runs on its own thread and adding it would
 # double-count time the main thread never spent.
+# AI_APPLY and AI_KICK are excluded as well — they are DISPATCH's own halves,
+# and adding them would count the same microseconds twice.
 static func main_thread_mean_us() -> float:
 	return _pub_mean_us[Section.SNAPSHOT] + _pub_mean_us[Section.BRAINS] \
 			+ _pub_mean_us[Section.DISPATCH]
