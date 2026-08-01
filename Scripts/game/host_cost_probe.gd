@@ -39,14 +39,21 @@ enum Section {
 	# DISPATCH's two halves, split for the same reason PerfProbe splits the rig:
 	# knowing the total is 0.6 ms says nothing about what to do next.
 	AI_APPLY,   # harvest + begin_tick + apply_decision, per bot
+	# SkaterController._process_input, summed over the bots. Nested inside
+	# AI_APPLY and broken out because it is NOT AI work: it is the ordinary
+	# skater step, the same call a local human's controller makes, and the host
+	# pays it per skater whoever is driving. Charging it to the AI would name the
+	# wrong subsystem — the fix for it is a cheaper skater tick or fewer ticks,
+	# not a cheaper bot.
+	SKATER_STEP,
 	AI_KICK,    # build_view + prep_for_decide + _stabilize_snapshot, per kick
 	WORKER,     # the off-thread decide() batch: context, NOT main-thread cost
 }
 
-const SECTION_COUNT: int = 6
+const SECTION_COUNT: int = 7
 const SECTION_NAMES: Array[String] = [
 	"snapshot", "brains", "dispatch (total)", "  dispatch: apply",
-	"  dispatch: kick", "worker (off-thread)",
+	"    of which skater step", "  dispatch: kick", "worker (off-thread)",
 ]
 
 # One publish per second of host simulation. Matches the cadence a reader can
@@ -155,11 +162,18 @@ static func worker_busy_pct() -> float:
 # The sum of the MAIN-thread sections' means — what AI costs the host tick on
 # average. WORKER is excluded: it runs on its own thread and adding it would
 # double-count time the main thread never spent.
-# AI_APPLY and AI_KICK are excluded as well — they are DISPATCH's own halves,
-# and adding them would count the same microseconds twice.
+# AI_APPLY, SKATER_STEP and AI_KICK are excluded as well — they are nested
+# inside DISPATCH, and adding them would count the same microseconds twice.
 static func main_thread_mean_us() -> float:
 	return _pub_mean_us[Section.SNAPSHOT] + _pub_mean_us[Section.BRAINS] \
 			+ _pub_mean_us[Section.DISPATCH]
+
+
+# The same figure with the skater step taken back out — what the AI itself costs
+# the tick, as opposed to what simulating ten skaters costs. This is the number
+# to quote when deciding whether the AI is worth optimising.
+static func ai_only_mean_us() -> float:
+	return maxf(main_thread_mean_us() - _pub_mean_us[Section.SKATER_STEP], 0.0)
 
 
 # The worst main-thread AI tick in the window. Not the sum of the per-section

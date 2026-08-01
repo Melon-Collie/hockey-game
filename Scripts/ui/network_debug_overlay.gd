@@ -663,10 +663,12 @@ func _render_host_ai_cost() -> void:
 				mean, peak, HostCostProbe.session_max_us(s)],
 			"peak far above mean means this is a SPIKE, not a steady cost — that is what an inconsistent frame rate is made of")
 	_context(_band(HostCostProbe.main_thread_max_us() / tick_us, 0.25, 0.50),
-		"AI total (main)",
+		"AI block total (main)",
 		"%.0f us mean · %.0f us worst section, of a %.0f us tick" % [
 			HostCostProbe.main_thread_mean_us(), HostCostProbe.main_thread_max_us(), tick_us],
 		"the worst figure is the largest SINGLE section, not their sum — separate sections can peak on separate ticks and adding them would invent a tick that never ran")
+	_info("AI itself", "%.0f us mean (block minus the skater step)" % HostCostProbe.ai_only_mean_us(),
+		"the skater step above is the ordinary per-skater controller tick, paid for humans too — only THIS part gets cheaper by making the bots cheaper")
 	_info("Worker behind", "%.0f%% of ticks" % HostCostProbe.worker_busy_pct(),
 		"share of ticks that could not kick a fresh AI batch because the previous one was still running; bots coast on their last decision through these, and the ticks that CAN kick are the expensive ones")
 
@@ -808,6 +810,7 @@ func _host_ai_cost_dict() -> Dictionary:
 	return {
 		"tick_us": 1_000_000.0 / maxf(Engine.physics_ticks_per_second, 1.0),
 		"main_thread_mean_us": HostCostProbe.main_thread_mean_us(),
+		"ai_only_mean_us": HostCostProbe.ai_only_mean_us(),
 		"main_thread_worst_section_us": HostCostProbe.main_thread_max_us(),
 		"worker_behind_pct": HostCostProbe.worker_busy_pct(),
 		"sections": sections,
