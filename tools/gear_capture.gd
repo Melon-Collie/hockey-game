@@ -15,13 +15,16 @@ extends SceneTree
 #
 # Locally any GPU works: drop the env var and xvfb-run. Output paths print
 # on save (user:// — never the repo tree, so captures can't be committed).
+#
+# MITTS_TEAM_SLOT picks which team's kit the lineup is dressed in (default 0).
+# Models resolve their LIGHT / TEAM / ACCENT zones against a real preset, so
+# the sheet is only honest for the team it names — shoot a cream-white team
+# and a pure-white one to see the spread.
 
 const _BOOT_ROT := Basis(Vector3(0, 0, -1), Vector3(1, 0, 0), Vector3(0, -1, 0))
 const _BLADE_ICE_M: float = 0.080 + SkaterMeshBuilder.SKATE_LIFT_M
 const _LACE_COLOR := Color(0.88, 0.88, 0.86)
-# A loud kit color, so the models' TEAM zones are unmistakable against the
-# black and white ones.
-const _TEAM_ACCENT := Color(0.10, 0.22, 0.75)
+const _TEAM_SLOT_ENV: String = "MITTS_TEAM_SLOT"
 
 # Both rows are shot with an ORTHOGONAL camera: perspective across a two-metre
 # lineup would frame the outer pieces differently from the middle ones, which
@@ -43,6 +46,10 @@ const _THREE_QUARTER_DEG: float = 40.0
 
 var _frames: int = 0
 var _holders: Array[Node3D] = []
+# The kit every model resolves against — home side, so TEAM lands on the
+# jersey's own glove color for gloves and the primary for skates.
+var _kit: Dictionary = {}
+var _team_name: String = ""
 
 
 func _init() -> void:
@@ -53,6 +60,11 @@ func _init() -> void:
 	e.background_color = Color(0.10, 0.11, 0.14)
 	env.environment = e
 	root.add_child(env)
+
+	var slot: int = int(OS.get_environment(_TEAM_SLOT_ENV))
+	_kit = TeamColorRegistry.get_colors(slot, 0)
+	_team_name = TeamColorRegistry.get_preset_name(slot)
+	print("dressing the catalogue in ", _team_name)
 
 	var count: int = maxi(GearModelRegistry.skate_count(), GearModelRegistry.glove_count())
 	var span: float = _SPACING_M * float(count - 1)
@@ -194,11 +206,13 @@ func _build_glove(holder: Node3D, model: int) -> void:
 
 
 func _skate_zone(model: int, zone: int) -> Color:
-	return GearModelRegistry.skate_color(model, zone, _TEAM_ACCENT)
+	return GearModelRegistry.skate_color(model, zone,
+			_kit.primary, _kit.secondary, _kit.light)
 
 
 func _glove_zone(model: int, zone: int) -> Color:
-	return GearModelRegistry.glove_color(model, zone, _TEAM_ACCENT)
+	return GearModelRegistry.glove_color(model, zone,
+			_kit.gloves, _kit.secondary, _kit.light)
 
 
 func _mat(c: Color, r: float) -> StandardMaterial3D:
@@ -211,11 +225,11 @@ func _mat(c: Color, r: float) -> StandardMaterial3D:
 func _on_frame() -> void:
 	_frames += 1
 	if _frames == 12:
-		_save("gear_side.png")
+		_save("gear_%s_side.png" % _team_name.to_lower())
 		for holder: Node3D in _holders:
 			holder.rotation_degrees = Vector3(0.0, _THREE_QUARTER_DEG, 0.0)
 	elif _frames == 24:
-		_save("gear_three_quarter.png")
+		_save("gear_%s_three_quarter.png" % _team_name.to_lower())
 		quit()
 
 

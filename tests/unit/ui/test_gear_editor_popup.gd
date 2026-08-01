@@ -6,7 +6,11 @@ extends GutTest
 # player's current picks selected, a pick reaches the preview meshes, and the
 # swatch strip an item carries shows that model's own zones.
 
-const _ACCENT := Color(0.10, 0.30, 0.80)
+# A synthetic kit shaped like TeamColorRegistry.get_colors' output, with every
+# slot distinguishable so a zone landing on the wrong one is visible.
+const _PRIMARY := Color(0.10, 0.30, 0.80)
+const _SECONDARY := Color(0.90, 0.30, 0.10)
+const _LIGHT := Color(0.96, 0.93, 0.84)   # cream, like Plum's
 const _KIT_GLOVES := Color(0.75, 0.15, 0.15)
 
 var _popup: GearEditorPopup = null
@@ -28,7 +32,12 @@ func _glove_btn() -> OptionButton:
 
 func _open(skate_model: int, glove_model: int) -> void:
 	_popup.open(PlayerAttributes.GEAR_BALANCED, skate_model, glove_model,
-			GearStyleConfig.LACE_DEFAULT_INDEX, false, _ACCENT, _KIT_GLOVES)
+			GearStyleConfig.LACE_DEFAULT_INDEX, false, {
+				"primary": _PRIMARY,
+				"secondary": _SECONDARY,
+				"light": _LIGHT,
+				"gloves": _KIT_GLOVES,
+			})
 
 
 func test_dropdowns_list_the_catalogue_with_the_current_picks_selected() -> void:
@@ -64,23 +73,24 @@ func test_a_pick_repaints_the_turntable() -> void:
 	assert_eq((cuff.material_override as StandardMaterial3D).albedo_color,
 			_KIT_GLOVES, "the stock glove cuff wears the kit")
 
-	# Whiteout's boot is white; Pro's cuff is white. Selecting must reach both.
+	# Whiteout's boot is light; Pro's cuff is light. Selecting must reach both,
+	# and "light" is the TEAM's white — cream here, not a fixed one.
 	_skate_btn().item_selected.emit(GearModelRegistry.SKATE_WHITEOUT)
 	_glove_btn().item_selected.emit(GearModelRegistry.GLOVE_PRO)
 	assert_eq(_surface_color("_boot", SkaterMeshBuilder.BOOT_PART_QUARTER),
-			GearModelRegistry.WHITE, "the picked boot repaints")
+			_LIGHT, "the picked boot repaints in the team's own white")
 	assert_eq((cuff.material_override as StandardMaterial3D).albedo_color,
-			GearModelRegistry.WHITE, "the picked cuff repaints")
+			_LIGHT, "the picked cuff repaints in the team's own white")
 
 
 # The zones that only exist because a piece was SPLIT are the ones a wrong
 # surface index would paint silently — pin that each lands on its own piece.
 func test_split_pieces_paint_apart() -> void:
-	# Two-Tone: white quarter, black toe cap. Pro: white holder under a black
+	# Two-Tone: light quarter, black toe cap. Pro: primary holder under a black
 	# boot. Two-Tone gloves: kit back, black fingers.
 	_open(GearModelRegistry.SKATE_TWO_TONE, GearModelRegistry.GLOVE_TWO_TONE)
 	assert_eq(_surface_color("_boot", SkaterMeshBuilder.BOOT_PART_QUARTER),
-			GearModelRegistry.WHITE, "the quarter is white")
+			_LIGHT, "the quarter is the team's white")
 	assert_eq(_surface_color("_boot", SkaterMeshBuilder.BOOT_PART_TOE),
 			GearModelRegistry.BLACK, "the toe cap is black")
 	assert_eq(_surface_color("_fist", SkaterMeshBuilder.FIST_PART_BACK),
@@ -92,7 +102,9 @@ func test_split_pieces_paint_apart() -> void:
 			GearModelRegistry.BLACK, "Two-Tone's holder is black")
 	_skate_btn().item_selected.emit(GearModelRegistry.SKATE_PRO)
 	assert_eq(_surface_color("_blade", SkaterMeshBuilder.BLADE_PART_HOLDER),
-			GearModelRegistry.WHITE, "Pro's holder is white")
+			_PRIMARY, "Pro's holder is the team primary")
+	assert_eq(_surface_color("_boot", SkaterMeshBuilder.BOOT_PART_TOE),
+			_LIGHT, "Pro's toe cap is the team's white")
 	assert_eq(_surface_color("_blade", SkaterMeshBuilder.BLADE_PART_RUNNER),
 			SkaterMeshBuilder.BLADE_STEEL_COLOR, "the runner stays steel")
 
@@ -117,7 +129,8 @@ func test_each_item_carries_its_own_zones_as_a_swatch() -> void:
 		for zone: int in GearModelRegistry.SKATE_ZONE_COUNT:
 			var swatch: Color = img.get_pixel(
 					zone * band + band / 2, img.get_height() / 2)
-			var want: Color = GearModelRegistry.skate_color(model, zone, _ACCENT)
+			var want: Color = GearModelRegistry.skate_color(model, zone,
+					_PRIMARY, _SECONDARY, _LIGHT)
 			# The strip is RGBA8 — allow the one-step float→byte quantisation.
 			var delta: float = maxf(maxf(absf(swatch.r - want.r),
 					absf(swatch.g - want.g)), absf(swatch.b - want.b))

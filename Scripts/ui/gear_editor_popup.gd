@@ -6,10 +6,10 @@ extends Control
 # and the lace color — arranged as compact rows around a live turntable preview
 # assembled from the skater's own shared meshes (boot on its holder and steel
 # with its ankle collar, gloved fist with its cuff ring). A model paints the
-# WHOLE piece from GearModelRegistry's black / white / team slots, so the
-# turntable shows the design you are buying, exactly as the rink renders it;
-# each row's dropdown carries a swatch strip of the model's zones next to its
-# name.
+# WHOLE piece from GearModelRegistry's slots — true black plus the wearing
+# team's own white, primary and secondary — so the turntable shows the design
+# you are buying on the kit you are buying it for; each row's dropdown carries
+# a swatch strip of the model's zones next to its name.
 #
 # Same sub-editor contract as StickEditorPopup: opened by PlayerSettingsPopup
 # over its own modal, it edits pending values and hands them back through
@@ -50,8 +50,12 @@ var _skate_model: int = 0
 var _glove_model: int = 0
 var _lace_color: int = GearStyleConfig.LACE_DEFAULT_INDEX
 var _gear_locked: bool = false
+# The kit a model's TEAM / ACCENT / LIGHT zones resolve against — the pending
+# team pick, so the turntable previews the sweater you are about to wear.
 var _team_accent: Color = Color.WHITE
 var _kit_gloves: Color = Color.BLACK
+var _team_secondary: Color = Color.WHITE
+var _team_light: Color = Color.WHITE
 # Boot-node seat on the turntable, kept so open() can re-seat the collar
 # against it per build.
 var _skate_at: Vector3 = Vector3.ZERO
@@ -369,23 +373,27 @@ func set_focus_scope(background: Control, restore: Control) -> void:
 
 
 # `profile`/models/laces are the host's PENDING picks; `gear_locked` mirrors
-# the online-match attribute lock (cosmetics stay live). A model's TEAM zones
-# resolve against `team_accent` (skates, laces) and `kit_gloves` (gloves) so
-# the swatches preview the kit the player is about to wear. `attrs` is the
+# the online-match attribute lock (cosmetics stay live). `team_colors` is the
+# pending team's TeamColorRegistry.get_colors dict — a model's TEAM zone
+# resolves against its primary (skates, laces) or its glove color (gloves),
+# ACCENT against its secondary and LIGHT against its own white, so the
+# swatches preview the kit the player is about to wear. `attrs` is the
 # pending BODY —
 # the preview collar takes the same scale the appearance rig gives SkateL
 # (calf girth laterally, height vertically; the boot deliberately never
 # scales), so the preview skate is the one this build wears on the ice.
 func open(profile: int, skate_model: int, glove_model: int, lace_color: int,
-		gear_locked: bool, team_accent: Color, kit_gloves: Color,
+		gear_locked: bool, team_colors: Dictionary,
 		attrs: PlayerAttributes = null) -> void:
 	_profile = clampi(profile, 0, _PROFILE_KEYS.size() - 1)
 	_skate_model = clampi(skate_model, 0, GearModelRegistry.skate_count() - 1)
 	_glove_model = clampi(glove_model, 0, GearModelRegistry.glove_count() - 1)
 	_lace_color = lace_color
 	_gear_locked = gear_locked
-	_team_accent = team_accent
-	_kit_gloves = kit_gloves
+	_team_accent = team_colors.primary
+	_kit_gloves = team_colors.gloves
+	_team_secondary = team_colors.secondary
+	_team_light = team_colors.light
 	var m_height: float = attrs.height_mult() if attrs != null else 1.0
 	var m_calf: float = attrs.calf_mult() if attrs != null else 1.0
 	_collar.scale = Vector3(m_calf, m_height, m_calf)
@@ -449,11 +457,13 @@ func _on_lace_color_selected(index: int) -> void:
 # ── Rendering ────────────────────────────────────────────────────────────────
 
 func _skate_zone(zone: int) -> Color:
-	return GearModelRegistry.skate_color(_skate_model, zone, _team_accent)
+	return GearModelRegistry.skate_color(_skate_model, zone,
+			_team_accent, _team_secondary, _team_light)
 
 
 func _glove_zone(zone: int) -> Color:
-	return GearModelRegistry.glove_color(_glove_model, zone, _kit_gloves)
+	return GearModelRegistry.glove_color(_glove_model, zone,
+			_kit_gloves, _team_secondary, _team_light)
 
 
 func _resolved_lace() -> Color:
@@ -487,7 +497,8 @@ func _rebuild_model_items() -> void:
 	for model: int in GearModelRegistry.skate_count():
 		var zones: Array[Color] = []
 		for zone: int in GearModelRegistry.SKATE_ZONE_COUNT:
-			zones.append(GearModelRegistry.skate_color(model, zone, _team_accent))
+			zones.append(GearModelRegistry.skate_color(model, zone,
+					_team_accent, _team_secondary, _team_light))
 		_skate_btn.add_icon_item(_swatch_strip(zones),
 				tr(GearModelRegistry.SKATE_NAME_KEYS[model]), model)
 	_skate_btn.select(_skate_model)
@@ -496,7 +507,8 @@ func _rebuild_model_items() -> void:
 	for model: int in GearModelRegistry.glove_count():
 		var zones: Array[Color] = []
 		for zone: int in GearModelRegistry.GLOVE_ZONE_COUNT:
-			zones.append(GearModelRegistry.glove_color(model, zone, _kit_gloves))
+			zones.append(GearModelRegistry.glove_color(model, zone,
+					_kit_gloves, _team_secondary, _team_light))
 		_glove_btn.add_icon_item(_swatch_strip(zones),
 				tr(GearModelRegistry.GLOVE_NAME_KEYS[model]), model)
 	_glove_btn.select(_glove_model)

@@ -66,7 +66,8 @@ func test_migration_maps_picks_onto_designs() -> void:
 	for body: int in [GearModelRegistry.GLOVE_TEAM, GearModelRegistry.GLOVE_PRO,
 			GearModelRegistry.GLOVE_TWO_TONE]:
 		assert_eq(GearModelRegistry.glove_color(body, GearModelRegistry.GLOVE_BODY,
-				Color.RED), Color.RED, "migrated gloves keep a kit-colored body")
+				Color.RED, Color.GREEN, Color.BLUE), Color.RED,
+				"migrated gloves keep a kit-colored body")
 
 
 func test_migration_preserves_laces_and_lands_legal() -> void:

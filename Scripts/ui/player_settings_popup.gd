@@ -276,12 +276,11 @@ func _on_stick_edited(curve: int, flex: int, length: int, tape_code: int) -> voi
 
 
 func _open_gear_editor() -> void:
-	# A model's TEAM zones resolve against the pending team pick — the accent
-	# for the skates and laces, the kit's glove color for the gloves.
-	var team_colors: Dictionary = _pending_team_colors()
+	# The whole kit goes over: a model resolves its TEAM / ACCENT / LIGHT zones
+	# against the pending team pick, not just one accent color.
 	_gear_popup.set_focus_scope(self, null)
 	_gear_popup.open(_pending_profile, _pending_skate_model, _pending_glove_model,
-			_pending_lace_color, _build_locked, team_colors.primary, team_colors.gloves,
+			_pending_lace_color, _build_locked, _pending_team_colors(),
 			_pending_attributes())
 
 

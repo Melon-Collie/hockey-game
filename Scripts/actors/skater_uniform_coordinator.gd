@@ -45,12 +45,16 @@ var _player_name: String = ""
 var _jersey_number: int = 0
 var _text_color: Color = Color.BLACK
 var _text_outline_color: Color = Color.BLACK
-# Team accent (colors.primary) from the last apply_uniform — what TEAM-palette
-# tape picks resolve to, cached so a live tape change repaints without one.
+# The kit colors a gear model or tape pick resolves against, cached from the
+# last apply_uniform so a live cosmetic change repaints without one.
+# _team_accent is colors.primary (TEAM for tape and skates), _kit_gloves is
+# uniform.gloves (TEAM for gloves), _team_secondary is the kit's second color
+# (the models' ACCENT slot) and _team_light its own white — which is CREAM for
+# some teams, so gear matches the sweater rather than out-whiting it.
 var _team_accent: Color = Color.WHITE
-# Kit glove color (uniform.gloves) from the last apply_uniform — what a TEAM
-# glove pick resolves to, cached for the same live-repaint reason.
 var _kit_gloves: Color = Color.BLACK
+var _team_secondary: Color = Color.WHITE
+var _team_light: Color = Color.WHITE
 var _jersey_viewport: SubViewport
 var _jersey_decal: JerseyDecal
 var _shoulder_viewport: SubViewport
@@ -179,6 +183,8 @@ func apply_uniform(colors: Dictionary) -> void:
 	# Blade — matte black with the player's tape job riding it (palette picks
 	# resolve against colors.primary, so TEAM picks track the kit).
 	_team_accent = colors.primary
+	_team_secondary = colors.secondary
+	_team_light = colors.light
 	_rebuild_blade()
 
 	# Stick shaft — near-black composite, satin finish, on the flex vertex
@@ -468,11 +474,13 @@ func _rebuild_blade() -> void:
 
 
 func _skate_zone_color(zone: int) -> Color:
-	return GearModelRegistry.skate_color(_skater.gear_style.skate_model, zone, _team_accent)
+	return GearModelRegistry.skate_color(_skater.gear_style.skate_model, zone,
+			_team_accent, _team_secondary, _team_light)
 
 
 func _glove_zone_color(zone: int) -> Color:
-	return GearModelRegistry.glove_color(_skater.gear_style.glove_model, zone, _kit_gloves)
+	return GearModelRegistry.glove_color(_skater.gear_style.glove_model, zone,
+			_kit_gloves, _team_secondary, _team_light)
 
 
 func _resolve_lace_color() -> Color:
