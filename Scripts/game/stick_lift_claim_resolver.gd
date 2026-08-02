@@ -125,6 +125,12 @@ func receive_claim(peer_id: int, host_timestamp: float,
 		return
 	if attacker_snap.is_ghost:
 		return
+	# A committed shot block withdraws the blade from puck play — no lift, the
+	# same way it takes no poke and corrals nothing. Judged from the REWOUND
+	# snapshot (like is_ghost) so the verdict matches the stance the claimant
+	# actually held at send time.
+	if attacker_snap.shot_state == SkaterStateMachine.State.SHOT_BLOCKING:
+		return
 	# Client-authoritative attacker blade ("aim") — the claim carries the blade the
 	# client hooked under the shaft with, reach-clamped to the attacker's
 	# server-authoritative body so a modified client can't teleport it. The victim's

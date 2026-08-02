@@ -128,6 +128,13 @@ func receive_claim(peer_id: int, host_timestamp: float,
 		return
 	if skater_snap.is_ghost:
 		return
+	# A committed shot block withdraws the blade from puck play — the same
+	# withdrawal the present-time loop applies in PuckController. Judged from the
+	# REWOUND snapshot (like is_ghost) so the verdict matches the stance the
+	# claimant actually held at send time. The client suppresses the claim itself
+	# while blocking (LocalController), but the grant is decided here.
+	if skater_snap.shot_state == SkaterStateMachine.State.SHOT_BLOCKING:
+		return
 	# Client-authoritative blade ("aim") — the attacker sends the blade geometry it
 	# actually poked with, reach-clamped to the server-authoritative body so a
 	# modified client can't teleport its blade onto the carrier. See

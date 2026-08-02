@@ -530,6 +530,12 @@ func _check_interactions() -> void:
 				# withdrawal gates and the claim/provisional paths.
 				if skater.hit_committed:
 					continue
+				# A committed shot block is the same bargain: the blade is
+				# choreographed flat across the lane and stops tracking the cursor,
+				# so it takes nothing off a carrier who skates into it. Blocking
+				# buys the body cylinder and the lane, not a free strip.
+				if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING:
+					continue
 				var blade_curr: Vector3 = skater.get_blade_contact_global()
 				if skater.blade_up:
 					# Stick lift: the attacker's lifted blade hooked under the
