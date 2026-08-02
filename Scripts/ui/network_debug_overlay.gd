@@ -671,9 +671,9 @@ func _render_host_ai_cost() -> void:
 		"the skater step above is the ordinary per-skater controller tick, paid for humans too — only THIS part gets cheaper by making the bots cheaper")
 	_context(_band(HostCostProbe.tick_total_mean_us() / tick_us, 0.40, 0.70),
 		"Tick attributed",
-		"%.0f us of %.0f us (%.0f%%)" % [HostCostProbe.tick_total_mean_us(), tick_us,
-			100.0 * HostCostProbe.tick_total_mean_us() / tick_us],
-		"every instrumented section summed. What is MISSING from it is the interesting part — engine-side transform propagation, signal dispatch, and any body not timed here")
+		"%.0f us, vs a %.0f us tick BUDGET (%.0f%%)" % [HostCostProbe.tick_total_mean_us(),
+			tick_us, 100.0 * HostCostProbe.tick_total_mean_us() / tick_us],
+		"every instrumented section summed. The denominator is the tick's BUDGET, not its length — the physics step ends when the work does and the rest of that wall time is _process and rendering, so the shortfall is NOT all unattributed physics. Compare it against the peak physics step above instead")
 	_info("Worker behind", "%.0f%% of ticks" % HostCostProbe.worker_busy_pct(),
 		"share of ticks that could not kick a fresh AI batch because the previous one was still running; bots coast on their last decision through these, and the ticks that CAN kick are the expensive ones")
 

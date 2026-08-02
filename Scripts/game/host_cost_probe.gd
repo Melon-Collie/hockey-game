@@ -77,6 +77,13 @@ static var enabled: bool = false
 # session accumulates enough microseconds that float32 quietly stops adding.
 static var _sum_us: PackedFloat64Array = _new_bins()
 static var _max_us: PackedFloat64Array = _new_bins()
+# This tick's running total per section, folded into the maxima at end_tick.
+# Sections recorded once per tick could take their peak straight from record(),
+# but the per-actor ones (ten skater bodies, two goalies) are recorded once per
+# ACTOR — taking the peak there gives the worst single actor while the mean is
+# the whole tick's sum, which produced the impossible reading of a peak BELOW
+# its own mean. Both statistics now describe the same thing: one tick.
+static var _tick_us: PackedFloat64Array = _new_bins()
 static var _ticks: int = 0
 # Ticks that found the worker still chewing the previous batch, so no new one
 # could be kicked. Sustained high values mean the bots are deciding at less than
@@ -110,12 +117,7 @@ static func _new_bins() -> PackedFloat64Array:
 static func record(section: int, us: int) -> void:
 	if not enabled:
 		return
-	var v: float = float(us)
-	_sum_us[section] += v
-	if v > _max_us[section]:
-		_max_us[section] = v
-	if v > _session_max_us[section]:
-		_session_max_us[section] = v
+	_tick_us[section] += float(us)
 
 
 # Closes the host tick. The worker-busy share is collected by the coordinator
@@ -126,6 +128,16 @@ static func end_tick() -> void:
 	if not enabled:
 		return
 	_ticks += 1
+	# Fold this tick's per-section totals into the window before anything else —
+	# the maxima are over TICKS, not over individual record() calls.
+	for s: int in SECTION_COUNT:
+		var v: float = _tick_us[s]
+		_tick_us[s] = 0.0
+		_sum_us[s] += v
+		if v > _max_us[s]:
+			_max_us[s] = v
+		if v > _session_max_us[s]:
+			_session_max_us[s] = v
 	if _ticks < WINDOW_TICKS:
 		return
 	for s: int in SECTION_COUNT:
@@ -211,6 +223,7 @@ static func reset() -> void:
 	for s: int in SECTION_COUNT:
 		_sum_us[s] = 0.0
 		_max_us[s] = 0.0
+		_tick_us[s] = 0.0
 		_pub_mean_us[s] = 0.0
 		_pub_max_us[s] = 0.0
 		_session_max_us[s] = 0.0
