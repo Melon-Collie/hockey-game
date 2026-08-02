@@ -200,11 +200,11 @@ recorded here because the node counts left behind look like evidence for it.
 
 The conversion was justified on transform propagation: ~40 cosmetic nodes per
 skater, each write dirtying a subtree and pushing a global to the
-RenderingServer. The F7 sweep was run before and after. Freezing the cosmetic rig
-saved ~1.9 ms both times. **Skater went 67 nodes to 32 and the frame did not
-move.**
+RenderingServer. An interleaved cosmetic-freeze sweep was run before and after.
+Freezing the cosmetic rig saved ~1.9 ms both times. **Skater went 67 nodes to 32
+and the frame did not move.**
 
-Then the sweep was split (PerfProbe.RIG_WRITE) and a micro-benchmark built
+Then the sweep was split into solve and write halves and a micro-benchmark built
 (`benchmarks/test_gait_micro_benchmark.gd`), and the picture came apart further:
 
 | | measured |
@@ -219,7 +219,7 @@ engine-side work the writes TRIGGER, not the writes themselves** — resolving b
 skeletons and re-uploading their bone data, plus propagating the crouch and
 marker nodes the solve still moves.
 
-That also explains the RIG_WRITE null result, which is otherwise baffling.
+That also explains the write-half null result, which is otherwise baffling.
 Freezing the arm and stick writes does not let either skeleton go clean: the gait
 still writes four leg bones and the head yaw every frame, so both skeletons are
 dirty regardless and the engine pays anyway. Only freezing the WHOLE rig stops
@@ -248,7 +248,9 @@ Two consequences for anyone optimising this next:
 - `tools/ring_capture.gd` — drives the ice shader's HUD uniforms directly.
 - `benchmarks/test_control_micro_benchmark.gd`,
   `benchmarks/test_goalie_micro_benchmark.gd` — per-tick µs, report-only.
-- F3 panel: frame cost split, and F7 the interleaved cosmetic-freeze sweep.
+- F3 panel → P: the frame-cost split and the host tick's per-section timings.
+  The cosmetic-freeze sweep that produced the numbers above has since been
+  removed; its full results are in `docs/performance-findings.md`.
 
 All capture tools need a real (software) renderer, not `--headless`:
 

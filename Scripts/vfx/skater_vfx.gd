@@ -112,14 +112,13 @@ func _ready() -> void:
 	_prev_pos = global_position
 
 func _process(_delta: float) -> void:
-	# Measurement freeze (see perf_probe.gd). Emitters are silenced ON the freeze
+	# Pose-capture freeze (see cosmetic_freeze.gd). Emitters are silenced ON the
 	# transition, not merely left alone: an early return skips the
 	# _set_blade_trails_emitting(false) below, so trails that were live when the
-	# freeze landed keep spawning forever. That made the frozen mode measure
-	# MORE expensive than the unfrozen one — a freeze that adds work prices the
-	# probe instead of the feature. Normal play re-enables them on the first
-	# unfrozen frame via the usual speed gates, so nothing needs restoring.
-	if PerfProbe.freeze_vfx:
+	# freeze landed would keep spawning forever. Normal play re-enables them on
+	# the first unfrozen frame via the usual speed gates, so nothing needs
+	# restoring.
+	if CosmeticFreeze.vfx:
 		if not _frozen:
 			_frozen = true
 			_set_blade_trails_emitting(false)

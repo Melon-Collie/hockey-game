@@ -1,18 +1,16 @@
 class_name HostCostProbe
 extends Object
 
-# Per-tick timing of the host's MAIN-THREAD AI work, which the cosmetic freeze
-# sweep (PerfProbe) structurally cannot see.
+# Per-tick timing of the host's main-thread work, section by section.
 #
-# Why a second probe rather than another PerfProbe mode: the sweep works by
-# switching work OFF and reading the frame. That is only sound for cosmetics —
-# suppressing a pose changes nothing anyone reads back. Freezing the AI changes
-# what the bots do, which changes the physics, which changes the frame; the A/B
-# would not be comparing two measurements of the same game. AI has clean call
-# seams instead, so it can simply be timed where it runs.
+# Why it times in place rather than switching work off and reading the frame:
+# that A/B is only sound when nothing reads the work back, which is true of
+# cosmetics and false of everything here. Freezing the AI changes what the bots
+# do, which changes the physics, which changes the frame — the two halves would
+# not be measuring the same game. These paths have clean call seams instead.
 #
 # MEAN IS THE WRONG STATISTIC HERE, and that is the whole point of this class.
-# The host's AI cost is not spread evenly across ticks:
+# Several of these sections are not spread evenly across ticks:
 #   • TeamBrain.tick is rate-limited to 6 Hz, so the full strategy computation
 #     lands on roughly one physics tick in twenty and costs nothing on the other
 #     nineteen — and force_retick() fires it off-cadence on every puck-carrier
@@ -36,8 +34,8 @@ enum Section {
 	SNAPSHOT,   # get_state_delayed + _enrich_snapshot_for_ai + accel tracker
 	BRAINS,     # the TeamBrain.tick loop — 6 Hz strategy plus forced re-ticks
 	DISPATCH,   # AICoordinator.dispatch, MAIN-thread portion only
-	# DISPATCH's two halves, split for the same reason PerfProbe splits the rig:
-	# knowing the total is 0.6 ms says nothing about what to do next.
+	# DISPATCH's two halves. Knowing the total is 0.6 ms says nothing about what
+	# to do next.
 	AI_APPLY,   # harvest + begin_tick + apply_decision, per bot
 	# SkaterController._process_input, summed over the bots. Nested inside
 	# AI_APPLY and broken out because it is NOT AI work: it is the ordinary
@@ -73,8 +71,8 @@ const WINDOW_TICKS: int = 120
 
 static var enabled: bool = false
 
-# Live window. Sums are float64 for the same reason PerfProbe's are: a long
-# session accumulates enough microseconds that float32 quietly stops adding.
+# Live window. Sums are float64 because a long session accumulates enough
+# microseconds that float32 quietly stops adding.
 static var _sum_us: PackedFloat64Array = _new_bins()
 static var _max_us: PackedFloat64Array = _new_bins()
 # This tick's running total per section, folded into the maxima at end_tick.

@@ -22,7 +22,7 @@ extends SceneTree
 #
 # ── Why this file is a two-line bootstrap ───────────────────────────────────
 # A `-s` script is COMPILED before the autoloads exist, and compiling it forces
-# a compile of every class it names. Naming Skater / SkaterController / PerfProbe
+# a compile of every class it names. Naming Skater / SkaterController / CosmeticFreeze
 # here would fail those compiles — they reach NetworkManager and friends — and
 # the failures are CACHED, so the run dies several frames later with an
 # unrelated "Nonexistent function 'new' in base 'GDScript'" inside Skater._ready.

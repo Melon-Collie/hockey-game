@@ -35,9 +35,17 @@ const COL_DIM := "8a93a0"
 const COL_VAL := "ececec"
 const DOT := "●"
 
+# Two pages behind one key. The netcode readout is the reason this overlay
+# exists and it has to stay glanceable; the frame-cost breakdown grew to rival it
+# in length while answering an unrelated question, and stacking them made neither
+# readable. P swaps between them. The COPIED DIGEST always carries both, so which
+# page happens to be up never decides what a bug report contains.
+enum Page { NET, PERF }
+
 var _rt: RichTextLabel
 var _panel: PanelContainer
 var _showing: bool = false
+var _page: Page = Page.NET
 
 # Felt-lag toast: a transient confirmation shown when a tester presses F4 to
 # flag "this felt laggy." Rendered independently of the F3 panel (the panel may
@@ -200,22 +208,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		# Only while the F3 panel is open, so a bare C keypress in gameplay
 		# never gets swallowed here.
 		_copy_session_digest()
-	elif event.keycode == KEY_F6 and _showing:
-		# Panel-open gated like C: freezing the cosmetic rig makes the game look
-		# broken, so it must not be one stray keypress away during normal play.
-		# Available in exported builds too — a debug build inflates GDScript
-		# specifically, so the honest version of this measurement is a release one.
-		PerfProbe.auto_cycle = false
-		_toast.text = "Cosmetic freeze: %s" % PerfProbe.cycle()
-		_toast.show()
-		_toast_timer = TOAST_SECONDS
-	elif event.keycode == KEY_F7 and _showing:
-		var on: bool = not PerfProbe.auto_cycle
-		PerfProbe.set_auto_cycle(on)
-		_toast.text = ("Freeze sweep RUNNING — play normally for ~2 min"
-				if on else "Freeze sweep stopped")
-		_toast.show()
-		_toast_timer = TOAST_SECONDS
+	elif event.keycode == KEY_P and _showing:
+		# Panel-open gated like C. The digest always carries BOTH pages, so
+		# whichever one is on screen never decides what a bug report contains.
+		_page = Page.NET if _page == Page.PERF else Page.PERF
 
 # A tester pressing F4 flags "this felt laggy right now." We snapshot the most
 # diagnostic LIVE values and append a marker to the session summary so the
@@ -274,22 +270,16 @@ func _copy_session_digest() -> void:
 			# Frame PACING, which decides whether main_thread_ms below is a cost at
 			# all. That figure is a residual (frame minus render), so anything that
 			# parks the main thread — a cap, or vsync quantising the frame to whole
-			# refresh periods — is charged to it. Under FIFO vsync a mode that saves
-			# real CPU can read as saving nothing (the frame still lands on the same
-			# refresh) or as saving far more than it did (it flipped the frame onto
-			# an earlier one), so a freeze sweep taken there is not comparable to one
-			# taken uncapped. The on-screen panel rules this out in its "Bound by"
-			# line; without these fields a PASTED digest could not.
+			# refresh periods — is charged to it, and two captures taken under
+			# different pacing cannot be compared at all. The on-screen panel rules
+			# this out in its "Bound by" line; without these fields a PASTED digest
+			# could not. See docs/performance-findings.md.
 			# Read from DisplayServer/Engine, not PlayerPrefs: the applied state is
 			# what shaped the numbers, and the two can diverge.
 			"vsync_mode": _vsync_mode_name(),
 			"fps_cap": Engine.max_fps,
 			"refresh_hz": DisplayServer.screen_get_refresh_rate(),
 			"bound_by": _frame_bound_verdict(_ema_frame_ms, _main_thread_ms(_ema_frame_ms)),
-			# Which cosmetic work was suppressed while these numbers were taken.
-			# Anything but "off" means this digest is one half of an A/B, not a
-			# measurement of the real game.
-			"cosmetic_freeze": PerfProbe.mode_name(),
 			"skaters": get_tree().get_nodes_in_group("skaters").size(),
 			"frame_ms": _ema_frame_ms,
 			"gpu_ms": _ema_gpu_ms,
@@ -305,11 +295,7 @@ func _copy_session_digest() -> void:
 			"nodes": int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)),
 			"physics_active_objects": int(Performance.get_monitor(Performance.PHYSICS_3D_ACTIVE_OBJECTS)),
 		},
-		# The whole freeze A/B, so one paste carries the comparison instead of
-		# five separate captures that each measured a different moment.
-		"freeze_sweep": _freeze_sweep_dict(),
-		# Host-only, and empty on a client. The sweep above is entirely cosmetic,
-		# so without this a pasted digest cannot say anything at all about the AI.
+		# Host-only, and empty on a client.
 		"host_ai_cost": _host_ai_cost_dict(),
 		"metrics": t.session.to_dict(),
 	}
@@ -365,10 +351,6 @@ func _set_measuring(on: bool) -> void:
 
 func _exit_tree() -> void:
 	_set_measuring(false)
-	# The freeze switches are static, so they outlive this scene — a freeze left
-	# latched at match teardown would silently cripple the next session's visuals
-	# and its numbers. The tool that arms it disarms it.
-	PerfProbe.reset()
 
 
 func _sample_frame_cost(delta: float) -> void:
@@ -385,17 +367,6 @@ func _sample_frame_cost(delta: float) -> void:
 	# Raw, unsmoothed — already 1 Hz aggregates (see the field doc-block).
 	_peak_process_ms = float(Performance.get_monitor(Performance.TIME_PROCESS)) * 1000.0
 	_peak_physics_ms = float(Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS)) * 1000.0
-
-	# Feed the freeze sweep from RAW per-frame values, not the EMAs above: the
-	# sweep's own per-mode mean is the smoothing, and pre-smoothed input would
-	# carry cost across a mode switch — blurring the difference it exists to find.
-	PerfProbe.tick(delta)
-	var raw_frame_ms: float = delta * 1000.0
-	var raw_gpu_ms: float = RenderingServer.viewport_get_measured_render_time_gpu(_vp_rid)
-	var raw_render_ms: float = maxf(raw_gpu_ms,
-			RenderingServer.viewport_get_measured_render_time_cpu(_vp_rid))
-	PerfProbe.record(raw_frame_ms, maxf(raw_frame_ms - raw_render_ms, 0.0), raw_gpu_ms,
-			int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)))
 
 
 func _refresh() -> void:
@@ -423,7 +394,12 @@ func _refresh() -> void:
 		role = "CLIENT"
 		_render_client(t)
 
-	if _showing:
+	# The role renderers above always run, panel open or not, because they are
+	# what drives the always-on dot's verdict. Switching to the perf page
+	# therefore discards their lines rather than skipping them — the verdict is
+	# already computed by this point and must not depend on which page is up.
+	if _showing and _page == Page.PERF:
+		_lines.clear()
 		_render_frame_cost()
 
 	# Verdict is known once all lines are collected; drive the always-on dot.
@@ -439,8 +415,10 @@ func _refresh() -> void:
 	var felt: String = ""
 	if t.session.felt_lag_count > 0:
 		felt = "   [color=#%s]%d lag report(s)[/color]" % [COL_WARN, t.session.felt_lag_count]
-	var header := "[b]Network Debug[/b]   [color=#%s]%s[/color]   [color=#%s]%s[/color]%s   [color=#%s](F3 close · F4 report lag · C copy digest)[/color]" % [
-		_col(_worst), verdict, COL_HEAD, role, felt, COL_DIM]
+	var other: String = "P perf" if _page == Page.NET else "P back to net"
+	var header := "[b]%s[/b]   [color=#%s]%s[/color]   [color=#%s]%s[/color]%s   [color=#%s](F3 close · F4 report lag · C copy digest · %s)[/color]" % [
+		"Network Debug" if _page == Page.NET else "Frame Cost",
+		_col(_worst), verdict, COL_HEAD, role, felt, COL_DIM, other]
 	_rt.text = header + "\n" + "\n".join(_lines)
 
 # ── Role renderers ───────────────────────────────────────────────────────────
@@ -637,7 +615,6 @@ func _render_frame_cost() -> void:
 	_info("Bound by", _frame_bound_verdict(frame_ms, main_ms),
 		"the cost that is actually capping the frame rate — optimize this one, the others are free wins on paper only")
 	_render_host_ai_cost()
-	_render_freeze_sweep()
 
 
 # Host-only: the main-thread AI work the cosmetic sweep cannot see, because it
@@ -676,98 +653,6 @@ func _render_host_ai_cost() -> void:
 		"every instrumented section summed. The denominator is the tick's BUDGET, not its length — the physics step ends when the work does and the rest of that wall time is _process and rendering, so the shortfall is NOT all unattributed physics. Compare it against the peak physics step above instead")
 	_info("Worker behind", "%.0f%% of ticks" % HostCostProbe.worker_busy_pct(),
 		"share of ticks that could not kick a fresh AI batch because the previous one was still running; bots coast on their last decision through these, and the ticks that CAN kick are the expensive ones")
-
-
-# The cosmetic-freeze A/B. Everything here is a MEAN over many frames per mode,
-# collected while auto-cycle interleaves the modes — see perf_probe.gd for why
-# the obvious protocol (hold one mode, take a reading, move on) measures the
-# moment instead of the mode and produced a self-contradicting result.
-func _render_freeze_sweep() -> void:
-	if PerfProbe.mode != PerfProbe.Mode.NONE and not PerfProbe.auto_cycle:
-		_lines.append("[color=#%s]%s Cosmetic freeze: %s[/color]  [color=#%s](held manually — the frame above is NOT shippable. F7 runs the proper interleaved sweep)[/color]" % [
-			COL_BAD, DOT, PerfProbe.mode_name(), COL_DIM])
-		return
-	if not PerfProbe.auto_cycle and PerfProbe.sample_count(PerfProbe.Mode.NONE) == 0:
-		_lines.append("[color=#%s]· F7 runs the cosmetic-freeze sweep (rig / HUD / VFX priced against each other) · F6 steps one mode by hand[/color]" % COL_DIM)
-		return
-
-	_section("Cosmetic freeze sweep (mean per mode)")
-	# The GPU column covers the ROOT viewport only — SubViewports carry their own
-	# RID and are timed separately, so the ice scratch map's render cost is
-	# invisible there and falls into the residual instead. A large SCRATCH saving
-	# in the main column therefore does NOT prove the saving was CPU work; it may
-	# be that 5.6 MP repaint. Every other mode is genuinely main-thread.
-	if PerfProbe.sample_count(PerfProbe.Mode.SCRATCH) > 0:
-		_lines.append("[color=#%s]· SCRATCH's saving lands in the main column whether it was CPU or GPU — its SubViewport is outside the root viewport's GPU timer[/color]" % COL_DIM)
-	var pacing: String = _sweep_pacing_warning()
-	if pacing != "":
-		_lines.append("[color=#%s]%s %s[/color]" % [COL_BAD, DOT, pacing])
-		_worst = Health.BAD
-	if PerfProbe.auto_cycle:
-		_lines.append("[color=#%s]%s Sweep RUNNING — now: %s. Play normally; every mode needs %d rotations.[/color]" % [
-			COL_WARN, DOT, PerfProbe.mode_name(), PerfProbe.MIN_ROTATIONS_PER_MODE])
-	# n is ROTATIONS, not frames — one 1 s window is one observation, and the ±
-	# is the spread across those windows. A gap smaller than the error bars is
-	# not a result no matter how many frames fed it.
-	var base_main: float = PerfProbe.rotation_mean_main_ms(PerfProbe.Mode.NONE)
-	for m: int in PerfProbe.MODE_COUNT:
-		var k: int = PerfProbe.rotations(m)
-		if k == 0:
-			continue
-		var se: float = PerfProbe.rotation_stderr_main_ms(m)
-		var se_txt: String = "±%.2f" % se if is_finite(se) else "±?"
-		var delta_txt: String = ""
-		if m != PerfProbe.Mode.NONE and PerfProbe.rotations(PerfProbe.Mode.NONE) > 0:
-			var diff: float = PerfProbe.rotation_mean_main_ms(m) - base_main
-			var resolved: bool = PerfProbe.difference_resolved(m, PerfProbe.Mode.NONE)
-			delta_txt = "  [color=#%s]%+.2f ms%s[/color]" % [
-				COL_OK if resolved else COL_DIM, diff, "" if resolved else " (in the noise)"]
-		_lines.append("[color=#%s]·[/color] %-15s [color=#%s]%.2f %s main · %.2f frame · %.0f draws[/color]%s [color=#%s](%d rot)[/color]" % [
-			COL_DIM, PerfProbe.MODE_NAMES[m], COL_VAL,
-			PerfProbe.rotation_mean_main_ms(m), se_txt,
-			PerfProbe.mean_frame_ms(m), PerfProbe.mean_draws(m), delta_txt, COL_DIM, k])
-	if not PerfProbe.comparison_ready():
-		_lines.append("[color=#%s]%s Not enough frames yet — differences this early are noise, not findings.[/color]" % [
-			COL_WARN, DOT])
-	# Two self-checks the reader would otherwise have to run by eye. Draw-call
-	# spread says whether the modes actually saw comparable scenes — if the
-	# camera showed one mode a scrum and another an empty end, the timings are
-	# not comparable no matter how many frames were collected. Additivity says
-	# whether the parts explain the whole: the freezes are independent, so the
-	# single-system savings must sum to ALL's. When they do, the split is real.
-	if PerfProbe.sample_count(PerfProbe.Mode.NONE) > 0:
-		var lo: float = PerfProbe.mean_draws(PerfProbe.Mode.NONE)
-		var hi: float = lo
-		for m: int in PerfProbe.MODE_COUNT:
-			if PerfProbe.sample_count(m) == 0:
-				continue
-			lo = minf(lo, PerfProbe.mean_draws(m))
-			hi = maxf(hi, PerfProbe.mean_draws(m))
-		var spread: float = (hi - lo) / maxf(lo, 1.0)
-		_info("Scene spread", "%.0f%% draw-call range" % (spread * 100.0),
-			"how much the scene varied across modes. Expect this to stay HIGH and don't chase it — the camera follows the play, so there is no steady state to sample. Interleaving handles that: it makes the variance unbiased, not absent. Context only")
-		var parts: float = 0.0
-		for m: int in [PerfProbe.Mode.RIG, PerfProbe.Mode.HUD, PerfProbe.Mode.VFX,
-				PerfProbe.Mode.SCRATCH]:
-			parts += base_main - PerfProbe.rotation_mean_main_ms(m)
-		var whole: float = base_main - PerfProbe.rotation_mean_main_ms(PerfProbe.Mode.ALL)
-		# The real validity test, and the only one that survives a scene which
-		# never repeats: the freezes are independent, so their savings must sum
-		# to ALL's. Scene bias would break that; scene VARIANCE does not.
-		var gap: float = absf(parts - whole)
-		_context(_band(gap / maxf(whole, 0.01), 0.10, 0.25), "Adds up",
-			"parts %.2f ms vs ALL %.2f ms" % [parts, whole],
-			"THE validity check — independent freezes must sum. Agreement means the split is a real decomposition; disagreement means the run is still noise")
-	# A debug build does NOT bias the three terms equally, so the split is
-	# readable but the verdict can be wrong. GDScript carries debug
-	# instrumentation (Script reads high), and an editor run shares the machine
-	# with the editor process (everything reads high). The counts below Frame are
-	# scene composition and are exact in any build — as is the DIFFERENCE between
-	# two runs of the same build, which is why a 3v3-vs-5v5 A/B is trustworthy
-	# here even when the absolute numbers are not.
-	if OS.is_debug_build():
-		_lines.append("[color=#%s]%s[/color] [color=#%s]Debug build — Script is inflated by GDScript debug instrumentation and the editor shares the machine. Draw/object counts are exact; compare runs, not absolutes.[/color]" % [
-			COL_WARN, DOT, COL_DIM])
 
 
 # Main-thread cost, derived rather than measured: the part of the frame that
@@ -823,33 +708,6 @@ func _host_ai_cost_dict() -> Dictionary:
 	}
 
 
-# Empty when the sweep's numbers can be trusted; otherwise why they cannot.
-#
-# The sweep compares main_thread_ms across modes, and that figure is a residual
-# (frame minus render). Anything that decides frame length independently of how
-# much work the main thread did therefore destroys the comparison rather than
-# merely adding noise to it:
-#   • An fps cap idles the main thread by exactly the work a freeze removed, so
-#     every mode reads the same and real savings vanish.
-#   • FIFO vsync (Enabled, and Adaptive until it drops) quantises the frame to
-#     whole refresh periods. This bites BELOW the ceiling too, which is the
-#     trap: a saving only shows when it flips a frame onto an earlier refresh,
-#     so the measured gap is a function of where the distribution happened to
-#     sit — it can read as zero or as several times the true figure.
-# Mailbox is exempt: it is triple-buffered and not capped to refresh, so the
-# frame still ends when the work does.
-func _sweep_pacing_warning() -> String:
-	if Engine.max_fps > 0:
-		return "Frame rate capped at %d — the sweep cannot resolve savings. Set Video → FPS Cap to Unlimited and re-run." % Engine.max_fps
-	var vsync: int = int(DisplayServer.window_get_vsync_mode())
-	if vsync == PlayerPrefs.VSYNC_ENABLED or vsync == PlayerPrefs.VSYNC_ADAPTIVE:
-		return "V-Sync is %s — frames are quantised to the display, so these gaps are not true costs. Set Video → V-Sync to Disabled and re-run." % PlayerPrefs.VSYNC_LABELS[vsync]
-	return ""
-
-
-# PlayerPrefs.VSYNC_LABELS is indexed by the DisplayServer.VSyncMode enum (see
-# the note on the constants there), so the applied mode reads straight through
-# it rather than needing a second table to fall out of step with.
 func _vsync_mode_name() -> String:
 	var mode: int = int(DisplayServer.window_get_vsync_mode())
 	if mode < 0 or mode >= PlayerPrefs.VSYNC_LABELS.size():
@@ -861,39 +719,6 @@ func _frac(part: float, whole: float) -> float:
 	return part / maxf(whole, 0.001)
 
 
-# Per-mode means for the digest. `ready` states outright whether the sample
-# counts justify reading a difference off these numbers, so a pasted digest
-# can't be over-read the way the first hand-run sweep was.
-func _freeze_sweep_dict() -> Dictionary:
-	var modes: Dictionary = {}
-	for m: int in PerfProbe.MODE_COUNT:
-		if PerfProbe.sample_count(m) == 0:
-			continue
-		var se: float = PerfProbe.rotation_stderr_main_ms(m)
-		modes[PerfProbe.MODE_NAMES[m]] = {
-			# Rotations are the sample size; frames are along for context only.
-			"rotations": PerfProbe.rotations(m),
-			"frames": PerfProbe.sample_count(m),
-			"main_thread_ms": PerfProbe.rotation_mean_main_ms(m),
-			"main_thread_stderr_ms": se if is_finite(se) else -1.0,
-			"resolved_vs_off": PerfProbe.difference_resolved(m, PerfProbe.Mode.NONE),
-			"frame_ms": PerfProbe.mean_frame_ms(m),
-			"gpu_ms": PerfProbe.mean_gpu_ms(m),
-			"draw_calls": PerfProbe.mean_draws(m),
-		}
-	return {
-		"running": PerfProbe.auto_cycle,
-		"ready": PerfProbe.comparison_ready(),
-		# Non-empty means the modes below are not comparable at all — a stronger
-		# statement than `ready`, which only speaks to sample size.
-		"pacing_warning": _sweep_pacing_warning(),
-		"min_rotations_per_mode": PerfProbe.MIN_ROTATIONS_PER_MODE,
-		"modes": modes,
-	}
-
-
-# Watch metrics: shown only when they leave the healthy band, so the client view
-# stays quiet until something is actually wrong. When all clear, one calm line.
 func _render_watch(t: NetworkTelemetry) -> void:
 	var any := false
 	any = _watch(_when_positive(t.blade_jump_per_sec, 10.0), "Stick jumps", "%.1f/s (%.2f m avg)" % [t.blade_jump_per_sec, t.blade_jump_mag_avg],
