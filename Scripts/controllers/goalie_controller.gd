@@ -1561,6 +1561,8 @@ func reset_to_crease() -> void:
 	_reading_planted_windup = false
 	_tracked_threat_position = puck.global_position if puck != null else Vector3.ZERO
 	_prev_puck_position = _tracked_threat_position
+	_sleep_ticks_skipped = 0
+	_sleep_skipped_delta = 0.0
 	_cross_crease_react_timer = 0.0
 	_cross_crease_timer = 0.0
 	_cross_crease_target_x = 0.0
@@ -1608,6 +1610,18 @@ func _physics_process(delta: float) -> void:
 			_rejoin_blend_elapsed += delta
 		_interpolate_and_apply()
 		return
+	# Sleeping-tick LOD — see the _SLEEP_TICK_DIVISOR block for the contract.
+	if _body_solve_asleep:
+		_sleep_ticks_skipped += 1
+		var wake_now: bool = _reaction.reacting \
+				or goalie.global_position.distance_squared_to(puck.global_position) \
+				< _BODY_SOLVE_WAKE_M * _BODY_SOLVE_WAKE_M
+		if not wake_now and _sleep_ticks_skipped < _SLEEP_TICK_DIVISOR:
+			_sleep_skipped_delta += delta
+			return
+		delta += _sleep_skipped_delta
+		_sleep_skipped_delta = 0.0
+		_sleep_ticks_skipped = 0
 	# A physics tick IS a new view by definition. The frame stamp inside the view
 	# only has to catch RE-reads within one tick (the puck_released signal handler
 	# fires outside _physics_process and must not rebuild what this tick already
@@ -3550,6 +3564,21 @@ func _update_facing(delta: float) -> void:
 const _BODY_SOLVE_WAKE_M: float = 14.0   # inside this, always solving
 const _BODY_SOLVE_SLEEP_M: float = 18.0  # beyond this, suspend
 var _body_solve_asleep: bool = false
+
+# Sleeping-tick LOD, layered on the body-solve suspension above: with the solve
+# asleep the residual tick is far-end bookkeeping (tracking / state / depth /
+# position / facing on a goalie holding a converged stance 18+ m from the play),
+# so it runs every _SLEEP_TICK_DIVISOR-th physics tick with the skipped time
+# folded into delta — timers, lerps and the position-derived puck velocity all
+# integrate over real elapsed time, just in coarser steps. Wake stays tick-exact
+# where it matters: skipped ticks still run the cheap checks in
+# _physics_process (a live reaction — e.g. started by the puck_released signal
+# handler between full ticks — or the puck inside the always-solve radius
+# forces a full tick immediately), and every other wake condition the solve
+# gate reads (stance, lunge / clear timers) can only change on a ticked frame.
+const _SLEEP_TICK_DIVISOR: int = 4
+var _sleep_ticks_skipped: int = 0
+var _sleep_skipped_delta: float = 0.0
 
 
 # True only when this goalie provably cannot interact with anything. Every

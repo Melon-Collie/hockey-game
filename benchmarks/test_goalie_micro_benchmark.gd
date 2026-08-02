@@ -149,7 +149,18 @@ func test_far_end_body_solve_lod() -> void:
 	assert_true(_ctrl._body_solve_asleep,
 			"body solve should be suspended with the puck at the far end")
 
-	_bench("FAR END: _physics_process (WHOLE TICK)", func() -> void:
+	# The sleeping-tick LOD must actually be skipping, or the row below silently
+	# re-measures the full far-end tick: from a fresh counter, an asleep tick
+	# early-outs and banks its delta for the next full tick.
+	_ctrl._sleep_ticks_skipped = 0
+	_ctrl._sleep_skipped_delta = 0.0
+	_ctrl._physics_process(delta)
+	assert_gt(_ctrl._sleep_skipped_delta, 0.0,
+			"an asleep goalie's tick should skip and bank its delta")
+
+	# Skip-averaged on purpose: 3 of every _SLEEP_TICK_DIVISOR calls early-out,
+	# so this row IS the sleeping goalie's real per-tick cost, not a full tick's.
+	_bench("FAR END: _physics_process (skip-avg)", func() -> void:
 		_ctrl._physics_process(delta))
 	_bench("FAR END: body parts (suspended)", func() -> void:
 		_ctrl._update_body_parts(delta))
