@@ -37,9 +37,18 @@ const _SHIN_LEN: float = 0.45
 # ice by exactly its length.
 const _FOOT_FWD: float = 0.10
 
+# Quiet time before the settled early-out in apply() engages. Sized to sit well
+# past the slowest smoothed channel's convergence (the eases run at ≥ ~5/s, so
+# one second leaves residuals under e⁻⁵ ≈ 0.7% of amplitude).
+const _SETTLE_SECONDS: float = 1.0
+
 var _skater: Skater = null
 var _sm: SkaterStateMachine = null
 var _controller: SkaterController = null  # tunables live as @export on the controller
+
+# Settled early-out state (see the block at the top of apply()).
+var _settle_timer: float = 0.0
+var _settled: bool = false
 
 # Height multiplier for this build's legs, set by SkaterController
 # .apply_attributes alongside the skeleton scaling (the appearance pass
@@ -226,6 +235,47 @@ func start_check_drive(hit_dir: Vector3, intensity: float) -> void:
 func apply(delta: float) -> void:
 	if _skater == null or delta <= 0.0:
 		return
+
+	# ── Settled early-out ──────────────────────────────────────────────────────
+	# At true rest the converged gait pose is static: with no inputs, no speed,
+	# no timers and a plain skating state, every smoothed channel decays to zero
+	# and the pass rewrites the same rest pose every frame — the fixed cost the
+	# micro-benchmark's "at rest" row measures. Detect the steady state from the
+	# same replicated inputs the pass itself reads (so remotes settle too), and
+	# once quiet has held for _SETTLE_SECONDS — long past every ease/spring's
+	# convergence, residuals far below perception — snap to the exact rest pose
+	# once (reset_to_rest) and hold. Any input, speed, timer, or state change
+	# fails `quiet` and the full pass runs again the same frame.
+	var qvel: Vector3 = _skater.velocity
+	var quiet: bool = (
+			qvel.x * qvel.x + qvel.z * qvel.z < 0.0025
+			and _skater.move_intent.length_squared() <= 0.0025
+			and not _skater.brake_intent
+			and not _controller.sprint_active
+			and not _skater.hit_committed
+			and not _skater.blade_up
+			and (_skater.current_shot_state == State.SKATING_WITH_PUCK
+				or _skater.current_shot_state == State.SKATING_WITHOUT_PUCK)
+			and _skater.current_shot_state == _shot_prev_state
+			and _controller.stagger_timer <= 0.0
+			and _controller.knockdown_timer <= 0.0
+			and _drive_t < 0.0 and _shot_kick_t < 0.0
+			and not _controller.is_faceoff_ready()
+			and _controller.celebration_progress() <= 0.0)
+	if quiet:
+		_settle_timer = minf(_settle_timer + delta, _SETTLE_SECONDS)
+		if _settle_timer >= _SETTLE_SECONDS:
+			if not _settled:
+				_settled = true
+				reset_to_rest()
+				# reset_to_rest clears the shot-transition latch to 0; re-stamp
+				# the live state or `quiet` fails every other frame and the
+				# settle/reset cycle never holds.
+				_shot_prev_state = _skater.current_shot_state
+			return
+	else:
+		_settle_timer = 0.0
+		_settled = false
 
 	var vel: Vector3 = _skater.velocity
 	# Ground speed only — vertical velocity never feeds the stride.

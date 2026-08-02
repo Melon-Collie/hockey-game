@@ -88,8 +88,11 @@ func _bench(label: String, fn: Callable) -> void:
 # Phases are timed with the per-tick view left WARM. The real tick invalidates
 # once and the first phase to read it pays the rebuild, so invalidating inside
 # every phase would charge that rebuild eight times over and invent a cost that
-# does not exist. The gap between the whole tick and the sum of the phases is
-# therefore roughly the view rebuild — itself worth knowing.
+# does not exist. Caveat: no skater getter is wired in this scene, so
+# _ensure_view short-circuits and the view scan is a NO-OP here — the
+# invalidate+rebuild row landing ≈ the warm "state" row is the check. The gap
+# between the whole tick and the sum of the phases is therefore NOT the view
+# rebuild; it is unattributed tick overhead.
 func test_goalie_tick_costs() -> void:
 	var delta: float = 1.0 / 120.0
 
@@ -106,8 +109,9 @@ func test_goalie_tick_costs() -> void:
 	_bench("  poke", func() -> void: _ctrl._update_goalie_poke(delta))
 	_bench("  view invalidate (flag only)", func() -> void: _ctrl._view.invalidate())
 
-	# What one view rebuild actually costs: invalidate, then force the first
-	# read. This is the term the warm-phase timings above deliberately exclude.
+	# Invalidate, then force the first read. With no skater getter wired the
+	# rebuild short-circuits, so this row ≈ the warm "state" row above — it
+	# verifies the view costs nothing HERE, it does not price a real rebuild.
 	_bench("  view invalidate + rebuild", func() -> void:
 		_ctrl._view.invalidate()
 		_ctrl._update_state(delta))
@@ -145,7 +149,18 @@ func test_far_end_body_solve_lod() -> void:
 	assert_true(_ctrl._body_solve_asleep,
 			"body solve should be suspended with the puck at the far end")
 
-	_bench("FAR END: _physics_process (WHOLE TICK)", func() -> void:
+	# The sleeping-tick LOD must actually be skipping, or the row below silently
+	# re-measures the full far-end tick: from a fresh counter, an asleep tick
+	# early-outs and banks its delta for the next full tick.
+	_ctrl._sleep_ticks_skipped = 0
+	_ctrl._sleep_skipped_delta = 0.0
+	_ctrl._physics_process(delta)
+	assert_gt(_ctrl._sleep_skipped_delta, 0.0,
+			"an asleep goalie's tick should skip and bank its delta")
+
+	# Skip-averaged on purpose: 3 of every _SLEEP_TICK_DIVISOR calls early-out,
+	# so this row IS the sleeping goalie's real per-tick cost, not a full tick's.
+	_bench("FAR END: _physics_process (skip-avg)", func() -> void:
 		_ctrl._physics_process(delta))
 	_bench("FAR END: body parts (suspended)", func() -> void:
 		_ctrl._update_body_parts(delta))

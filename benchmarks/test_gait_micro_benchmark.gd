@@ -171,10 +171,14 @@ func test_gait_cost_by_state() -> void:
 	var delta: float = 1.0 / 120.0
 	_results.clear()
 
+	# "at rest" measures the SETTLED early-out, not a full at-rest pass: the
+	# settle window (_SETTLE_SECONDS) elapses inside the 2 s warm-up loop, which
+	# is also the honest steady state — a skater quiet for two seconds IS
+	# settled in game.
 	for spec: Array in [
 			["skating (intent + speed)", _skate_forward],
 			["gliding (speed, no intent)", _glide],
-			["at rest", _rest],
+			["at rest (settled)", _rest],
 			["hockey stop (braking)", _hockey_stop],
 			["shot-blocking (planted)", _blocking],
 		]:
@@ -189,6 +193,24 @@ func test_gait_cost_by_state() -> void:
 
 	_print_results()
 	assert_true(_results.size() > 0, "benchmark produced rows")
+
+
+# The settled early-out, verified: a quiet skater settles after _SETTLE_SECONDS
+# and any input wakes the full pass the same frame. Guards the by-state rows
+# above — a silently-broken settle would re-measure the full at-rest pass and
+# look like a regression; a settle that fails to wake would freeze the legs on
+# the first stride after every stop.
+func test_settled_early_out() -> void:
+	var delta: float = 1.0 / 120.0
+	_rest()
+	for _w: int in 240:
+		_controller._skating.apply(delta)
+	assert_true(_controller._skating._settled,
+			"a quiet skater should settle within 2 s")
+	_skate_forward()
+	_controller._skating.apply(delta)
+	assert_false(_controller._skating._settled,
+			"movement intent must wake the gait the same frame")
 
 
 # The orthonormal-basis question, isolated. The gait's intent block runs
