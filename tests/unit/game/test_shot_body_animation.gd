@@ -6,6 +6,8 @@ const _LEG_L: int = SkaterMeshBuilder.LegBone.LEG_L
 const _LEG_R: int = SkaterMeshBuilder.LegBone.LEG_R
 const _SHIN_L: int = SkaterMeshBuilder.LegBone.SHIN_L
 const _SHIN_R: int = SkaterMeshBuilder.LegBone.SHIN_R
+const _FOOT_L: int = SkaterMeshBuilder.LegBone.FOOT_L
+const _FOOT_R: int = SkaterMeshBuilder.LegBone.FOOT_R
 
 # Shot body animation (SkaterSkatingCoordinator + the pose coordinator's
 # block branch) — the load settles the weight over the stick-side back leg
@@ -213,27 +215,46 @@ func test_block_drops_to_one_knee() -> void:
 			"body drop should release to rest")
 
 
-func test_block_extended_skate_stays_on_the_ice() -> void:
-	# The extended leg's abduction is SOLVED from the kneel height, so both feet
-	# land at the same height — the seal lies along the ice instead of the far
-	# skate floating above it or scissoring through it.
+func test_block_lands_both_skates_on_the_ice() -> void:
+	# Both halves of the kneel solve, measured where they show: the body drop is
+	# derived from the down leg's chain (thigh, folded shin, AND the boot pivot
+	# ahead of the ankle — omit that last term and the trailing skate buries
+	# itself in the ice by its own length), and the extended leg's abduction is
+	# derived from the resulting hip height. Both skates therefore end at the
+	# height they rest at, which is ice level.
+	var rest_down: float = _foot_y(_LEG_L, _SHIN_L, _FOOT_L)
+	var rest_ext: float = _foot_y(_LEG_R, _SHIN_R, _FOOT_R)
 	_skater.current_shot_state = State.SHOT_BLOCKING
 	_tick(120)
-	var down_foot: float = _foot_y(_LEG_L, _SHIN_L)
-	var ext_foot: float = _foot_y(_LEG_R, _SHIN_R)
-	assert_almost_eq(ext_foot, down_foot, 0.02,
-			"both skates should sit at ice level (down %.3f, extended %.3f)" % [down_foot, ext_foot])
+	assert_almost_eq(_foot_y(_LEG_L, _SHIN_L, _FOOT_L), rest_down, 0.02,
+			"the kneeling skate should sit on the ice, not through it")
+	assert_almost_eq(_foot_y(_LEG_R, _SHIN_R, _FOOT_R), rest_ext, 0.02,
+			"the extended skate should reach the ice, not hang above it")
+	# ...and the extended boot stays LEVEL: the ankle everts against the leg's
+	# splay, so the blade lies flat instead of swinging up onto an edge.
+	assert_lt(_boot_tilt(_LEG_R, _SHIN_R, _FOOT_R), deg_to_rad(15.0),
+			"the extended skate should stay level under its splayed leg")
 
 
-# Skate height in MeshRoot space, from the posed hip/knee/roll angles over the
-# dropped hips — what the rig actually renders. Compared between the two legs,
-# so the ice plane's own offset cancels.
-func _foot_y(leg: int, shin: int) -> float:
-	var hip: float = _skater.leg_bone_euler(leg).x
-	var roll: float = _skater.leg_bone_euler(leg).z
-	var knee: float = _skater.leg_bone_euler(shin).x
-	var span: float = 0.31 * cos(hip) + 0.45 * cos(hip + knee)
-	return _skater.lower_body.position.y - 0.13 - span * cos(roll)
+# Walks the posed leg chain to the FOOT pivot — the boot's centre. Measured off
+# the rig rather than recomputed from the design angles, so a pose that lands
+# somewhere the geometry didn't intend still shows up here.
+func _foot_chain(leg: int, shin: int, foot: int) -> Transform3D:
+	var chain := Transform3D.IDENTITY
+	for bone: int in [leg, shin, foot]:
+		chain = chain * Transform3D(
+				Basis.from_euler(_skater.leg_bone_euler(bone)), _skater.leg_bone_position(bone))
+	return chain
+
+
+func _foot_y(leg: int, shin: int, foot: int) -> float:
+	return _skater.lower_body.position.y + _foot_chain(leg, shin, foot).origin.y
+
+
+# How far the boot has rolled out of the orientation it rests in.
+func _boot_tilt(leg: int, shin: int, foot: int) -> float:
+	var rest := Basis.from_euler(Vector3(deg_to_rad(90.0), 0.0, 0.0))
+	return _foot_chain(leg, shin, foot).basis.y.angle_to(rest.y)
 
 
 func test_block_seal_height_matches_the_kneeling_body() -> void:

@@ -817,7 +817,7 @@ var show_one_timer_indicator: bool = false
 # height so its skate stays on the ice (SkaterSkatingCoordinator). Keyed off the
 # replicated current_shot_state, so remote blockers read identically.
 @export var block_kneel_hip_deg: float = 30.0    # down-leg thigh, forward of vertical
-@export var block_kneel_shin_deg: float = 76.0   # down-leg shin, from vertical (90 = flat on the ice)
+@export var block_kneel_shin_deg: float = 88.0   # down-leg shin, from vertical (90 = flat on the ice)
 @export var block_extend_knee_deg: float = 10.0  # residual flex in the extended leg — never locked straight
 @export var block_trunk_pitch_deg: float = 16.0  # chest tips forward over the down knee
 @export var block_trunk_roll_deg: float = 10.0   # ...and rolls onto it, off the extended leg

@@ -29,6 +29,13 @@ const State = SkaterStateMachine.State
 # the vertical drop is a length and rides `leg_scale` below.
 const _THIGH_LEN: float = 0.31
 const _SHIN_LEN: float = 0.45
+# Forward offset from the shin's end to the FOOT pivot (ShinL → FootL local −Z):
+# the boot's centre sits ahead of the ankle, not under it. Irrelevant to the
+# stance crouch — a few degrees of knee flex barely tilts it — but the shot
+# block folds the shin nearly flat, which swings this offset from horizontal to
+# straight DOWN, and a solve that ignored it buried the trailing skate in the
+# ice by exactly its length.
+const _FOOT_FWD: float = 0.10
 
 var _skater: Skater = null
 var _sm: SkaterStateMachine = null
@@ -1030,6 +1037,9 @@ func apply(delta: float) -> void:
 		trunk_pitch_add += wobble_amp * sin(wobble_phase)
 		trunk_roll_add += wobble_amp * 0.7 * sin(wobble_phase * 1.31)
 
+	var foot_evert_l: float = 0.0
+	var foot_evert_r: float = 0.0
+
 	# ── Shot block: the one-knee drop ─────────────────────────────────────────
 	# The block a real skater plays. The STICK-SIDE knee sinks toward the ice
 	# with the shin folded back along it; the far leg extends out to the other
@@ -1039,10 +1049,11 @@ func apply(delta: float) -> void:
 	# covers the other, which is why the block's reach is wider than the torso.
 	#
 	# Geometry, not authored numbers: the kneeling hip height falls out of the
-	# down leg's thigh/shin angles, and the extended leg's abduction is SOLVED
-	# from that same height (its vertical span is exactly leg·cos(roll), since
-	# the knee folds in the rolled leg's own sagittal plane) so its skate lands
-	# on the ice instead of floating above it or scissoring through it.
+	# down leg's thigh/shin angles AND the boot's forward offset under them
+	# (_FOOT_FWD), and the extended leg's abduction is SOLVED from that same
+	# height (its vertical span is exactly leg·cos(roll), since the knee folds in
+	# the rolled leg's own sagittal plane) so its skate lands on the ice instead
+	# of floating above it or scissoring through it.
 	#
 	# The pose REPLACES the stance rather than layering on it — lerped on
 	# _block_blend like the knockdown crumple below, which supersedes it (a
@@ -1050,15 +1061,24 @@ func apply(delta: float) -> void:
 	if _block_blend > 0.001:
 		var kneel_hip: float = deg_to_rad(_controller.block_kneel_hip_deg)
 		var kneel_shin: float = deg_to_rad(_controller.block_kneel_shin_deg)
-		var hip_h: float = leg_scale \
-				* (_THIGH_LEN * cos(kneel_hip) + _SHIN_LEN * cos(kneel_shin))
+		var hip_h: float = leg_scale * (_THIGH_LEN * cos(kneel_hip)
+				+ _SHIN_LEN * cos(kneel_shin) + _FOOT_FWD * sin(kneel_shin))
 		var ext_knee: float = deg_to_rad(_controller.block_extend_knee_deg)
-		var ext_len: float = leg_scale * (_THIGH_LEN + _SHIN_LEN * cos(ext_knee))
+		var ext_len: float = leg_scale * (_THIGH_LEN
+				+ _SHIN_LEN * cos(ext_knee) + _FOOT_FWD * sin(ext_knee))
 		var ext_roll: float = acos(clampf(hip_h / maxf(ext_len, 0.001), -1.0, 1.0))
 		# Knee value is the total fold (hip + shin-from-vertical), negative-folds-
 		# back, matching the stance_knee convention above. The extended leg rolls
 		# AWAY from the body: left toward −X (negative roll), right toward +X.
 		var down_knee: float = -(kneel_hip + kneel_shin)
+		# Ankle eversion on the extended leg: give the skate back the roll its
+		# leg just took (equal and opposite, in the shin's frame), so the blade
+		# lies flat on the ice instead of swinging up onto an edge under a leg
+		# splayed 60° out of vertical.
+		if stick_side > 0.0:
+			foot_evert_l = ext_roll * _block_blend
+		else:
+			foot_evert_r = -ext_roll * _block_blend
 		if stick_side > 0.0:
 			r_pitch = lerpf(r_pitch, kneel_hip, _block_blend)
 			r_roll = lerpf(r_roll, 0.0, _block_blend)
@@ -1103,4 +1123,5 @@ func apply(delta: float) -> void:
 		drop += _controller.hit_commit_crouch_m * commit_t
 
 	_skater.set_leg_swing(l_pitch, l_roll, l_knee, r_pitch, r_roll, r_knee)
+	_skater.set_foot_eversion(foot_evert_l, foot_evert_r)
 	_skater.set_skating_crouch_drop(drop)

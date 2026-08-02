@@ -1331,6 +1331,9 @@ var _leg_pos: PackedVector3Array = PackedVector3Array()
 # The scene's authored shin euler, kept so the knee write can preserve its Y/Z
 # the way a node's `rotation.x = v` did. Index 0 = left, 1 = right.
 var _leg_shin_base_euler: PackedVector3Array = PackedVector3Array()
+# True while the skate bones carry an eversion, so set_foot_eversion knows it
+# still owes one write to put them back (see there).
+var _feet_everted: bool = false
 # Untouched baselines the sizing seam multiplies against, captured off the scene
 # subtree before it is freed.
 var _leg_base_scale: PackedVector3Array = PackedVector3Array()
@@ -1363,6 +1366,30 @@ func set_leg_swing(left_pitch: float, left_roll: float, left_knee: float,
 func _pose_leg_pivot(bone: int, euler: Vector3) -> void:
 	_leg_skeleton.set_bone_pose(bone,
 			Transform3D(Basis.from_euler(euler), _leg_pos[bone]))
+
+
+# Ankle eversion (radians, about the shin's Z): rolls the SKATE against its
+# leg's splay so the blade stays flat on the ice. The boot hangs below the ankle
+# joint, so a leg rolled far out of vertical — the shot block's extended leg —
+# swings its blade up onto an edge and clear of the ice unless the ankle gives
+# back the roll, which is what a real ankle does. Unlike the pivots this bone
+# carries an authored rotation and the sizing seam's scale, so the eversion is
+# composed onto the rest basis rather than replacing it.
+#
+# Skipped unless something is actually everted (and once more to settle back),
+# so the common case adds no writes to the render-rate rig pass.
+func set_foot_eversion(left_roll: float, right_roll: float) -> void:
+	if is_zero_approx(left_roll) and is_zero_approx(right_roll) and not _feet_everted:
+		return
+	_feet_everted = not (is_zero_approx(left_roll) and is_zero_approx(right_roll))
+	_pose_leg_foot(SkaterMeshBuilder.LegBone.FOOT_L, left_roll)
+	_pose_leg_foot(SkaterMeshBuilder.LegBone.FOOT_R, right_roll)
+
+
+func _pose_leg_foot(bone: int, roll: float) -> void:
+	var basis: Basis = Basis.from_euler(Vector3(0.0, 0.0, roll)) * _leg_basis[bone]
+	_leg_skeleton.set_bone_pose(bone,
+			Transform3D(basis.scaled_local(_leg_scale[bone]), _leg_pos[bone]))
 
 
 # Sets the skating-stance body drop (metres). The stance flexes hips/knees,
