@@ -137,12 +137,12 @@ func snap_lean_to_state() -> void:
 	velocity_lean_x = v_target.x
 	velocity_lean_z = v_target.y
 	if _skater.current_shot_state == State.SHOT_BLOCKING:
-		# Mirror the local block branch in apply_upper_body: the chest folds
-		# over the knees instead of deriving a reach lean from the block's
+		# Mirror the local block branch in apply_upper_body: the chest tips
+		# over the down knee instead of deriving a reach lean from the block's
 		# low hand pose. Snapped, like everything else on this path — the
 		# block pose itself snaps on entry.
 		upper_body_lean = -deg_to_rad(_controller.block_trunk_pitch_deg)
-		upper_body_lean_roll = 0.0
+		upper_body_lean_roll = _block_trunk_roll()
 	else:
 		var reach_target: Vector2 = compute_upper_body_lean_target(
 				Vector2(_skater.top_hand.position.x, _skater.top_hand.position.z),
@@ -152,6 +152,15 @@ func snap_lean_to_state() -> void:
 		upper_body_lean = reach_target.x
 		upper_body_lean_roll = reach_target.y
 	_apply_lean()
+
+
+# Torso roll of the shot block, as a rotation.z: the chest leans onto the down
+# knee, which the gait drops on the STICK side (so body and stick seal opposite
+# halves of the lane). Negative rotation.z rolls the torso top toward local +X,
+# where a righty's stick — and therefore his kneeling leg — is.
+func _block_trunk_roll() -> float:
+	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
+	return -blade_side_sign * deg_to_rad(_controller.block_trunk_roll_deg)
 
 
 # Single writer for the torso/leg lean rotations. Layers, in order: the reach
@@ -262,16 +271,17 @@ func apply_facing(input: InputState, delta: float) -> void:
 
 func apply_upper_body(delta: float) -> void:
 	if _sm.get_state() == State.SHOT_BLOCKING:
-		# Chest folds over the knees — the braced-wall read, over the gait's
-		# deep sit and wide leg V. Entry zeroed the lean so this eases in from
-		# square; roll stays zero and the yaw stays locked at the snapped
-		# facing (the block faces the shooter dead-on). The block blade pose
-		# solves its ice height through blade_y_lean_corrected, so the stick
-		# stays flat on the ice under the pitching torso.
+		# Chest tips forward AND onto the down knee — the weight sits over the
+		# kneeling leg, off the one extended along the ice (the gait solves that
+		# drop). Entry zeroed the lean so this eases in from square; the yaw
+		# stays locked at the snapped facing (the block faces the shooter
+		# dead-on). The block blade pose solves its ice height through
+		# blade_y_lean_corrected, so the stick stays flat on the ice under the
+		# pitching torso.
 		var block_ease: float = minf(_controller.block_pose_blend_speed * delta, 1.0)
 		upper_body_lean = lerpf(upper_body_lean,
 				-deg_to_rad(_controller.block_trunk_pitch_deg), block_ease)
-		upper_body_lean_roll = lerpf(upper_body_lean_roll, 0.0, block_ease)
+		upper_body_lean_roll = lerpf(upper_body_lean_roll, _block_trunk_roll(), block_ease)
 		_apply_lean()
 		return
 

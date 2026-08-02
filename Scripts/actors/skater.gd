@@ -229,14 +229,21 @@ var is_local_skater: bool = false
 # ── Body Block Tuning ─────────────────────────────────────────────────────────
 @export var body_block_radius: float = 0.5
 @export var block_body_radius: float = 0.9
-@export var block_crouch_depth: float = 0.35
+# World-Y ceiling of the shot-block seal — the top of the KNEELING body (helmet
+# shell, ≈1.44 m at the default build; the standing head reaches ≈1.85 m). A
+# blocker who drops to a knee gives up everything above it, so elevating over
+# him beats the block. Authored rather than measured off the live pose on
+# purpose: the pose is a render-rate cosmetic (SkaterSkatingCoordinator), and
+# collision must not depend on when a frame happened to draw. Re-derive it if
+# the kneel angles move — test_shot_body_animation pins the two together.
+@export var block_seal_height: float = 1.45
 # Vertical center of the body-block sphere, in skater-local space (origin sits at
 # the hips). Raised to torso height so the PASSIVE sphere (body_block_radius)
 # clears a grounded puck (top ≈ ice_height + radius ≈ 0.12) — loose pucks on the
 # ice slip under/between the legs, enabling nutmegs. The WIDER explicit-block
 # sphere (block_body_radius, Ctrl) is what stops a low puck: set_block_stance
 # rebases it to seal from the ice up (the hip-height origin puts this local
-# offset at the torso, so without the rebase a flat shot slid under the crouch).
+# offset at the torso, so without the rebase a flat shot slid under the block).
 # Mirrors the grounded-vs-airborne split the blade already uses.
 @export var body_block_height: float = 0.7
 
@@ -1324,6 +1331,9 @@ var _leg_pos: PackedVector3Array = PackedVector3Array()
 # The scene's authored shin euler, kept so the knee write can preserve its Y/Z
 # the way a node's `rotation.x = v` did. Index 0 = left, 1 = right.
 var _leg_shin_base_euler: PackedVector3Array = PackedVector3Array()
+# True while the skate bones carry an eversion, so set_foot_eversion knows it
+# still owes one write to put them back (see there).
+var _feet_everted: bool = false
 # Untouched baselines the sizing seam multiplies against, captured off the scene
 # subtree before it is freed.
 var _leg_base_scale: PackedVector3Array = PackedVector3Array()
@@ -1358,6 +1368,30 @@ func _pose_leg_pivot(bone: int, euler: Vector3) -> void:
 			Transform3D(Basis.from_euler(euler), _leg_pos[bone]))
 
 
+# Ankle eversion (radians, about the shin's Z): rolls the SKATE against its
+# leg's splay so the blade stays flat on the ice. The boot hangs below the ankle
+# joint, so a leg rolled far out of vertical — the shot block's extended leg —
+# swings its blade up onto an edge and clear of the ice unless the ankle gives
+# back the roll, which is what a real ankle does. Unlike the pivots this bone
+# carries an authored rotation and the sizing seam's scale, so the eversion is
+# composed onto the rest basis rather than replacing it.
+#
+# Skipped unless something is actually everted (and once more to settle back),
+# so the common case adds no writes to the render-rate rig pass.
+func set_foot_eversion(left_roll: float, right_roll: float) -> void:
+	if is_zero_approx(left_roll) and is_zero_approx(right_roll) and not _feet_everted:
+		return
+	_feet_everted = not (is_zero_approx(left_roll) and is_zero_approx(right_roll))
+	_pose_leg_foot(SkaterMeshBuilder.LegBone.FOOT_L, left_roll)
+	_pose_leg_foot(SkaterMeshBuilder.LegBone.FOOT_R, right_roll)
+
+
+func _pose_leg_foot(bone: int, roll: float) -> void:
+	var basis: Basis = Basis.from_euler(Vector3(0.0, 0.0, roll)) * _leg_basis[bone]
+	_leg_skeleton.set_bone_pose(bone,
+			Transform3D(basis.scaled_local(_leg_scale[bone]), _leg_pos[bone]))
+
+
 # Sets the skating-stance body drop (metres). The stance flexes hips/knees,
 # which shortens the legs' vertical span; lowering the torso AND the hips by
 # the deficit keeps the skates planted instead of floating. Cosmetic only —
@@ -1386,9 +1420,8 @@ func set_skeleton_root_offset(offset: float) -> void:
 
 
 func _apply_body_height() -> void:
-	var block_depth: float = block_crouch_depth if _block_stance_active else 0.0
 	upper_body.position.y = _default_upper_body_y + _skeleton_root_offset \
-			- block_depth - _skating_crouch_drop
+			- _skating_crouch_drop
 	lower_body.position.y = _default_lower_body_y + _skeleton_root_offset \
 			- _skating_crouch_drop
 
@@ -2339,17 +2372,26 @@ func set_ghost(ghost: bool) -> void:
 
 
 # ── Shot-Block Stance ─────────────────────────────────────────────────────────
+# The block's BODY pose (the one-knee drop) is the gait's, off the replicated
+# shot state; this flag is the collision half — it widens the body-block
+# cylinder below. Taking the blade OUT of puck play is not the layer flip here
+# (nothing has masked LAYER_BLADE_AREAS since puck contact went analytic) but
+# the SHOT_BLOCKING gates on the analytic paths themselves: PuckController's
+# corral and contest scans, PickupClaimResolver, LocalController's provisional
+# pickup.
 func set_block_stance(active: bool) -> void:
 	_block_stance_active = active
-	_apply_body_height()
 	_blade_area.collision_layer = 0 if active else Constants.LAYER_BLADE_AREAS
 
 
 # The body-block CYLINDER the analytic detector tests against (PuckController) — a vertical
 # cylinder at the skater's XZ axis matching the torso. PASSIVE: radius body_block_radius over a
 # torso band raised off the ice, so a grounded puck slides UNDER (a flat shot passes clean).
-# SHOT-BLOCK crouch: the wider block_body_radius, banded from the ice up so a low shot is
-# sealed. Reach is uniform across the band (unlike the old sphere, which bulged at one height).
+# SHOT-BLOCK: the wider block_body_radius, banded from the ice up to block_seal_height so a
+# low shot is sealed. Both dimensions are the one-knee pose's — the leg extended along the
+# ice on one side and the stick flat on the other earn the width; the kneeling head caps the
+# height, so beating a committed blocker means going OVER him. Reach is uniform across the
+# band (unlike the old sphere, which bulged at one height).
 func get_body_block_radius() -> float:
 	return block_body_radius if _block_stance_active else body_block_radius
 
@@ -2357,8 +2399,9 @@ func get_body_block_radius() -> float:
 # World-Y extent [bottom, top] of the body-block cylinder.
 func get_body_block_y_range() -> Vector2:
 	if _block_stance_active:
-		# Seal the ice up through the body (a crouched block stops a flat shot).
-		return Vector2(0.0, 2.0 * block_body_radius)
+		# Seal the ice up through the kneeling body (a committed block stops a
+		# flat shot; over the top of him it goes through).
+		return Vector2(0.0, block_seal_height)
 	# Torso band centred at body_block_height, raised off the ice so a grounded puck passes under.
 	var center_y: float = global_position.y + body_block_height
 	return Vector2(center_y - body_block_radius, center_y + body_block_radius)

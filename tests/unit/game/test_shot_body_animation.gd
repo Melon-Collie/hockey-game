@@ -6,18 +6,21 @@ const _LEG_L: int = SkaterMeshBuilder.LegBone.LEG_L
 const _LEG_R: int = SkaterMeshBuilder.LegBone.LEG_R
 const _SHIN_L: int = SkaterMeshBuilder.LegBone.SHIN_L
 const _SHIN_R: int = SkaterMeshBuilder.LegBone.SHIN_R
+const _FOOT_L: int = SkaterMeshBuilder.LegBone.FOOT_L
+const _FOOT_R: int = SkaterMeshBuilder.LegBone.FOOT_R
 
 # Shot body animation (SkaterSkatingCoordinator + the pose coordinator's
 # block branch) — the load settles the weight over the stick-side back leg
 # while the charge builds (wrister drag-charge, slapper wind-up), the release
 # transfers it over the front foot with the back leg kicking into extension
-# behind, and the shot block drops into a low wide braced wall. Driven purely
-# from the replicated current_shot_state + shot_charge (the stick-flex
-# contract), so these tests drive those fields directly the way a wire-fed
-# remote would.
+# behind, and the shot block drops to one knee with the far leg extended along
+# the ice. Driven purely from the replicated current_shot_state + shot_charge
+# (the stick-flex contract), so these tests drive those fields directly the way
+# a wire-fed remote would.
 #
 # Default handedness is LEFT (Skater.is_left_handed = true), so the stick side
-# — the back leg — is the LEFT leg throughout.
+# — the back leg on a shot, the kneeling leg on a block — is the LEFT leg
+# throughout.
 
 const SKATER_SCENE: PackedScene = preload("res://Scenes/Skater.tscn")
 const State = SkaterStateMachine.State
@@ -181,29 +184,110 @@ func test_short_wind_up_slap_still_commits() -> void:
 			"a short-wind slap should still commit the body (split %.3f rad)" % max_split)
 
 
-func test_block_plants_wide_and_low() -> void:
+func test_block_drops_to_one_knee() -> void:
 	var rest_hips_y: float = _skater.lower_body.position.y
 	_skater.current_shot_state = State.SHOT_BLOCKING
 	_tick(120)
-	# Wide braced V: legs splay outward (left toward −X = negative roll).
-	assert_lt(_skater.leg_bone_euler(_LEG_L).z, -0.15,
-			"legs should splay into the braced V (l roll %.3f)" % _skater.leg_bone_euler(_LEG_L).z)
-	assert_gt(_skater.leg_bone_euler(_LEG_R).z, 0.15,
-			"legs should splay into the braced V (r roll %.3f)" % _skater.leg_bone_euler(_LEG_R).z)
-	# Deep sit: knees bent, whole body dropped so the skates stay planted.
-	assert_lt(_skater.leg_bone_euler(_SHIN_L).x, -0.15, "knees should bend under the block")
-	assert_lt(_skater.lower_body.position.y, rest_hips_y - 0.03,
-			"the block should sink the body (hips %.3f, rest %.3f)"
+	# Default handedness is LEFT, so the LEFT knee is the one that drops: thigh
+	# pitched forward, shin folded back along the ice, no splay on that side.
+	assert_gt(_skater.leg_bone_euler(_LEG_L).x, 0.3,
+			"the down thigh should pitch forward (l pitch %.3f)" % _skater.leg_bone_euler(_LEG_L).x)
+	assert_lt(_skater.leg_bone_euler(_SHIN_L).x, -1.5,
+			"the down shin should fold back along the ice (l knee %.3f)" % _skater.leg_bone_euler(_SHIN_L).x)
+	assert_almost_eq(_skater.leg_bone_euler(_LEG_L).z, 0.0, 0.05,
+			"the kneeling leg stays under the body, not splayed")
+	# The far leg extends out the other side (right toward +X = positive roll),
+	# near-straight, so its skate seals the ice beside the kneeling body.
+	assert_gt(_skater.leg_bone_euler(_LEG_R).z, 0.8,
+			"the far leg should extend out to the side (r roll %.3f)" % _skater.leg_bone_euler(_LEG_R).z)
+	assert_gt(_skater.leg_bone_euler(_SHIN_R).x, -0.3,
+			"the extended leg should stay near-straight (r knee %.3f)" % _skater.leg_bone_euler(_SHIN_R).x)
+	# Kneeling drops the hips most of the way to the ice — far deeper than any
+	# skating crouch, which is what makes the block read as committed.
+	assert_lt(_skater.lower_body.position.y, rest_hips_y - 0.3,
+			"the kneel should sink the hips (hips %.3f, rest %.3f)"
 			% [_skater.lower_body.position.y, rest_hips_y])
-	# Releasing the block eases the wall back out to a neutral stance.
+	# Releasing the block eases the knee drop back out to a neutral stance.
 	_skater.current_shot_state = State.SKATING_WITHOUT_PUCK
 	_tick(240)
-	assert_almost_eq(_skater.leg_bone_euler(_LEG_L).z, 0.0, 0.02, "leg splay should release to rest")
+	assert_almost_eq(_skater.leg_bone_euler(_LEG_R).z, 0.0, 0.02, "leg extension should release to rest")
 	assert_almost_eq(_skater.lower_body.position.y, rest_hips_y, 0.01,
 			"body drop should release to rest")
 
 
-func test_block_folds_chest_over_knees() -> void:
+func test_block_lands_both_skates_on_the_ice() -> void:
+	# Both halves of the kneel solve, measured where they show: the body drop is
+	# derived from the down leg's chain (thigh, folded shin, AND the boot pivot
+	# ahead of the ankle — omit that last term and the trailing skate buries
+	# itself in the ice by its own length), and the extended leg's abduction is
+	# derived from the resulting hip height. Both skates therefore end at the
+	# height they rest at, which is ice level.
+	var rest_down: float = _foot_y(_LEG_L, _SHIN_L, _FOOT_L)
+	var rest_ext: float = _foot_y(_LEG_R, _SHIN_R, _FOOT_R)
+	_skater.current_shot_state = State.SHOT_BLOCKING
+	_tick(120)
+	assert_almost_eq(_foot_y(_LEG_L, _SHIN_L, _FOOT_L), rest_down, 0.02,
+			"the kneeling skate should sit on the ice, not through it")
+	assert_almost_eq(_foot_y(_LEG_R, _SHIN_R, _FOOT_R), rest_ext, 0.02,
+			"the extended skate should reach the ice, not hang above it")
+	# ...and the extended boot stays LEVEL: the ankle everts against the leg's
+	# splay, so the blade lies flat instead of swinging up onto an edge.
+	assert_lt(_boot_tilt(_LEG_R, _SHIN_R, _FOOT_R), deg_to_rad(15.0),
+			"the extended skate should stay level under its splayed leg")
+
+
+# Walks the posed leg chain to the FOOT pivot — the boot's centre. Measured off
+# the rig rather than recomputed from the design angles, so a pose that lands
+# somewhere the geometry didn't intend still shows up here.
+func _foot_chain(leg: int, shin: int, foot: int) -> Transform3D:
+	var chain := Transform3D.IDENTITY
+	for bone: int in [leg, shin, foot]:
+		chain = chain * Transform3D(
+				Basis.from_euler(_skater.leg_bone_euler(bone)), _skater.leg_bone_position(bone))
+	return chain
+
+
+func _foot_y(leg: int, shin: int, foot: int) -> float:
+	return _skater.lower_body.position.y + _foot_chain(leg, shin, foot).origin.y
+
+
+# How far the boot has rolled out of the orientation it rests in.
+func _boot_tilt(leg: int, shin: int, foot: int) -> float:
+	var rest := Basis.from_euler(Vector3(deg_to_rad(90.0), 0.0, 0.0))
+	return _foot_chain(leg, shin, foot).basis.y.angle_to(rest.y)
+
+
+func test_block_seal_height_matches_the_kneeling_body() -> void:
+	# Calibration: the block's collision seal is authored (collision can't read a
+	# render-rate pose), so it has to be re-derived whenever the kneel angles
+	# move. This pins the two together — the seal covers the kneeling head and
+	# stops there, rather than walling off a standing body that isn't there.
+	var controller: SkaterController = SkaterController.new()
+	autofree(controller)
+	var sm := SkaterStateMachine.new()
+	var pose := SkaterPoseCoordinator.new()
+	pose.setup(_skater, sm, SkaterAimingBehavior.new(), controller, _coord)
+	_skater.current_shot_state = State.SHOT_BLOCKING
+	sm.set_state(State.SHOT_BLOCKING)
+	_skater.set_block_stance(true)  # the collision half, normally flipped on entry
+	for _i: int in 120:
+		_coord.apply(DT)
+		pose.apply_upper_body(DT)
+	# Helmet centre in world Y, over the dropped and pitched torso. The skater
+	# body rides at FACEOFF_SPAWN_HEIGHT with the ice at 0.
+	var helmet_y: float = _skater.upper_bone_base_position(SkaterMeshBuilder.UpperBone.HELMET).y
+	var head_center: float = GameRules.FACEOFF_SPAWN_HEIGHT + _skater.upper_body.position.y \
+			+ helmet_y * cos(_skater.upper_body.rotation.x)
+	var seal: float = _skater.get_body_block_y_range().y
+	assert_gt(seal, head_center,
+			"the seal should cover the kneeling head (seal %.3f, head centre %.3f)"
+			% [seal, head_center])
+	assert_lt(seal, head_center + 0.25,
+			"the seal shouldn't wall off a body that isn't there (seal %.3f, head centre %.3f)"
+			% [seal, head_center])
+
+
+func test_block_tips_the_chest_onto_the_down_knee() -> void:
 	# The torso branch runs on the simulating machine via the pose coordinator;
 	# wire it the way SkaterController.setup does and hold SHOT_BLOCKING.
 	var controller: SkaterController = SkaterController.new()
@@ -215,7 +299,10 @@ func test_block_folds_chest_over_knees() -> void:
 	for _i: int in 120:
 		pose.apply_upper_body(DT)
 	assert_lt(_skater.upper_body.rotation.x, -0.15,
-			"the chest should fold forward over the knees (pitch %.3f rad)"
+			"the chest should tip forward over the down knee (pitch %.3f rad)"
 			% _skater.upper_body.rotation.x)
-	assert_almost_eq(_skater.upper_body.rotation.z, 0.0, 0.01,
-			"the block torso should stay square, no roll")
+	# Default handedness is LEFT: the knee drops on the −X side, so the torso
+	# rolls onto it — positive rotation.z tips the torso top toward local −X.
+	assert_gt(_skater.upper_body.rotation.z, 0.1,
+			"the torso should roll onto the down knee (roll %.3f rad)"
+			% _skater.upper_body.rotation.z)
