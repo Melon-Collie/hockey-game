@@ -39,12 +39,16 @@ func _glove(model: int, zone: int) -> Color:
 	return GearModelRegistry.glove_color(model, zone, _TEAM, _ACCENT, _LIGHT)
 
 
-# Blackout is black on every zone including the holder — which is the one
-# deliberate change from the pre-models look, where the holder rendered steel.
+# Blackout is black through the boot on a white holder — the median NHL skate,
+# and the one deliberate change from the pre-models look, where the holder
+# rendered steel along with the runner.
 func test_row_zero_is_the_stock_design() -> void:
-	for zone: int in GearModelRegistry.SKATE_ZONE_COUNT:
+	for zone: int in [GearModelRegistry.SKATE_QUARTER, GearModelRegistry.SKATE_TOE,
+			GearModelRegistry.SKATE_COLLAR, GearModelRegistry.SKATE_STRIPE]:
 		assert_eq(_skate(GearModelRegistry.SKATE_BLACKOUT, zone),
-				GearModelRegistry.BLACK, "the stock skate is black on every zone")
+				GearModelRegistry.BLACK, "the stock skate is black through the boot")
+	assert_eq(_skate(GearModelRegistry.SKATE_BLACKOUT, GearModelRegistry.SKATE_HOLDER),
+			_LIGHT, "even the blackout stands on a white holder")
 	for zone: int in GearModelRegistry.GLOVE_ZONE_COUNT:
 		assert_eq(_glove(GearModelRegistry.GLOVE_TEAM, zone),
 				_TEAM, "the stock glove is kit-colored on every zone")
@@ -75,6 +79,15 @@ func test_the_catalogue_uses_both_team_colors() -> void:
 			if _glove(model, zone) == _ACCENT:
 				glove_accents += 1
 	assert_gt(glove_accents, 0, "some glove design wears the team's secondary")
+
+
+# A holder is molded white plastic on essentially every skate on the ice, so
+# no design departs from it — including the blackout, whose boot is black to
+# the collar and still stands on a white holder.
+func test_every_holder_is_the_teams_white() -> void:
+	for model: int in GearModelRegistry.skate_count():
+		assert_eq(_skate(model, GearModelRegistry.SKATE_HOLDER), _LIGHT,
+				"skate model %d wears a white holder" % model)
 
 
 # The boot is leather. A quarter or toe cap in a team's secondary — which for

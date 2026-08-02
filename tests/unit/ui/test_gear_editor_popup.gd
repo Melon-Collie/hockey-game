@@ -86,8 +86,8 @@ func test_a_pick_repaints_the_turntable() -> void:
 # The zones that only exist because a piece was SPLIT are the ones a wrong
 # surface index would paint silently — pin that each lands on its own piece.
 func test_split_pieces_paint_apart() -> void:
-	# Two-Tone: light quarter, black toe cap. Pro: primary holder under a black
-	# boot. Two-Tone gloves: kit back, black fingers.
+	# Two-Tone: light quarter, black toe cap. Pro: light toe cap under a black
+	# quarter. Two-Tone gloves: kit back, black fingers.
 	_open(GearModelRegistry.SKATE_TWO_TONE, GearModelRegistry.GLOVE_TWO_TONE)
 	assert_eq(_surface_color("_boot", SkaterMeshBuilder.BOOT_PART_QUARTER),
 			_LIGHT, "the quarter is the team's white")
@@ -97,14 +97,15 @@ func test_split_pieces_paint_apart() -> void:
 			_KIT_GLOVES, "the back of the hand keeps the kit")
 	assert_eq(_surface_color("_fist", SkaterMeshBuilder.FIST_PART_FINGERS),
 			GearModelRegistry.BLACK, "the fingers are black")
-	# The steel runner is never a zone, whatever the model says.
 	assert_eq(_surface_color("_blade", SkaterMeshBuilder.BLADE_PART_HOLDER),
-			_LIGHT, "Two-Tone's holder is the team's white")
+			_LIGHT, "the holder is the team's white")
 	_skate_btn().item_selected.emit(GearModelRegistry.SKATE_PRO)
-	assert_eq(_surface_color("_blade", SkaterMeshBuilder.BLADE_PART_HOLDER),
-			_PRIMARY, "Pro's holder is the team primary")
 	assert_eq(_surface_color("_boot", SkaterMeshBuilder.BOOT_PART_TOE),
 			_LIGHT, "Pro's toe cap is the team's white")
+	# The steel runner is never a zone, whatever the model says — and it must
+	# stay distinct from the white holder now sitting directly above it.
+	assert_ne(_surface_color("_blade", SkaterMeshBuilder.BLADE_PART_RUNNER),
+			_LIGHT, "the runner does not vanish into the holder")
 	assert_eq(_surface_color("_blade", SkaterMeshBuilder.BLADE_PART_RUNNER),
 			SkaterMeshBuilder.BLADE_STEEL_COLOR, "the runner stays steel")
 
