@@ -81,12 +81,17 @@ func dispatch(bots: Array[AIController], brains: Array[TeamBrain],
 	#      stable (last completed batch). While the worker is in flight we skip the
 	#      apply; the bot coasts on its retained move intent until the next batch.
 	var worker_idle: bool = not _run_in_flight
+	# Recorded HERE, not after dispatch returns: by then the kick below has set
+	# the in-flight flag, so a healthy tick would read as a late worker.
+	HostCostProbe.note_worker_busy(not worker_idle)
+	var t_half: int = Time.get_ticks_usec()
 	_next_bots.clear()
 	for b: AIController in bots:
 		if b.begin_tick(delta):
 			_next_bots.append(b)
 			if worker_idle:
 				b.apply_decision(delta)
+	HostCostProbe.record(HostCostProbe.Section.AI_APPLY, Time.get_ticks_usec() - t_half)
 
 	# D. Kick a fresh batch only when the worker is idle. Swap this frame's normal
 	#    list into _worker_bots (the worker reads it until it signals ready; we
@@ -94,6 +99,7 @@ func dispatch(bots: Array[AIController], brains: Array[TeamBrain],
 	#    snapshot. If the worker is still busy we skip the kick and try again next
 	#    frame — it keeps working on the in-flight batch.
 	if worker_idle:
+		t_half = Time.get_ticks_usec()
 		# Freeze the brain views now, while the worker is idle — the worker reads
 		# them during the batch, so they must not be rebuilt mid-flight.
 		for brain: TeamBrain in brains:
@@ -109,6 +115,7 @@ func dispatch(bots: Array[AIController], brains: Array[TeamBrain],
 		_worker_delta = delta
 		_run_in_flight = true
 		_wake.post()
+		HostCostProbe.record(HostCostProbe.Section.AI_KICK, Time.get_ticks_usec() - t_half)
 
 
 # Fill _worker_snapshot with a race-safe view of this frame's snapshot. Three

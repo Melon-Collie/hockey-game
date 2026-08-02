@@ -1629,6 +1629,7 @@ func _physics_process(delta: float) -> void:
 	# a harness that drives _physics_process directly never advances the engine's
 	# frame counter and would silently read the first tick's skater positions
 	# forever.
+	var t0: int = Time.get_ticks_usec()
 	_view.invalidate()
 	_update_tracking(delta)
 	_update_shot_timer(delta)
@@ -1638,6 +1639,7 @@ func _physics_process(delta: float) -> void:
 	_update_facing(delta)
 	_update_body_parts(delta)
 	_update_goalie_poke(delta)
+	HostCostProbe.record(HostCostProbe.Section.GOALIE_PHYS, Time.get_ticks_usec() - t0)
 
 # ── Tracking ──────────────────────────────────────────────────────────────────
 # "Threat" = where the goalie's positioning targets. Carrier body (steady)

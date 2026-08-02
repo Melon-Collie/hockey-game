@@ -844,6 +844,7 @@ func _classify_save_part(part_body: Node3D) -> int:
 func _physics_process(delta: float) -> void:
 	if not _is_server:
 		return
+	var _t0: int = Time.get_ticks_usec()
 
 	# Tick per-skater cooldowns regardless of carrier state. Keys are int
 	# instance_ids; resolve back via instance_from_id and drop entries whose
@@ -877,3 +878,4 @@ func _physics_process(delta: float) -> void:
 	else:
 		# The analytic sim owns the loose puck on every host.
 		_drive_analytic(delta)
+	HostCostProbe.record(HostCostProbe.Section.PUCK_PHYS, Time.get_ticks_usec() - _t0)

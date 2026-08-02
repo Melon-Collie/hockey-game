@@ -17,7 +17,7 @@ extends Node
 #   • The skater's own _process / _physics_process are switched OFF and called
 #     by hand with a fixed DT, one of each per step. Real frame deltas would
 #     advance the gait phase and the stick flex by a different amount each run.
-#   • VFX and the world HUD are frozen (PerfProbe). Both are non-rig content —
+#   • VFX and the world HUD are frozen (CosmeticFreeze). Both are non-rig content —
 #     particle systems are stochastic and the HUD is camera-derived — so they
 #     would contribute diff noise about nothing.
 #   • Each pose gets a FRESH skater and controller. Charge timers, lean
@@ -148,8 +148,8 @@ var _puck: Puck = null
 
 func begin(record_baseline: bool) -> void:
 	_record_baseline = record_baseline
-	PerfProbe.freeze_vfx = true
-	PerfProbe.freeze_hud = true
+	CosmeticFreeze.vfx = true
+	CosmeticFreeze.hud = true
 	_skater_scene = load("res://Scenes/Skater.tscn")
 	_puck_scene = load("res://Scenes/Puck.tscn")
 	_state = StubGameState.new()

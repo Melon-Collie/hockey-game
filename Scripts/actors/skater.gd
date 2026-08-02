@@ -701,19 +701,14 @@ func _process(delta: float) -> void:
 	# Stick flex is time/state-driven — it runs every frame regardless (it has
 	# its own shader-write guard) so a mid-shot whip never freezes on an
 	# otherwise-static pose.
-	# PerfProbe.freeze_rig suppresses the whole marker-driven rebuild so its cost
-	# can be measured by difference (see perf_probe.gd). Off in normal play.
-	if is_visible_in_tree() and not PerfProbe.freeze_rig:
+	if is_visible_in_tree():
 		# Cosmetic pose (leg gait / head / off-hand IK) at render rate, before the
 		# marker-driven mesh rebuild that consumes it. Skipped entirely when hidden
 		# — an off-screen skater needs no animated pose. Gameplay-relevant pose
 		# (facing, upper-body twist, blade IK) already ran in the physics tick.
 		if render_pose_update.is_valid():
 			render_pose_update.call(delta)
-		# The dirty check is deliberately INSIDE the freeze gate: skipping it lets
-		# the snapshot go stale, so the first unfrozen frame trips it and rebuilds
-		# rather than holding the frozen pose into the next rotation.
-		if not PerfProbe.freeze_rig_write and _rig_pose_changed():
+		if _rig_pose_changed():
 			update_stick_mesh()
 			update_arm_mesh()
 			update_bottom_arm_mesh()
@@ -727,7 +722,7 @@ func _process(delta: float) -> void:
 	# Its internal timers (ping bubble, ring recolour) are wall-clock accumulators
 	# over delta, so a different tick source changes when they fire by less than a
 	# frame, not how long they last.
-	if not PerfProbe.freeze_hud:
+	if not CosmeticFreeze.hud:
 		_hud.update(delta)
 
 
@@ -754,6 +749,7 @@ func _rig_pose_changed() -> bool:
 
 
 func _physics_process(delta: float) -> void:
+	var _t0: int = Time.get_ticks_usec()
 	# _prev_blade_contact is captured at the top of each controller's tick, before
 	# the per-tick IK update runs (see Skater.capture_prev_blade_contact()).
 	# Capturing it here would read post-IK and miss the swing within the tick.
@@ -807,6 +803,7 @@ func _physics_process(delta: float) -> void:
 	# doc-comment). Blade elevation/lift above is cosmetic and doesn't touch the
 	# body position/velocity/upper-body fields the snapshot records.
 	post_move_integrated.emit()
+	HostCostProbe.record(HostCostProbe.Section.SKATER_PHYS, Time.get_ticks_usec() - _t0)
 
 
 # Sanitizes the body's velocity/position to finite values right before the Jolt

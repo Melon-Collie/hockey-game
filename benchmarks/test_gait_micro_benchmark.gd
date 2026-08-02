@@ -3,12 +3,12 @@ extends GutTest
 # ── Gait / render-pose micro-benchmark (report-only; NOT in the default suite) ─
 # Times Skater.render_pose_update and its parts on one real skater.
 #
-# Why this exists, precisely: the F7 freeze sweep split the cosmetic rig in half
-# and found the WRITE half (bone poses, stick/arm rebuild, both elbow IK solves)
+# Why this exists, precisely: a cosmetic-freeze sweep split the rig in half and
+# found the WRITE half (bone poses, stick/arm rebuild, both elbow IK solves)
 # costs 0.12 ms +/- 0.32 across ten skaters — statistically nothing — while the
 # SOLVE half costs 1.82 ms. That is ~80% of all freezable cosmetic cost in the
 # frame, and it is this path. Everything else on the cosmetic list is rounding
-# error beside it.
+# error beside it. Full results: docs/performance-findings.md.
 #
 # Run explicitly:
 #   bash .claude/hooks/run-gut.sh -gdir=res://benchmarks
@@ -151,9 +151,9 @@ func test_render_pose_costs() -> void:
 	_bench("  bottom-hand IK", func() -> void:
 		_controller._ik.update_bottom_hand())
 
-	# The write half, for scale. The freeze sweep says this is ~nothing across
-	# ten skaters; if that is wrong, it shows up here as a number comparable to
-	# the gait's.
+	# The write half, for scale. The sweep said this is ~nothing across ten
+	# skaters; if that is wrong, it shows up here as a number comparable to the
+	# gait's.
 	_bench("[write] update_arm_mesh", func() -> void:
 		_skater.update_arm_mesh())
 	_bench("[write] update_bottom_arm_mesh", func() -> void:

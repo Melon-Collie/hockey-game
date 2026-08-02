@@ -258,7 +258,9 @@ func apply_decision(delta: float) -> void:
 		return
 	if _pending_input == null:
 		return
+	var t0: int = Time.get_ticks_usec()
 	_process_input(_pending_input, delta)
+	HostCostProbe.record(HostCostProbe.Section.SKATER_STEP, Time.get_ticks_usec() - t0)
 	skater.current_shot_state = _sm.get_state() as int
 	_refresh_debug_label()
 
