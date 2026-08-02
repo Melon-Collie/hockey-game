@@ -2373,8 +2373,12 @@ func set_ghost(ghost: bool) -> void:
 
 # ── Shot-Block Stance ─────────────────────────────────────────────────────────
 # The block's BODY pose (the one-knee drop) is the gait's, off the replicated
-# shot state — this flag is the collision half: the wider block cylinder below,
-# and a blade that stops corralling (it's committed flat to the ice).
+# shot state; this flag is the collision half — it widens the body-block
+# cylinder below. Taking the blade OUT of puck play is not the layer flip here
+# (nothing has masked LAYER_BLADE_AREAS since puck contact went analytic) but
+# the SHOT_BLOCKING gates on the analytic paths themselves: PuckController's
+# corral and contest scans, PickupClaimResolver, LocalController's provisional
+# pickup.
 func set_block_stance(active: bool) -> void:
 	_block_stance_active = active
 	_blade_area.collision_layer = 0 if active else Constants.LAYER_BLADE_AREAS
