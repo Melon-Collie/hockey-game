@@ -99,7 +99,7 @@ func test_split_pieces_paint_apart() -> void:
 			GearModelRegistry.BLACK, "the fingers are black")
 	# The steel runner is never a zone, whatever the model says.
 	assert_eq(_surface_color("_blade", SkaterMeshBuilder.BLADE_PART_HOLDER),
-			GearModelRegistry.BLACK, "Two-Tone's holder is black")
+			_LIGHT, "Two-Tone's holder is the team's white")
 	_skate_btn().item_selected.emit(GearModelRegistry.SKATE_PRO)
 	assert_eq(_surface_color("_blade", SkaterMeshBuilder.BLADE_PART_HOLDER),
 			_PRIMARY, "Pro's holder is the team primary")

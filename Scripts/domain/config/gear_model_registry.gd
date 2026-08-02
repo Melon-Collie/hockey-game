@@ -24,9 +24,12 @@ extends RefCounted
 # boot's heel-through-instep shell) / TOE cap / COLLAR / STRIPE (the band
 # ringing the ankle collar) / HOLDER (the plastic the steel bolts into), a
 # glove is BODY (the back of the hand) / FINGERS / CUFF. The steel RUNNER is
-# deliberately not a zone — it is steel in life and stays steel here. Laces
-# are not part of a model either; players pick those apart from the skate, as
-# they do at the rink.
+# deliberately not a zone — NOT because steel is always bare (CCM's JetSpeed
+# ships STEP Blacksteel, a carbon-coated black runner, on the most-worn CCM
+# skate in the league) but because it is a few millimetres of the silhouette
+# below the holder's rail, and a zone every design would spend a swatch band
+# on to say the same thing. Laces are not part of a model either; players pick
+# those apart from the skate, as they do at the rink.
 #
 # The catalogue is wire data: model indices travel in the packed GearStyleConfig
 # code, so rows must only ever be APPENDED — reordering or removing one silently
@@ -36,7 +39,8 @@ extends RefCounted
 # glove), which is what an untouched player wears. The one deliberate
 # departure from the pre-models look is the blade HOLDER: it used to render
 # steel along with the runner, which read as one gray lump under the boot.
-# Real holders are molded plastic, so the stock skate now wears a black one.
+# Real holders are molded plastic, and Blackout's is black because that design
+# is a stealth colorway — every other row wears the white a real holder is.
 
 enum Paint { BLACK, LIGHT, TEAM, ACCENT }
 
@@ -78,17 +82,27 @@ const SKATE_NAME_KEYS: Array[StringName] = [
 # (quarter, toe, collar, stripe, holder) per model, index-aligned with
 # SKATE_NAME_KEYS. The quarter and toe only ever take BLACK or LIGHT: a boot is
 # leather, and a boot in a team's secondary would stop reading as a skate.
+#
+# The HOLDER column is weighted the way real gear is: holders are mostly WHITE
+# (the molded plastic they are conventionally made in — black was the early
+# default, back when it matched the boot, and white displaced it), so most of
+# the catalogue wears the team's light. Black is the deliberate stealth
+# exception rather than the shelf default, and a team-colored holder is the
+# custom-shop lane. The light here is the TEAM's white, so a cream-white kit
+# gets a cream holder — a real holder would be the same plastic white on every
+# player, but a design that belongs to the sweater beats that fidelity.
 const _SKATE_MODELS: Array[Array] = [
 	# Blackout — the stock pro skate, black to the holder.
 	[Paint.BLACK, Paint.BLACK, Paint.BLACK, Paint.BLACK, Paint.BLACK],
 	# Team — black boot, the primary on the band and the holder.
 	[Paint.BLACK, Paint.BLACK, Paint.BLACK, Paint.TEAM, Paint.TEAM],
-	# Retro — the old light ankle cuff over a black boot, secondary band.
-	[Paint.BLACK, Paint.BLACK, Paint.LIGHT, Paint.ACCENT, Paint.LIGHT],
+	# Retro — the classic Tacks: light toe cap and ankle over a black boot.
+	[Paint.BLACK, Paint.LIGHT, Paint.LIGHT, Paint.ACCENT, Paint.LIGHT],
 	# Whiteout — light through the boot with a primary band.
 	[Paint.LIGHT, Paint.LIGHT, Paint.LIGHT, Paint.TEAM, Paint.LIGHT],
-	# Two-Tone — light quarter against a black toe cap, secondary band.
-	[Paint.LIGHT, Paint.BLACK, Paint.BLACK, Paint.ACCENT, Paint.BLACK],
+	# Two-Tone — the flagship silhouette (a Vapor Hyperlite reads as a light
+	# quarter running into a dark toe under one bright band at the ankle).
+	[Paint.LIGHT, Paint.BLACK, Paint.BLACK, Paint.ACCENT, Paint.LIGHT],
 	# Pro — black boot, light toe cap, secondary band, primary holder.
 	[Paint.BLACK, Paint.LIGHT, Paint.BLACK, Paint.ACCENT, Paint.TEAM],
 ]
