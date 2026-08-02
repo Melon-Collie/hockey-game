@@ -59,12 +59,16 @@ func test_migration_maps_picks_onto_designs() -> void:
 	assert_eq(GearStyleConfig.migrate_colors(_legacy_code(3, 0, 1)).skate_model,
 			GearModelRegistry.SKATE_TEAM, "a colored accent -> Team")
 	# Gloves only ever tinted the cuff, so every mapping keeps a kit-colored body.
+	# There is no black glove to land on any more, so a black pick becomes the
+	# design whose cuff takes the team's other color.
+	assert_eq(GearStyleConfig.migrate_colors(_legacy_code(2, 1, 1)).glove_model,
+			GearModelRegistry.GLOVE_PRO, "white cuffs -> Pro")
 	assert_eq(GearStyleConfig.migrate_colors(_legacy_code(2, 2, 1)).glove_model,
-			GearModelRegistry.GLOVE_TWO_TONE, "black cuffs -> Two-Tone")
+			GearModelRegistry.GLOVE_CONTRAST, "black cuffs -> Contrast")
 	assert_eq(GearStyleConfig.migrate_colors(_legacy_code(2, 5, 1)).glove_model,
-			GearModelRegistry.GLOVE_PRO, "a colored cuff -> Pro")
+			GearModelRegistry.GLOVE_CONTRAST, "a colored cuff -> Contrast")
 	for body: int in [GearModelRegistry.GLOVE_TEAM, GearModelRegistry.GLOVE_PRO,
-			GearModelRegistry.GLOVE_TWO_TONE]:
+			GearModelRegistry.GLOVE_CONTRAST]:
 		assert_eq(GearModelRegistry.glove_color(body, GearModelRegistry.GLOVE_BODY,
 				Color.RED, Color.GREEN, Color.BLUE), Color.RED,
 				"migrated gloves keep a kit-colored body")

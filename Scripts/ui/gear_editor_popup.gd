@@ -55,6 +55,7 @@ var _gear_locked: bool = false
 var _team_accent: Color = Color.WHITE
 var _kit_gloves: Color = Color.BLACK
 var _team_secondary: Color = Color.WHITE
+var _glove_accent: Color = Color.WHITE
 var _team_light: Color = Color.WHITE
 # Boot-node seat on the turntable, kept so open() can re-seat the collar
 # against it per build.
@@ -393,6 +394,7 @@ func open(profile: int, skate_model: int, glove_model: int, lace_color: int,
 	_team_accent = team_colors.primary
 	_kit_gloves = team_colors.gloves
 	_team_secondary = team_colors.secondary
+	_glove_accent = team_colors.glove_accent
 	_team_light = team_colors.light
 	var m_height: float = attrs.height_mult() if attrs != null else 1.0
 	var m_calf: float = attrs.calf_mult() if attrs != null else 1.0
@@ -463,7 +465,7 @@ func _skate_zone(zone: int) -> Color:
 
 func _glove_zone(zone: int) -> Color:
 	return GearModelRegistry.glove_color(_glove_model, zone,
-			_kit_gloves, _team_secondary, _team_light)
+			_kit_gloves, _glove_accent, _team_light)
 
 
 func _resolved_lace() -> Color:
@@ -508,7 +510,7 @@ func _rebuild_model_items() -> void:
 		var zones: Array[Color] = []
 		for zone: int in GearModelRegistry.GLOVE_ZONE_COUNT:
 			zones.append(GearModelRegistry.glove_color(model, zone,
-					_kit_gloves, _team_secondary, _team_light))
+					_kit_gloves, _glove_accent, _team_light))
 		_glove_btn.add_icon_item(_swatch_strip(zones),
 				tr(GearModelRegistry.GLOVE_NAME_KEYS[model]), model)
 	_glove_btn.select(_glove_model)

@@ -62,3 +62,25 @@ func test_score_stripe_pair_away_is_primary() -> void:
 	var pair: Dictionary = TeamColorRegistry.get_score_stripe_pair(_PAPAYA, 1)
 	assert_eq(pair.away, TeamColorRegistry.get_preset(1).primary,
 			"away stripe is its primary")
+
+
+# A glove design's second color has to differ from the glove body, and MOST
+# presets dress their gloves in the secondary — so reaching for the secondary
+# again would paint those teams a monochrome glove. get_colors derives
+# glove_accent as whichever team color the body is not; every shipped preset
+# has to come out with two distinguishable glove colors or the catalogue's
+# contrast designs collapse on that team.
+func test_every_preset_has_a_contrasting_glove_accent() -> void:
+	for slot: int in TeamColorRegistry.get_all_slots():
+		for team_id: int in 2:
+			var colors: Dictionary = TeamColorRegistry.get_colors(slot, team_id)
+			var body: Color = colors.gloves
+			var accent: Color = colors.glove_accent
+			assert_false(body.is_equal_approx(accent),
+					"%s side %d: glove body and accent must differ"
+					% [TeamColorRegistry.get_preset_name(slot), team_id])
+			# And it is one of the team's OWN two colors, not an invention.
+			assert_true(accent.is_equal_approx(colors.primary)
+					or accent.is_equal_approx(colors.secondary),
+					"%s side %d: the glove accent is a team color"
+					% [TeamColorRegistry.get_preset_name(slot), team_id])

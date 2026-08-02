@@ -81,6 +81,15 @@ func test_the_catalogue_uses_both_team_colors() -> void:
 	assert_gt(glove_accents, 0, "some glove design wears the team's secondary")
 
 
+# A glove is made in the team's colors, and no preset here has black among
+# theirs — a black glove would belong to nobody. BLACK is a skate-only slot.
+func test_gloves_never_reach_for_black() -> void:
+	for model: int in GearModelRegistry.glove_count():
+		for zone: int in GearModelRegistry.GLOVE_ZONE_COUNT:
+			assert_ne(_glove(model, zone), GearModelRegistry.BLACK,
+					"glove model %d zone %d is a kit color" % [model, zone])
+
+
 # A holder is molded white plastic on essentially every skate on the ice, so
 # no design departs from it — including the blackout, whose boot is black to
 # the collar and still stands on a white holder.

@@ -48,12 +48,16 @@ var _text_outline_color: Color = Color.BLACK
 # The kit colors a gear model or tape pick resolves against, cached from the
 # last apply_uniform so a live cosmetic change repaints without one.
 # _team_accent is colors.primary (TEAM for tape and skates), _kit_gloves is
-# uniform.gloves (TEAM for gloves), _team_secondary is the kit's second color
-# (the models' ACCENT slot) and _team_light its own white — which is CREAM for
-# some teams, so gear matches the sweater rather than out-whiting it.
+# uniform.gloves (TEAM for gloves), and _team_light is the kit's own white —
+# CREAM for some teams, so gear matches the sweater rather than out-whiting it.
+# The models' ACCENT slot reads _team_secondary on skates but _glove_accent on
+# gloves: most presets dress their gloves in the secondary already, so the
+# glove's second color has to be the one it is NOT (TeamColorRegistry derives
+# it).
 var _team_accent: Color = Color.WHITE
 var _kit_gloves: Color = Color.BLACK
 var _team_secondary: Color = Color.WHITE
+var _glove_accent: Color = Color.WHITE
 var _team_light: Color = Color.WHITE
 var _jersey_viewport: SubViewport
 var _jersey_decal: JerseyDecal
@@ -184,6 +188,7 @@ func apply_uniform(colors: Dictionary) -> void:
 	# resolve against colors.primary, so TEAM picks track the kit).
 	_team_accent = colors.primary
 	_team_secondary = colors.secondary
+	_glove_accent = colors.glove_accent
 	_team_light = colors.light
 	_rebuild_blade()
 
@@ -480,7 +485,7 @@ func _skate_zone_color(zone: int) -> Color:
 
 func _glove_zone_color(zone: int) -> Color:
 	return GearModelRegistry.glove_color(_skater.gear_style.glove_model, zone,
-			_kit_gloves, _team_secondary, _team_light)
+			_kit_gloves, _glove_accent, _team_light)
 
 
 func _resolve_lace_color() -> Color:

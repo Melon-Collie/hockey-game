@@ -12,6 +12,8 @@ const _PRIMARY := Color(0.10, 0.30, 0.80)
 const _SECONDARY := Color(0.90, 0.30, 0.10)
 const _LIGHT := Color(0.96, 0.93, 0.84)   # cream, like Plum's
 const _KIT_GLOVES := Color(0.75, 0.15, 0.15)
+# Whichever team color the glove body is not — see TeamColorRegistry.
+const _GLOVE_ACCENT := Color(0.20, 0.70, 0.35)
 
 var _popup: GearEditorPopup = null
 
@@ -37,6 +39,7 @@ func _open(skate_model: int, glove_model: int) -> void:
 				"secondary": _SECONDARY,
 				"light": _LIGHT,
 				"gloves": _KIT_GLOVES,
+				"glove_accent": _GLOVE_ACCENT,
 			})
 
 
@@ -87,16 +90,17 @@ func test_a_pick_repaints_the_turntable() -> void:
 # surface index would paint silently — pin that each lands on its own piece.
 func test_split_pieces_paint_apart() -> void:
 	# Two-Tone: light quarter, black toe cap. Pro: light toe cap under a black
-	# quarter. Two-Tone gloves: kit back, black fingers.
+	# quarter. Two-Tone gloves: the kit pairing flipped — the team's other
+	# color on the back, the kit's own on the fingers.
 	_open(GearModelRegistry.SKATE_TWO_TONE, GearModelRegistry.GLOVE_TWO_TONE)
+	assert_eq(_surface_color("_fist", SkaterMeshBuilder.FIST_PART_BACK),
+			_GLOVE_ACCENT, "Two-Tone's back takes the team's other color")
 	assert_eq(_surface_color("_boot", SkaterMeshBuilder.BOOT_PART_QUARTER),
 			_LIGHT, "the quarter is the team's white")
 	assert_eq(_surface_color("_boot", SkaterMeshBuilder.BOOT_PART_TOE),
 			GearModelRegistry.BLACK, "the toe cap is black")
-	assert_eq(_surface_color("_fist", SkaterMeshBuilder.FIST_PART_BACK),
-			_KIT_GLOVES, "the back of the hand keeps the kit")
 	assert_eq(_surface_color("_fist", SkaterMeshBuilder.FIST_PART_FINGERS),
-			GearModelRegistry.BLACK, "the fingers are black")
+			_KIT_GLOVES, "Two-Tone's fingers keep the kit")
 	assert_eq(_surface_color("_blade", SkaterMeshBuilder.BLADE_PART_HOLDER),
 			_LIGHT, "the holder is the team's white")
 	_skate_btn().item_selected.emit(GearModelRegistry.SKATE_PRO)

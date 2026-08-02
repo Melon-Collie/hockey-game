@@ -9,16 +9,23 @@ extends RefCounted
 # Zones paint from four SLOTS, three of which are the wearer's own kit, so a
 # design reads as itself on every team while still belonging to that team:
 #
-#   BLACK   true black. Boot leather is black whoever you play for, and the
-#           stealth design wants a black that no kit can tint.
+#   BLACK   true black, and SKATES ONLY. Boot leather is black whoever you
+#           play for, and the stealth design wants a black that no kit can
+#           tint. Gloves never reach for it: a real glove is made in the
+#           team's colors, and no team here has black among theirs, so a black
+#           glove would belong to nobody.
 #   LIGHT   the team's own white — `light` in the preset, which is CREAM for
 #           some teams (Pomegranate, Plum) and pure white for the rest. It is
 #           already what their away jersey is painted, so their gear matches
 #           the sweater instead of out-whiting it.
 #   TEAM    the primary for skates; for gloves the kit's OWN glove color, so
 #           an untouched glove still matches the sweater's gloves.
-#   ACCENT  the team's secondary. A real kit has two colors and a real skate
-#           wears both — this is the one that puts the second on the gear.
+#   ACCENT  the team's second color. A real kit has two and a real piece wears
+#           both — team-stock gloves ship in three-color kit colorways (the
+#           Canadiens' is royal / red / white). On skates this is the preset's
+#           secondary; on GLOVES it is `glove_accent`, which is whichever team
+#           color the glove body is not, because five of the eight presets
+#           dress their gloves in the secondary already.
 #
 # Zones are the paintable surfaces the rig carries: a skate is QUARTER (the
 # boot's heel-through-instep shell) / TOE cap / COLLAR / STRIPE (the band
@@ -112,28 +119,30 @@ const _SKATE_MODELS: Array[Array] = [
 
 const GLOVE_TEAM: int = 0
 const GLOVE_PRO: int = 1
-const GLOVE_BLACKOUT: int = 2
-const GLOVE_CONTRAST: int = 3
-const GLOVE_VINTAGE: int = 4
-const GLOVE_TWO_TONE: int = 5
+const GLOVE_CONTRAST: int = 2
+const GLOVE_VINTAGE: int = 3
+const GLOVE_TWO_TONE: int = 4
+const GLOVE_TRICOLOR: int = 5
 
 const GLOVE_NAME_KEYS: Array[StringName] = [
 	&"GEAR_MODEL_TEAM",
 	&"GEAR_MODEL_PRO",
-	&"GEAR_MODEL_BLACKOUT",
 	&"GEAR_MODEL_CONTRAST",
 	&"GEAR_MODEL_VINTAGE",
 	&"GEAR_MODEL_TWO_TONE",
+	&"GEAR_MODEL_TRICOLOR",
 ]
 
-# (body, fingers, cuff) per model, index-aligned with GLOVE_NAME_KEYS.
+# (body, fingers, cuff) per model, index-aligned with GLOVE_NAME_KEYS. Built
+# from the kit alone — no BLACK anywhere, because a glove is made in the team's
+# colors and none of these teams has black among theirs.
 const _GLOVE_MODELS: Array[Array] = [
 	[Paint.TEAM, Paint.TEAM, Paint.TEAM],       # Team — the kit glove, cuff and all
-	[Paint.TEAM, Paint.TEAM, Paint.LIGHT],      # Pro — kit glove, light cuff
-	[Paint.BLACK, Paint.BLACK, Paint.BLACK],    # Blackout
-	[Paint.BLACK, Paint.ACCENT, Paint.ACCENT],  # Contrast — black back, secondary fingers
-	[Paint.LIGHT, Paint.TEAM, Paint.TEAM],      # Vintage — light back, kit fingers
-	[Paint.TEAM, Paint.BLACK, Paint.BLACK],     # Two-Tone — kit back, black fingers
+	[Paint.TEAM, Paint.TEAM, Paint.LIGHT],      # Pro — kit glove, white cuff roll
+	[Paint.TEAM, Paint.ACCENT, Paint.ACCENT],   # Contrast — second color on fingers and cuff
+	[Paint.LIGHT, Paint.TEAM, Paint.TEAM],      # Vintage — white back, kit fingers
+	[Paint.ACCENT, Paint.TEAM, Paint.TEAM],     # Two-Tone — the pairing flipped
+	[Paint.TEAM, Paint.ACCENT, Paint.LIGHT],    # Tri-Color — the full kit colorway
 ]
 
 

@@ -87,6 +87,13 @@ static func get_colors(slot: int, team_id: int) -> Dictionary:
 		"jersey":         jersey_block.base,
 		"jersey_stripe":  _accent_color(jersey_block, shoulders.color),
 		"gloves":         kit.gloves,
+		# A glove design's SECOND color is whichever team color the glove body
+		# is not. Five of the eight presets dress their gloves in the secondary,
+		# so a design that reached for the secondary again would paint those
+		# teams a monochrome glove — this is the only derived color that has to
+		# look at what it is contrasting against.
+		"glove_accent":   preset.primary if kit.gloves.is_equal_approx(preset.secondary) \
+				else preset.secondary,
 		"pants":          pants_block.base,
 		"pants_stripe":   _accent_color(pants_block, shoulders.color),
 		"socks":          socks_block.base,

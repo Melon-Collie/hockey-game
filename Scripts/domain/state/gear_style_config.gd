@@ -75,10 +75,10 @@ static func migrate_colors(code: int) -> GearStyleConfig:
 		skate_model = GearModelRegistry.SKATE_BLACKOUT
 	elif skate_color == _TAPE_WHITE:
 		skate_model = GearModelRegistry.SKATE_WHITEOUT
-	var glove_model: int = GearModelRegistry.GLOVE_PRO
+	var glove_model: int = GearModelRegistry.GLOVE_CONTRAST
 	if glove_color == TapeColorRegistry.TEAM_INDEX:
 		glove_model = GearModelRegistry.GLOVE_TEAM
-	elif glove_color == _TAPE_BLACK:
-		glove_model = GearModelRegistry.GLOVE_TWO_TONE
+	elif glove_color == _TAPE_WHITE:
+		glove_model = GearModelRegistry.GLOVE_PRO
 	return GearStyleConfig.new(skate_model, glove_model,
 			(code >> _LACE_SHIFT) & _FIELD_MASK)

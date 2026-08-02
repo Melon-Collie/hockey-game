@@ -212,7 +212,7 @@ func _skate_zone(model: int, zone: int) -> Color:
 
 func _glove_zone(model: int, zone: int) -> Color:
 	return GearModelRegistry.glove_color(model, zone,
-			_kit.gloves, _kit.secondary, _kit.light)
+			_kit.gloves, _kit.glove_accent, _kit.light)
 
 
 func _mat(c: Color, r: float) -> StandardMaterial3D:
