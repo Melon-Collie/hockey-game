@@ -52,6 +52,16 @@ extension. Subsequent rebuilds hot-reload (`reloadable = true`), though
 Windows sometimes holds the DLL lock — if the reload doesn't take, restart the
 editor.
 
+## Shipping
+
+Players never build anything: `deploy.yml` and `deploy-steam.yml` cross-
+compile the Windows `template_release` DLL with mingw-w64 (statically linked
+runtime, no extra dependencies) before the Godot export, and the export packs
+whatever the `.gdextension` manifest references. A missing DLL ships a
+working game that silently runs the GDScript fallback — the boot log and the
+debug digest's `native_kernels` field are how you catch that, in a shipped
+build exactly as on a dev machine.
+
 ## Verifying a port
 
 ```bash

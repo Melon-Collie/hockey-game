@@ -21,6 +21,7 @@ jobs:
         with:
           lfs: true
           fetch-depth: 0  # full history so `git rev-list --count HEAD` is meaningful
+          submodules: true  # native/godot-cpp, needed to build the GDExtension
 
       - name: Compute version
         id: version
@@ -61,6 +62,23 @@ jobs:
           export/windows/wine = "${WINE_BIN}"
           EOF
           echo "rcedit configured (wine: ${WINE_BIN})"
+
+      # Build the native GDExtension for the shipped platform BEFORE export.
+      # The DLLs are gitignored (dev machines build their own), so without
+      # this step the export bundles nothing and every player silently runs
+      # the GDScript fallback — correct but slow, and invisible except for
+      # the boot log / digest "native_kernels" field. Cross-compiled with
+      # mingw-w64 (godot-cpp statically links the runtime, so the DLL has no
+      # extra dependencies). The export maps windows.release.x86_64 in
+      # native/mitts_native.gdextension to this artifact and packs it.
+      - name: Build native GDExtension (Windows release)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-mingw-w64-x86-64 scons
+          cd native
+          scons platform=windows arch=x86_64 target=template_release use_mingw=yes \
+                build_profile=build_profile.json -j"$(nproc)"
+          ls -la bin/
 
       - name: Export with Godot
         uses: firebelley/godot-export@v5.2.1
