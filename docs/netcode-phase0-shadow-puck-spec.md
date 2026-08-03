@@ -93,7 +93,7 @@ physics:
 - **Coulomb ice friction** — `decel = GameRules.PUCK_ICE_DECEL_M_S2`, velocity
   decelerated opposite its direction, clamped at 0 (`trajectory.gd:113-126`).
 - **Board reflection at the rounded-corner contact** — `bounce = GameRules.PUCK_BOARD_BOUNCE`
-  (0.4, matching `Physics/boards.tres`), reflecting the outward velocity component
+  (0.4), reflecting the outward velocity component
   about the inward normal from `clamp_to_rink_inner` (`trajectory.gd:100-111`).
 
 Its own doc-comment: *"Applies Coulomb ice friction and board reflection so the
