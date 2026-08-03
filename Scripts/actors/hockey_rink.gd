@@ -211,6 +211,7 @@ func _ready() -> void:
 	# puck are held inside the rink by the smooth analytic boundary, not by this
 	# 256-segment corner mesh.
 	collision_layer = Constants.LAYER_BOARDS
+	collision_mask = 0
 	_rebuild()
 	if not Engine.is_editor_hint() and _scratch_map != null:
 		# period_synced emits `new_period: int`; clear() takes no args, so we
@@ -558,10 +559,10 @@ func _add_ice(tex: ImageTexture) -> void:
 
 	# Ice collision — needs its own StaticBody3D so physics_material_override applies
 	var ice_body := StaticBody3D.new()
-	# Ice stays on LAYER_WALLS (skaters + puck both collide with it). Only the
-	# perimeter boards move to LAYER_BOARDS; the ice is a flat slab and never
-	# produces the concave-corner crease that wedged the skater.
+	# Identity tag only, like the boards above — the ice plane is a constant every
+	# analytic path reads, not a surface anything rests on.
 	ice_body.collision_layer = Constants.LAYER_WALLS
+	ice_body.collision_mask = 0
 	# Single source of truth: the live ice friction the host simulates IS
 	# GameRules.ICE_FRICTION (realistic puck-on-ice μ ~0.05). The AI/client
 	# prediction model reads the same constant, so the two can never drift — no

@@ -80,6 +80,8 @@ func _ready() -> void:
 	_head.collision_layer = Constants.LAYER_GOALIE_BODIES
 	_glove.collision_layer = Constants.LAYER_GOALIE_BODIES
 	_blocker.collision_layer = Constants.LAYER_GOALIE_BODIES
+	for part: StaticBody3D in [_stick, _left_pad, _right_pad, _body, _head, _glove, _blocker]:
+		part.collision_mask = 0
 	# Swap the scene's primitive part meshes for the shared low-poly faceted
 	# set (colliders untouched). Before the uniform coordinator only by
 	# convention — painting is material_override / ShaderMaterial, mesh-free.

@@ -129,6 +129,8 @@ func _rebuild() -> void:
 	# (PuckGeometryCollision) and the skater is held out of the net pocket by
 	# GameRules.push_out_of_net (see Skater.clamp_body_to_net).
 	_net_body.collision_layer = Constants.LAYER_NET
+	_net_body.collision_mask = 0
+	collision_mask = 0  # the pipe-frame root; its layer comes from RinkArena.tscn
 	_net_body.physics_material_override = NET_MATERIAL  # twine absorbs; puck drops instead of pinging
 	add_child(_net_body)
 
