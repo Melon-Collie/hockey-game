@@ -4631,6 +4631,12 @@ func return_to_lobby() -> void:
 			bot_identity["name"] = r.player_name
 			bot_identity["number"] = r.jersey_number
 			bot_identity["is_left_handed"] = r.is_left_handed
+			# Carry the resolved look too, or a rematch re-rolls it: hash-derived
+			# cosmetics would survive (same name → same hash) but a card-pinned
+			# skin/tape/gear pick would silently reset to the fallback.
+			bot_identity["skin"] = r.skin_tone
+			bot_identity["tape_code"] = r.tape_code
+			bot_identity["gear_style_code"] = r.gear_style_code
 			bot_identities[slot_key] = bot_identity
 	NetworkManager.pending_bot_slots = bot_slots
 	NetworkManager.pending_bot_identities = bot_identities
@@ -4990,9 +4996,12 @@ func _spawn_bots_from_lobby() -> void:
 		# sync_existing_players payload. Unlike the human spawn broadcast (removed
 		# from the lobby push to stop double-delivery), there's no overlapping
 		# channel here, so this must stay. Don't "consolidate" it away.
-		# The bot's host-resolved skin tone must be in the peer map BEFORE the
-		# broadcast reads it (send_spawn_remote_skater passes get_peer_skin_tone).
+		# The bot's host-resolved cosmetics (skin, tape, gear) must be in the
+		# peer maps BEFORE the broadcast reads them (send_spawn_remote_skater
+		# passes the get_peer_* values).
 		NetworkManager.set_peer_skin_tone(record.peer_id, record.skin_tone)
+		NetworkManager.set_peer_tape_code(record.peer_id, record.tape_code)
+		NetworkManager.set_peer_gear_style(record.peer_id, record.gear_style_code)
 		NetworkManager.send_spawn_remote_skater(record.peer_id, team_slot, team_id,
 				colors.jersey, colors.helmet, colors.pants,
 				record.is_left_handed, record.player_name, record.jersey_number, record.attributes)
