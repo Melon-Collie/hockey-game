@@ -2,21 +2,24 @@ class_name StickEditorPopup
 extends Control
 
 # The stick workbench: every stick-related pick in one modal — the three
-# stick gear slots (LENGTH / CURVE / FLEX) and the tape job (blade tape color
-# + coverage, knob color, handle wrap style) — arranged as compact dropdown
-# rows around a live turntable preview assembled from the real in-game pieces:
-# the procedural blade mesh at the picked pattern, the wrapped tape band, the
-# flex shader pulsing a load-and-release bow scaled by the picked flex (and
-# painting the picked handle wrap), and the shaft cut to the picked length.
+# stick gear slots (LENGTH / CURVE / FLEX), the stick MODEL (a whole
+# shaft/blade colorway from StickModelRegistry), and the tape job (blade tape
+# color + coverage, knob color, handle wrap style) — arranged as compact
+# dropdown rows around a live turntable preview assembled from the real
+# in-game pieces: the procedural blade mesh at the picked pattern in the
+# picked colorway, the wrapped tape band, the flex shader pulsing a
+# load-and-release bow scaled by the picked flex (and painting the picked
+# handle wrap), and the shaft cut to the picked length.
 #
-# Rows whose pick changes gameplay (the gear) carry a gold asterisk; tape rows
-# are cosmetic and never lock. A sub-editor, not a committer: opened by
-# PlayerSettingsPopup (the player screen's Equipment section) over its own
-# modal, it edits pending values and hands them back through `stick_edited`
-# on Done — the HOST owns snapshot/commit/revert, so Cancel here just discards
-# this dialog's edits and the host's Cancel still reverts an applied Done.
+# Rows whose pick changes gameplay (the gear) carry a gold asterisk; the
+# model and tape rows are cosmetic and never lock. A sub-editor, not a
+# committer: opened by PlayerSettingsPopup (the player screen's Equipment
+# section) over its own modal, it edits pending values and hands them back
+# through `stick_edited` on Done — the HOST owns snapshot/commit/revert, so
+# Cancel here just discards this dialog's edits and the host's Cancel still
+# reverts an applied Done.
 
-signal stick_edited(curve: int, flex: int, length: int, tape_code: int)
+signal stick_edited(curve: int, flex: int, length: int, tape_code: int, stick_model: int)
 
 # Gear tooltips (headline effects only).
 const _LENGTH_TOOLTIP: String = "Cut relative to your height.\nShort = snappier blade, finest close control, less reach.\nLong = more reach & sweep, slower to cut back."
@@ -63,10 +66,16 @@ const _STYLE_KEYS: Array[StringName] = [
 	&"TAPE_HANDLE_KNOB", &"TAPE_HANDLE_CANDY", &"TAPE_HANDLE_FULL",
 ]
 
+# The model swatch strip drawn on each dropdown row: the colorway's read at
+# chip size (shaft, bands, wordmark), same dimensions as the gear workbench's.
+const _SWATCH_W: int = 36
+const _SWATCH_H: int = 18
+
 # Pending picks (working state between open() and Done).
 var _curve: int = PlayerAttributes.GEAR_BALANCED
 var _flex: int = PlayerAttributes.GEAR_BALANCED
 var _length: int = PlayerAttributes.GEAR_BALANCED
+var _stick_model: int = StickModelRegistry.STICK_CLASSIC
 var _tape: StickTapeConfig = StickTapeConfig.new()
 var _body: PlayerAttributes = null          # full build, for stick_len_mult()
 var _gear_locked: bool = false
@@ -76,6 +85,7 @@ var _team_accent: Color = Color.WHITE
 var _length_btn: OptionButton = null
 var _curve_btn: OptionButton = null
 var _flex_btn: OptionButton = null
+var _model_btn: OptionButton = null
 var _span_btn: OptionButton = null
 var _style_btn: OptionButton = null
 var _blade_color_dd: SwatchDropdown = null
@@ -183,7 +193,7 @@ func _build() -> void:
 	tape_col.alignment = BoxContainer.ALIGNMENT_BEGIN
 	tape_col.add_theme_constant_override("separation", 12)
 	columns.add_child(tape_col)
-	tape_col.add_child(_make_column_header(tr(&"STICK_COL_TAPE")))
+	tape_col.add_child(_make_column_header(tr(&"STICK_COL_STYLE")))
 
 	_length_btn = _make_option_btn(_LENGTH_KEYS, _LENGTH_TOOLTIP, _on_length_selected)
 	_add_row(gear_col, tr(&"STICK_GEAR_LENGTH"), _length_btn, true, _LENGTH_TOOLTIP)
@@ -198,6 +208,19 @@ func _build() -> void:
 	legend.add_theme_color_override("font_color", MenuStyle.GOLD)
 	legend.add_theme_font_size_override("font_size", 13)
 	gear_col.add_child(legend)
+
+	# The model row leads the style column: the colorway is the stick you
+	# bought; the tape rows below are what you did to it. Fixed designs, so
+	# the items fill once here rather than per open().
+	_model_btn = OptionButton.new()
+	_model_btn.custom_minimum_size = Vector2(180, 36)
+	_model_btn.add_theme_font_size_override("font_size", 15)
+	for model: int in StickModelRegistry.count():
+		_model_btn.add_icon_item(_swatch_strip(StickModelRegistry.swatch_colors(model)),
+				tr(StickModelRegistry.NAME_KEYS[model]), model)
+	SoundManager.wire_button(_model_btn)
+	_model_btn.item_selected.connect(_on_model_selected)
+	_add_row(tape_col, tr(&"STICK_MODEL_LABEL"), _model_btn, false, "")
 
 	_blade_color_dd = SwatchDropdown.new()
 	_blade_color_dd.selected.connect(_on_blade_color_selected)
@@ -358,8 +381,9 @@ func _build_preview(vbox: VBoxContainer) -> void:
 	shaft_box.size = Vector3(_SHAFT_CROSS.x, _SHAFT_CROSS.y, 1.0)
 	shaft_box.subdivide_depth = 12  # the flex shader needs length-wise vertices
 	_shaft.mesh = shaft_box
-	# The house design (paint + wordmark / carbon weave) comes from the same
-	# factory the rink uses, so the preview IS the in-game stick.
+	# The design (paint + wordmark / weave) comes from the same factory the
+	# rink uses, so the preview IS the in-game stick; open() re-applies the
+	# pending model's colorway over these defaults.
 	_shaft_mat = StickStyle.make_shaft_material()
 	_shaft.material_override = _shaft_mat
 	_turntable.add_child(_shaft)
@@ -389,25 +413,28 @@ func set_focus_scope(background: Control, restore: Control) -> void:
 
 
 # `attrs` is the host's PENDING build (this popup edits its stick gear);
-# `gear_locked` mirrors the attribute lock (online match) — tape stays live.
-func open(attrs: PlayerAttributes, tape_code: int, gear_locked: bool,
-		team_accent: Color) -> void:
+# `stick_model` is the pending colorway pick; `gear_locked` mirrors the
+# attribute lock (online match) — the model and tape stay live.
+func open(attrs: PlayerAttributes, tape_code: int, stick_model: int,
+		gear_locked: bool, team_accent: Color) -> void:
 	_body = attrs
 	_curve = attrs.curve
 	_flex = attrs.flex
 	_length = attrs.length
+	_stick_model = clampi(stick_model, 0, StickModelRegistry.count() - 1)
 	_tape = StickTapeConfig.from_code(tape_code)
 	_gear_locked = gear_locked
 	_team_accent = team_accent
 	_pulse_t = 0.0
 	_refresh()
+	_apply_model_materials()
 	_rebuild_preview()
 	visible = true
 	ControllerNav.open_modal(_focus_background, self, _length_btn)
 
 
 func _done() -> void:
-	stick_edited.emit(_curve, _flex, _length, _tape.to_code())
+	stick_edited.emit(_curve, _flex, _length, _tape.to_code(), _stick_model)
 	_close()
 
 
@@ -454,6 +481,12 @@ func _on_flex_selected(option: int) -> void:
 	_rebuild_preview()
 
 
+func _on_model_selected(index: int) -> void:
+	_stick_model = index
+	_apply_model_materials()
+	_rebuild_preview()
+
+
 func _on_blade_color_selected(index: int) -> void:
 	_tape = StickTapeConfig.new(index, _tape.span, _tape.knob_color, _tape.knob_style)
 	_rebuild_preview()
@@ -478,6 +511,29 @@ func _on_style_selected(option: int) -> void:
 
 # ── Rendering ────────────────────────────────────────────────────────────────
 
+# Swaps the preview's shaft and blade onto the picked colorway — the same
+# factories the rink uses. The shaft material comes back fresh with default
+# runtime uniforms, so _rebuild_preview must follow to rewrite the live ones
+# (grip wrap, shaft length; _process re-sends flex each frame).
+func _apply_model_materials() -> void:
+	_shaft_mat = StickStyle.make_shaft_material(_stick_model)
+	_shaft.material_override = _shaft_mat
+	_blade.material_override = StickStyle.make_blade_material(_stick_model)
+
+
+# One colorway as a strip of equal vertical bands (the gear workbench's model
+# strip). The last band absorbs the rounding remainder so every strip fills
+# the same width.
+func _swatch_strip(zones: Array[Color]) -> ImageTexture:
+	var img := Image.create(_SWATCH_W, _SWATCH_H, false, Image.FORMAT_RGBA8)
+	var band: int = _SWATCH_W / zones.size()
+	for i: int in zones.size():
+		var x0: int = i * band
+		var w: int = _SWATCH_W - x0 if i == zones.size() - 1 else band
+		img.fill_rect(Rect2i(x0, 0, w, _SWATCH_H), zones[i])
+	return ImageTexture.create_from_image(img)
+
+
 func _refresh() -> void:
 	_length_btn.select(clampi(_length, 0, _LENGTH_KEYS.size() - 1))
 	_curve_btn.select(clampi(_curve, 0, _CURVE_KEYS.size() - 1))
@@ -490,6 +546,7 @@ func _refresh() -> void:
 		_flex_btn.set_item_text(i, tr(&"STICK_FLEX_ITEM")
 				% [tr(_FLEX_KEYS[i]), PlayerAttributes.flex_number_for(lbs, i)])
 	_flex_btn.select(clampi(_flex, 0, _FLEX_KEYS.size() - 1))
+	_model_btn.select(clampi(_stick_model, 0, StickModelRegistry.count() - 1))
 	for btn: OptionButton in [_length_btn, _curve_btn, _flex_btn]:
 		btn.disabled = _gear_locked
 	_lock_label.visible = _gear_locked

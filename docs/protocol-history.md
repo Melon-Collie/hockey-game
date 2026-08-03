@@ -228,3 +228,8 @@ here whenever you bump, in the same format.
 #      width, new meaning: a v52 peer would read a model index as a color
 #      index and dress every player in the wrong gear, so mixed builds must
 #      be refused.
+# v54: stick models — the packed GearStyleConfig code grows a fourth field
+#      (bits 15–19): a StickModelRegistry index, the stick's shaft/blade
+#      colorway. Same payload shape (still one int), but a v53 peer masks the
+#      field off and silently renders every custom stick as the house design,
+#      so mixed builds must be refused.
