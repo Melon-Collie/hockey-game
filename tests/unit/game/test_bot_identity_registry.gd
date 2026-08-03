@@ -179,6 +179,83 @@ func test_pick_for_slot_prefers_matching_position() -> void:
 		used.clear()
 
 
+# ── Cosmetics: pinned looks and the name-hash fallback ───────────────────────
+
+func test_normalize_packs_pinned_cosmetics() -> void:
+	var norm: Dictionary = BotIdentityRegistry.normalize_entry({
+			"name": "Flash", "tape_blade": 5, "tape_span": StickTapeConfig.Span.TOE,
+			"tape_knob": 2, "knob_style": StickTapeConfig.KnobStyle.CANDY_CANE,
+			"skate_model": GearModelRegistry.SKATE_RETRO,
+			"glove_model": GearModelRegistry.GLOVE_TRICOLOR,
+			"lace_color": 5, "stick_model": StickModelRegistry.STICK_VOLT})
+	var tape: StickTapeConfig = StickTapeConfig.from_code(int(norm.tape_code))
+	assert_eq(tape.blade_color, 5)
+	assert_eq(tape.span, StickTapeConfig.Span.TOE)
+	assert_eq(tape.knob_color, 2)
+	assert_eq(tape.knob_style, StickTapeConfig.KnobStyle.CANDY_CANE)
+	var gear: GearStyleConfig = GearStyleConfig.from_code(int(norm.gear_style_code))
+	assert_eq(gear.skate_model, GearModelRegistry.SKATE_RETRO)
+	assert_eq(gear.glove_model, GearModelRegistry.GLOVE_TRICOLOR)
+	assert_eq(gear.lace_color, 5)
+	assert_eq(gear.stick_model, StickModelRegistry.STICK_VOLT)
+
+
+func test_normalize_coerces_out_of_range_cosmetics() -> void:
+	var norm: Dictionary = BotIdentityRegistry.normalize_entry({
+			"name": "Forged", "tape_blade": 99, "skate_model": -3, "stick_model": 42})
+	var tape: StickTapeConfig = StickTapeConfig.from_code(int(norm.tape_code))
+	assert_true(TapeColorRegistry.is_valid(tape.blade_color), "blade tape coerces legal")
+	var gear: GearStyleConfig = GearStyleConfig.from_code(int(norm.gear_style_code))
+	assert_true(GearModelRegistry.is_valid_skate(gear.skate_model), "skate model coerces legal")
+	assert_true(StickModelRegistry.is_valid(gear.stick_model), "stick model coerces legal")
+
+
+func test_normalize_omits_unpinned_cosmetic_groups() -> void:
+	# No pins → no codes, which is how spawn_bot knows to derive the fallback.
+	var norm: Dictionary = BotIdentityRegistry.normalize_entry({"name": "Plain"})
+	assert_false(norm.has("tape_code"), "unpinned tape group writes no code")
+	assert_false(norm.has("gear_style_code"), "unpinned gear group writes no code")
+	# One pinned field claims its whole group; the other group stays derived.
+	var half: Dictionary = BotIdentityRegistry.normalize_entry(
+			{"name": "Half", "stick_model": 1})
+	assert_false(half.has("tape_code"))
+	assert_true(half.has("gear_style_code"))
+
+
+func test_fallback_looks_are_stable_legal_and_varied() -> void:
+	var tape_codes: Dictionary = {}
+	var gear_codes: Dictionary = {}
+	for entry: Dictionary in _bundled_entries():
+		var bot_name: String = String(entry.get("name", ""))
+		var tape_code: int = BotIdentityRegistry.fallback_tape_code(bot_name)
+		assert_eq(tape_code, BotIdentityRegistry.fallback_tape_code(bot_name),
+				"fallback tape must be deterministic for '%s'" % bot_name)
+		assert_eq(StickTapeConfig.from_code(tape_code).to_code(), tape_code,
+				"fallback tape for '%s' must already be legal" % bot_name)
+		tape_codes[tape_code] = true
+		var gear_code: int = BotIdentityRegistry.fallback_gear_style_code(bot_name)
+		assert_eq(gear_code, BotIdentityRegistry.fallback_gear_style_code(bot_name),
+				"fallback gear must be deterministic for '%s'" % bot_name)
+		assert_eq(GearStyleConfig.from_code(gear_code).to_code(), gear_code,
+				"fallback gear for '%s' must already be legal" % bot_name)
+		gear_codes[gear_code] = true
+	# The whole point is variety: across the roster's names the hash tables
+	# should land on comfortably more than a couple of distinct looks.
+	assert_gt(tape_codes.size(), 4, "roster-wide fallback tape should vary")
+	assert_gt(gear_codes.size(), 4, "roster-wide fallback gear should vary")
+
+
+func test_every_bundled_card_pins_its_cosmetics() -> void:
+	# The bundled roster is fully curated — every card owns a deliberate look;
+	# the fallback tables exist for user rosters and generic "Bot N" bots.
+	for entry: Dictionary in _bundled_entries():
+		var norm: Dictionary = BotIdentityRegistry.normalize_entry(entry)
+		assert_true(norm.has("tape_code"),
+				"bot '%s' should pin a tape job" % entry.get("name", "?"))
+		assert_true(norm.has("gear_style_code"),
+				"bot '%s' should pin gear" % entry.get("name", "?"))
+
+
 func test_pick_for_slot_falls_back_when_position_pool_exhausted() -> void:
 	# Consume every LD identity; the next LD pick must still return someone.
 	var used: Array[String] = []
