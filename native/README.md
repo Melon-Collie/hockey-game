@@ -2,7 +2,7 @@
 
 C++ ports of per-tick math kernels, registered as `Native*` classes
 (`NativeTopHandIK`, `NativeBottomHandIK`, `NativeSkaterGait`,
-`NativeSkaterMovement`, `NativePuckStep`). The GDScript
+`NativeSkaterMovement`, `NativePuckStep`, `NativeBladeDangle`). The GDScript
 originals (in `Scripts/domain/rules/` and `Scripts/controllers/`) remain the
 behavioral reference; each ported kernel is pinned to its reference by a
 seeded fuzz test (`tests/unit/rules/test_native_ik_parity.gd`,
@@ -85,6 +85,10 @@ without a built binary lose performance, never correctness):
 - **Blade IK** — `SkaterIKCoordinator` (`project_blade`, the 3-pass
   `_solve_top_hand`, `update_bottom_hand`); config syncs inside the cached-
   config builders, so `invalidate_configs()` covers both representations.
+- **Blade dangle** — `SkaterIKCoordinator.apply_blade_from_mouse` step 2 (the
+  stateful speed-cap / arrive-law smoother, `NativeBladeDangle.advance`);
+  reset/seed forward from `reset_blade_smoothing` / `seed_blade_smoothing`,
+  config syncs via `_sync_dangle_config` under `invalidate_configs()`.
 - **Puck step** — host drive (`Puck._drive_analytic`, per sub-step so the
   goalie interleave keeps its exact order) and client prediction
   (`PuckController._run_prediction`, whole-tick `step_tick` batching), both

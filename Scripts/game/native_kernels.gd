@@ -8,7 +8,7 @@ class_name NativeKernels
 
 const KERNEL_CLASSES: Array[StringName] = [
 	&"NativeTopHandIK", &"NativeBottomHandIK", &"NativeSkaterGait",
-	&"NativeSkaterMovement", &"NativePuckStep",
+	&"NativeSkaterMovement", &"NativePuckStep", &"NativeBladeDangle",
 ]
 
 
