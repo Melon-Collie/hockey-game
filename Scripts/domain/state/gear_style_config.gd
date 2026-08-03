@@ -12,8 +12,8 @@ extends RefCounted
 # because laces are chosen apart from the skate. The face pick is a
 # GearModelRegistry FACE_* option (bare / visor / cage / fishbowl) — a fixed
 # look, like the stick. Cosmetic only — nothing gameplay reads it.
-# Skates/gloves/laces/face are picked in the gear workbench, the stick model
-# in the stick workbench; all painted by SkaterUniformCoordinator.
+# Skates/gloves/laces/face and the stick model are all picked in the locker;
+# all painted by SkaterUniformCoordinator.
 #
 # Travels the wire as one packed int (to_code/from_code) appended to the join
 # and spawn payloads, like the tape code. from_code clamps every field, so a

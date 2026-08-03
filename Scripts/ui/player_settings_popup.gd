@@ -2,18 +2,17 @@ class_name PlayerSettingsPopup
 extends Control
 
 # The player screen — who you are, one column: name, number, handedness,
-# preferred position, skin tone, height, weight, the two equipment workbench
-# launchers side by side — the stick (StickEditorPopup: gear + tape + live
-# preview) and the gear (GearEditorPopup: blade profile + skate/glove color +
-# live preview) — and the team pick last.
+# preferred position, skin tone, height, weight, the LockerPopup launcher (every
+# equipment pick — stick, skates, gloves, helmet — around a mannequin wearing
+# all of them), and the team pick last.
 #
 # One build per player, no presets — edits land directly on PlayerPrefs' flat
 # fields. Opened from the main menu only (the lobby has no build editor).
 #
 # Snapshot-and-commit pattern: edits buffer in _pending_* until Apply is
-# pressed. Cancel / ESC / overlay-click revert. Mirrors OptionsPanel. The
-# workbenches are sub-editors — their Done lands in this popup's pending
-# fields; Apply/Cancel here commit or discard it with everything else.
+# pressed. Cancel / ESC / overlay-click revert. Mirrors OptionsPanel. The locker
+# is a sub-editor — its Done lands in this popup's pending fields; Apply/Cancel
+# here commit or discard it with everything else.
 #
 # During an active online match the BUILD half (height, weight, profile, stick
 # gear) is locked — attributes replicate at join time — while cosmetics (skin,
@@ -52,13 +51,11 @@ var _weight_slider: HSlider = null
 var _weight_value_label: Label = null
 var _lock_label: Label = null
 var _apply_btn: Button = null
-# The two workbenches, opened over this popup by their Edit buttons.
-var _stick_popup: StickEditorPopup = null
-var _gear_popup: GearEditorPopup = null
-# Gold "unapplied changes" notes beside each Edit button — pending workbench
-# edits are otherwise invisible until Apply.
-var _stick_pending_label: Label = null
-var _gear_pending_label: Label = null
+# The locker, opened over this popup by its launcher button.
+var _locker_popup: LockerPopup = null
+# Gold "unapplied changes" note under the launcher — pending locker edits are
+# otherwise invisible until Apply.
+var _locker_pending_label: Label = null
 
 # Pending state — what Apply will commit.
 var _pending_name: String = ""
@@ -190,7 +187,7 @@ func _build() -> void:
 	_build_skin_section(col)
 	_build_height_section(col)
 	_build_weight_section(col)
-	_build_workbench_row(col)
+	_build_locker_row(col)
 	_build_team_section(col)
 
 	_lock_label = Label.new()
@@ -203,21 +200,16 @@ func _build() -> void:
 
 	_build_action_row(vbox)
 
-	_stick_popup = StickEditorPopup.new()
-	_stick_popup.stick_edited.connect(_on_stick_edited)
-	add_child(_stick_popup)
-
-	_gear_popup = GearEditorPopup.new()
-	_gear_popup.gear_edited.connect(_on_gear_edited)
-	add_child(_gear_popup)
+	_locker_popup = LockerPopup.new()
+	_locker_popup.locker_edited.connect(_on_locker_edited)
+	add_child(_locker_popup)
 
 
-# The two workbench launchers side by side — the buttons name themselves, so
-# the gutter stays empty (a spacer keeps the pair on the field column's
-# edges). Each button's gold "unapplied changes" note sits beneath it
-# (pending workbench edits are otherwise invisible until Apply); the notes
-# reserve their line so the column doesn't jump.
-func _build_workbench_row(vbox: VBoxContainer) -> void:
+# The locker launcher — the button names itself, so the gutter stays empty and
+# the button fills the shared field width. Its gold "unapplied changes" note
+# sits beneath (pending locker edits are otherwise invisible until Apply) and
+# reserves its line so the column doesn't jump.
+func _build_locker_row(vbox: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	row.add_theme_constant_override("separation", 12)
@@ -225,78 +217,54 @@ func _build_workbench_row(vbox: VBoxContainer) -> void:
 	var gutter := Control.new()
 	gutter.custom_minimum_size = Vector2(_IDENTITY_LABEL_W, 0)
 	row.add_child(gutter)
-	# One shared note string — sitting under its own button makes "whose
-	# changes" unambiguous, and the short form fits the half-field button.
-	_stick_pending_label = _add_workbench_launcher(
-			row, tr(&"STICK_EDIT_BUTTON"), tr(&"EDIT_PENDING_NOTE"), _open_stick_editor)
-	_gear_pending_label = _add_workbench_launcher(
-			row, tr(&"GEAR_EDIT_BUTTON"), tr(&"EDIT_PENDING_NOTE"), _open_gear_editor)
 
-
-# One launcher: the Edit button with its pending note reserved beneath.
-# Returns the note label so the caller can toggle it.
-func _add_workbench_launcher(row: HBoxContainer, button_text: String,
-		note_text: String, on_pressed: Callable) -> Label:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 2)
 	row.add_child(box)
 	var edit_btn := Button.new()
-	edit_btn.text = button_text
-	edit_btn.custom_minimum_size = Vector2(_PAIR_W, 48)
+	edit_btn.text = tr(&"LOCKER_EDIT_BUTTON")
+	edit_btn.custom_minimum_size = Vector2(_FIELD_W, 48)
 	edit_btn.add_theme_font_size_override("font_size", 17)
 	MenuStyle.wire_hover_scale(edit_btn)
 	SoundManager.wire_button(edit_btn)
-	edit_btn.pressed.connect(on_pressed)
+	edit_btn.pressed.connect(_open_locker)
 	box.add_child(edit_btn)
-	var note := Label.new()
-	note.text = note_text
-	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	note.add_theme_color_override("font_color", MenuStyle.GOLD)
-	note.add_theme_font_size_override("font_size", 12)
+
+	_locker_pending_label = Label.new()
+	_locker_pending_label.text = tr(&"EDIT_PENDING_NOTE")
+	_locker_pending_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_locker_pending_label.add_theme_color_override("font_color", MenuStyle.GOLD)
+	_locker_pending_label.add_theme_font_size_override("font_size", 12)
 	# Invisible-but-space-reserving so a note appearing doesn't reflow the rows
 	# below (Label has no reserve mode; modulate keeps layout, unlike visible).
-	note.modulate = Color(1, 1, 1, 0)
-	box.add_child(note)
-	return note
+	_locker_pending_label.modulate = Color(1, 1, 1, 0)
+	box.add_child(_locker_pending_label)
 
 
-func _open_stick_editor() -> void:
-	# TEAM tape swatches resolve against the pending team pick, so the swatch
-	# previews the kit the player is about to wear.
-	var accent: Color = _pending_team_colors().primary
-	_stick_popup.set_focus_scope(self, null)
-	_stick_popup.open(_pending_attributes(), _pending_tape, _pending_stick_model,
-			_build_locked, accent)
+func _open_locker() -> void:
+	# The whole kit goes over: the mannequin wears the pending sweater, and a
+	# gear model resolves its TEAM / ACCENT / LIGHT zones against that same
+	# pick, so the locker previews the design on the team you are about to play
+	# for.
+	_locker_popup.set_focus_scope(self, null)
+	_locker_popup.open(_pending_attributes(), _pending_tape, _pending_gear_code(),
+			_build_locked, _pending_team_colors(), _pending_skin, _pending_is_left)
 
 
-func _on_stick_edited(curve: int, flex: int, length: int, tape_code: int,
-		stick_model: int) -> void:
+func _on_locker_edited(profile: int, curve: int, flex: int, length: int,
+		tape_code: int, gear_code: int) -> void:
 	if not _build_locked:
+		_pending_profile = profile
 		_pending_curve = curve
 		_pending_flex = flex
 		_pending_length = length
 	_pending_tape = tape_code
-	_pending_stick_model = stick_model
-	_update_apply_state()
-
-
-func _open_gear_editor() -> void:
-	# The whole kit goes over: a model resolves its TEAM / ACCENT / LIGHT zones
-	# against the pending team pick, not just one accent color.
-	_gear_popup.set_focus_scope(self, null)
-	_gear_popup.open(_pending_profile, _pending_skate_model, _pending_glove_model,
-			_pending_lace_color, _pending_helmet_face, _build_locked,
-			_pending_team_colors(), _pending_attributes())
-
-
-func _on_gear_edited(profile: int, skate_model: int, glove_model: int,
-		lace_color: int, helmet_face: int) -> void:
-	if not _build_locked:
-		_pending_profile = profile
-	_pending_skate_model = skate_model
-	_pending_glove_model = glove_model
-	_pending_lace_color = lace_color
-	_pending_helmet_face = helmet_face
+	var gear := GearStyleConfig.from_code(gear_code)
+	_pending_skate_model = gear.skate_model
+	_pending_glove_model = gear.glove_model
+	_pending_lace_color = gear.lace_color
+	_pending_stick_model = gear.stick_model
+	_pending_helmet_face = gear.helmet_face
 	_update_apply_state()
 
 
@@ -690,32 +658,17 @@ func _pending_gear_code() -> int:
 			_pending_lace_color, _pending_stick_model, _pending_helmet_face).to_code()
 
 
-func _snapshot_gear() -> GearStyleConfig:
-	return GearStyleConfig.from_code(
-			int(_snapshot.get("gear", GearStyleConfig.DEFAULT_CODE)))
-
-
-# Whether the stick the player would get on Apply differs from the one the rink
-# is showing — pending stick edits are otherwise invisible behind the button.
-# The stick MODEL is compared apart from the rest of the gear code because it
-# is edited here, in the stick workbench, not the gear one.
-func _is_stick_dirty() -> bool:
-	return _pending_curve != int(_snapshot.get("curve", 0)) \
+# Whether the equipment the player would get on Apply differs from what the
+# rink is showing — pending locker edits are otherwise invisible behind the
+# button. Everything the locker owns counts: the stick gear and blade profile,
+# the tape, and all five fields of the gear code.
+func _is_locker_dirty() -> bool:
+	return _pending_profile != int(_snapshot.get("profile", 0)) \
+			or _pending_curve != int(_snapshot.get("curve", 0)) \
 			or _pending_flex != int(_snapshot.get("flex", 0)) \
 			or _pending_length != int(_snapshot.get("length", 0)) \
-			or _pending_tape != int(_snapshot.get("tape", 0)) \
-			or _pending_stick_model != _snapshot_gear().stick_model
-
-
-# Same visibility contract for the gear workbench's picks (its four fields of
-# the gear code — the stick model field belongs to the stick note above).
-func _is_gear_dirty() -> bool:
-	var gear: GearStyleConfig = _snapshot_gear()
-	return _pending_profile != int(_snapshot.get("profile", 0)) \
-			or _pending_skate_model != gear.skate_model \
-			or _pending_glove_model != gear.glove_model \
-			or _pending_lace_color != gear.lace_color \
-			or _pending_helmet_face != gear.helmet_face
+			or _pending_tape != int(_snapshot.get("tape", StickTapeConfig.DEFAULT_CODE)) \
+			or _pending_gear_code() != int(_snapshot.get("gear", GearStyleConfig.DEFAULT_CODE))
 
 
 func _is_build_dirty() -> bool:
@@ -741,12 +694,10 @@ func _update_apply_state() -> void:
 		or _pending_gear_code() != int(_snapshot.get("gear", GearStyleConfig.DEFAULT_CODE))
 		or _is_build_dirty())
 	_apply_btn.disabled = not changed or not _name_valid or not _number_valid
-	# The notes fade via modulate, not `visible` — they reserve their line so
-	# the rows below never reflow.
-	if _stick_pending_label != null:
-		_stick_pending_label.modulate.a = 1.0 if _is_stick_dirty() else 0.0
-	if _gear_pending_label != null:
-		_gear_pending_label.modulate.a = 1.0 if _is_gear_dirty() else 0.0
+	# The note fades via modulate, not `visible` — it reserves its line so the
+	# rows below never reflow.
+	if _locker_pending_label != null:
+		_locker_pending_label.modulate.a = 1.0 if _is_locker_dirty() else 0.0
 
 
 func _apply() -> void:
@@ -851,8 +802,8 @@ func _restore_from_snapshot() -> void:
 
 
 # Refresh the build controls (sliders + value labels) from the pending build,
-# and apply the online-match lock. The profile row lives in the gear workbench,
-# which reads the pending value fresh on every open.
+# and apply the online-match lock. The profile row lives in the locker, which
+# reads the pending value fresh on every open.
 func _refresh_build() -> void:
 	if _height_slider == null:
 		return

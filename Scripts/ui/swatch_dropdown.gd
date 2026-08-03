@@ -60,6 +60,13 @@ func _init(min_size: Vector2 = Vector2(96, 36)) -> void:
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
+# The control that actually takes focus and hover. This wrapper is FOCUS_NONE
+# and its closed button covers it edge to edge, so a caller that wants to react
+# to the row being reached — by pad or by pointer — has to watch the button,
+# not the wrapper, whose own signals never fire.
+func focus_target() -> Control:
+	return _closed_btn
+
 # `names` are tooltip strings, index-aligned with `colors`; `chip_labels`
 # (optional, same alignment) draw short text on a chip — empty string for
 # color-only entries. Re-supply whenever a live entry (the TEAM accent) may

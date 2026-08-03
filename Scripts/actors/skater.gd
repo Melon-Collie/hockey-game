@@ -1236,7 +1236,7 @@ func notify_shaft_material_rebuilt() -> void:
 # mid-blade bend, high = late toe hook); FACE_DEG twists the face open toward
 # the toe (builder face_open_deg); TOE_ROUND is the corner radius. Called
 # from SkaterController.apply_attributes, so the rendered blade matches the
-# pick. Public: StickEditorPopup builds its preview blade from the same rows.
+# pick. Public: LockerMannequin builds its stick blade from the same rows.
 const BLADE_PATTERN_DEPTH: Array[float] = [0.018, 0.022, 0.030]
 const BLADE_PATTERN_POWER: Array[float] = [2.2, 3.0, 4.6]
 const BLADE_PATTERN_FACE_DEG: Array[float] = [3.0, 7.0, 12.0]

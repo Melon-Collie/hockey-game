@@ -27,11 +27,17 @@ TUTORIAL_CONTINUE_CTA,Continue → %s: %s,Continuar → %s: %s
 DRILL_PENALTY_SHOTS,Penalty Shots,Penaltis
 DRILL_SHOT_ACCURACY,Shot Accuracy,Precisión de Tiro
 DRILL_PASSING,Passing,Pases
-STICK_EDIT_BUTTON,Edit Stick,Editar palo
-STICK_EDITOR_TITLE,Stick,Palo
+LOCKER_EDIT_BUTTON,Locker,Vestuario
+LOCKER_TITLE,Locker,Vestuario
+LOCKER_SEC_STICK,STICK,PALO
+LOCKER_SEC_SKATES,SKATES,PATINES
+LOCKER_SEC_GLOVES,GLOVES,GUANTES
+LOCKER_SEC_HELMET,HELMET,CASCO
+LOCKER_CASE_HINT_MOUSE,Drag to turn · up and down to zoom,Arrastra para girar · arriba y abajo para acercar
+LOCKER_CASE_HINT_PAD,Right Stick to turn · up and down to zoom,Stick derecho para girar · arriba y abajo para acercar
+LOCKER_LOCKED_NOTE,Stick gear and blade profile are locked during online play — looks can still change.,El equipo del palo y el perfil de la cuchilla están bloqueados en partidas en línea — el aspecto aún puede cambiar.
 EDITOR_DONE,Done,Hecho
 EDITOR_CANCEL,Cancel,Cancelar
-STICK_GEAR_LOCKED,Gear is locked during online play — tape can still change.,El equipo está bloqueado en partidas en línea — la cinta aún puede cambiar.
 STICK_GEAR_LENGTH,Length,Largo
 STICK_GEAR_CURVE,Curve,Curva
 STICK_GEAR_FLEX,Flex,Flex
@@ -71,8 +77,6 @@ TAPE_HANDLE_CANDY,Candy cane,Espiral
 TAPE_HANDLE_FULL,Full grip,Empuñadura completa
 STICK_GAMEPLAY_LEGEND,* affects gameplay,* afecta a la jugabilidad
 TAPE_COLOR_TEAM_SHORT,Team,Equipo
-STICK_COL_GEAR,GEAR,EQUIPAMIENTO
-STICK_COL_STYLE,STYLE,ESTILO
 STICK_MODEL_LABEL,Model,Modelo
 STICK_MODEL_STEALTH,Stealth,Stealth
 STICK_MODEL_REDLINE,Redline,Redline
@@ -88,13 +92,8 @@ POSITION_C,Center,Centro
 POSITION_RW,Right Wing,Ala derecha
 POSITION_LD,Left Defense,Defensa izquierda
 POSITION_RD,Right Defense,Defensa derecha
-GEAR_EDIT_BUTTON,Edit Gear,Editar equipamiento
-GEAR_EDITOR_TITLE,Gear,Equipamiento
-GEAR_LOCKED_NOTE,Profile is locked during online play — gear looks can still change.,El perfil está bloqueado en partidas en línea — el aspecto del equipamiento aún puede cambiar.
-GEAR_PROFILE_LABEL,Profile:,Perfil:
-GEAR_SKATES_LABEL,Skates:,Patines:
-GEAR_GLOVES_LABEL,Gloves:,Guantes:
-GEAR_LACES_LABEL,Laces:,Cordones:
+GEAR_PROFILE_LABEL,Profile,Perfil
+GEAR_LACES_LABEL,Laces,Cordones
 GEAR_PROFILE_AGILITY,Agility,Agilidad
 GEAR_PROFILE_BALANCED,Balanced,Equilibrado
 GEAR_PROFILE_POWER,Power,Potencia
@@ -107,7 +106,7 @@ GEAR_MODEL_PRO,Pro,Pro
 GEAR_MODEL_CONTRAST,Contrast,Contraste
 GEAR_MODEL_VINTAGE,Vintage,Clásico
 GEAR_MODEL_TRICOLOR,Tri-Color,Tricolor
-GEAR_FACE_LABEL,Face:,Careta:
+GEAR_FACE_LABEL,Face,Careta
 GEAR_FACE_NONE,None,Ninguna
 GEAR_FACE_VISOR,Visor,Visera
 GEAR_FACE_CAGE,Cage,Rejilla

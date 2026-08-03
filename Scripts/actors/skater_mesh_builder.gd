@@ -800,9 +800,9 @@ static func _build_head() -> ArrayMesh:
 	return _build_ball(HEAD_RADIUS, 10, 5, 1.0)
 
 
-# Shared part accessors for out-of-game figures (the lobby's bench dummies)
-# so every rendered player body — live or furniture — wears the same faceted
-# set from the same cache.
+# Shared part accessors for out-of-game figures (the lobby's bench dummies, the
+# locker mannequin) so every rendered player body — live or furniture — wears
+# the same faceted set from the same cache.
 static func shared_torso() -> ArrayMesh:
 	return _shared("torso", _build_torso)
 
@@ -821,6 +821,18 @@ static func shared_shoulder_cap() -> ArrayMesh:
 
 static func shared_thigh() -> ArrayMesh:
 	return _shared("thigh", _build_thigh)
+
+
+# The joint balls that close the leg chain. A figure built from thigh and sock
+# alone has a hole where each knee should be — the thigh ends at leg-local
+# −0.28 and the sock starts at −0.35, and the ball is what spans it. Both are
+# built at their real radii, so a placer scales them only by the build's dials.
+static func shared_hip_ball() -> ArrayMesh:
+	return _shared("hip", _build_hip)
+
+
+static func shared_knee_ball() -> ArrayMesh:
+	return _shared("knee", _build_knee)
 
 
 static func shared_sock() -> ArrayMesh:
@@ -933,8 +945,8 @@ const _CAGE_V_BAR_OFFSETS: Array[float] = [-0.84, -0.42, 0.0, 0.42, 0.84]
 # The face piece's fixed look — the one gear piece whose colors never resolve
 # against the kit (a visor is smoked polycarbonate and a cage bare steel
 # whoever wears them), so the material lives here with the geometry instead of
-# on the uniform coordinator, and the gear workbench turntable and the capture
-# tool dress their previews from the same factory. The shields carry their
+# on the uniform coordinator, and the locker mannequin and the capture tool
+# dress their previews from the same factory. The shields carry their
 # transparency in the registry alpha; the cage is an open lattice of one-sided
 # strips, so it renders two-sided instead.
 static func make_face_gear_material(option: int) -> StandardMaterial3D:
