@@ -85,16 +85,20 @@ jobs:
           EOF
           echo "rcedit configured (wine: ${WINE_BIN})"
 
-      # Same native-extension build as deploy.yml — the DLLs are gitignored,
-      # so the export bundles the kernels only if CI builds them first (a
-      # missing DLL ships a working game that silently runs the GDScript
-      # fallback; see native/README.md).
-      - name: Build native GDExtension (Windows release)
+      # Same native-extension build as deploy.yml — the binaries are
+      # gitignored, so the export bundles the kernels only if CI builds them
+      # first. One build per exported preset: the Windows DLL (mingw cross)
+      # and the Linux .so (host g++). Godot's export *fails* on a missing
+      # library it's told to copy, so both are required, not optional
+      # (see native/README.md).
+      - name: Build native GDExtension (Windows + Linux release)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends g++-mingw-w64-x86-64 scons
           cd native
           scons platform=windows arch=x86_64 target=template_release use_mingw=yes \
+                build_profile=build_profile.json -j"$(nproc)"
+          scons platform=linux arch=x86_64 target=template_release \
                 build_profile=build_profile.json -j"$(nproc)"
           ls -la bin/
 

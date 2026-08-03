@@ -63,20 +63,21 @@ jobs:
           EOF
           echo "rcedit configured (wine: ${WINE_BIN})"
 
-      # Build the native GDExtension for the shipped platform BEFORE export.
-      # The DLLs are gitignored (dev machines build their own), so without
-      # this step the export bundles nothing and every player silently runs
-      # the GDScript fallback — correct but slow, and invisible except for
-      # the boot log / digest "native_kernels" field. Cross-compiled with
-      # mingw-w64 (godot-cpp statically links the runtime, so the DLL has no
-      # extra dependencies). The export maps windows.release.x86_64 in
-      # native/mitts_native.gdextension to this artifact and packs it.
-      - name: Build native GDExtension (Windows release)
+      # Build the native GDExtension for every shipped platform BEFORE export.
+      # The binaries are gitignored (dev machines build their own), and Godot's
+      # export fails outright when a library mapped in
+      # native/mitts_native.gdextension is missing — so each exported preset
+      # needs its build here: the Windows DLL cross-compiled with mingw-w64
+      # (godot-cpp statically links the runtime, so no extra dependencies)
+      # and the Linux .so with the runner's host g++.
+      - name: Build native GDExtension (Windows + Linux release)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends g++-mingw-w64-x86-64 scons
           cd native
           scons platform=windows arch=x86_64 target=template_release use_mingw=yes \
+                build_profile=build_profile.json -j"$(nproc)"
+          scons platform=linux arch=x86_64 target=template_release \
                 build_profile=build_profile.json -j"$(nproc)"
           ls -la bin/
 
