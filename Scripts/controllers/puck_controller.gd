@@ -130,6 +130,11 @@ var _native_step: RefCounted = null
 var _gather_packed := PackedFloat32Array()
 var _gather_parts: Array = []
 var _gather_goalies: Array = []
+# Scratch for the reachable-end goalie filter in _run_prediction — reused per frame.
+var _reachable_goalies: Array = []
+# Shared read-only empty (const arrays are frozen): the no-goalie-reachable default
+# on every mid-ice re-predict, instead of allocating a fresh `[]` per frame.
+const _NO_GOALIES: Array = []
 var _predict_goalie_contact: GoalieContactDetector.Contact = null
 var _predict_obb_scratch: SweptDiscOBB.Result = null
 # _run_prediction's output slots (filled per call; members so the per-frame
@@ -1087,6 +1092,30 @@ func _predict_loose(delta: float) -> bool:
 	return true
 
 
+# Goalies whose end the predicted span can actually reach — the client-side twin
+# of the host drive's same-end filter (Puck._drive_analytic). The per-tick range
+# gate below is near-EITHER-goal-line, so without this the goalie ~55 m away gets
+# all ~8 of its boxes swept on every predicted tick, and its parts are gathered
+# even on a re-predict that never leaves centre ice.
+#
+# A goalie at end sign `s` can only be contacted while `pos.z * s > thresh`, and
+# over the span `pos.z * s` never exceeds `start_pos.z * s + travel`. `travel` is
+# an over-estimate — the puck starts at its fastest (ice friction and the speed
+# clamp only slow it, board caroms only reverse it) and the vertical component of
+# the speed buys no z — so no reachable goalie can be culled.
+func _reachable_goalies_for(goalies: Array, start_pos: Vector3, start_vel: Vector3,
+		age: float) -> Array:
+	var thresh: float = GameRules.GOAL_LINE_Z - PuckAuthorityRules.GOALIE_DETECT_RANGE_Z
+	var travel: float = start_vel.length() * age
+	_reachable_goalies.clear()
+	for g: Node3D in goalies:
+		if g == null:
+			continue
+		if start_pos.z * signf(g.global_position.z) + travel > thresh:
+			_reachable_goalies.append(g)
+	return _reachable_goalies
+
+
 # The shared prediction loop: advance (start_pos, start_vel) forward `age`
 # seconds on the host's analytic solver, writing the outcome to _sim_pos /
 # _sim_vel / _sim_stopped (members, not a return — this runs per frame and
@@ -1099,7 +1128,9 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 	var pos: Vector3 = start_pos
 	var vel: Vector3 = start_vel
 	var radius: float = GameRules.PUCK_COLLISION_RADIUS
-	var goalies: Array = _goalie_provider.call() if not _goalie_provider.is_null() else []
+	var goalies: Array = _NO_GOALIES
+	if not _goalie_provider.is_null():
+		goalies = _reachable_goalies_for(_goalie_provider.call(), start_pos, start_vel, age)
 	# Gather the goalie boxes ONCE per re-predict for the native fast path —
 	# the rendered goalie pose is fixed for this frame, and the legacy path
 	# re-read the engine properties per predicted tick.
