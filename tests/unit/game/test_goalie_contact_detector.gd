@@ -72,9 +72,8 @@ func test_picks_nearest_across_two_goalies() -> void:
 
 func test_zero_layer_part_is_skipped() -> void:
 	# The goalie's clear-sweep disables the stick by zeroing its collision layer
-	# (Goalie.set_stick_collision_enabled(false)); Jolt then ignores it, and the
-	# analytic test must too — or the goalie's own sweep ricochets off his
-	# "disabled" blade.
+	# (Goalie.set_stick_collision_enabled(false)); the analytic test must honour
+	# that — or the goalie's own sweep ricochets off his "disabled" blade.
 	var goalie := _goalie_with_box(Vector3.ZERO, Vector3(0.5, 0.5, 0.5))
 	var body := goalie.get_child(0) as StaticBody3D
 	body.collision_layer = 0

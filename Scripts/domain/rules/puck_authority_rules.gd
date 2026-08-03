@@ -1,12 +1,11 @@
 class_name PuckAuthorityRules
 
-# The determinism migration (docs/netcode-determinism-migration.md): the LOOSE puck is
-# driven by the analytic sim (the feel-validated AITrajectory.step_puck_3d — integration +
-# ice friction + rounded-corner board caroms + the loft/gravity channel) instead of Jolt,
-# so the puck's motion is deterministic and client-reproducible. Collision against the
-# non-board geometry (goal pipes, net panels, and the moving goalie) is resolved
-# analytically too — see PuckCollisionRules / GoalieSaveRules / SweptDiscOBB — so there is
-# no Jolt "net zone": the puck is analytic everywhere.
+# The LOOSE puck is driven by the analytic sim (AITrajectory.step_puck_3d — integration +
+# ice friction + rounded-corner board caroms + the loft/gravity channel), so its motion is
+# deterministic and client-reproducible (docs/netcode-determinism-migration.md). Collision
+# against the non-board geometry (goal pipes, net panels, and the moving goalie) is resolved
+# analytically too — see PuckCollisionRules / GoalieSaveRules / SweptDiscOBB. The puck never
+# touches the engine's physics solver: it is analytic everywhere.
 #
 # Pure / static — headless-testable, and (like every step_puck_3d caller) allocation-free
 # on the per-tick path.

@@ -50,12 +50,10 @@ class DeadenConfig:
 	var steer_lateral_weight: float = 1.0   # cornerward bias (lateral vs forward)
 	var steer_forward_weight: float = 0.35  # out-of-crease bias
 
-# Raw restitution off a goalie surface for a LIVE (uncontrolled) rebound — mirrors the Jolt
-# PhysicsMaterials (Physics/goalie_pad.tres 0.2, Physics/goalie_stick.tres 0.4). Only reached
-# on a live rebound: PAD/BLOCKER above pad_max_incoming_speed (a hard shot beats the pad), and
+# Raw restitution off a goalie surface for a LIVE (uncontrolled) rebound. Only reached on a
+# live rebound: PAD/BLOCKER above pad_max_incoming_speed (a hard shot beats the pad), and
 # STICK always (it redirects, never deadens). Chest/glove are always controlled, so their
-# material bounce is never used. Named here because the analytic puck no longer reads the Jolt
-# material; a mirror guard should pin the pair like the boards.
+# restitution is never used.
 const PAD_RESTITUTION: float = 0.2
 const STICK_RESTITUTION: float = 0.4
 

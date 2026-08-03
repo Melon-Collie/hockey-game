@@ -227,11 +227,10 @@ signal puck_touched_by_goalie(goalie: Goalie)  # puck contacted a goalie body wh
 
 # ── Signals (client-only predicted contact cues, GameManager plays sound/VFX) ──
 # Fired from the loose-puck prediction the instant the predicted flight rings a
-# post / thumps the net frame / caroms off the boards / meets a goalie. This
-# restores the instant local feedback the Jolt-era client puck got from its own
-# body_entered signals: the analytic migration removed every client-side contact
-# signal, leaving only the host's cue broadcast — which lands ~RTT late and can
-# be lost outright. Emission is edge-latched across frames (the stateless
+# post / thumps the net frame / caroms off the boards / meets a goalie. Without
+# these the only cue is the host's broadcast, which lands ~RTT late and can be
+# lost outright — so the client would hear its own post ping a beat after seeing
+# it. Emission is edge-latched across frames (the stateless
 # re-predict re-detects the same contact every frame until the snapshot base
 # passes it — see the _pred_cue_*_prev latches in _run_prediction) and the
 # host's broadcast of the same contact is echo-suppressed in GameManager

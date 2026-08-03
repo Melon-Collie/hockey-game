@@ -21,8 +21,8 @@ rewind`, lead 0). That past-rendering is the dominant *feel* cost:
 - The **goalie** shows a gap that the present-time goalie has already closed.
 
 The gold standard is Rocket League / Valorant, **not** rollback (this isn't a
-deterministic-lockstep game — Jolt physics on the puck rules that out; see
-"Why not rollback"). The goal: pull every entity toward *present* to kill the
+deterministic-lockstep game — we don't have every player's inputs on every
+machine; see "Why not rollback"). The goal: pull every entity toward *present* to kill the
 past-rendering, **without** breaking lag-comp claim validation (`render ==
 rewind`) and **without** reintroducing ghost saves.
 
@@ -33,8 +33,8 @@ rewind`) and **without** reintroducing ghost saves.
 You can safely forward-predict anything whose near future is a *continuous
 function of momentum you can see*: a skater body (inertia), a sliding puck
 (velocity + friction), a goalie's lateral push. You must **not** locally
-re-derive anything whose future is a *decision*: the puck's Jolt bounces, or the
-goalie AI's save selection. A decision re-run on a client with slightly
+re-derive anything whose future is a *decision*: the goalie AI's save selection,
+a blade's pickup/deflect claim. A decision re-run on a client with slightly
 different inputs doesn't drift — it *flips*, and near a shot that flip is a
 ghost save / phantom goal. Decisions stay host-authoritative; only motion is
 extrapolated.
@@ -45,14 +45,14 @@ application of it.
 ## Why not rollback
 
 Full-world rollback (GGPO lineage) needs (a) every player's inputs on every
-machine and (b) a bit-deterministic simulation. We have neither, and (b) is
-fatal: the puck is a Jolt `RigidBody3D` whose state can't be losslessly
-snapshotted/restored or reproduced cross-machine. The skater *body* is
-hand-integrated GDScript (deterministic, cheap to run forward) — which is
-exactly why the plan can forward-integrate skaters but not roll back the puck.
-A client can only reconcile entities whose *inputs* it has; a client has only
-its own. So: predict-self + extrapolate-others-forward + lag-comp claims is the
-ceiling for this stack, and it's the Rocket League / Valorant family.
+machine and (b) a bit-deterministic simulation. **(b) is now satisfied** — the
+determinism migration retired the engine-simulated puck, so both the puck and the
+skater body are hand-integrated GDScript that replays identically everywhere
+(`docs/netcode-determinism-migration.md`). **(a) is the remaining blocker**, and
+it is enough on its own: a client can only reconcile entities whose *inputs* it
+has, and a client has only its own. So: predict-self + extrapolate-others-forward
++ lag-comp claims is still the ceiling for this stack, and it's the Rocket League
+/ Valorant family.
 
 ## Target architecture, per entity
 
@@ -96,10 +96,13 @@ trajectory-predicted. So this is a narrow surface.
 - **Drop the lead (trail, `render == rewind`)** the moment a bounce/contest is
   imminent. This **extends the existing board-aware `_crosses_board` gate** from
   "boards" to "any imminent contact." Reasons it must drop:
-  1. The host can't cheaply reconstruct the puck's led instant — its near future
-     is Jolt collisions the client doesn't predict (unlike the deterministic
-     skater body). So `render == rewind` for the puck only holds when the path
-     is clear.
+  1. ⚠️ **Premise changed — re-derive before implementing.** This reason was
+     originally "the puck's near future is engine collisions the client doesn't
+     predict." That is no longer true: the client runs the same analytic step as
+     the host and already predicts boards, posts, net panels, and goalie contact
+     (`PuckController`'s predicted-contact cues). What is left of the reason is the
+     *decision* surface only — a blade's pickup/deflect claim — not the geometry.
+     Whether the gate should still trip on boards/posts/net is now an open question.
   2. The puck is fast — a wrong lead is a multi-metre snap. Clean-lane slides are
      the safe case; near-body is exactly the contested-pickup case where
      trailing is *correct*.
@@ -125,7 +128,8 @@ rationale is the governing principle:
   (its own prior decisions), backdoor/one-timer threats, and multi-second
   commit/reaction timers. Fixing the puck read fixes one input of many; the
   others can't be reproduced client-side. "On-net = deterministic" is also false
-  — tips/deflections/screens change an on-net puck's line (Jolt + `deflect_velocity`),
+  — tips/deflections/screens change an on-net puck's line (a blade claim plus
+  `deflect_velocity` — a decision, not motion),
   and those are the highest-value goalie moments.
 - **What we do instead:** optionally **pose-lead the goalie's render** off the
   broadcast velocity (dead-reckon position forward through motion it's already

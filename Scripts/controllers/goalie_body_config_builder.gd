@@ -151,7 +151,7 @@ class Inputs:
 	# the processing window even though `reacting_to_shot` is true.
 	var arm_reaction_pending: bool = false
 	# Real puck position/velocity for the elevated-shot intercept calculation
-	# at the goalie's z-plane. Server uses Jolt linear_velocity; client passes
+	# at the goalie's z-plane. Server uses the puck's linear_velocity; client passes
 	# the position-derived `_puck_velocity_est` estimate.
 	var puck_position: Vector3 = Vector3.ZERO
 	var puck_velocity_est: Vector3 = Vector3.ZERO

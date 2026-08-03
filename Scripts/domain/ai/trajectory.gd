@@ -185,7 +185,7 @@ static func intercept_time(shooter_pos: Vector3, target_pos: Vector3,
 
 
 # Puck-physics-aware forward simulation. Applies Coulomb ice friction
-# and board reflection so the projected trajectory matches Jolt's
+# and board reflection so the projected trajectory matches the host drive's
 # actual resolution of a freely sliding puck. Use this for chase
 # intercepts, pass-in-flight reception, and rebound prediction —
 # anywhere the AI is reasoning about where the puck WILL BE rather
@@ -214,12 +214,10 @@ static func predict_puck_at(pos: Vector3, vel: Vector3, lead_time_s: float,
 # _step / predict use internally). predict_final returns position only, so free-run
 # callers that must carry velocity forward tick-by-tick need this.
 #
-# This is the shared atom of the determinism migration (docs/netcode-determinism-
-# migration.md, docs/netcode-phase0-shadow-puck-spec.md): the Phase-0 shadow-puck
-# comparator free-runs the loose puck by chaining this, and the eventual Phase-1
-# deterministic puck sim is built on it — so the sim the AI already trusts to match
-# Jolt IS the sim that would drive the puck. Grounded (XZ) puck only; gravity/loft
-# and goalie/net/pipe collision are later-phase additions.
+# This is the shared atom of the deterministic puck (docs/netcode-determinism-
+# migration.md): the sim the AI reasons with IS the sim that drives the loose puck
+# on the host and predicts it on the client. Grounded (XZ) puck only — gravity/loft
+# and goalie/net/pipe collision live in step_puck_3d and the collision rules.
 static func step_puck(pos: Vector3, vel: Vector3, dt: float) -> Transform3D:
 	return _step(pos, vel, dt,
 			GameRules.PUCK_ICE_DECEL_M_S2, GameRules.PUCK_BOARD_BOUNCE,
@@ -346,7 +344,7 @@ const _AIRBORNE_VY_EPS_M_S: float = 0.05
 
 # step_puck with a vertical (gravity) channel — the airborne extension of the puck atom,
 # so loft shots, saucer passes, and rebounds off the goalie's glove are modeled too, not
-# just the grounded slide. Matches Jolt + Puck.gd:
+# just the grounded slide. Matches Puck.gd's drive:
 #  - AIRBORNE (off the ice or moving vertically): ballistic — gravity on Y, board
 #    reflection on XZ, and NO ice friction (no ice contact means no normal force, so a
 #    puck in flight keeps its horizontal pace).
