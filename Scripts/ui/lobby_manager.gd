@@ -179,8 +179,11 @@ func _ready() -> void:
 # never silently drop an online player out of the session.
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed(&"ui_cancel"):
-		_on_back_pressed()
+		# Mark handled BEFORE acting: the offline back-out changes scene
+		# synchronously, which pulls this node from the tree mid-call and
+		# nulls get_viewport().
 		get_viewport().set_input_as_handled()
+		_on_back_pressed()
 
 func _initial_color_preference() -> int:
 	var saved: int = PlayerPrefs.preferred_color_slot
