@@ -272,7 +272,7 @@ func _dummy_materials(colors: Dictionary) -> Dictionary:
 		"pants":    _matte(uniform.pants.base),
 		"socks":    socks_mat,
 		"skate":    _matte(Color(0.08, 0.08, 0.08), 0.42),
-		"steel":    _matte(Color(0.82, 0.85, 0.88), 0.25),
+		"steel":    _matte(SkaterMeshBuilder.BLADE_STEEL_COLOR, 0.25),
 		"arms":     _matte(uniform.arms.upper.base),
 		"gloves":   _matte(uniform.gloves),
 		"skin":     _matte(SkinToneRegistry.color_for(SkinToneRegistry.DEFAULT_INDEX)),

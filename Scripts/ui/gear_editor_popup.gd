@@ -2,22 +2,23 @@ class_name GearEditorPopup
 extends Control
 
 # The gear workbench: the equipment picks that live below the stick — SKATE
-# PROFILE (the blade grind, the one gameplay row) and the skate / glove
-# accent colors — arranged as compact rows around a live turntable preview
-# assembled from the skater's own shared meshes (boot on steel with its ankle
-# collar, gloved fist with its cuff ring). The color picks paint ACCENT
-# STRIPES, not the whole piece: the skate pick colors the band ringing the
-# collar (boot stays dark), the glove pick colors the wrist cuff (the hand
-# stays kit-colored) — exactly what the rink renders.
+# PROFILE (the blade grind, the one gameplay row), the skate and glove MODELS,
+# and the lace color — arranged as compact rows around a live turntable preview
+# assembled from the skater's own shared meshes (boot on its holder and steel
+# with its ankle collar, gloved fist with its cuff ring). A model paints the
+# WHOLE piece from GearModelRegistry's slots — true black plus the wearing
+# team's own white, primary and secondary — so the turntable shows the design
+# you are buying on the kit you are buying it for; each row's dropdown carries
+# a swatch strip of the model's zones next to its name.
 #
 # Same sub-editor contract as StickEditorPopup: opened by PlayerSettingsPopup
 # over its own modal, it edits pending values and hands them back through
 # `gear_edited` on Done — the HOST owns snapshot/commit/revert, so Cancel here
 # just discards this dialog's edits and the host's Cancel still reverts an
-# applied Done. The profile row locks during online play; colors are cosmetic
-# and never lock.
+# applied Done. The profile row locks during online play; models and laces are
+# cosmetic and never lock.
 
-signal gear_edited(profile: int, skate_color: int, glove_color: int, lace_color: int)
+signal gear_edited(profile: int, skate_model: int, glove_model: int, lace_color: int)
 
 const _PROFILE_TOOLTIP: String = "Blade grind.\nAgility = quicker first step & tighter cornering, lower top speed.\nPower = higher top speed & better glide, wider turns."
 const _PROFILE_KEYS: Array[StringName] = [
@@ -37,22 +38,33 @@ const _BLADE_ICE_M: float = 0.080 + SkaterMeshBuilder.SKATE_LIFT_M
 const _FIST_SCALE: float = 0.085
 const _CUFF_RADIUS: float = 0.065
 
+# The model swatch strip drawn on each dropdown row: one band per paint zone,
+# in GearModelRegistry's zone order (quarter → toe → collar → band → holder;
+# glove body → fingers → cuff).
+const _SWATCH_W: int = 36
+const _SWATCH_H: int = 18
+
 # Pending picks (working state between open() and Done).
 var _profile: int = PlayerAttributes.GEAR_BALANCED
-var _skate_color: int = GearStyleConfig.SKATE_DEFAULT_INDEX
-var _glove_color: int = TapeColorRegistry.TEAM_INDEX
+var _skate_model: int = 0
+var _glove_model: int = 0
 var _lace_color: int = GearStyleConfig.LACE_DEFAULT_INDEX
 var _gear_locked: bool = false
+# The kit a model's TEAM / ACCENT / LIGHT zones resolve against — the pending
+# team pick, so the turntable previews the sweater you are about to wear.
 var _team_accent: Color = Color.WHITE
 var _kit_gloves: Color = Color.BLACK
+var _team_secondary: Color = Color.WHITE
+var _glove_accent: Color = Color.WHITE
+var _team_light: Color = Color.WHITE
 # Boot-node seat on the turntable, kept so open() can re-seat the collar
 # against it per build.
 var _skate_at: Vector3 = Vector3.ZERO
 
 # Controls.
 var _profile_btn: OptionButton = null
-var _skate_dd: SwatchDropdown = null
-var _glove_dd: SwatchDropdown = null
+var _skate_btn: OptionButton = null
+var _glove_btn: OptionButton = null
 var _lace_dd: SwatchDropdown = null
 var _lock_label: Label = null
 
@@ -60,6 +72,7 @@ var _lock_label: Label = null
 var _viewport: SubViewport = null
 var _turntable: Node3D = null
 var _boot: MeshInstance3D = null
+var _blade: MeshInstance3D = null
 var _collar: MeshInstance3D = null
 var _skate_stripe: MeshInstance3D = null
 var _laces: MeshInstance3D = null
@@ -147,13 +160,11 @@ func _build() -> void:
 	_profile_btn.item_selected.connect(_on_profile_selected)
 	_add_row(rows, tr(&"GEAR_PROFILE_LABEL"), _profile_btn, true, _PROFILE_TOOLTIP)
 
-	_skate_dd = SwatchDropdown.new(Vector2(180, 36))
-	_skate_dd.selected.connect(_on_skate_color_selected)
-	_add_row(rows, tr(&"GEAR_SKATES_LABEL"), _skate_dd, false, "")
+	_skate_btn = _model_button(_on_skate_model_selected)
+	_add_row(rows, tr(&"GEAR_SKATES_LABEL"), _skate_btn, false, "")
 
-	_glove_dd = SwatchDropdown.new(Vector2(180, 36))
-	_glove_dd.selected.connect(_on_glove_color_selected)
-	_add_row(rows, tr(&"GEAR_GLOVES_LABEL"), _glove_dd, false, "")
+	_glove_btn = _model_button(_on_glove_model_selected)
+	_add_row(rows, tr(&"GEAR_GLOVES_LABEL"), _glove_btn, false, "")
 
 	_lace_dd = SwatchDropdown.new(Vector2(180, 36))
 	_lace_dd.selected.connect(_on_lace_color_selected)
@@ -220,6 +231,18 @@ func _add_row(vbox: VBoxContainer, label_text: String, control: Control,
 	row.add_child(control)
 
 
+# A model dropdown, styled like the profile row it sits under. Its items are
+# filled per open() (_rebuild_model_items) because a model's TEAM zones resolve
+# against the kit the player is about to wear.
+func _model_button(on_selected: Callable) -> OptionButton:
+	var btn := OptionButton.new()
+	btn.custom_minimum_size = Vector2(180, 36)
+	btn.add_theme_font_size_override("font_size", 15)
+	SoundManager.wire_button(btn)
+	btn.item_selected.connect(on_selected)
+	return btn
+
+
 # The turntable viewport in the same "display case" well as the stick
 # workbench: a soft ice disc the pieces stand on, real shadows, own 3D world.
 # The pieces ARE the in-game meshes — the boot on its steel with the ankle
@@ -283,8 +306,10 @@ func _build_preview(vbox: VBoxContainer) -> void:
 	_turntable = Node3D.new()
 	_viewport.add_child(_turntable)
 
-	# Skate: boot + steel share the rotated boot frame, seated so the runner
-	# stands on the disc.
+	# Skate: boot + blade share the rotated boot frame, seated so the runner
+	# stands on the disc. Both are multi-surface pieces (quarter/toe,
+	# holder/runner), so they are painted per SURFACE — a material_override
+	# would flatten each pair into one color.
 	var skate_at := Vector3(-0.16, _BLADE_ICE_M, 0.0)
 	_skate_at = skate_at
 	_boot = MeshInstance3D.new()
@@ -292,14 +317,14 @@ func _build_preview(vbox: VBoxContainer) -> void:
 	_boot.transform = Transform3D(_BOOT_ROT, skate_at)
 	_turntable.add_child(_boot)
 
-	var steel := MeshInstance3D.new()
-	steel.mesh = SkaterMeshBuilder.shared_skate_blade()
+	_blade = MeshInstance3D.new()
+	_blade.mesh = SkaterMeshBuilder.shared_skate_blade()
 	var steel_mat := StandardMaterial3D.new()
-	steel_mat.albedo_color = Color(0.82, 0.85, 0.88)
+	steel_mat.albedo_color = SkaterMeshBuilder.BLADE_STEEL_COLOR
 	steel_mat.roughness = 0.25
-	steel.material_override = steel_mat
-	steel.transform = Transform3D(_BOOT_ROT, skate_at)
-	_turntable.add_child(steel)
+	_blade.set_surface_override_material(SkaterMeshBuilder.BLADE_PART_RUNNER, steel_mat)
+	_blade.transform = Transform3D(_BOOT_ROT, skate_at)
+	_turntable.add_child(_blade)
 
 	_laces = MeshInstance3D.new()
 	_laces.mesh = SkaterMeshBuilder.shared_laces()
@@ -348,23 +373,29 @@ func set_focus_scope(background: Control, restore: Control) -> void:
 	_focus_restore = restore
 
 
-# `profile`/colors are the host's PENDING picks; `gear_locked` mirrors the
-# online-match attribute lock (colors stay live). TEAM color chips resolve
-# against `team_accent` (skates) and `kit_gloves` (gloves) so the swatches
-# preview the kit the player is about to wear. `attrs` is the pending BODY —
+# `profile`/models/laces are the host's PENDING picks; `gear_locked` mirrors
+# the online-match attribute lock (cosmetics stay live). `team_colors` is the
+# pending team's TeamColorRegistry.get_colors dict — a model's TEAM zone
+# resolves against its primary (skates, laces) or its glove color (gloves),
+# ACCENT against its secondary and LIGHT against its own white, so the
+# swatches preview the kit the player is about to wear. `attrs` is the
+# pending BODY —
 # the preview collar takes the same scale the appearance rig gives SkateL
 # (calf girth laterally, height vertically; the boot deliberately never
 # scales), so the preview skate is the one this build wears on the ice.
-func open(profile: int, skate_color: int, glove_color: int, lace_color: int,
-		gear_locked: bool, team_accent: Color, kit_gloves: Color,
+func open(profile: int, skate_model: int, glove_model: int, lace_color: int,
+		gear_locked: bool, team_colors: Dictionary,
 		attrs: PlayerAttributes = null) -> void:
 	_profile = clampi(profile, 0, _PROFILE_KEYS.size() - 1)
-	_skate_color = skate_color
-	_glove_color = glove_color
+	_skate_model = clampi(skate_model, 0, GearModelRegistry.skate_count() - 1)
+	_glove_model = clampi(glove_model, 0, GearModelRegistry.glove_count() - 1)
 	_lace_color = lace_color
 	_gear_locked = gear_locked
-	_team_accent = team_accent
-	_kit_gloves = kit_gloves
+	_team_accent = team_colors.primary
+	_kit_gloves = team_colors.gloves
+	_team_secondary = team_colors.secondary
+	_glove_accent = team_colors.glove_accent
+	_team_light = team_colors.light
 	var m_height: float = attrs.height_mult() if attrs != null else 1.0
 	var m_calf: float = attrs.calf_mult() if attrs != null else 1.0
 	_collar.scale = Vector3(m_calf, m_height, m_calf)
@@ -378,7 +409,7 @@ func open(profile: int, skate_color: int, glove_color: int, lace_color: int,
 
 
 func _done() -> void:
-	gear_edited.emit(_profile, _skate_color, _glove_color, _lace_color)
+	gear_edited.emit(_profile, _skate_model, _glove_model, _lace_color)
 	_close()
 
 
@@ -410,13 +441,13 @@ func _on_profile_selected(option: int) -> void:
 	_refresh()
 
 
-func _on_skate_color_selected(index: int) -> void:
-	_skate_color = index
+func _on_skate_model_selected(index: int) -> void:
+	_skate_model = index
 	_repaint_preview()
 
 
-func _on_glove_color_selected(index: int) -> void:
-	_glove_color = index
+func _on_glove_model_selected(index: int) -> void:
+	_glove_model = index
 	_repaint_preview()
 
 
@@ -427,14 +458,14 @@ func _on_lace_color_selected(index: int) -> void:
 
 # ── Rendering ────────────────────────────────────────────────────────────────
 
-func _resolved_skate() -> Color:
-	return TapeColorRegistry.resolve(_skate_color, _team_accent)
+func _skate_zone(zone: int) -> Color:
+	return GearModelRegistry.skate_color(_skate_model, zone,
+			_team_accent, _team_secondary, _team_light)
 
 
-func _resolved_glove() -> Color:
-	if _glove_color == TapeColorRegistry.TEAM_INDEX:
-		return _kit_gloves
-	return TapeColorRegistry.resolve(_glove_color, _kit_gloves)
+func _glove_zone(zone: int) -> Color:
+	return GearModelRegistry.glove_color(_glove_model, zone,
+			_kit_gloves, _glove_accent, _team_light)
 
 
 func _resolved_lace() -> Color:
@@ -445,54 +476,91 @@ func _refresh() -> void:
 	_profile_btn.select(clampi(_profile, 0, _PROFILE_KEYS.size() - 1))
 	_profile_btn.disabled = _gear_locked
 	_lock_label.visible = _gear_locked
+	_rebuild_model_items()
 
-	var skate_colors: Array[Color] = []
-	var glove_colors: Array[Color] = []
+	var lace_colors: Array[Color] = []
 	var names: Array[String] = []
 	var chip_labels: Array[String] = []
 	for i: int in TapeColorRegistry.count():
-		skate_colors.append(TapeColorRegistry.resolve(i, _team_accent))
-		glove_colors.append(_kit_gloves if i == TapeColorRegistry.TEAM_INDEX
-				else TapeColorRegistry.resolve(i, _kit_gloves))
+		lace_colors.append(TapeColorRegistry.resolve(i, _team_accent))
 		names.append(tr(TapeColorRegistry.NAME_KEYS[i]))
 		# The TEAM chip says so — it tracks the kit rather than being one
 		# more fixed color.
 		chip_labels.append(tr(&"TAPE_COLOR_TEAM_SHORT")
 				if i == TapeColorRegistry.TEAM_INDEX else "")
-	_skate_dd.set_palette(skate_colors, names, chip_labels)
-	_skate_dd.set_selected(_skate_color)
-	_glove_dd.set_palette(glove_colors, names, chip_labels)
-	_glove_dd.set_selected(_glove_color)
-	# Laces share the skate palette (TEAM resolves to the accent).
-	_lace_dd.set_palette(skate_colors, names, chip_labels)
+	_lace_dd.set_palette(lace_colors, names, chip_labels)
 	_lace_dd.set_selected(_lace_color)
 
 
-# Repaints the turntable pieces with the current picks — same finishes and
-# stripe semantics as the rink (skate leather 0.42, glove cloth 0.9; the
-# steel stays steel): the picks color only the collar band and the wrist
-# cuff, while boot, collar, and fist keep the kit look.
+# Fills both model dropdowns with the catalogue, each item carrying a swatch
+# strip of that model's zones resolved against the pending kit.
+func _rebuild_model_items() -> void:
+	_skate_btn.clear()
+	for model: int in GearModelRegistry.skate_count():
+		var zones: Array[Color] = []
+		for zone: int in GearModelRegistry.SKATE_ZONE_COUNT:
+			zones.append(GearModelRegistry.skate_color(model, zone,
+					_team_accent, _team_secondary, _team_light))
+		_skate_btn.add_icon_item(_swatch_strip(zones),
+				tr(GearModelRegistry.SKATE_NAME_KEYS[model]), model)
+	_skate_btn.select(_skate_model)
+
+	_glove_btn.clear()
+	for model: int in GearModelRegistry.glove_count():
+		var zones: Array[Color] = []
+		for zone: int in GearModelRegistry.GLOVE_ZONE_COUNT:
+			zones.append(GearModelRegistry.glove_color(model, zone,
+					_kit_gloves, _glove_accent, _team_light))
+		_glove_btn.add_icon_item(_swatch_strip(zones),
+				tr(GearModelRegistry.GLOVE_NAME_KEYS[model]), model)
+	_glove_btn.select(_glove_model)
+
+
+# One model's zones as a strip of equal vertical bands. The last band absorbs
+# the rounding remainder so a 3-zone strip fills the same width as a 2-zone one.
+func _swatch_strip(zones: Array[Color]) -> ImageTexture:
+	var img := Image.create(_SWATCH_W, _SWATCH_H, false, Image.FORMAT_RGBA8)
+	var band: int = _SWATCH_W / zones.size()
+	for i: int in zones.size():
+		var x0: int = i * band
+		var w: int = _SWATCH_W - x0 if i == zones.size() - 1 else band
+		img.fill_rect(Rect2i(x0, 0, w, _SWATCH_H), zones[i])
+	return ImageTexture.create_from_image(img)
+
+
+# Repaints the turntable pieces with the current picks — same finishes as the
+# rink (skate leather 0.42, glove cloth 0.9; the steel runner stays steel). The
+# models paint every zone, so what stands on the disc is the pair you are
+# equipping.
 func _repaint_preview() -> void:
 	if _boot == null:
 		return
-	var boot_mat := StandardMaterial3D.new()
-	boot_mat.albedo_color = Color(0.08, 0.08, 0.08)
-	boot_mat.roughness = 0.42
-	_boot.material_override = boot_mat
-	_collar.material_override = boot_mat.duplicate()
-	var stripe_mat := StandardMaterial3D.new()
-	stripe_mat.albedo_color = _resolved_skate()
-	stripe_mat.roughness = 0.42
-	_skate_stripe.material_override = stripe_mat
-	var laces_mat := StandardMaterial3D.new()
-	laces_mat.albedo_color = _resolved_lace()
-	laces_mat.roughness = 0.9
-	_laces.material_override = laces_mat
-	var fist_mat := StandardMaterial3D.new()
-	fist_mat.albedo_color = _kit_gloves
-	fist_mat.roughness = 0.9
-	_fist.material_override = fist_mat
-	var cuff_mat := StandardMaterial3D.new()
-	cuff_mat.albedo_color = _resolved_glove()
-	cuff_mat.roughness = 0.9
-	_cuff.material_override = cuff_mat
+	_paint_surface(_boot, SkaterMeshBuilder.BOOT_PART_QUARTER,
+			_skate_zone(GearModelRegistry.SKATE_QUARTER), 0.42)
+	_paint_surface(_boot, SkaterMeshBuilder.BOOT_PART_TOE,
+			_skate_zone(GearModelRegistry.SKATE_TOE), 0.42)
+	_paint_surface(_blade, SkaterMeshBuilder.BLADE_PART_HOLDER,
+			_skate_zone(GearModelRegistry.SKATE_HOLDER), 0.42)
+	_collar.material_override = _preview_mat(
+			_skate_zone(GearModelRegistry.SKATE_COLLAR), 0.42)
+	_skate_stripe.material_override = _preview_mat(
+			_skate_zone(GearModelRegistry.SKATE_STRIPE), 0.42)
+	_laces.material_override = _preview_mat(_resolved_lace(), 0.9)
+	_paint_surface(_fist, SkaterMeshBuilder.FIST_PART_BACK,
+			_glove_zone(GearModelRegistry.GLOVE_BODY), 0.9)
+	_paint_surface(_fist, SkaterMeshBuilder.FIST_PART_FINGERS,
+			_glove_zone(GearModelRegistry.GLOVE_FINGERS), 0.9)
+	_cuff.material_override = _preview_mat(
+			_glove_zone(GearModelRegistry.GLOVE_CUFF), 0.9)
+
+
+func _paint_surface(mi: MeshInstance3D, surface: int, color: Color,
+		roughness: float) -> void:
+	mi.set_surface_override_material(surface, _preview_mat(color, roughness))
+
+
+func _preview_mat(color: Color, roughness: float) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.roughness = roughness
+	return mat

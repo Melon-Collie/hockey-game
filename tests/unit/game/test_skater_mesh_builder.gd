@@ -25,12 +25,20 @@ class PartSpec:
 	var mesh: ArrayMesh
 	var max_size: Vector3
 	var side_only_v: bool  # lathed part: side V capped at 0.5 (caps use the rest)
+	# Which surface of `mesh` carries this piece. A part that splits into
+	# separately-paintable pieces (the boot's quarter and toe cap, the blade's
+	# holder and runner, the fist's back and fingers) is ONE mesh of several
+	# surfaces, and every piece has to hold the winding/UV/envelope contract on
+	# its own — a split that leaves a half open is invisible until it renders.
+	var surface: int
 
-	func _init(p_label: String, p_mesh: ArrayMesh, p_max: Vector3, p_side: bool) -> void:
+	func _init(p_label: String, p_mesh: ArrayMesh, p_max: Vector3, p_side: bool,
+			p_surface: int = 0) -> void:
 		label = p_label
 		mesh = p_mesh
 		max_size = p_max
 		side_only_v = p_side
+		surface = p_surface
 
 
 # Envelopes come from the primitives in Scenes/Skater.tscn: torso cylinder
@@ -51,16 +59,20 @@ func _parts() -> Array[PartSpec]:
 				Vector3(0.27, 0.27, 0.27), false),
 		PartSpec.new("neck", SkaterMeshBuilder._build_neck(),
 				Vector3(0.19, 0.10, 0.19), true),
-		PartSpec.new("skate_blade", SkaterMeshBuilder._build_skate_blade(),
-				Vector3(0.02, 0.19, 0.08), false),
+		PartSpec.new("blade_holder", SkaterMeshBuilder._build_skate_blade(),
+				Vector3(0.02, 0.19, 0.06), false, SkaterMeshBuilder.BLADE_PART_HOLDER),
+		PartSpec.new("blade_runner", SkaterMeshBuilder._build_skate_blade(),
+				Vector3(0.01, 0.19, 0.04), false, SkaterMeshBuilder.BLADE_PART_RUNNER),
 		PartSpec.new("shoulder", SkaterMeshBuilder._build_shoulder(),
 				Vector3(0.21, 0.28, 0.21), false),
 		PartSpec.new("arm_bone", SkaterMeshBuilder.shared_arm_bone(),
 				Vector3(2.0, 1.0, 2.0), true),
 		PartSpec.new("joint_ball", SkaterMeshBuilder.shared_joint_ball(),
 				Vector3(2.0, 2.0, 2.0), false),
-		PartSpec.new("glove_fist", SkaterMeshBuilder.shared_glove_fist(),
-				Vector3(2.2, 2.0, 2.0), false),
+		PartSpec.new("glove_back", SkaterMeshBuilder.shared_glove_fist(),
+				Vector3(2.2, 1.0, 2.0), false, SkaterMeshBuilder.FIST_PART_BACK),
+		PartSpec.new("glove_fingers", SkaterMeshBuilder.shared_glove_fist(),
+				Vector3(2.2, 1.0, 2.0), false, SkaterMeshBuilder.FIST_PART_FINGERS),
 		PartSpec.new("cuff", SkaterMeshBuilder.shared_cuff(),
 				Vector3(2.0, SkaterMeshBuilder.CUFF_HEIGHT_M, 2.0), true),
 		PartSpec.new("knob", SkaterMeshBuilder.shared_knob(),
@@ -83,14 +95,16 @@ func _parts() -> Array[PartSpec]:
 		# collar's footprint. Heel-ward only — toward the shin column, with
 		# the extension's sole tucked above the tread line — so the tuned
 		# ice/board contact silhouette is unchanged.
-		PartSpec.new("boot", SkaterMeshBuilder._build_boot(),
-				Vector3(0.16, 0.27, 0.16), false),
+		PartSpec.new("boot_quarter", SkaterMeshBuilder._build_boot(),
+				Vector3(0.16, 0.21, 0.16), false, SkaterMeshBuilder.BOOT_PART_QUARTER),
+		PartSpec.new("boot_toe", SkaterMeshBuilder._build_boot(),
+				Vector3(0.13, 0.08, 0.13), false, SkaterMeshBuilder.BOOT_PART_TOE),
 	]
 
 
 func test_every_part_is_wound_outward() -> void:
 	for part: PartSpec in _parts():
-		var vol: float = _signed_volume(part.mesh)
+		var vol: float = _signed_volume(part.mesh, part.surface)
 		assert_lt(vol, -1e-7,
 				"%s should be a closed outward-wound solid (negative signed volume)"
 				% part.label)
@@ -101,7 +115,7 @@ func test_every_part_has_unit_flat_normals() -> void:
 	# triangle with real area must carry a unit normal (flat shading gives one
 	# normal per face, so a bad one shows as a black facet).
 	for part: PartSpec in _parts():
-		var arrays: Array = part.mesh.surface_get_arrays(0)
+		var arrays: Array = part.mesh.surface_get_arrays(part.surface)
 		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 		var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
 		var bad: int = 0
@@ -114,7 +128,7 @@ func test_every_part_has_unit_flat_normals() -> void:
 
 func test_uvs_stay_inside_painter_conventions() -> void:
 	for part: PartSpec in _parts():
-		var arrays: Array = part.mesh.surface_get_arrays(0)
+		var arrays: Array = part.mesh.surface_get_arrays(part.surface)
 		var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
 		var v_side_max: float = 0.0
 		for uv: Vector2 in uvs:
@@ -131,7 +145,7 @@ func test_uvs_stay_inside_painter_conventions() -> void:
 
 func test_every_part_stays_inside_its_primitive_envelope() -> void:
 	for part: PartSpec in _parts():
-		var size: Vector3 = part.mesh.get_aabb().size
+		var size: Vector3 = _surface_bounds(part.mesh, part.surface).size
 		for axis in 3:
 			assert_lt(size[axis], part.max_size[axis] + _EPS,
 					"%s axis %d should stay inside the replaced primitive's envelope"
@@ -187,8 +201,18 @@ func test_skate_blade_reaches_the_lifted_ice_depth() -> void:
 			"the boot sole should ride on the blade, clear of the ice")
 
 
-func _signed_volume(mesh: ArrayMesh) -> float:
-	var arrays: Array = mesh.surface_get_arrays(0)
+# One surface's own bounds. ArrayMesh.get_aabb() unions every surface, which
+# would let a piece drift outside its envelope as long as a sibling covered it.
+func _surface_bounds(mesh: ArrayMesh, surface: int) -> AABB:
+	var verts: PackedVector3Array = mesh.surface_get_arrays(surface)[Mesh.ARRAY_VERTEX]
+	var bounds := AABB(verts[0], Vector3.ZERO)
+	for v: Vector3 in verts:
+		bounds = bounds.expand(v)
+	return bounds
+
+
+func _signed_volume(mesh: ArrayMesh, surface: int = 0) -> float:
+	var arrays: Array = mesh.surface_get_arrays(surface)
 	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 	var total: float = 0.0
 	for i in range(0, verts.size(), 3):

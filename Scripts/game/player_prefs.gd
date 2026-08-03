@@ -228,8 +228,9 @@ var preferred_color_slot: int = -1  # team color preset slot index; -1 → use t
 # Packed StickTapeConfig code (blade tape color + coverage + knob color +
 # handle style).
 var stick_tape_code: int = StickTapeConfig.DEFAULT_CODE
-# Packed GearStyleConfig code (skate + glove color) — the Equipment section's
-# gear cosmetics, carried through the join handshake like the tape job.
+# Packed GearStyleConfig code (skate model + glove model + lace color) — the
+# Equipment section's gear cosmetics, carried through the join handshake like
+# the tape job.
 var gear_style_code: int = GearStyleConfig.DEFAULT_CODE
 
 # Per-player build (attributes v4, body + gear): a free HEIGHT in inches
@@ -512,6 +513,9 @@ func save() -> void:
 	cfg.set_value("player", "preferred_color_slot", preferred_color_slot)
 	cfg.set_value("player", "stick_tape", stick_tape_code)
 	cfg.set_value("player", "gear_style", gear_style_code)
+	# Marks the code above as already carrying MODEL indices, so _load() doesn't
+	# re-run the pre-models accent-color migration on it.
+	cfg.set_value("player", "gear_model_version", 1)
 	cfg.set_value("player", "skin_tone", skin_tone)
 	cfg.set_value("player", "attr_height",  attr_height)
 	cfg.set_value("player", "attr_weight",  attr_weight)
@@ -1095,8 +1099,15 @@ func _load() -> void:
 		# code coerces to a legal tape job instead of riding raw into the wire.
 		stick_tape_code = StickTapeConfig.from_code(int(cfg.get_value(
 				"player", "stick_tape", StickTapeConfig.DEFAULT_CODE))).to_code()
-		gear_style_code = GearStyleConfig.from_code(int(cfg.get_value(
-				"player", "gear_style", GearStyleConfig.DEFAULT_CODE))).to_code()
+		# A pre-models save stored two TapeColorRegistry accent picks where the
+		# code now carries skate/glove model indices — map them onto the nearest
+		# designs rather than silently re-equipping stock gear.
+		var stored_gear: int = int(cfg.get_value(
+				"player", "gear_style", GearStyleConfig.DEFAULT_CODE))
+		if int(cfg.get_value("player", "gear_model_version", 0)) >= 1:
+			gear_style_code = GearStyleConfig.from_code(stored_gear).to_code()
+		else:
+			gear_style_code = GearStyleConfig.migrate_colors(stored_gear).to_code()
 		skin_tone = SkinToneRegistry.clamp_index(int(cfg.get_value(
 				"player", "skin_tone", SkinToneRegistry.DEFAULT_INDEX)))
 		var attr_ver: int = int(cfg.get_value("player", "attr_scale_version", 1))

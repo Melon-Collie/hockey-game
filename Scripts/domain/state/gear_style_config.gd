@@ -1,11 +1,12 @@
 class_name GearStyleConfig
 extends RefCounted
 
-# A player's gear cosmetics: skate stripe, glove stripe, and lace colors,
-# each an index into the shared TapeColorRegistry palette. The picks paint
-# accents, not whole pieces — the skate color goes on the band ringing the
-# boot collar (the boot stays dark), the glove color on the wrist cuff rings
-# (the hands stay kit-colored), and the lace color on the instep lace rungs.
+# A player's gear cosmetics: a skate MODEL, a glove MODEL, and a lace color.
+# The two model picks are indices into GearModelRegistry — whole designs that
+# paint every zone of the piece (boot / collar / accent band; glove body /
+# cuff) out of black, white and the team's own colors, rather than a single
+# accent color the player tints. The lace pick stays an index into the shared
+# TapeColorRegistry palette, because laces are chosen apart from the skate.
 # Cosmetic only — nothing gameplay reads it. Picked in the gear workbench and
 # painted by SkaterUniformCoordinator.
 #
@@ -13,48 +14,71 @@ extends RefCounted
 # and spawn payloads, like the tape code. from_code clamps every field, so a
 # forged code lands on a legal look instead of being rejected.
 #
-# The TEAM sentinel resolves per slot at paint time: TEAM gloves take the
-# kit's glove color (uniform.gloves), TEAM skates and laces take the team
-# accent. Defaults — skates BLACK (a dark band on the dark boot), gloves TEAM
-# (a kit-colored cuff on kit gloves), laces WHITE (the classic lace) — render
-# the exact look every skater wore before gear cosmetics existed.
+# Defaults — skate model 0 (all-black boot), glove model 0 (kit-colored body
+# and cuff), laces WHITE — render the exact look every skater wore before gear
+# cosmetics existed.
 
-# 5 bits per color index, matching StickTapeConfig's palette headroom.
-const _COLOR_BITS: int = 5
-const _COLOR_MASK: int = (1 << _COLOR_BITS) - 1
-const _LACE_SHIFT: int = _COLOR_BITS * 2
+# 5 bits per field, matching StickTapeConfig's palette headroom.
+const _FIELD_BITS: int = 5
+const _FIELD_MASK: int = (1 << _FIELD_BITS) - 1
+const _LACE_SHIFT: int = _FIELD_BITS * 2
 
-# Palette index of the classic dark boot band (TapeColorRegistry BLACK).
-const SKATE_DEFAULT_INDEX: int = 2
 # Palette index of the classic lace (TapeColorRegistry WHITE).
 const LACE_DEFAULT_INDEX: int = 1
 
-# The all-default packed code (skates BLACK, gloves TEAM, laces WHITE) — the
-# wire default for every payload that carries a gear style code.
-const DEFAULT_CODE: int = SKATE_DEFAULT_INDEX | (LACE_DEFAULT_INDEX << _LACE_SHIFT)
+# TapeColorRegistry indices migrate_colors reads by name. Local constants
+# rather than registry lookups: they are the values the OLD codes were written
+# with, and must not drift if the palette is ever reordered.
+const _TAPE_WHITE: int = 1
+const _TAPE_BLACK: int = 2
 
-var skate_color: int = SKATE_DEFAULT_INDEX
-var glove_color: int = TapeColorRegistry.TEAM_INDEX
+# The all-default packed code — the wire default for every payload that carries
+# a gear style code.
+const DEFAULT_CODE: int = LACE_DEFAULT_INDEX << _LACE_SHIFT
+
+var skate_model: int = 0
+var glove_model: int = 0
 var lace_color: int = LACE_DEFAULT_INDEX
 
 
-func _init(p_skate_color: int = SKATE_DEFAULT_INDEX,
-		p_glove_color: int = TapeColorRegistry.TEAM_INDEX,
+func _init(p_skate_model: int = 0, p_glove_model: int = 0,
 		p_lace_color: int = LACE_DEFAULT_INDEX) -> void:
-	skate_color = p_skate_color if TapeColorRegistry.is_valid(p_skate_color) \
-			else SKATE_DEFAULT_INDEX
-	glove_color = p_glove_color if TapeColorRegistry.is_valid(p_glove_color) \
-			else TapeColorRegistry.TEAM_INDEX
+	skate_model = p_skate_model if GearModelRegistry.is_valid_skate(p_skate_model) else 0
+	glove_model = p_glove_model if GearModelRegistry.is_valid_glove(p_glove_model) else 0
 	lace_color = p_lace_color if TapeColorRegistry.is_valid(p_lace_color) \
 			else LACE_DEFAULT_INDEX
 
 
 func to_code() -> int:
-	return skate_color | (glove_color << _COLOR_BITS) | (lace_color << _LACE_SHIFT)
+	return skate_model | (glove_model << _FIELD_BITS) | (lace_color << _LACE_SHIFT)
 
 
 static func from_code(code: int) -> GearStyleConfig:
 	return GearStyleConfig.new(
-			code & _COLOR_MASK,
-			(code >> _COLOR_BITS) & _COLOR_MASK,
-			(code >> _LACE_SHIFT) & _COLOR_MASK)
+			code & _FIELD_MASK,
+			(code >> _FIELD_BITS) & _FIELD_MASK,
+			(code >> _LACE_SHIFT) & _FIELD_MASK)
+
+
+# Maps a pre-models gear code (skate accent color, glove accent color, laces —
+# all TapeColorRegistry indices) onto the nearest model design, so a saved
+# look survives the switch instead of silently reverting to stock. Skates keep
+# their intent — a black pick was the stock skate, white was a white boot,
+# anything else was an accent band, which is what the Team model is. Gloves
+# only ever tinted the CUFF, so every pick lands on a model whose body stays
+# kit-colored.
+static func migrate_colors(code: int) -> GearStyleConfig:
+	var skate_color: int = code & _FIELD_MASK
+	var glove_color: int = (code >> _FIELD_BITS) & _FIELD_MASK
+	var skate_model: int = GearModelRegistry.SKATE_TEAM
+	if skate_color == _TAPE_BLACK:
+		skate_model = GearModelRegistry.SKATE_BLACKOUT
+	elif skate_color == _TAPE_WHITE:
+		skate_model = GearModelRegistry.SKATE_WHITEOUT
+	var glove_model: int = GearModelRegistry.GLOVE_CONTRAST
+	if glove_color == TapeColorRegistry.TEAM_INDEX:
+		glove_model = GearModelRegistry.GLOVE_TEAM
+	elif glove_color == _TAPE_WHITE:
+		glove_model = GearModelRegistry.GLOVE_PRO
+	return GearStyleConfig.new(skate_model, glove_model,
+			(code >> _LACE_SHIFT) & _FIELD_MASK)
