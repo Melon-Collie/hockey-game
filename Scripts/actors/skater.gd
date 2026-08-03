@@ -577,6 +577,9 @@ var visual_offset: Vector3 = Vector3.ZERO:
 	set(v):
 		visual_offset = v
 		if mesh_root != null:
+			# Shifts MeshRoot, an ancestor of the Blade marker — the blade
+			# contact memo must not serve the un-shifted point.
+			_blade_contact_dirty = true
 			mesh_root.position = global_transform.basis.inverse() * v
 
 var _uniform: SkaterUniformCoordinator
@@ -1324,6 +1327,7 @@ func is_forced_lift_active() -> bool:
 # ── Facing ────────────────────────────────────────────────────────────────────
 func set_facing(facing: Vector2) -> void:
 	_facing = facing
+	_blade_contact_dirty = true
 	rotation.y = atan2(-_facing.x, -_facing.y)
 
 
@@ -1456,6 +1460,7 @@ func set_skeleton_root_offset(offset: float) -> void:
 
 
 func _apply_body_height() -> void:
+	_blade_contact_dirty = true
 	upper_body.position.y = _default_upper_body_y + _skeleton_root_offset \
 			- _skating_crouch_drop
 	lower_body.position.y = _default_lower_body_y + _skeleton_root_offset \
@@ -1464,6 +1469,7 @@ func _apply_body_height() -> void:
 
 # ── Blade ─────────────────────────────────────────────────────────────────────
 func set_blade_position(pos: Vector3) -> void:
+	_blade_contact_dirty = true
 	blade.position = pos
 	var blade_world: Vector3 = upper_body.to_global(pos)
 	var hand_world: Vector3 = upper_body.to_global(top_hand.position)
@@ -1477,14 +1483,37 @@ func get_blade_position() -> Vector3:
 	return blade.position
 
 
+# Memo for get_blade_contact_global(), which resolves the UpperBody→Blade
+# transform chain and is read up to 3x per skater per tick across the
+# interaction loops (plus IK, claims, and render-rate aim readers). The cached
+# point is served while (a) no pose setter that can move the blade's world
+# contact has run since the fill — set_blade_position, set_facing,
+# set_upper_body_rotation / lean, _apply_body_height, and the visual_offset
+# MeshRoot shift all raise _blade_contact_dirty — and (b) the body hasn't
+# translated, guarded by comparing local `position` against the fill-time value
+# (catches every direct global_position write: integration, collision push-out,
+# clamps, reconcile snaps, teleports — none of which route through a setter
+# here). An unchanged position with no setter call means an unchanged pose, so
+# the memo is exact, not merely per-tick.
+var _blade_contact_cache: Vector3 = Vector3.ZERO
+var _blade_contact_cache_at: Vector3 = Vector3.INF
+var _blade_contact_dirty: bool = true
+
+
 # World position where the puck plays on the blade — mid-blade by default.
 func get_blade_contact_global() -> Vector3:
+	if not _blade_contact_dirty and position == _blade_contact_cache_at:
+		return _blade_contact_cache
 	var heel_world: Vector3 = upper_body.to_global(blade.position)
 	var forward: Vector3 = -blade.global_transform.basis.z
 	forward.y = 0.0
-	if forward.length() < 0.001:
-		return heel_world
-	return heel_world + forward.normalized() * (blade_length * 0.5)
+	var contact: Vector3 = heel_world
+	if forward.length() >= 0.001:
+		contact = heel_world + forward.normalized() * (blade_length * 0.5)
+	_blade_contact_cache = contact
+	_blade_contact_cache_at = position
+	_blade_contact_dirty = false
+	return contact
 
 
 # Smoothed rendered factor in [−1, +1]. Discrete _carry_side is sticky
@@ -1717,10 +1746,12 @@ func get_bottom_hand_position() -> Vector3:
 
 # ── Upper Body ────────────────────────────────────────────────────────────────
 func set_upper_body_rotation(angle: float) -> void:
+	_blade_contact_dirty = true
 	upper_body.rotation.y = angle
 
 
 func set_upper_body_lean(lean_x: float, lean_z: float = 0.0) -> void:
+	_blade_contact_dirty = true
 	upper_body.rotation.x = lean_x
 	upper_body.rotation.z = lean_z
 
@@ -2332,9 +2363,43 @@ func set_upper_surface_material(surface: int, mat: Material) -> void:
 	_arm_mesh.set_surface_override_material(surface, mat)
 
 
+# Cosmetic per-stride trunk texture (the gait's dig lean / weight-shift sway /
+# stagger wobble), applied to the torso/helmet/shoulder-cap BONES rather than
+# the UpperBody node: the blade and shoulder markers hang under UpperBody, so
+# a node rotation would move the blade's WORLD position — physics-rate
+# gameplay geometry — while the gait runs at render rate. Bones are pure mesh,
+# so this keeps the invariant documented in SkaterPoseCoordinator._apply_lean.
+# The arms stay anchored to the (deterministic) hands and stick on purpose.
+var _trunk_texture := Basis.IDENTITY
+var _trunk_texture_pitch: float = 0.0
+var _trunk_texture_roll: float = 0.0
+
+
+func set_trunk_texture(pitch_add: float, roll_add: float) -> void:
+	if is_equal_approx(pitch_add, _trunk_texture_pitch) \
+			and is_equal_approx(roll_add, _trunk_texture_roll):
+		return
+	_trunk_texture_pitch = pitch_add
+	_trunk_texture_roll = roll_add
+	_trunk_texture = Basis.from_euler(Vector3(pitch_add, 0.0, roll_add))
+	_repose_upper_bone(SkaterMeshBuilder.UpperBone.TORSO)
+	_repose_upper_bone(SkaterMeshBuilder.UpperBone.HELMET)
+	_repose_upper_bone(SkaterMeshBuilder.UpperBone.SHOULDER_L)
+	_repose_upper_bone(SkaterMeshBuilder.UpperBone.SHOULDER_R)
+
+
 func _repose_upper_bone(bone: int) -> void:
-	_arm_skeleton.set_bone_pose(bone, Transform3D(
-			_upper_basis[bone].scaled_local(_upper_scale[bone]), _upper_pos[bone]))
+	var pose := Transform3D(
+			_upper_basis[bone].scaled_local(_upper_scale[bone]), _upper_pos[bone])
+	# The trunk texture rotates the upper-body SHELL about the trunk pivot (the
+	# skeleton lives in upper-body space, so a zero-origin premultiply is that
+	# pivot). Arm bones are excluded — they follow the hands.
+	if bone == SkaterMeshBuilder.UpperBone.TORSO \
+			or bone == SkaterMeshBuilder.UpperBone.HELMET \
+			or bone == SkaterMeshBuilder.UpperBone.SHOULDER_L \
+			or bone == SkaterMeshBuilder.UpperBone.SHOULDER_R:
+		pose = Transform3D(_trunk_texture, Vector3.ZERO) * pose
+	_arm_skeleton.set_bone_pose(bone, pose)
 
 
 # ── Torso / helmet / shoulder sizing seam ─────────────────────────────────────

@@ -62,10 +62,26 @@ var last_target_blade_world: Vector3 = Vector3.ZERO
 var _cached_top_cfg: TopHandIK.Config = null
 var _cached_bottom_cfg: BottomHandIK.Config = null
 var _ik_result := TopHandIK.Result.new()
+# Native IK solvers (null = extension absent, GDScript fallback). Config
+# properties sync inside the cached-config builders — the same rebuild moment —
+# so invalidate_configs() covers both representations.
+var _native_top: RefCounted = null
+var _native_bottom: RefCounted = null
+# Native blade-dangle smoother (null = extension absent, GDScript fallback).
+# In native mode it OWNS the cross-tick smoothing state (_prev_skater_pos,
+# _blade_dangle_vel, the init flag) — only _smoothed_blade_world is mirrored
+# back, because the hand solve below the block reads it.
+var _native_dangle: RefCounted = null
 
 func setup(skater: Skater, controller: SkaterController) -> void:
 	_skater = skater
 	_controller = controller
+	if ClassDB.class_exists(&"NativeTopHandIK"):
+		_native_top = ClassDB.instantiate(&"NativeTopHandIK")
+		_native_bottom = ClassDB.instantiate(&"NativeBottomHandIK")
+	if ClassDB.class_exists(&"NativeBladeDangle"):
+		_native_dangle = ClassDB.instantiate(&"NativeBladeDangle")
+		_sync_dangle_config()
 
 # Drop the cached configs so the next solve rebuilds them from the controller
 # exports. Called by SkaterController.apply_attributes (stick length, ROM, and
@@ -73,6 +89,17 @@ func setup(skater: Skater, controller: SkaterController) -> void:
 func invalidate_configs() -> void:
 	_cached_top_cfg = null
 	_cached_bottom_cfg = null
+	_sync_dangle_config()
+
+# The dangle tunables are plain controller @exports (not part of the cached IK
+# configs), so they sync here — covered by the same invalidate_configs moment
+# that rebuilds the config objects on apply_attributes.
+func _sync_dangle_config() -> void:
+	if _native_dangle != null:
+		_native_dangle.set_config(
+				_controller.max_blade_speed,
+				_controller.wrister_on_axis_blade_speed,
+				_controller.max_blade_accel)
 
 # Drop the smoothed-blade baseline so the next solve re-seeds it deterministically
 # from the first replayed input (the init branch in apply_blade_from_mouse snaps
@@ -82,6 +109,8 @@ func invalidate_configs() -> void:
 func reset_blade_smoothing() -> void:
 	_smoothed_blade_initialized = false
 	_blade_dangle_vel = Vector3.ZERO
+	if _native_dangle != null:
+		_native_dangle.reset_smoothing()
 
 # Seed the smoothed-blade baseline to a specific world position so the next solve
 # steps toward the cursor FROM there rather than from a stale value. Called by
@@ -97,6 +126,8 @@ func seed_blade_smoothing(world_pos: Vector3) -> void:
 	# The follow-through choreographed the blade directly; the dangle resumes
 	# from rest at the seeded position.
 	_blade_dangle_vel = Vector3.ZERO
+	if _native_dangle != null:
+		_native_dangle.seed(world_pos, _skater.global_position)
 
 # ── Blade From Mouse (Top-Hand IK) ────────────────────────────────────────────
 # Input is treated as a desired blade position. The top hand is solved as a
@@ -163,9 +194,15 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 		# precision (hand + lean blade_y) below. Uses rest blade_y for the projection:
 		# the sub-cm lean refinement the iterative solve adds is irrelevant to a point
 		# that's about to be capped and re-solved.
-		var target_blade_local: Vector3 = TopHandIK.project_blade(
-				_skater.shoulder.position, target_blade_xz, blade_side_sign,
-				_ik_config(blade_y_local()))
+		var target_blade_local: Vector3
+		if _native_top != null:
+			_ik_config(blade_y_local())
+			target_blade_local = _native_top.project_blade(
+					_skater.shoulder.position, target_blade_xz, blade_side_sign)
+		else:
+			target_blade_local = TopHandIK.project_blade(
+					_skater.shoulder.position, target_blade_xz, blade_side_sign,
+					_ik_config(blade_y_local()))
 		target_blade_world = _skater.upper_body_to_global(target_blade_local)
 		target_blade_world.y = 0.0
 		last_target_blade_world = target_blade_world
@@ -178,92 +215,101 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 	#    would drag while skating and, once skating speed exceeds the cap, never
 	#    catch up. So carry the smoothed blade along with the skater's translation
 	#    first, then cap only the residual dangle relative to the player.
-	if not _smoothed_blade_initialized:
-		_smoothed_blade_world = target_blade_world
-		_prev_skater_pos = skater_pos
+	if _native_dangle != null:
+		# Native port of the block below (native/src/native_blade_dangle.cpp).
+		# It owns the smoothing state; the returned smoothed blade is mirrored
+		# because the hand solve below reads _smoothed_blade_world.
+		_smoothed_blade_world = _native_dangle.advance(
+				target_blade_world, skater_pos, delta,
+				_controller.get_shot_state() == State.WRISTER_AIM)
 		_smoothed_blade_initialized = true
-		_blade_dangle_vel = Vector3.ZERO
-	_smoothed_blade_world += skater_pos - _prev_skater_pos
-	_smoothed_blade_world.y = 0.0
-	_prev_skater_pos = skater_pos
-	var step: Vector3 = target_blade_world - _smoothed_blade_world
-	step.y = 0.0
-	var max_step: float = _controller.max_blade_speed * delta
-	if max_step > 0.0:
-		# During a wrister aim, uncap blade motion ALONG the shot axis — the
-		# wind-back-and-snap that makes the shot feel responsive regardless of
-		# Hands — while keeping the PERPENDICULAR component capped at the normal
-		# dangle budget (max_step). Lateral blade sweep IS dangling; capping only
-		# that axis fixes slow-blade shot feel without letting "shoot mode" become
-		# a way to dangle at full blade speed. The axis is skater→smoothed-blade
-		# (the current aim line). Reading the LAGGED smoothed blade (not the raw
-		# target) self-stabilizes the split: a fast lateral whip can't drag the
-		# axis along with it (off-axis is capped, so the axis can only rotate as
-		# fast as that cap allows), while a slow re-aim turns the axis naturally.
-		# The on-axis budget is flat (Hands-independent) so shooting feels the
-		# same for everyone — Hands still gates the off-axis dangle.
-		var axis_vec: Vector3 = _smoothed_blade_world - skater_pos
-		axis_vec.y = 0.0
-		if _controller.get_shot_state() == State.WRISTER_AIM and axis_vec.length_squared() > 0.0001:
-			var axis: Vector3 = axis_vec.normalized()
-			var on_axis: Vector3 = axis * step.dot(axis)
-			var off_axis: Vector3 = step - on_axis
-			var on_max: float = _controller.wrister_on_axis_blade_speed * delta
-			var on_len: float = on_axis.length()
-			if on_len > on_max:
-				on_axis *= on_max / on_len
-			var off_len: float = off_axis.length()
-			if off_len > max_step:
-				off_axis *= max_step / off_len
-			_smoothed_blade_world += on_axis + off_axis
-			# Keep the dangle-velocity state coherent through the aim mode so
-			# exiting a wrister aim doesn't hand the inertia model a stale
-			# velocity from before the wind-up.
-			_blade_dangle_vel = (on_axis + off_axis) / delta
-		elif _controller.max_blade_accel > 0.0:
-			# SECOND-ORDER BLADE (attributes v4 hands model): the stick has
-			# inertia. Dangle velocity chases an arrive-law target — speed
-			# toward the target is bounded by both the tip-speed cap and
-			# sqrt(2·A·dist) (the fastest approach that can still stop on the
-			# target), and the velocity itself may only change at A per second.
-			# Traverse speed is barely touched (the caps are tuned to bind only
-			# at gesture extremes); direction REVERSALS pay the inertia — the
-			# lever seesaw's whole point. No spring, no overshoot: the arrive
-			# law decays approach speed to zero at the target, and the landing
-			# snap below catches the final sub-tick step exactly like the
-			# first-order path did.
-			var accel: float = _controller.max_blade_accel
-			var dist: float = step.length()
-			var desired := Vector3.ZERO
-			if dist > 0.00001:
-				var arrive_speed: float = minf(
-						_controller.max_blade_speed, sqrt(2.0 * accel * dist))
-				desired = step * (arrive_speed / dist)
-			_blade_dangle_vel = _blade_dangle_vel.move_toward(desired, accel * delta)
-			var move: Vector3 = _blade_dangle_vel * delta
-			if move.length() >= dist and _blade_dangle_vel.dot(step) >= 0.0:
-				_smoothed_blade_world = target_blade_world
+	else:
+		if not _smoothed_blade_initialized:
+			_smoothed_blade_world = target_blade_world
+			_prev_skater_pos = skater_pos
+			_smoothed_blade_initialized = true
+			_blade_dangle_vel = Vector3.ZERO
+		_smoothed_blade_world += skater_pos - _prev_skater_pos
+		_smoothed_blade_world.y = 0.0
+		_prev_skater_pos = skater_pos
+		var step: Vector3 = target_blade_world - _smoothed_blade_world
+		step.y = 0.0
+		var max_step: float = _controller.max_blade_speed * delta
+		if max_step > 0.0:
+			# During a wrister aim, uncap blade motion ALONG the shot axis — the
+			# wind-back-and-snap that makes the shot feel responsive regardless of
+			# Hands — while keeping the PERPENDICULAR component capped at the normal
+			# dangle budget (max_step). Lateral blade sweep IS dangling; capping only
+			# that axis fixes slow-blade shot feel without letting "shoot mode" become
+			# a way to dangle at full blade speed. The axis is skater→smoothed-blade
+			# (the current aim line). Reading the LAGGED smoothed blade (not the raw
+			# target) self-stabilizes the split: a fast lateral whip can't drag the
+			# axis along with it (off-axis is capped, so the axis can only rotate as
+			# fast as that cap allows), while a slow re-aim turns the axis naturally.
+			# The on-axis budget is flat (Hands-independent) so shooting feels the
+			# same for everyone — Hands still gates the off-axis dangle.
+			var axis_vec: Vector3 = _smoothed_blade_world - skater_pos
+			axis_vec.y = 0.0
+			if _controller.get_shot_state() == State.WRISTER_AIM and axis_vec.length_squared() > 0.0001:
+				var axis: Vector3 = axis_vec.normalized()
+				var on_axis: Vector3 = axis * step.dot(axis)
+				var off_axis: Vector3 = step - on_axis
+				var on_max: float = _controller.wrister_on_axis_blade_speed * delta
+				var on_len: float = on_axis.length()
+				if on_len > on_max:
+					on_axis *= on_max / on_len
+				var off_len: float = off_axis.length()
+				if off_len > max_step:
+					off_axis *= max_step / off_len
+				_smoothed_blade_world += on_axis + off_axis
+				# Keep the dangle-velocity state coherent through the aim mode so
+				# exiting a wrister aim doesn't hand the inertia model a stale
+				# velocity from before the wind-up.
+				_blade_dangle_vel = (on_axis + off_axis) / delta
+			elif _controller.max_blade_accel > 0.0:
+				# SECOND-ORDER BLADE (attributes v4 hands model): the stick has
+				# inertia. Dangle velocity chases an arrive-law target — speed
+				# toward the target is bounded by both the tip-speed cap and
+				# sqrt(2·A·dist) (the fastest approach that can still stop on the
+				# target), and the velocity itself may only change at A per second.
+				# Traverse speed is barely touched (the caps are tuned to bind only
+				# at gesture extremes); direction REVERSALS pay the inertia — the
+				# lever seesaw's whole point. No spring, no overshoot: the arrive
+				# law decays approach speed to zero at the target, and the landing
+				# snap below catches the final sub-tick step exactly like the
+				# first-order path did.
+				var accel: float = _controller.max_blade_accel
+				var dist: float = step.length()
+				var desired := Vector3.ZERO
+				if dist > 0.00001:
+					var arrive_speed: float = minf(
+							_controller.max_blade_speed, sqrt(2.0 * accel * dist))
+					desired = step * (arrive_speed / dist)
+				_blade_dangle_vel = _blade_dangle_vel.move_toward(desired, accel * delta)
+				var move: Vector3 = _blade_dangle_vel * delta
+				if move.length() >= dist and _blade_dangle_vel.dot(step) >= 0.0:
+					_smoothed_blade_world = target_blade_world
+				else:
+					_smoothed_blade_world += move
 			else:
-				_smoothed_blade_world += move
-		else:
-			# First-order path (max_blade_accel 0 = inertia disabled — the
-			# pre-v4 servo, kept bit-exact as the escape hatch).
-			var step_len: float = step.length()
-			if step_len > max_step:
-				# Target is beyond the dangle-speed budget this tick — step toward it.
-				_smoothed_blade_world += step * (max_step / step_len)
-				_blade_dangle_vel = step * (max_step / step_len) / delta
-			else:
-				# Within budget this tick — the blade can reach the target.
-				_smoothed_blade_world = target_blade_world
-				_blade_dangle_vel = step / delta if delta > 0.0 else Vector3.ZERO
-	# else (delta == 0): no wall-clock elapsed, so the blade traverses no ROM.
-	# This is the reconcile final re-apply path (LocalController.reconcile passes
-	# delta 0.0 to re-place the blade in the post-snap body frame). Snapping to
-	# the target here would zero out the hands speed cap on every reconcile —
-	# clients reconcile constantly, the host never does, so the host would feel
-	# the clamp at full strength while clients barely felt it. Keep the replayed
-	# (already clamped) smoothed blade instead of snapping.
+				# First-order path (max_blade_accel 0 = inertia disabled — the
+				# pre-v4 servo, kept bit-exact as the escape hatch).
+				var step_len: float = step.length()
+				if step_len > max_step:
+					# Target is beyond the dangle-speed budget this tick — step toward it.
+					_smoothed_blade_world += step * (max_step / step_len)
+					_blade_dangle_vel = step * (max_step / step_len) / delta
+				else:
+					# Within budget this tick — the blade can reach the target.
+					_smoothed_blade_world = target_blade_world
+					_blade_dangle_vel = step / delta if delta > 0.0 else Vector3.ZERO
+		# else (delta == 0): no wall-clock elapsed, so the blade traverses no ROM.
+		# This is the reconcile final re-apply path (LocalController.reconcile passes
+		# delta 0.0 to re-place the blade in the post-snap body frame). Snapping to
+		# the target here would zero out the hands speed cap on every reconcile —
+		# clients reconcile constantly, the host never does, so the host would feel
+		# the clamp at full strength while clients barely felt it. Keep the replayed
+		# (already clamped) smoothed blade instead of snapping.
 
 	# 3. Solve the hand (and lean-corrected blade_y) for the CAPPED blade. The
 	#    smoothed blade is already within ROM (it stepped from one in-ROM point
@@ -402,12 +448,18 @@ func _solve_top_hand(desired_blade_xz: Vector2, blade_side_sign: float) -> TopHa
 	var blade_y: float = blade_y_local()
 	var ik: TopHandIK.Result = _ik_result
 	for i in 3:
-		TopHandIK.solve(
-				_skater.shoulder.position,
-				desired_blade_xz,
-				blade_side_sign,
-				_ik_config(blade_y),
-				ik)
+		if _native_top != null:
+			_ik_config(blade_y)
+			_native_top.solve(_skater.shoulder.position, desired_blade_xz, blade_side_sign)
+			ik.hand = _native_top.get_hand()
+			ik.blade = _native_top.get_blade()
+		else:
+			TopHandIK.solve(
+					_skater.shoulder.position,
+					desired_blade_xz,
+					blade_side_sign,
+					_ik_config(blade_y),
+					ik)
 		blade_y = blade_y_lean_corrected(ik.blade.x, ik.blade.z)
 	return ik
 
@@ -426,10 +478,16 @@ func update_bottom_hand() -> void:
 	var grip_y: float = lerpf(hand_local.y, blade_local.y, _controller.bottom_hand_grip_fraction) + _controller.bh_hand_y
 	var cfg: BottomHandIK.Config = _bottom_hand_ik_config()
 	cfg.hand_y = grip_y
-	var bh: Vector3 = BottomHandIK.solve(
-			_skater.bottom_shoulder.position,
-			grip_target_xz,
-			cfg)
+	var bh: Vector3
+	if _native_bottom != null:
+		_native_bottom.hand_y = grip_y
+		bh = _native_bottom.solve(
+				_skater.bottom_shoulder.position, grip_target_xz, cfg.backhand_angle)
+	else:
+		bh = BottomHandIK.solve(
+				_skater.bottom_shoulder.position,
+				grip_target_xz,
+				cfg)
 	_skater.set_bottom_hand_position(bh)
 
 # ── Net Exclusion Clamp ───────────────────────────────────────────────────────
@@ -583,7 +641,17 @@ func _ik_config(blade_y: float) -> TopHandIK.Config:
 		_cached_top_cfg.rom_backhand_angle_max = deg_to_rad(_controller.rom_backhand_angle_max_deg)
 		_cached_top_cfg.rom_forehand_reach_max = _controller.rom_forehand_reach_max
 		_cached_top_cfg.rom_backhand_reach_max = _controller.rom_backhand_reach_max
+		if _native_top != null:
+			_native_top.stick_length = _cached_top_cfg.stick_length
+			_native_top.hand_rest_y = _cached_top_cfg.hand_rest_y
+			_native_top.hand_y_max = _cached_top_cfg.hand_y_max
+			_native_top.rom_forehand_angle_max = _cached_top_cfg.rom_forehand_angle_max
+			_native_top.rom_backhand_angle_max = _cached_top_cfg.rom_backhand_angle_max
+			_native_top.rom_forehand_reach_max = _cached_top_cfg.rom_forehand_reach_max
+			_native_top.rom_backhand_reach_max = _cached_top_cfg.rom_backhand_reach_max
 	_cached_top_cfg.blade_y = blade_y
+	if _native_top != null:
+		_native_top.blade_y = blade_y
 	return _cached_top_cfg
 
 func _bottom_hand_ik_config() -> BottomHandIK.Config:
@@ -592,6 +660,9 @@ func _bottom_hand_ik_config() -> BottomHandIK.Config:
 		_cached_bottom_cfg.hand_y = _controller.bh_hand_y
 		_cached_bottom_cfg.release_angle_max = deg_to_rad(_controller.bh_release_angle_deg)
 		_cached_bottom_cfg.release_angle_band = deg_to_rad(_controller.bh_release_angle_band_deg)
+		if _native_bottom != null:
+			_native_bottom.release_angle_max = _cached_bottom_cfg.release_angle_max
+			_native_bottom.release_angle_band = _cached_bottom_cfg.release_angle_band
 	_cached_bottom_cfg.backhand_angle = _bh_backhand_angle()
 	return _cached_bottom_cfg
 

@@ -122,6 +122,14 @@ var _goalie_provider: Callable = Callable()
 # ── Phase-3/4b loose-puck prediction scratch (client only; see _predict_loose) ──
 var _predict_frame_scratch: PuckGeometryCollision.Result = null
 var _predict_tick_result: PuckAuthorityRules.TickResult = null
+# NativePuckStep (null = extension absent, GDScript step). Same factory as the
+# host drive's instance, so prediction and authority run the identical step.
+var _native_step: RefCounted = null
+# Per-re-predict goalie-box gather scratches (GoalieContactDetector
+# .gather_boxes) — reused so the per-frame predictor allocates nothing.
+var _gather_packed := PackedFloat32Array()
+var _gather_parts: Array = []
+var _gather_goalies: Array = []
 var _predict_goalie_contact: GoalieContactDetector.Contact = null
 var _predict_obb_scratch: SweptDiscOBB.Result = null
 # _run_prediction's output slots (filled per call; members so the per-frame
@@ -263,6 +271,7 @@ func setup(assigned_puck: Puck, assigned_is_server: bool) -> void:
 		_predict_tick_result = PuckAuthorityRules.TickResult.new()
 		_predict_goalie_contact = GoalieContactDetector.Contact.new()
 		_predict_obb_scratch = SweptDiscOBB.Result.new()
+		_native_step = NativePuckStepFactory.make_configured()
 
 func set_peer_id_resolver(resolver: Callable) -> void:
 	_peer_id_resolver = resolver
@@ -475,9 +484,11 @@ func _contest_blade_velocity(skater: Skater, raw_blade_vel: Vector3) -> Vector3:
 # too-fast-or-poorly-angled) isn't corralling, so it isn't a possession contest.
 # Host present-time only, and only invoked at the rare instant a pickup is about
 # to be granted, so it adds no per-tick cost on the common no-pickup path.
-func _find_contesting_corraller(first: Skater, skaters: Array, puck_curr: Vector3, puck_airborne: bool) -> Skater:
+func _find_contesting_corraller(first: Skater, skaters: Array, puck_curr: Vector3,
+		puck_airborne: bool, now: float) -> Skater:
 	for skater: Skater in skaters:
-		if skater == first or skater.is_ghost or skater.is_knocked_down or puck.is_on_cooldown(skater):
+		if skater == first or skater.is_ghost or skater.is_knocked_down \
+				or puck.is_on_cooldown_at(skater, now):
 			continue
 		if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
 				or skater.current_shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
@@ -514,6 +525,9 @@ func _check_interactions() -> void:
 		return
 	var puck_curr: Vector3 = puck.get_puck_position()
 	var skaters: Array = _skater_getter.call()
+	# One clock sample serves every cooldown gate this tick — is_on_cooldown()
+	# re-called the injected time provider per skater per loop.
+	var now: float = NetworkManager.local_time()
 
 	if puck.carrier != null:
 		if not puck.pickup_locked:
@@ -521,6 +535,11 @@ func _check_interactions() -> void:
 			# across all checkers and the lookup was being repeated.
 			var carrier_team: int = _team_id_by_skater.get(puck.carrier, -1)
 			var carrier_skater: Skater = puck.carrier
+			# Carrier pose is likewise invariant across checkers this tick (a
+			# strip/poke breaks the loop) — hoisted out of the stick-lift test.
+			var carrier_hand: Vector3 = carrier_skater.upper_body_to_global(
+					carrier_skater.get_top_hand_position())
+			var carrier_blade: Vector3 = carrier_skater.get_blade_contact_global()
 			for skater: Skater in skaters:
 				if skater == puck.carrier or skater.is_ghost or skater.is_knocked_down:
 					continue
@@ -544,9 +563,8 @@ func _check_interactions() -> void:
 					# carrier's shaft pops their blade up and strips the puck. A
 					# lifted blade pokes nothing the normal way (it's off the ice),
 					# so it's stick-lift-or-skip for this checker.
-					var vic_hand: Vector3 = carrier_skater.upper_body_to_global(carrier_skater.get_top_hand_position())
 					if PuckInteractionRules.check_blade_under_stick(
-							blade_curr, vic_hand, carrier_skater.get_blade_contact_global(),
+							blade_curr, carrier_hand, carrier_blade,
 							STICK_LIFT_RADIUS, STICK_LIFT_UNDER_MARGIN):
 						carrier_skater.force_blade_lift(STICK_LIFT_FORCED_LIFT_S)
 						_processing_stick_lift = true
@@ -564,12 +582,12 @@ func _check_interactions() -> void:
 		if not puck.pickup_locked:
 			# Body block first: a puck driven into a player's torso is absorbed/dampened before
 			# any stick play. If one lands, the velocity changed this tick — skip the pickup pass.
-			if _check_body_blocks(skaters, puck_curr):
+			if _check_body_blocks(skaters, puck_curr, now):
 				return
 			# On-ice/off-ice gate is invariant across skaters this tick.
 			var puck_airborne: bool = puck.is_airborne()
 			for skater: Skater in skaters:
-				if skater.is_ghost or skater.is_knocked_down or puck.is_on_cooldown(skater):
+				if skater.is_ghost or skater.is_knocked_down or puck.is_on_cooldown_at(skater, now):
 					continue
 				# Committed to a body check — the stick is off the ice, so no
 				# corral/receive (mirrors the poke + claim + provisional gates).
@@ -622,7 +640,8 @@ func _check_interactions() -> void:
 					# puck squirts free biased toward the stronger blade. Otherwise this
 					# skater takes it. Mirrors the client-claim contest window; the scan
 					# only runs at the rare moment a pickup would actually happen.
-					var contender: Skater = _find_contesting_corraller(skater, skaters, puck_curr, puck_airborne)
+					var contender: Skater = _find_contesting_corraller(
+							skater, skaters, puck_curr, puck_airborne, now)
 					if contender != null:
 						# Present-time contest — both blades are host-live this tick, so
 						# feed their live kinematics (the claim path feeds rewound ones).
@@ -652,9 +671,9 @@ func _check_interactions() -> void:
 # (matching the old Area mask); the body_block_cooldown de-dups the level-triggered test the
 # way the Area's edge trigger did. Knocked-down players still block, as before. Returns true
 # on the first block so the caller skips the pickup pass this tick.
-func _check_body_blocks(skaters: Array, puck_curr: Vector3) -> bool:
+func _check_body_blocks(skaters: Array, puck_curr: Vector3, now: float) -> bool:
 	for skater: Skater in skaters:
-		if skater.is_ghost or puck.is_on_cooldown(skater):
+		if skater.is_ghost or puck.is_on_cooldown_at(skater, now):
 			continue
 		var axis := Vector2(skater.global_position.x, skater.global_position.z)
 		var reach: float = skater.get_body_block_radius() + GameRules.PUCK_COLLISION_RADIUS
@@ -1082,6 +1101,13 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 	var vel: Vector3 = start_vel
 	var radius: float = GameRules.PUCK_COLLISION_RADIUS
 	var goalies: Array = _goalie_provider.call() if not _goalie_provider.is_null() else []
+	# Gather the goalie boxes ONCE per re-predict for the native fast path —
+	# the rendered goalie pose is fixed for this frame, and the legacy path
+	# re-read the engine properties per predicted tick.
+	var goalie_box_count: int = 0
+	if not goalies.is_empty() and GoalieContactDetector.native_available():
+		goalie_box_count = GoalieContactDetector.gather_boxes(
+				goalies, _gather_packed, _gather_parts, _gather_goalies)
 	var stopped: bool = false
 	# Predicted-cue latch upkeep: a gap since the last re-predict means a new
 	# loose span (carry pin / whistle / fallback interpolation in between) —
@@ -1104,20 +1130,31 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 		var tick_vel_in: Vector3 = vel
 		var tick_post: bool = false
 		var tick_net: bool = false
-		var substeps: int = PuckAuthorityRules.frame_substeps(pos.z, vel.length(), dt)
-		var sub_dt: float = dt / float(substeps)
-		for _sub in substeps:
-			_predict_tick_result.touched_post = false
-			_predict_tick_result.touched_net = false
-			PuckAuthorityRules.step_frame_substep(pos, vel, sub_dt, radius,
-					puck.max_speed, puck.ice_height, puck.max_height,
-					_predict_frame_scratch, _predict_tick_result)
-			pos = _predict_tick_result.position
-			vel = _predict_tick_result.velocity
-			if _predict_tick_result.touched_post:
-				tick_post = true
-			if _predict_tick_result.touched_net:
-				tick_net = true
+		if _native_step != null:
+			# The whole sub-stepped tick crosses the boundary once — the shape
+			# the per-frame re-predict multiplies (age ticks x up to 16 substeps).
+			_native_step.clear_touched()
+			_native_step.step_tick(pos, vel, dt, radius,
+					puck.max_speed, puck.ice_height, puck.max_height)
+			pos = _native_step.get_position()
+			vel = _native_step.get_velocity()
+			tick_post = _native_step.get_touched_post()
+			tick_net = _native_step.get_touched_net()
+		else:
+			var substeps: int = PuckAuthorityRules.frame_substeps(pos.z, vel.length(), dt)
+			var sub_dt: float = dt / float(substeps)
+			for _sub in substeps:
+				_predict_tick_result.touched_post = false
+				_predict_tick_result.touched_net = false
+				PuckAuthorityRules.step_frame_substep(pos, vel, sub_dt, radius,
+						puck.max_speed, puck.ice_height, puck.max_height,
+						_predict_frame_scratch, _predict_tick_result)
+				pos = _predict_tick_result.position
+				vel = _predict_tick_result.velocity
+				if _predict_tick_result.touched_post:
+					tick_post = true
+				if _predict_tick_result.touched_net:
+					tick_net = true
 		if tick_post and not span_post:
 			span_post = true
 			if not _pred_cue_post_prev:
@@ -1142,10 +1179,17 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 		# so chord-level timing is enough). The goalie pose used is the client's
 		# RENDERED (interpolated) goalie — approximate by nature, which is
 		# exactly why the response is never predicted, only the hold.
+		var pred_goalie_hit: bool = false
 		if not goalies.is_empty() \
-				and absf(pos.z) > GameRules.GOAL_LINE_Z - PuckAuthorityRules.GOALIE_DETECT_RANGE_Z \
-				and GoalieContactDetector.nearest(goalies, tick_prev, pos, radius,
-						_predict_obb_scratch, _predict_goalie_contact):
+				and absf(pos.z) > GameRules.GOAL_LINE_Z - PuckAuthorityRules.GOALIE_DETECT_RANGE_Z:
+			if goalie_box_count > 0:
+				pred_goalie_hit = GoalieContactDetector.nearest_packed(
+						_gather_packed, goalie_box_count, _gather_parts, _gather_goalies,
+						tick_prev, pos, radius, _predict_goalie_contact)
+			elif not GoalieContactDetector.native_available():
+				pred_goalie_hit = GoalieContactDetector.nearest(goalies, tick_prev, pos,
+						radius, _predict_obb_scratch, _predict_goalie_contact)
+		if pred_goalie_hit:
 			pos = _predict_goalie_contact.point \
 					+ _predict_goalie_contact.normal * _predict_goalie_contact.depth
 			span_goalie = true
@@ -1168,14 +1212,20 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 		# every collision the step resolves: at 33 m/s the remainder is ~0.28 m, so
 		# an approach frame could render the puck through a board (clamped back, but
 		# only for the boards) or inside a post / the net panels.
-		var rem_steps: int = PuckAuthorityRules.frame_substeps(pos.z, vel.length(), frac)
-		var rem_dt: float = frac / float(rem_steps)
-		for _r in rem_steps:
-			PuckAuthorityRules.step_frame_substep(pos, vel, rem_dt, radius,
-					puck.max_speed, puck.ice_height, puck.max_height,
-					_predict_frame_scratch, _predict_tick_result)
-			pos = _predict_tick_result.position
-			vel = _predict_tick_result.velocity
+		if _native_step != null:
+			_native_step.step_tick(pos, vel, frac, radius,
+					puck.max_speed, puck.ice_height, puck.max_height)
+			pos = _native_step.get_position()
+			vel = _native_step.get_velocity()
+		else:
+			var rem_steps: int = PuckAuthorityRules.frame_substeps(pos.z, vel.length(), frac)
+			var rem_dt: float = frac / float(rem_steps)
+			for _r in rem_steps:
+				PuckAuthorityRules.step_frame_substep(pos, vel, rem_dt, radius,
+						puck.max_speed, puck.ice_height, puck.max_height,
+						_predict_frame_scratch, _predict_tick_result)
+				pos = _predict_tick_result.position
+				vel = _predict_tick_result.velocity
 	# No goal prediction, for ANY predicted puck: park an inbound puck on the
 	# goal line inside the posts and let the authoritative outcome arrive (the
 	# goal horn is a host decision, like the save).

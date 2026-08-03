@@ -1045,6 +1045,15 @@ func set_broadcast_rate(hz: float) -> void:
 # runs NetworkManager before the scene's actors: a broadcast from here at
 # priority 0 would read pre-integration (last tick's) state, re-adding the
 # one-tick departure-latency floor the hook removes.
+# True on the tick whose end-of-tick try_broadcast() will actually fire (the
+# cadence counter is due). Lets tick-path callers piggyback once-per-broadcast
+# work — GameManager's stats dirty-flag flush — on the same cadence. The
+# counter cycles on offline hosts too (is_offline_mode only gates the send in
+# _broadcast_state), so offline flushes keep the same rhythm.
+func is_broadcast_due() -> bool:
+	return is_host and _state_tick_counter >= _state_tick_divisor
+
+
 func try_broadcast() -> void:
 	if not is_host:
 		return

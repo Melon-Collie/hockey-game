@@ -59,10 +59,11 @@ var leg_scale: float = 1.0
 
 # ── Runtime State ─────────────────────────────────────────────────────────────
 var stride_phase: float = 0.0
-# Per-stride trunk texture, read by SkaterPoseCoordinator when it applies the
-# torso lean (this coordinator never writes torso rotations itself — the pose
-# pass stays the single writer). Radians; updated on real ticks only, so it
-# holds steady through reconcile replay like the rest of the gait.
+# Per-stride trunk texture, written onto the cosmetic torso/helmet/shoulder
+# BONES via Skater.set_trunk_texture — never onto the UpperBody node, whose
+# rotation carries the blade markers (gameplay geometry; see the invariant in
+# SkaterPoseCoordinator._apply_lean). Radians; updated on real ticks only, so
+# it holds steady through reconcile replay like the rest of the gait.
 var trunk_pitch_add: float = 0.0
 var trunk_roll_add: float = 0.0
 # Eased 0..1 "committing a check" stance factor, tracked toward skater.hit_committed
@@ -158,15 +159,47 @@ var _drive_intensity: float = 0.0       # 0..1 VFX hit hardness
 # opponent's stick. Keyed off the replicated blade_up.
 var _lift_blend: float = 0.0
 
+# NativeSkaterGait (null = extension absent, the GDScript body below runs).
+# The native port carries the full gait state machine; this class then acts as
+# the wrapper that feeds inputs, writes the pose outputs, and republishes the
+# trunk/yaw channels the pose coordinator reads.
+var _native: RefCounted = null
+
 func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController) -> void:
 	_skater = skater
 	_sm = sm
 	_controller = controller
+	if ClassDB.class_exists(&"NativeSkaterGait"):
+		_native = ClassDB.instantiate(&"NativeSkaterGait")
+		_native.set_state_ids(
+				State.SKATING_WITH_PUCK, State.SKATING_WITHOUT_PUCK,
+				State.SHOT_BLOCKING, State.FOLLOW_THROUGH, State.WRISTER_AIM,
+				State.SLAPPER_CHARGE_WITH_PUCK, State.SLAPPER_CHARGE_WITHOUT_PUCK,
+				State.ONE_TIMER_RETENTION)
+		native_reconfigure()
+
+# Reloads the native port's tunables and leg scale from the controller.
+# Called from setup and from SkaterController.apply_attributes (which rewrites
+# the exports the config was built from — same invalidation moment as the
+# cached movement/IK configs).
+func native_reconfigure() -> void:
+	if _native == null:
+		return
+	var missing: String = _native.configure(_controller)
+	if missing != "":
+		# A rename/removal desynced the port's tunable table — running it with
+		# stale values would be a silent behavior fork. Loudly fall back.
+		push_error("NativeSkaterGait disabled — controller exports missing: %s" % missing)
+		_native = null
+		return
+	_native.set_leg_scale(leg_scale)
 
 # Snaps the gait back to a clean standstill and plants the legs at their rest
 # pose. Called on faceoff / respawn teleports so a skater doesn't drop into the
 # dot mid-stride carrying the previous shift's leg swing.
 func reset_to_rest() -> void:
+	if _native != null:
+		_native.reset_to_rest()
 	stride_phase = 0.0
 	_intensity = 0.0
 	_effort = 0.0
@@ -207,6 +240,7 @@ func reset_to_rest() -> void:
 	if _skater != null:
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 		_skater.set_skating_crouch_drop(0.0)
+		_skater.set_trunk_texture(0.0, 0.0)
 
 
 # Arms the check-delivery drive (see the runtime state above). During
@@ -215,6 +249,8 @@ func reset_to_rest() -> void:
 # a re-zeroed envelope would pin the pose at its rise for as long as the
 # contact grinds.
 func start_check_drive(hit_dir: Vector3, intensity: float) -> void:
+	if _native != null:
+		_native.start_check_drive(hit_dir, intensity)
 	var flat := Vector3(hit_dir.x, 0.0, hit_dir.z)
 	if flat.length_squared() < 0.0001 or intensity <= 0.0:
 		return
@@ -234,6 +270,9 @@ func start_check_drive(hit_dir: Vector3, intensity: float) -> void:
 # smoothly instead of snapping between them.
 func apply(delta: float) -> void:
 	if _skater == null or delta <= 0.0:
+		return
+	if _native != null:
+		_apply_native(delta)
 		return
 
 	# ── Settled early-out ──────────────────────────────────────────────────────
@@ -1175,3 +1214,58 @@ func apply(delta: float) -> void:
 	_skater.set_leg_swing(l_pitch, l_roll, l_knee, r_pitch, r_roll, r_knee)
 	_skater.set_foot_eversion(foot_evert_l, foot_evert_r)
 	_skater.set_skating_crouch_drop(drop)
+	_skater.set_trunk_texture(trunk_pitch_add, trunk_roll_add)
+
+
+# The native path: feed the replicated inputs to NativeSkaterGait, write its
+# pose outputs onto the skater, republish the trunk/yaw channels. Behavior is
+# pinned to the GDScript body above by tests/unit/rules/test_native_gait_parity.gd.
+func _apply_native(delta: float) -> void:
+	var flags: int = 0
+	if _skater.brake_intent:
+		flags |= 1   # FLAG_BRAKE
+	if _skater.hit_committed:
+		flags |= 2   # FLAG_HIT_COMMITTED
+	if _skater.blade_up:
+		flags |= 4   # FLAG_BLADE_UP
+	if _skater.is_left_handed:
+		flags |= 8   # FLAG_LEFT_HANDED
+	if _controller.sprint_active:
+		flags |= 16  # FLAG_SPRINT
+	if _controller.is_faceoff_ready():
+		flags |= 32  # FLAG_FACEOFF_READY
+	var code: int = _native.apply(delta, _skater.velocity,
+			_skater.global_transform.basis, _skater.move_intent,
+			_skater.current_shot_state, _skater.shot_charge,
+			_controller.stagger_timer, _controller.knockdown_timer,
+			_controller.celebration_progress(), flags)
+	_settled = code != 0
+	if code == 2:
+		# Settle edge — mirror reset_to_rest's one-time rest-pose write.
+		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+		_skater.set_skating_crouch_drop(0.0)
+		_skater.set_trunk_texture(0.0, 0.0)
+		stride_phase = 0.0
+		trunk_pitch_add = 0.0
+		trunk_roll_add = 0.0
+		stop_yaw_offset = 0.0
+		travel_align_yaw = 0.0
+		shot_hip_yaw = 0.0
+		return
+	if code != 0:
+		return
+	# Republish the public channels external readers consume (the pose
+	# coordinator's yaw sum, stride_phase for tests/tooling) so the coordinator
+	# surface stays truthful whichever implementation ran.
+	stride_phase = _native.get_stride_phase()
+	_skater.set_leg_swing(
+			_native.get_l_pitch(), _native.get_l_roll(), _native.get_l_knee(),
+			_native.get_r_pitch(), _native.get_r_roll(), _native.get_r_knee())
+	_skater.set_foot_eversion(_native.get_foot_evert_l(), _native.get_foot_evert_r())
+	_skater.set_skating_crouch_drop(_native.get_crouch_drop())
+	trunk_pitch_add = _native.get_trunk_pitch_add()
+	trunk_roll_add = _native.get_trunk_roll_add()
+	stop_yaw_offset = _native.get_stop_yaw_offset()
+	travel_align_yaw = _native.get_travel_align_yaw()
+	shot_hip_yaw = _native.get_shot_hip_yaw()
+	_skater.set_trunk_texture(trunk_pitch_add, trunk_roll_add)

@@ -257,6 +257,9 @@ func _copy_session_digest() -> void:
 		"role": "host" if NetworkManager.is_host else "client",
 		"net_sim_active": NetworkSimManager.enabled,
 		"game_id": GameManager.get_game_id(),
+		# Which simulation engine produced these numbers — the native kernels
+		# fall back to GDScript silently, so a digest must say which path ran.
+		"native_kernels": NativeKernels.summary(),
 		# Local frame cost rides along so a pasted digest can answer "GPU or CPU?"
 		# on its own. Live EMAs, not session aggregates — the digest is copied from
 		# the open panel, so they describe the moment the tester chose to capture.
