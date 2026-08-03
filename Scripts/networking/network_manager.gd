@@ -315,6 +315,11 @@ var _world_state_provider: Callable = Callable()
 # local player spawns; the input-tick poll uses it to gather a batch without
 # holding a controller reference.
 var _input_batch_provider: Callable = Callable()
+# Reused across the 120 Hz input sends: the provider fills the Array, the buffer
+# is resized to the exact packet size and written at offsets. Both are consumed
+# entirely within one send.
+var _input_batch_scratch: Array[InputState] = []
+var _input_batch_buf := PackedByteArray()
 var _clock_sync: RefCounted = null  # ClockSync instance, client only
 # Carrier-event redundancy (see SnapshotEventLog): the host records each carrier
 # event and appends the recent set to every unreliable world-state packet in
@@ -991,17 +996,24 @@ func _process(delta: float) -> void:
 			# redundancy already covers the low-fps cadence itself.
 			_input_timer = minf(_input_timer - input_delta, input_delta)
 			var batch_frames: int = 24 if get_peer_loss_rate() > 10.0 else 12
-			var batch: Array[InputState] = _input_batch_provider.call(batch_frames)
-			var buf := PackedByteArray(); buf.resize(3)
+			var batch: Array[InputState] = _input_batch_scratch
+			_input_batch_provider.call(batch, batch_frames)
+			# Pre-sized once and written at offsets, rather than append_array-ing a
+			# fresh PackedByteArray per input (a throwaway buffer per input per
+			# batch, plus a realloc per append, 120x/s).
+			var buf: PackedByteArray = _input_batch_buf
+			buf.resize(3 + batch.size() * InputState.BYTES_SIZE)
 			# u16 client-measured downstream loss in basis points (0..10000 = 0..100%),
 			# u8 count. The client's own WS-seq-gap loss is authoritative for the
 			# host->client link, so the host stores it directly instead of re-deriving
 			# loss from an undersampled seq echo (see _peer_loss_rates).
 			buf.encode_u16(0, clampi(roundi(packet_loss_pct * 100.0), 0, 65535))
 			buf.encode_u8(2, batch.size())
-			for s: InputState in batch:
-				buf.append_array(s.to_bytes())
+			for i: int in batch.size():
+				batch[i].write_bytes(buf, 3 + i * InputState.BYTES_SIZE)
 			NetworkTelemetry.record_input_sent()
+			# rpc_id encodes the buffer into the packet synchronously, so reusing
+			# it on the next send is safe.
 			receive_input_batch.rpc_id(1, buf)
 
 	if not is_host:

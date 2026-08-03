@@ -135,24 +135,34 @@ func to_array() -> Array:
 
 func to_bytes() -> PackedByteArray:
 	var b := PackedByteArray(); b.resize(BYTES_SIZE)
+	write_bytes(b, 0)
+	return b
+
+
+# to_bytes' in-place twin: writes this input's BYTES_SIZE record at `offset` in a
+# caller-owned buffer. The batch send packs up to 24 inputs per RPC at 120 Hz, so
+# building each record as its own PackedByteArray and append_array-ing it churned
+# a throwaway buffer per input per batch (~1.4-2.9k/s). Same bytes as to_bytes by
+# construction — that one now delegates here.
+func write_bytes(b: PackedByteArray, offset: int) -> void:
 	# host_timestamp rides as u32 in 0.1ms units (Constants.TIME_WIRE_SCALE):
 	# constant precision over ~119h vs f32's uptime-degrading ULP, which would
 	# start quantizing adjacent per-tick stamps equal (dedupe-dropped as
 	# duplicates) after ~4.6h of host uptime.
-	b.encode_u32(0, roundi(maxf(host_timestamp, 0.0) * Constants.TIME_WIRE_SCALE))
-	b.encode_float(4, delta)
-	b.encode_s16(8,  clampi(roundi(move_vector.x * 1000.0), -32768, 32767))
-	b.encode_s16(10, clampi(roundi(move_vector.y * 1000.0), -32768, 32767))
-	b.encode_s16(12, clampi(roundi(mouse_world_pos.x * 100.0), -32768, 32767))
-	b.encode_s8( 14, clampi(roundi(mouse_world_pos.y * 100.0), -128, 127))
-	b.encode_s16(15, clampi(roundi(mouse_world_pos.z * 100.0), -32768, 32767))
+	b.encode_u32(offset, roundi(maxf(host_timestamp, 0.0) * Constants.TIME_WIRE_SCALE))
+	b.encode_float(offset + 4, delta)
+	b.encode_s16(offset + 8,  clampi(roundi(move_vector.x * 1000.0), -32768, 32767))
+	b.encode_s16(offset + 10, clampi(roundi(move_vector.y * 1000.0), -32768, 32767))
+	b.encode_s16(offset + 12, clampi(roundi(mouse_world_pos.x * 100.0), -32768, 32767))
+	b.encode_s8( offset + 14, clampi(roundi(mouse_world_pos.y * 100.0), -128, 127))
+	b.encode_s16(offset + 15, clampi(roundi(mouse_world_pos.z * 100.0), -32768, 32767))
 	# SIGNED s16: attack_up team-1 players negate mouse_screen_pos in the gatherer
 	# to pre-align the cursor-drag frame to world XZ (see LocalInputGatherer.gather).
 	# A u16 clamp floored those negatives to 0, so the host saw a frozen (0,0)
 	# cursor — zero wrister charge + null charge direction — and fired every drag
 	# as a tap. Screen coords (even negated, even at 8K) fit in ±32767.
-	b.encode_s16(17, clampi(roundi(mouse_screen_pos.x), -32768, 32767))
-	b.encode_s16(19, clampi(roundi(mouse_screen_pos.y), -32768, 32767))
+	b.encode_s16(offset + 17, clampi(roundi(mouse_screen_pos.x), -32768, 32767))
+	b.encode_s16(offset + 19, clampi(roundi(mouse_screen_pos.y), -32768, 32767))
 	var flags: int = (
 		(0x001 if shoot_pressed  else 0) | (0x002 if shoot_held     else 0) |
 		(0x004 if slap_pressed   else 0) | (0x008 if slap_held      else 0) |
@@ -161,13 +171,12 @@ func to_bytes() -> PackedByteArray:
 		(0x100 if block_held     else 0) | (0x200 if stick_lift_held else 0) |
 		(0x400 if stick_lift_pressed else 0) | (0x800 if quick_pass_pressed else 0) |
 		(0x1000 if hit_held else 0) | (0x2000 if commit_wrister_power else 0))
-	b.encode_u16(21, flags)
+	b.encode_u16(offset + 21, flags)
 	# Committed wrister power as a u8 (0..1 in 1/255 steps). Only meaningful while
 	# the commit flag above is set; a mouse sender leaves the default and the host
 	# ignores the byte. u8 caps the decode at 1.0 by construction, so a forged
 	# payload can't buy a shot above the ceiling.
-	b.encode_u8(23, roundi(clampf(bot_wrister_power_t, 0.0, 1.0) * 255.0))
-	return b
+	b.encode_u8(offset + 23, roundi(clampf(bot_wrister_power_t, 0.0, 1.0) * 255.0))
 
 
 static func from_bytes(b: PackedByteArray, offset: int = 0) -> InputState:

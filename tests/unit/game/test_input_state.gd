@@ -225,6 +225,69 @@ func test_from_bytes_supports_offset() -> void:
 	assert_almost_eq(r.host_timestamp, 2.0, 0.0001)
 	assert_eq(r.shoot_pressed, true)
 
+
+# ── write_bytes: the batch send's in-place encoder ───────────────────────────
+# It is what actually reaches the wire, so it must stay byte-identical to
+# to_bytes across every field, not merely round-trip.
+
+func _fully_populated_input() -> InputState:
+	var s := InputState.new()
+	s.host_timestamp     = 1234.5678
+	s.delta              = 1.0 / 240.0
+	s.move_vector        = Vector2(0.5, -0.3)
+	s.mouse_world_pos    = Vector3(1.0, -0.4, -2.5)
+	s.mouse_screen_pos   = Vector2(-320.0, 240.0)
+	s.shoot_pressed      = true
+	s.slap_held          = true
+	s.sprint_held        = true
+	s.brake              = true
+	s.elevation_level    = 2
+	s.block_held         = true
+	s.stick_lift_held    = true
+	s.stick_lift_pressed = true
+	s.quick_pass_pressed = true
+	s.hit_held           = true
+	s.commit_wrister_power = true
+	s.bot_wrister_power_t  = 0.75
+	return s
+
+
+func test_write_bytes_matches_to_bytes() -> void:
+	var s: InputState = _fully_populated_input()
+	var buf := PackedByteArray(); buf.resize(InputState.BYTES_SIZE)
+	s.write_bytes(buf, 0)
+	assert_eq(buf, s.to_bytes(), "write_bytes must match to_bytes byte for byte")
+
+
+func test_write_bytes_at_offset_matches_to_bytes() -> void:
+	# The batch send packs records back to back after a 3-byte header, so every
+	# record but the first is written at a non-zero offset.
+	var s: InputState = _fully_populated_input()
+	var expected: PackedByteArray = s.to_bytes()
+	var buf := PackedByteArray(); buf.resize(3 + 2 * InputState.BYTES_SIZE)
+	s.write_bytes(buf, 3)
+	s.write_bytes(buf, 3 + InputState.BYTES_SIZE)
+	for i: int in InputState.BYTES_SIZE:
+		assert_eq(buf[3 + i], expected[i], "record 0 byte %d" % i)
+		assert_eq(buf[3 + InputState.BYTES_SIZE + i], expected[i], "record 1 byte %d" % i)
+	# The header bytes must be untouched by a record written past them.
+	assert_eq(buf[0], 0)
+	assert_eq(buf[1], 0)
+	assert_eq(buf[2], 0)
+
+
+func test_write_bytes_round_trips_through_from_bytes_at_offset() -> void:
+	var s: InputState = _fully_populated_input()
+	var buf := PackedByteArray(); buf.resize(3 + InputState.BYTES_SIZE)
+	s.write_bytes(buf, 3)
+	var r := InputState.from_bytes(buf, 3)
+	assert_almost_eq(r.host_timestamp, s.host_timestamp, 0.0002)
+	assert_almost_eq(r.mouse_screen_pos.x, s.mouse_screen_pos.x, 0.5)
+	assert_eq(r.elevation_level, s.elevation_level)
+	assert_true(r.hit_held)
+	assert_true(r.commit_wrister_power)
+	assert_almost_eq(r.bot_wrister_power_t, s.bot_wrister_power_t, 1.0 / 255.0)
+
 # ── Wire timestamp precision (u32 @ 0.1ms units) ─────────────────────────────
 
 func test_bytes_round_trip_timestamp_precision_at_long_session() -> void:

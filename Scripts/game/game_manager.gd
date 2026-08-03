@@ -2817,7 +2817,7 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 			# at a sub-stagger bump up to full by a knockdown. The old 5.0/11 floor
 			# predated the inelastic-resolver rewrite (Δv shrank ~2×) and never fired.
 			local_player_impact.emit(impulse, clampf((impulse.length() - 0.6) / 1.5, 0.0, 1.0)))
-		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)
+		NetworkManager.set_input_batch_provider(local_ctrl.fill_input_batch)
 		# Historical positions of the OTHER skaters for the reconcile replay's
 		# body-check re-resolution (Slice C) — sampled from each remote's
 		# interpolation buffer at the replayed input's host timestamp.
