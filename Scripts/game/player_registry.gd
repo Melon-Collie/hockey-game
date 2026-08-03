@@ -249,6 +249,15 @@ func spawn_bot(
 	# through the spawn broadcast (GameManager seeds the peer map).
 	record.skin_tone = SkinToneRegistry.clamp_index(int(identity.get("skin",
 			record.player_name.hash() % SkinToneRegistry.TONES.size())))
+	# Tape job and gear/stick styling follow the same contract as skin: the
+	# card may pin packed codes ("tape_code" / "gear_style_code", authored via
+	# BotIdentityRegistry.normalize_entry); without a pin a stable look derives
+	# from the name, so hand-rolled user rosters still show variety. The
+	# from_code round-trip coerces a forged identity dict onto a legal look.
+	record.tape_code = StickTapeConfig.from_code(int(identity.get("tape_code",
+			BotIdentityRegistry.fallback_tape_code(record.player_name)))).to_code()
+	record.gear_style_code = GearStyleConfig.from_code(int(identity.get("gear_style_code",
+			BotIdentityRegistry.fallback_gear_style_code(record.player_name)))).to_code()
 	var faceoff_pos: Vector3 = PlayerRules.faceoff_position(team.team_id, team_slot)
 
 	var puck: Puck = _puck_getter.call() as Puck
@@ -267,6 +276,10 @@ func spawn_bot(
 	spawned.skater.set_skater_collision_provider(skaters)
 	spawned.skater.collision_tiebreak_id = peer_id
 	spawned.skater.set_player_name(record.player_name)
+	# Tape and gear style before uniform — same ordering contract as spawn():
+	# the uniform paint resolves their palette picks.
+	spawned.skater.set_tape_config(StickTapeConfig.from_code(record.tape_code))
+	spawned.skater.set_gear_style(GearStyleConfig.from_code(record.gear_style_code))
 	spawned.skater.set_skin_tone(record.skin_tone)
 	spawned.skater.set_uniform(colors)
 	spawned.skater.set_jersey_info(record.player_name, record.jersey_number)
