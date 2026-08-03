@@ -3,11 +3,11 @@ extends SceneTree
 # Dev visualizer: renders the whole stick-model catalogue offscreen — every
 # colorway standing on its blade above its name — and saves PNGs from two
 # angles, so stick designs can be SEEN without launching the game. Each stick
-# is the locker mannequin's own assembly (procedural blade at the M92 pattern,
-# shaft box on the flex shader, butt knob — the seats from
-# LockerMannequin._pose_stick; keep the two in sync) painted through
-# StickStyle/StickModelRegistry, so what lands in the PNG is what the rink
-# renders. Bare blade and bare grip on purpose: the sheet shows the colorway,
+# is built from the rink's own pieces (procedural blade at the M92 pattern,
+# shaft box on the flex shader, butt knob) painted through
+# StickStyle/StickModelRegistry, so the COLORWAY in the PNG is the one the game
+# renders. The lie and the shelf layout are this tool's own — a stick stood up
+# for reading, not the locker mannequin's carried pose. Bare blade and bare grip on purpose: the sheet shows the colorway,
 # not a tape job over it.
 #
 # Needs a real (software) renderer, not --headless. On the web container:
@@ -119,10 +119,9 @@ func _add_shelf(width: float, center_x: float) -> void:
 	root.add_child(mi)
 
 
-# One stick under `holder`, LockerMannequin._pose_stick's assembly:
-# heel-origin blade at the pattern, shaft climbing from the heel at the lie
-# angle, knob capping the butt. All materials come from the same factories
-# the rink uses.
+# One stick under `holder`: heel-origin blade at the pattern, shaft climbing
+# from the heel at the lie angle, knob capping the butt. All materials come
+# from the same factories the rink uses.
 func _build_stick(holder: Node3D, model: int) -> void:
 	var p := StickBladeMeshBuilder.Params.new()
 	p.length = GameRules.DEFAULT_BLADE_LENGTH_M

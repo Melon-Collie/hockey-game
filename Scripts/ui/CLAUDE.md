@@ -57,6 +57,19 @@ know which device you used. That does not make the pad path netcode-free: what
 the device **commits** (e.g. wrister power) is a replicated input field. Treat
 "which device" as local and "what the device committed" as wire.
 
+## Composite controls take focus on the inside
+
+`SwatchDropdown` and `PaletteDropdown` are wrappers: the outer `Control` is
+`FOCUS_NONE` and an inner `Button` fills it edge to edge. So the **wrapper's own
+`focus_entered` / `mouse_entered` never fire** — the inner button is what the pad
+focuses and what the pointer lands on. Connecting to the wrapper compiles, runs,
+and silently does nothing.
+
+`SwatchDropdown.focus_target()` returns the control that actually receives both.
+Use it wherever a row reacts to being reached (the locker's camera framing).
+`PaletteDropdown` has the same shape and no accessor yet — add one the same way
+if something needs to watch it.
+
 ## Menu styling
 
 `MenuStyle` owns the shared look. `apply_primary_cta` is the one loud button per

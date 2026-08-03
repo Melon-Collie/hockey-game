@@ -3,10 +3,11 @@ extends SceneTree
 # Dev visualizer: renders the whole gear catalogue offscreen — every skate model
 # above its name, every glove model above its own, and the helmet face options
 # on a third shelf — and saves PNGs from two angles, so gear changes can be
-# SEEN without launching the game. Each piece is the locker mannequin's own
-# assembly (shared SkaterMeshBuilder parts, the seats from
-# LockerMannequin._pose — keep the two in sync) painted through
-# GearModelRegistry, so what lands in the PNG is what the rink paints.
+# SEEN without launching the game. Each piece is the rink's own shared
+# SkaterMeshBuilder mesh painted through GearModelRegistry, so the PAINT in the
+# PNG is the paint the game applies. The shelf layout and seating are this
+# tool's own — isolated pieces at a legible angle, not the locker mannequin's
+# worn pose — so there is nothing here to keep in sync with it.
 #
 # Needs a real (software) renderer, not --headless. On the web container:
 #
@@ -143,11 +144,11 @@ func _add_shelf(span: float, y: float) -> void:
 	root.add_child(mi)
 
 
-# One skate under `holder`, painted from the model's zones. Mirrors
-# LockerMannequin._pose: the boot rides the rotated boot frame seated
-# so the runner stands on the shelf, and the collar takes the appearance rig's
-# neutral-build scaling (calf girth laterally, height vertically — the boot
-# deliberately never scales) with the accent band seated on it.
+# One skate under `holder`, painted from the model's zones. The boot rides a
+# rotated boot frame seated so the runner stands on the shelf with the toe
+# facing the camera, and the collar takes the appearance rig's neutral-build
+# scaling (calf girth laterally, height vertically — the boot deliberately
+# never scales) with the accent band seated on it.
 func _build_skate(holder: Node3D, model: int) -> void:
 	var skate_at := Vector3(0.0, _BLADE_ICE_M, 0.0)
 	# Boot and blade are multi-surface pieces (quarter/toe, holder/runner), so
