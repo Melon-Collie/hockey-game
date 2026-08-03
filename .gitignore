@@ -15,3 +15,8 @@ steam/output/
 # OS
 .DS_Store
 Thumbs.db
+# GDExtension build output (every machine builds its own — native/README.md)
+native/bin/
+native/.sconsign.dblite
+native/src/*.o
+native/src/*.os

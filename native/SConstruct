@@ -1,0 +1,21 @@
+#!/usr/bin/env python
+# Build for the mitts_native GDExtension (see native/README.md).
+#
+#   cd native && scons build_profile=build_profile.json
+#
+# Delegates platform/toolchain handling to godot-cpp's SConstruct; the
+# build_profile limits generated bindings to the classes the extension uses,
+# which keeps the first build to ~1-2 minutes instead of ~10.
+import os
+
+env = SConscript("godot-cpp/SConstruct")
+
+env.Append(CPPPATH=["src/"])
+sources = Glob("src/*.cpp")
+
+library = env.SharedLibrary(
+    "bin/libmitts_native{}{}".format(env["suffix"], env["SHLIBSUFFIX"]),
+    source=sources,
+)
+
+Default(library)

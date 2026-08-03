@@ -21,6 +21,7 @@ Deep detail lives next to the code it describes and loads on demand.
 | Launch modes, session lifecycle, claim resolvers, backend | `Scripts/game/CLAUDE.md` |
 | UI conventions (locale seam, menu style, popups) | `Scripts/ui/CLAUDE.md` |
 | Test suite conventions | `tests/CLAUDE.md` |
+| Native C++ kernels (GDExtension build, parity gates) | `native/README.md` |
 | Class boundaries, subsystem decisions, invariants | `ARCHITECTURE.md` |
 | Feature design records | `docs/*-plan.md` |
 | Backlog — perf, extraction candidates, coverage gaps, planned work | GitHub issues |
@@ -170,6 +171,7 @@ that file can't tell you:
 | New controller behavior | Method on `SkaterController`; `GameManager` calls it, never pokes internals directly |
 | New reconcile logic | `domain/rules/reconciliation_rules.gd` + GUT test |
 | New bot AI evaluator | `domain/ai/action_scoring.gd` + GUT calibration test — build it as a grounded model (see `Scripts/domain/ai/CLAUDE.md`) |
+| Port a hot kernel to C++ | `native/src/` + seeded parity fuzz test + micro-bench row; GDScript original stays as the reference (see `native/README.md`) |
 | New "body dial X scales Y" rule | `PlayerAttributes` (see `Scripts/domain/state/CLAUDE.md`) |
 | New user-facing UI string | `KEY,en,es` row in `locale/translations.csv`, then `tr("KEY")` at the display seam (see `Scripts/ui/CLAUDE.md`) |
 
