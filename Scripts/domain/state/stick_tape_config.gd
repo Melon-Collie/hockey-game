@@ -14,7 +14,7 @@ extends RefCounted
 # WIRE VALUES — append only. HEEL_TO_MID sits at 0 so the all-default config
 # packs to code 0: a payload that omits the field (an older entry, a bot)
 # decodes to exactly the pre-customization look.
-enum Span { HEEL_TO_MID, TOE, MID, FULL, NONE }
+enum Span { HEEL_TO_MID, TOE, MID, FULL, NONE, MID_TO_TOE }
 
 # u ranges per span (x = start, y = end; u: 0 = heel, 1 = toe). Spans that
 # include the heel start slightly negative so the tape's heel cap sits proud
@@ -26,6 +26,7 @@ const _SPAN_RANGES: Array[Vector2] = [
 	Vector2(0.22, 0.72),            # MID — the classic middle patch
 	Vector2(_HEEL_OVERHANG, 1.0),   # FULL
 	Vector2(0.0, 0.0),              # NONE — no band at all
+	Vector2(0.38, 1.0),             # MID_TO_TOE — HEEL_TO_MID's mirror
 ]
 
 # Handle wrap style: just the butt knob, a candy-cane spiral running down the

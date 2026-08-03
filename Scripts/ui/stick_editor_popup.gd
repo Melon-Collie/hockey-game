@@ -49,13 +49,14 @@ const _FLEX_KEYS: Array[StringName] = [
 const _SPAN_OPTIONS: Array[int] = [
 	StickTapeConfig.Span.FULL,
 	StickTapeConfig.Span.HEEL_TO_MID,
+	StickTapeConfig.Span.MID_TO_TOE,
 	StickTapeConfig.Span.MID,
 	StickTapeConfig.Span.TOE,
 	StickTapeConfig.Span.NONE,
 ]
 const _SPAN_KEYS: Array[StringName] = [
-	&"TAPE_SPAN_FULL", &"TAPE_SPAN_HEEL_TO_MID", &"TAPE_SPAN_MID",
-	&"TAPE_SPAN_TOE", &"TAPE_SPAN_NONE",
+	&"TAPE_SPAN_FULL", &"TAPE_SPAN_HEEL_TO_MID", &"TAPE_SPAN_MID_TO_TOE",
+	&"TAPE_SPAN_MID", &"TAPE_SPAN_TOE", &"TAPE_SPAN_NONE",
 ]
 const _STYLE_OPTIONS: Array[int] = [
 	StickTapeConfig.KnobStyle.KNOB,
