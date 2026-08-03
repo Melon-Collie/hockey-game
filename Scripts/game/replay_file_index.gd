@@ -20,15 +20,22 @@ static func list(dir: String = REPLAY_DIR) -> Array[String]:
 	var d: DirAccess = DirAccess.open(dir)
 	if d == null:
 		return result
+	# Decorate-sort-undecorate: stat each file once on the way in and sort on the
+	# cached time. Statting inside the comparator instead costs a filesystem call
+	# per comparison — O(n log n) syscalls to order n files, on the main thread of
+	# whatever menu frame asked for the list.
+	var mtime_by_path: Dictionary[String, int] = {}
 	d.list_dir_begin()
 	var name: String = d.get_next()
 	while not name.is_empty():
 		if not d.current_is_dir() and name.ends_with(REPLAY_EXT):
-			result.append(dir.path_join(name))
+			var path: String = dir.path_join(name)
+			result.append(path)
+			mtime_by_path[path] = FileAccess.get_modified_time(path)
 		name = d.get_next()
 	d.list_dir_end()
 	result.sort_custom(func(a: String, b: String) -> bool:
-		return FileAccess.get_modified_time(a) > FileAccess.get_modified_time(b))
+		return mtime_by_path[a] > mtime_by_path[b])
 	return result
 
 
