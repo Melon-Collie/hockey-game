@@ -203,18 +203,89 @@ func test_stick_gear_reaches_the_blade_and_the_shaft() -> void:
 			"a long cut outreaches standard")
 
 
-# Both fists are pinned to the shaft, so a length change has to carry them —
-# hands left behind at the old grip is exactly the failure the mannequin
-# replaced the free-floating turntable to avoid.
+# Both fists grip the shaft, so a length change has to carry them — hands left
+# behind at the old grip is exactly the failure the mannequin replaced the
+# free-floating turntable to avoid.
 func test_the_hands_stay_on_the_shaft_when_the_stick_is_recut() -> void:
 	_open()
 	var top: MeshInstance3D = _part("_hands", 0)
-	var short_grip: Vector3 = Vector3.ZERO
 	_btn("_length_btn").item_selected.emit(0)
-	short_grip = top.position
+	var short_grip: Vector3 = top.position
 	_btn("_length_btn").item_selected.emit(2)
 	assert_lt(short_grip.y, top.position.y,
 			"a longer stick raises the top hand's grip")
+
+
+# Distance from the shaft line to each fist. The grips are solved onto that
+# line, so anything above a rounding error means a hand is holding thin air.
+func _grip_offset(hand: MeshInstance3D) -> float:
+	var heel: Vector3 = _mannequin().get("_shaft_heel")
+	var up: Vector3 = _mannequin().get("_shaft_up")
+	var along: Vector3 = hand.position - heel
+	return (along - up * along.dot(up)).length()
+
+
+# Both arms are the rig's own length. Deriving segment length from how far the
+# grip happened to land built one long arm and one short one, because the two
+# hands sit at very different distances from their shoulders.
+func test_both_arms_are_the_same_length() -> void:
+	for length: int in 3:
+		_open()
+		_btn("_length_btn").item_selected.emit(length)
+		var spans: Array[float] = []
+		for i: int in 2:
+			var upper: float = _part("_upper_arms", i).transform.basis.y.length()
+			var fore: float = _part("_forearms", i).transform.basis.y.length()
+			assert_almost_eq(upper, fore, 0.01,
+					"arm %d bends at its midpoint (cut %d)" % [i, length])
+			spans.append(upper + fore)
+		assert_almost_eq(spans[0], spans[1], 0.01,
+				"both arms are the same length (cut %d)" % length)
+		# And that length is the rig's own bones riding the build's height, not
+		# whatever distance the grip happened to land at.
+		var build := PlayerAttributes.new(PlayerAttributes.HEIGHT_MEDIUM,
+				int(PlayerAttributes.NEUTRAL_WEIGHT_LBS), 1, 1, 1, length)
+		assert_almost_eq(spans[0], 0.66 * build.height_mult(), 0.01,
+				"arms are the rig's 0.33 m bones, scaled by height")
+
+
+# Every grip has to end up ON the shaft and inside its own arm's reach — the
+# solver slides it until both hold, so neither can be traded for the other.
+func test_the_grips_stay_on_the_shaft_and_inside_the_arms_reach() -> void:
+	for height: int in [PlayerAttributes.HEIGHT_MIN, PlayerAttributes.HEIGHT_MAX]:
+		for length: int in 3:
+			_open(GearStyleConfig.new(), StickTapeConfig.DEFAULT_CODE,
+					PlayerAttributes.new(height,
+						PlayerAttributes.coerce_weight(height, 190), 1, 1, 1, length))
+			for i: int in 2:
+				var hand: MeshInstance3D = _part("_hands", i)
+				assert_almost_eq(_grip_offset(hand), 0.0, 0.001,
+						"hand %d grips the shaft (height %d, cut %d)" % [i, height, length])
+				var shoulder: Vector3 = _part("_upper_arms", i).position \
+						+ _part("_upper_arms", i).transform.basis.y * 0.5
+				var upper: float = _part("_upper_arms", i).transform.basis.y.length()
+				var fore: float = _part("_forearms", i).transform.basis.y.length()
+				assert_lte(shoulder.distance_to(hand.position), upper + fore + 0.001,
+						"hand %d is inside its arm's reach" % i)
+
+
+# The fist and cuff bases scale their COLUMNS. Basis.scaled() scales in the
+# parent frame instead, which shears a rotated grip basis into a stretched
+# sheet — a blade-shaped artifact hanging off each wrist.
+func test_the_hand_pieces_are_not_sheared() -> void:
+	_open()
+	for i: int in 2:
+		for name: String in ["_hands", "_cuffs"]:
+			var b: Basis = _part(name, i).transform.basis
+			assert_almost_eq(b.x.dot(b.y), 0.0, 0.0001, "%s %d x⊥y" % [name, i])
+			assert_almost_eq(b.y.dot(b.z), 0.0, 0.0001, "%s %d y⊥z" % [name, i])
+			assert_almost_eq(b.z.dot(b.x), 0.0, 0.0001, "%s %d z⊥x" % [name, i])
+		# The cuff is a unit-radius ring with its real height baked in, so only
+		# its radius may scale — a stretched Y is the artifact itself.
+		var cuff: Basis = _part("_cuffs", i).transform.basis
+		assert_almost_eq(cuff.y.length(), 1.0, 0.001, "cuff %d keeps its height" % i)
+		assert_lt(cuff.x.length(), 0.15, "cuff %d stays a wrist ring" % i)
+		assert_lt(cuff.z.length(), 0.15, "cuff %d stays a wrist ring" % i)
 
 
 # The mannequin stands ON the case floor at every build: the boot is the one
@@ -266,6 +337,16 @@ func test_a_row_aims_the_case_at_its_own_group() -> void:
 	_btn("_face_btn").focus_entered.emit()
 	assert_eq(_popup.get("_focus"), LockerMannequin.Focus.HELMET)
 	_btn("_curve_btn").focus_entered.emit()
+	assert_eq(_popup.get("_focus"), LockerMannequin.Focus.STICK)
+
+
+# Hovering has to aim it too, and the pointer lands on the CONTROL, not on the
+# container behind it — wiring only the row leaves a mouse player's case stuck.
+func test_hovering_a_control_aims_the_case() -> void:
+	_open()
+	_btn("_skate_btn").mouse_entered.emit()
+	assert_eq(_popup.get("_focus"), LockerMannequin.Focus.SKATES)
+	_btn("_flex_btn").mouse_entered.emit()
 	assert_eq(_popup.get("_focus"), LockerMannequin.Focus.STICK)
 
 

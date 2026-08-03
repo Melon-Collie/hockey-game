@@ -63,11 +63,19 @@ const _HAND_RADIUS: float = 0.064
 const _CUFF_RADIUS: float = 0.065
 # How far up the forearm the cuff ring sits from the fist's center.
 const _CUFF_OFFSET_M: float = 0.075
-# Both arm segments as a fraction of the shoulder→hand span. Equal halves would
-# leave the arm dead straight, which reads as a mannequin arm rather than a
-# player's; over half forces a visible bend at any reach, so the pose survives
-# whatever the stick length and body height put the hands.
-const _ARM_SEGMENT_FRAC: float = 0.56
+# Arm segments at the rig's own lengths (Skater.upper_arm_length /
+# forearm_length), NOT derived from how far the grip happens to be: the two
+# hands sit at very different distances from their shoulders, so a
+# reach-proportional segment builds one long arm and one short one.
+const _UPPER_ARM_M: float = 0.33
+const _FOREARM_M: float = 0.33
+# Grips are solved onto the shaft within this fraction of the arm's full span,
+# so the elbow always has a bend left in it and the fists never float off the
+# hand they belong to.
+const _GRIP_REACH_FRAC: float = 0.88
+# Elbow pole hint, the rig's own (Skater.arm_pole_local) — mirrored per side so
+# each elbow swings out and back rather than folding into the ribs.
+const _ARM_POLE := Vector3(0.55, -1.0, 0.1)
 
 # ── Stick pose ───────────────────────────────────────────────────────────────
 # The display LIE — steeper than the rink's 42°, which is a skating-crouch
@@ -86,10 +94,16 @@ const _HEEL_OUT_M: float = 0.14
 const _HEEL_FWD_M: float = -0.67
 # The heel rides this far above the sole (the stick workbench's disc seat).
 const _HEEL_LIFT_M: float = 0.042
-# Hand grips along the shaft: the top hand just under the knob, the bottom hand
-# about half way down.
-const _TOP_HAND_DROP_M: float = 0.17
-const _BOTTOM_HAND_FRAC: float = 0.52
+# Where the grips WANT to sit — the top hand just under the knob, the bottom
+# hand high on the shaft. Both are only hints: the arm pass slides each one
+# along the shaft until its own shoulder can actually reach it. They sit high
+# because a stick standing on the ice in front of a player genuinely is held
+# near its top; the shoulders are only ~1.4 m above a blade planted 0.7 m out.
+const _TOP_HAND_DROP_M: float = 0.13
+const _BOTTOM_HAND_FRAC: float = 0.70
+# A grip never rides onto the hosel, and never past the knob.
+const _GRIP_MIN_S_M: float = 0.25
+const _GRIP_END_MARGIN_M: float = 0.06
 const _HOSEL_LEN_M: float = 0.085
 const _SHAFT_CROSS := Vector2(0.04, 0.05)
 const _KNOB_HEIGHT_M: float = 0.05
@@ -136,10 +150,11 @@ var _knob: MeshInstance3D = null
 # pieces move with the build's height and the picked stick length.
 var _anchors: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO,
 	Vector3.ZERO, Vector3.ZERO]
-# Where the fists land on the shaft. Written by the stick pass, read by the arm
-# pass right after it — the grips are what the arms are posed to reach.
-var _grip_top: Vector3 = Vector3.ZERO
-var _grip_bottom: Vector3 = Vector3.ZERO
+# The posed shaft line, in rig space. Written by the stick pass and read by the
+# arm pass right after it — the grips are solved onto this line.
+var _shaft_heel: Vector3 = Vector3.ZERO
+var _shaft_up: Vector3 = Vector3.UP
+var _shaft_len: float = 1.0
 # +1 when the blade sits on the rig's +X side (a right-handed shot), −1 for a
 # lefty. The top hand is always on the other side — see Skater._position_hand_markers.
 var _blade_side: float = 1.0
@@ -314,7 +329,7 @@ func _pose(attrs: PlayerAttributes, tape: StickTapeConfig,
 				Vector3(leg_x, boot_y, _BOOT_DZ))
 
 	_pose_stick(attrs, tape)
-	_pose_arms(is_left_handed, shoulder_x, shoulder_y, m_upper_arm, m_forearm)
+	_pose_arms(is_left_handed, shoulder_x, shoulder_y, m_upper_arm, m_forearm, m_height)
 
 	# Anchors so far are rig-local (the stick and arm passes wrote theirs the
 	# same way); the two body framings join them here.
@@ -383,61 +398,93 @@ func _pose_stick(attrs: PlayerAttributes, tape: StickTapeConfig) -> void:
 	var yaw: float = deg_to_rad(-_blade_side * _STICK_YAW_DEG)
 	_stick_root.transform = Transform3D(Basis(Vector3.UP, yaw), heel)
 
-	var up_shaft: Vector3 = _stick_root.basis * axis
-	_anchors[Focus.STICK] = heel + up_shaft * (stick_len * 0.5)
-	# Grip points, cached for the arm pass.
-	_grip_top = heel + up_shaft * (stick_len - _TOP_HAND_DROP_M)
-	_grip_bottom = heel + up_shaft * (stick_len * _BOTTOM_HAND_FRAC)
+	# Cached for the arm pass, which solves the grips onto this line.
+	_shaft_heel = heel
+	_shaft_up = _stick_root.basis * axis
+	_shaft_len = stick_len
+	_anchors[Focus.STICK] = heel + _shaft_up * (stick_len * 0.5)
 
 
-# Both arms, shoulder → elbow → fist, with the fists on the shaft's grip
-# points. The top hand belongs to the shoulder AWAY from the blade (a lefty's
-# right hand tops the stick), which is the same rule the rig's hand markers use.
+# Both arms, shoulder → elbow → fist. The top hand belongs to the shoulder AWAY
+# from the blade (a lefty's right hand tops the stick), which is the same rule
+# the rig's hand markers use.
+#
+# The grips are SOLVED onto the shaft rather than fixed on it: the shoulders sit
+# ~1.4 m above a blade planted out in front, so the two hands are at very
+# different distances from their own shoulders, and pinning both would put one
+# hand outside its arm's reach. Sliding each grip to where its arm can hold it
+# is what keeps both arms the rig's own length.
 func _pose_arms(is_left_handed: bool, shoulder_x: float, shoulder_y: float,
-		m_upper_arm: float, m_forearm: float) -> void:
+		m_upper_arm: float, m_forearm: float, m_height: float) -> void:
 	var top_side: float = 1.0 if is_left_handed else -1.0
-	var grips: Array[Vector3] = [_grip_top, _grip_bottom]
+	var upper: float = _UPPER_ARM_M * m_height
+	var fore: float = _FOREARM_M * m_height
+	var reach_limit: float = (upper + fore) * _GRIP_REACH_FRAC
+	var wanted: Array[float] = [
+		_shaft_len - _TOP_HAND_DROP_M, _shaft_len * _BOTTOM_HAND_FRAC]
+	var grips: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO]
 	for i: int in 2:
 		var side: float = top_side if i == 0 else -top_side
 		var shoulder := Vector3(side * shoulder_x, shoulder_y, 0.0)
-		var hand: Vector3 = grips[i]
-		# Elbows swing out and back off the shoulder→hand line — the pole hint
-		# is what stops the solver from picking a bend into the ribs.
-		var elbow: Vector3 = _solve_elbow(shoulder, hand,
-				Vector3(side * 0.85, -0.35, 0.38))
+		var hand: Vector3 = _shaft_heel + _shaft_up \
+				* _grip_along_shaft(shoulder, wanted[i], reach_limit)
+		grips[i] = hand
+		var pole := Vector3(_ARM_POLE.x * side, _ARM_POLE.y, _ARM_POLE.z)
+		var elbow: Vector3 = _solve_elbow(shoulder, hand, pole, upper, fore)
 		_seat_bone(_upper_arms[i], shoulder, elbow, _ARM_RADIUS * m_upper_arm)
 		_seat_bone(_forearms[i], elbow, hand, _ARM_RADIUS * m_forearm)
 		_elbows[i].transform = Transform3D(
 				Basis.from_scale(Vector3.ONE * _ELBOW_RADIUS * m_upper_arm), elbow)
 		# The fist's local +Y runs back toward the elbow — the live rig's
-		# convention, so the block's faces track the forearm.
+		# convention, so the block's faces track the forearm. Both this and the
+		# cuff scale their basis COLUMNS: Basis.scaled() would scale in the
+		# parent frame, which shears a rotated basis into a stretched sheet.
 		var grip: Basis = _basis_along((elbow - hand).normalized())
 		_hands[i].transform = Transform3D(
-				grip.scaled(Vector3.ONE * _HAND_RADIUS), hand)
+				Basis(grip.x * _HAND_RADIUS, grip.y * _HAND_RADIUS,
+					grip.z * _HAND_RADIUS), hand)
 		var wrist: Vector3 = hand + (elbow - hand).normalized() * _CUFF_OFFSET_M
+		# The cuff mesh carries its real height baked, so only the radius scales.
 		_cuffs[i].transform = Transform3D(
-				grip.scaled(Vector3(_CUFF_RADIUS, 1.0, _CUFF_RADIUS)), wrist)
+				Basis(grip.x * _CUFF_RADIUS, grip.y, grip.z * _CUFF_RADIUS), wrist)
 
-	_anchors[Focus.GLOVES] = (_grip_top + _grip_bottom) * 0.5
+	_anchors[Focus.GLOVES] = (grips[0] + grips[1]) * 0.5
 
 
-# Elbow on the circle of points that bend the arm by a fixed amount, picked by
-# a pole hint. Both segments are the same fraction of the reach, so the bend is
-# there at every stick length and body height without a reach check.
-func _solve_elbow(shoulder: Vector3, hand: Vector3, pole: Vector3) -> Vector3:
+# How far along the shaft a hand can grip: the points within `reach` of the
+# shoulder are an interval on the shaft line, so take the one nearest where the
+# grip wanted to be. A shaft that never comes within reach falls back to the
+# closest it gets, which is the best that arm can do.
+func _grip_along_shaft(shoulder: Vector3, wanted: float, reach: float) -> float:
+	var to_heel: Vector3 = _shaft_heel - shoulder
+	var b: float = _shaft_up.dot(to_heel)
+	var disc: float = b * b - to_heel.length_squared() + reach * reach
+	var s: float = -b
+	if disc > 0.0:
+		var root: float = sqrt(disc)
+		s = clampf(wanted, -b - root, -b + root)
+	return clampf(s, _GRIP_MIN_S_M, _shaft_len - _GRIP_END_MARGIN_M)
+
+
+# Elbow on the circle of poses that reach `hand` with the given segments,
+# picked by a pole hint — the hint is what stops the solver bending into the
+# ribs. Segments are the rig's fixed lengths, so both arms come out the same
+# length whatever their grip ended up being.
+func _solve_elbow(shoulder: Vector3, hand: Vector3, pole: Vector3,
+		upper: float, fore: float) -> Vector3:
 	var to_hand: Vector3 = hand - shoulder
 	var reach: float = to_hand.length()
 	if reach < 0.001:
-		return shoulder
+		return shoulder + Vector3.DOWN * upper
 	var dir: Vector3 = to_hand / reach
-	var seg: float = reach * _ARM_SEGMENT_FRAC
-	# Equal segments put the elbow over the midpoint; its offset off the line is
-	# the leg of the isoceles triangle.
-	var offset: float = sqrt(maxf(seg * seg - reach * reach * 0.25, 0.0))
+	# Cosine rule: how far along the shoulder→hand line the elbow projects.
+	var along: float = clampf(
+			(reach * reach + upper * upper - fore * fore) / (2.0 * reach), -upper, upper)
+	var offset: float = sqrt(maxf(upper * upper - along * along, 0.0))
 	var perp: Vector3 = pole - dir * pole.dot(dir)
 	if perp.length_squared() < 1e-8:
 		perp = Vector3.DOWN - dir * dir.dot(Vector3.DOWN)
-	return shoulder + dir * (reach * 0.5) + perp.normalized() * offset
+	return shoulder + dir * along + perp.normalized() * offset
 
 
 # Stretch a unit bone prism between two joints. +Y (the wide end) lands on the

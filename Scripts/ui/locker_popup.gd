@@ -383,6 +383,10 @@ func _section_header(text: String) -> Label:
 # One labelled row. `gameplay` rows carry the gold asterisk the legend
 # explains; `focus` is the framing this row asks the case for, on hover or on
 # focus, so working a row and seeing the piece are the same gesture.
+#
+# Every piece of the row wires the hover, not just the row itself: the label and
+# the control sit ON TOP of the container and take the pointer, so relying on
+# the container alone leaves the framing stuck wherever it was.
 func _add_row(col: VBoxContainer, label_text: String, control: Control,
 		gameplay: bool, tooltip: String, focus: int) -> void:
 	var row := HBoxContainer.new()
@@ -400,6 +404,7 @@ func _add_row(col: VBoxContainer, label_text: String, control: Control,
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.mouse_filter = Control.MOUSE_FILTER_STOP
 	label.tooltip_text = tooltip
+	label.mouse_entered.connect(_set_focus.bind(focus))
 	row.add_child(label)
 
 	var star := Label.new()
@@ -410,9 +415,12 @@ func _add_row(col: VBoxContainer, label_text: String, control: Control,
 	star.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	star.tooltip_text = tr(&"STICK_GAMEPLAY_LEGEND") if gameplay else ""
 	star.mouse_filter = Control.MOUSE_FILTER_STOP if gameplay else Control.MOUSE_FILTER_IGNORE
+	if gameplay:
+		star.mouse_entered.connect(_set_focus.bind(focus))
 	row.add_child(star)
 
 	control.focus_entered.connect(_set_focus.bind(focus))
+	control.mouse_entered.connect(_set_focus.bind(focus))
 	row.add_child(control)
 
 
