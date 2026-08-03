@@ -84,6 +84,14 @@ const _DRAG_RAD_PER_PX: float = 0.008
 const _DRAG_ZOOM_PER_PX: float = 0.004
 const _ZOOM_NEAR_M: float = 0.22
 const _ZOOM_FAR_M: float = 4.5
+# The pad's right stick does the same two jobs as the drag, as a RATE control
+# (per second at full deflection) rather than per pixel. Stick Y is positive
+# DOWN like screen space, so pushing up zooms in — the same gesture as dragging
+# up, which is what keeps the two devices from feeling inverted against each
+# other. Deadzone matches FreeCamera's pad free-look.
+const _PAD_DEADZONE: float = 0.15
+const _PAD_RAD_PER_S: float = 2.2
+const _PAD_ZOOM_PER_S: float = 0.8
 
 # Pending picks (working state between open() and Done).
 var _attrs: PlayerAttributes = null
@@ -129,6 +137,13 @@ var _target_yaw: float = 0.0
 # asked for. Cleared when the focus moves, like the presented yaw is.
 var _zoom: float = 1.0
 var _dragging: bool = false
+# Cached like every other pad reader in the project: get_connected_joypads() is
+# not free, and device 0 is not a safe assumption. -1 = no pad.
+var _pad_device: int = -1
+# True on any frame the right stick is live, so the wide shot's idle turn gets
+# out of the way while the player is aiming the case themselves.
+var _pad_looking: bool = false
+var _case_hint: Label = null
 
 # Focus scope (see ControllerNav.open_modal).
 var _focus_background: Control = null
@@ -141,13 +156,27 @@ func _ready() -> void:
 	if focus_theme != null:
 		theme = focus_theme
 	_build()
+	Input.joy_connection_changed.connect(
+			func(_d: int, _c: bool) -> void: _refresh_pad_device())
+	_refresh_pad_device()
+	# The case hint names whichever device is driving, so it follows a mid-session
+	# swap the way every other persistent prompt does.
+	InputDeviceTracker.device_changed.connect(
+			func(_is_gamepad: bool) -> void: _refresh_case_hint())
+	_refresh_case_hint()
 	visible = false
+
+
+func _refresh_pad_device() -> void:
+	var pads: Array = Input.get_connected_joypads()
+	_pad_device = int(pads[0]) if not pads.is_empty() else -1
 
 
 func _process(delta: float) -> void:
 	if not visible or _mannequin == null:
 		return
-	if _focus == LockerMannequin.Focus.FULL and not _dragging:
+	_read_pad_look(delta)
+	if _focus == LockerMannequin.Focus.FULL and not _dragging and not _pad_looking:
 		_target_yaw += _IDLE_RAD_PER_S * delta
 	var t: float = minf(_EASE_PER_S * delta, 1.0)
 	_yaw = lerpf(_yaw, _target_yaw, t)
@@ -176,6 +205,30 @@ func _base_distance() -> float:
 
 func _framed_distance() -> float:
 	return clampf(_base_distance() * _zoom, _ZOOM_NEAR_M, _ZOOM_FAR_M)
+
+
+# The pad's right stick drives the case exactly as the mouse drag does — turn
+# on X, zoom on Y — but as a rate, so holding the stick keeps moving. Gated on
+# the one device flag every surface here reads, so a controller the player has
+# switched off in Options is ignored entirely.
+func _read_pad_look(delta: float) -> void:
+	_pad_looking = false
+	if _pad_device < 0 or not InputDeviceTracker.is_gamepad_active():
+		return
+	var look: Vector2 = GamepadAimRules.apply_radial_deadzone(Vector2(
+			Input.get_joy_axis(_pad_device, JOY_AXIS_RIGHT_X),
+			Input.get_joy_axis(_pad_device, JOY_AXIS_RIGHT_Y)), _PAD_DEADZONE)
+	if look == Vector2.ZERO:
+		return
+	_pad_looking = true
+	_target_yaw += look.x * _PAD_RAD_PER_S * delta
+	_zoom_by(look.y * _PAD_ZOOM_PER_S * delta)
+
+
+func _refresh_case_hint() -> void:
+	if _case_hint != null:
+		_case_hint.text = ControllerGlyphs.prompt(
+				tr(&"LOCKER_CASE_HINT_MOUSE"), tr(&"LOCKER_CASE_HINT_PAD"))
 
 
 # ── Construction ─────────────────────────────────────────────────────────────
@@ -268,6 +321,13 @@ func _build() -> void:
 # The display case: an inset well with an ice disc the mannequin stands on,
 # real shadows, and its own 3D world so the figure renders over the menu scrim.
 func _build_case(row: HBoxContainer) -> void:
+	# The case and its hint stack, so the hint stays under the glass rather than
+	# beside the rows.
+	var case_column := VBoxContainer.new()
+	case_column.add_theme_constant_override("separation", 6)
+	case_column.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(case_column)
+
 	var case_panel := PanelContainer.new()
 	var case_style := StyleBoxFlat.new()
 	case_style.bg_color = MenuStyle.SURFACE_INPUT
@@ -276,8 +336,7 @@ func _build_case(row: HBoxContainer) -> void:
 	case_style.border_color = MenuStyle.TEAL_DIM
 	case_style.set_content_margin_all(4)
 	case_panel.add_theme_stylebox_override("panel", case_style)
-	case_panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	row.add_child(case_panel)
+	case_column.add_child(case_panel)
 
 	var container := SubViewportContainer.new()
 	container.stretch = true
@@ -324,6 +383,14 @@ func _build_case(row: HBoxContainer) -> void:
 	# The mannequin's origin IS the ice plane, so it sits on the disc unposed.
 	_mannequin = LockerMannequin.new()
 	_viewport.add_child(_mannequin)
+
+	# Turning and zooming the case is invisible until someone tries it, so the
+	# hint names the gesture for whichever device is driving.
+	_case_hint = Label.new()
+	_case_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_case_hint.add_theme_color_override("font_color", MenuStyle.TEXT_MUTED)
+	_case_hint.add_theme_font_size_override("font_size", 11)
+	case_column.add_child(_case_hint)
 
 
 func _build_stick_column(row: HBoxContainer) -> void:
@@ -452,8 +519,14 @@ func _add_row(col: VBoxContainer, label_text: String, control: Control,
 		star.mouse_entered.connect(_set_focus.bind(focus))
 	row.add_child(star)
 
-	control.focus_entered.connect(_set_focus.bind(focus))
-	control.mouse_entered.connect(_set_focus.bind(focus))
+	# A SwatchDropdown is a wrapper — it is FOCUS_NONE and its button covers it,
+	# so watching the wrapper would silently never fire and those rows would be
+	# the only ones that never re-frame the case.
+	var reached: Control = control
+	if control is SwatchDropdown:
+		reached = (control as SwatchDropdown).focus_target()
+	reached.focus_entered.connect(_set_focus.bind(focus))
+	reached.mouse_entered.connect(_set_focus.bind(focus))
 	row.add_child(control)
 
 
@@ -552,18 +625,20 @@ func _on_case_input(event: InputEvent) -> void:
 	elif event is InputEventMouseMotion and _dragging:
 		var motion := event as InputEventMouseMotion
 		_target_yaw += motion.relative.x * _DRAG_RAD_PER_PX
-		_zoom_by(motion.relative.y)
+		_zoom_by(motion.relative.y * _DRAG_ZOOM_PER_PX)
 
 
-# Screen Y runs downward, so a positive drag pushes the camera out. Clamped
-# against THIS framing's own distance rather than as a free multiplier: let it
-# wind up past the stop and the zoom stops responding until you have dragged
-# all the way back, which reads as the control being broken.
-func _zoom_by(dy: float) -> void:
+# Both devices land here: a positive `exponent` pushes the camera out, negative
+# pulls it in, and the scaling is multiplicative so the two only have to agree
+# on sign and rate. Clamped against THIS framing's own distance rather than as
+# a free multiplier: let it wind up past the stop and the zoom stops responding
+# until it has been wound all the way back, which reads as a broken control —
+# and a held stick would wind it up far faster than a drag ever could.
+func _zoom_by(exponent: float) -> void:
 	var base: float = _base_distance()
 	if base <= 0.0:
 		return
-	_zoom = clampf(_zoom * exp(dy * _DRAG_ZOOM_PER_PX),
+	_zoom = clampf(_zoom * exp(exponent),
 			minf(_ZOOM_NEAR_M / base, 1.0), maxf(_ZOOM_FAR_M / base, 1.0))
 
 

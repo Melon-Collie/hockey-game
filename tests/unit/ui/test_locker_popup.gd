@@ -432,26 +432,95 @@ func test_the_whole_stick_shot_contains_the_whole_stick() -> void:
 func test_dragging_up_and_down_zooms() -> void:
 	_open()
 	var wide: float = _popup.call("_framed_distance")
-	_popup.call("_zoom_by", -60.0)
+	_popup.call("_zoom_by", -0.25)
 	var closer: float = _popup.call("_framed_distance")
 	assert_lt(closer, wide, "dragging up pulls the camera in")
-	_popup.call("_zoom_by", 120.0)
+	_popup.call("_zoom_by", 0.5)
 	assert_gt(_popup.call("_framed_distance"), closer, "dragging down pushes it out")
 
 	# Wind it hard against each stop, then reverse ONE step: the distance has to
-	# move straight away.
+	# move straight away. A held pad stick can hit these stops in a second, so
+	# this is the pad's failure mode as much as the mouse's.
 	for i: int in 40:
-		_popup.call("_zoom_by", -100.0)
+		_popup.call("_zoom_by", -0.5)
 	var pinned_near: float = _popup.call("_framed_distance")
-	_popup.call("_zoom_by", 40.0)
+	_popup.call("_zoom_by", 0.2)
 	assert_gt(_popup.call("_framed_distance"), pinned_near,
 			"the near stop does not wind up")
 	for i: int in 40:
-		_popup.call("_zoom_by", 100.0)
+		_popup.call("_zoom_by", 0.5)
 	var pinned_far: float = _popup.call("_framed_distance")
-	_popup.call("_zoom_by", -40.0)
+	_popup.call("_zoom_by", -0.2)
 	assert_lt(_popup.call("_framed_distance"), pinned_far,
 			"the far stop does not wind up")
+
+
+# The pad's right stick has to reach the same two controls the drag does, and
+# agree with it on direction — a stick that zoomed the opposite way from the
+# drag would read as one of the two being inverted.
+func test_the_pad_stick_turns_and_zooms_the_same_way_the_drag_does() -> void:
+	_open()
+	# With no pad connected under GUT, the read must leave the case alone rather
+	# than reading axes off a device that isn't there.
+	var before_yaw: float = _popup.get("_target_yaw")
+	_popup.call("_read_pad_look", 0.016)   # no pad connected under GUT
+	assert_eq(_popup.get("_target_yaw"), before_yaw,
+			"no pad connected means the case is left alone")
+	assert_false(_popup.get("_pad_looking"), "and the idle turn keeps running")
+
+	# The zoom path both devices share: negative pulls in on either.
+	var wide: float = _popup.call("_framed_distance")
+	_popup.call("_zoom_by", -0.3)
+	assert_lt(_popup.call("_framed_distance"), wide,
+			"negative exponent pulls in, whichever device sent it")
+
+
+# The swatch rows are the ones a pad player would silently lose: SwatchDropdown
+# is a FOCUS_NONE wrapper whose inner button takes the focus, so watching the
+# wrapper connects a signal that never fires and those three rows alone would
+# never re-frame the case.
+func test_the_swatch_rows_reframe_the_case_too() -> void:
+	_open()
+	var rows: Dictionary = {
+		"_blade_color_dd": LockerMannequin.Focus.BLADE,
+		"_knob_color_dd": LockerMannequin.Focus.GRIP,
+		"_lace_dd": LockerMannequin.Focus.SKATES,
+	}
+	for name: String in rows:
+		var dd: SwatchDropdown = _popup.get(name) as SwatchDropdown
+		assert_eq(dd.focus_mode, Control.FOCUS_NONE,
+				"%s is still a wrapper — if this changed, so did the wiring" % name)
+		_popup.call("_set_focus", LockerMannequin.Focus.FULL)
+		dd.focus_target().focus_entered.emit()
+		assert_eq(_popup.get("_focus"), rows[name], "%s aims the case" % name)
+		_popup.call("_set_focus", LockerMannequin.Focus.FULL)
+		dd.focus_target().mouse_entered.emit()
+		assert_eq(_popup.get("_focus"), rows[name], "%s aims it on hover too" % name)
+
+
+# Every row a pad walks has to be reachable at all — a control the focus search
+# skips is a pick a controller player simply cannot make.
+func test_every_row_control_is_pad_reachable() -> void:
+	_open()
+	for name: String in ["_length_btn", "_curve_btn", "_flex_btn",
+			"_stick_model_btn", "_span_btn", "_style_btn", "_profile_btn",
+			"_skate_btn", "_glove_btn", "_face_btn"]:
+		assert_ne(_btn(name).focus_mode, Control.FOCUS_NONE,
+				"%s can be focused" % name)
+	for name: String in ["_blade_color_dd", "_knob_color_dd", "_lace_dd"]:
+		var dd: SwatchDropdown = _popup.get(name) as SwatchDropdown
+		assert_ne(dd.focus_target().focus_mode, Control.FOCUS_NONE,
+				"%s can be focused" % name)
+
+
+# The hint has to name the device that is actually driving, and follow a swap.
+func test_the_case_hint_names_the_driving_device() -> void:
+	_open()
+	var hint: Label = _popup.get("_case_hint") as Label
+	assert_false(hint.text.is_empty(), "the case says how to turn it")
+	assert_eq(hint.text, ControllerGlyphs.prompt(
+			tr(&"LOCKER_CASE_HINT_MOUSE"), tr(&"LOCKER_CASE_HINT_PAD")),
+			"and names whichever device is active")
 
 
 # Moving to another group hands back a framed shot, not whatever the last drag
