@@ -400,6 +400,30 @@ var _local_goalie_cue_at: float = -1000.0
 var _local_boards_cue_at: float = -1000.0
 var _local_net_cue_at: float = -1000.0
 
+# Coalesces contact-path stat syncs to one flush per broadcast interval
+# (see StatsSyncGate); flushed in _capture_and_broadcast_post_physics.
+var _stats_sync_gate := StatsSyncGate.new()
+
+# ── Replay audio-event queue ──────────────────────────────────────────────────
+# _record_replay_audio_event is reached from physics-tick paths (shot releases,
+# the drained contact signals, credited body checks), so the tick side only
+# stamps the raw fields into these preallocated parallel arrays; the Dictionary
+# build, JSON encode for the .mreplay writer, and the client mirror RPC all run
+# in the _process drain (_drain_replay_event_queue). Record-time gates
+# (host / replay-mode / celebration / _should_record_to_file) are evaluated at
+# QUEUE time so a phase flip before the drain can't change what gets recorded.
+# Overflow: drop-newest with a warning — capacity covers any real per-frame
+# event burst several times over.
+const _REPLAY_EVENT_QUEUE_CAP: int = 32
+const _EMPTY_EXTRA: Dictionary = {}
+var _replay_evt_kinds: Array[String] = []
+var _replay_evt_pos := PackedVector3Array()
+var _replay_evt_speed := PackedFloat64Array()
+var _replay_evt_ts := PackedFloat64Array()
+var _replay_evt_to_file := PackedByteArray()
+var _replay_evt_extra: Array[Dictionary] = []
+var _replay_evt_count: int = 0
+
 
 func _ready() -> void:
 	randomize()
@@ -423,6 +447,14 @@ func _ready() -> void:
 	var net_hook := PostPhysicsNetHook.new()
 	net_hook.callback = _capture_and_broadcast_post_physics
 	add_child(net_hook)
+	_replay_evt_kinds.resize(_REPLAY_EVENT_QUEUE_CAP)
+	_replay_evt_pos.resize(_REPLAY_EVENT_QUEUE_CAP)
+	_replay_evt_speed.resize(_REPLAY_EVENT_QUEUE_CAP)
+	_replay_evt_ts.resize(_REPLAY_EVENT_QUEUE_CAP)
+	_replay_evt_to_file.resize(_REPLAY_EVENT_QUEUE_CAP)
+	_replay_evt_extra.resize(_REPLAY_EVENT_QUEUE_CAP)
+	for i: int in _REPLAY_EVENT_QUEUE_CAP:
+		_replay_evt_extra[i] = _EMPTY_EXTRA
 	game_over.connect(_on_game_over)
 	_wire_network_signals()
 
@@ -482,6 +514,10 @@ func _process(delta: float) -> void:
 	if _telemetry != null:
 		_telemetry.tick(delta)
 		_observe_telemetry()
+	# Replay audio events queued on the physics tick build/encode/mirror here.
+	# Before the state-machine tick below: a phase entry can start a cinematic
+	# that extracts the recorder's events, which must include this frame's.
+	_drain_replay_event_queue()
 	# Cosmetic, both roles: skaters "step off the ice" at their bench door
 	# during the period-break skate-off (see _update_period_break_hiding).
 	_update_period_break_hiding()
@@ -627,10 +663,30 @@ func _physics_process(delta: float) -> void:
 # _physics_process block: host only, live session, not during goal replay
 # (the recorder must not see replay positions).
 func _capture_and_broadcast_post_physics() -> void:
+	# Drain the puck's deferred contact-event queue FIRST, before this hook's
+	# session gates and before the ring capture + broadcast below. INVARIANT:
+	# clients must observe the identical event-vs-state ordering the old
+	# synchronous emits produced, so the drain MUST precede the capture — every
+	# contact's listener effects (the goalie's catch/butterfly state machine
+	# transition, contact-cue RPCs, stat marks) land before the snapshot that
+	# reflects the contact is captured and shipped. In particular the glove
+	# catch (puck_caught_by_goalie → CATCHING transition) must be in this
+	# tick's snapshot so remotes never render an uncaught frame. Deliberately
+	# ahead of the host/_state_machine gates: tutorial and drill sessions
+	# (which listen to these signals) drain here too.
+	if puck != null:
+		puck.drain_contact_events()
 	if not NetworkManager.is_host or puck == null or _state_machine == null:
 		return
 	if NetworkManager.is_replay_mode():
 		return
+	# Contact-path stat syncs coalesce through the gate and flush here, with
+	# (and just before) the state broadcast — at most one full-roster encode
+	# per broadcast interval instead of one per contact. After the contact
+	# drain above so a contact's stat lands in the same flush. Phase-transition
+	# syncs still run immediately from their own call sites.
+	if _stats_sync_gate.should_flush(NetworkManager.is_broadcast_due()):
+		_sync_stats_to_clients()
 	var t0: int = Time.get_ticks_usec()
 	if _state_buffer_manager != null and puck_controller != null:
 		_state_buffer_manager.capture(_registry, puck_controller, goalie_controllers)
@@ -1807,8 +1863,13 @@ func _on_remote_carrier_sound(new_carrier_peer_id: int) -> void:
 # Audio-only events use kind ∈ { puck_boards, puck_goal_body, puck_deflection,
 # puck_body_block, puck_strip, puck_goalie, puck_post, puck_pickup, shot };
 # body_check carries extra payload via _record_body_check_replay_event.
+#
+# Reached from physics-tick paths, so this only stamps the raw fields into the
+# preallocated queue (allocation-free apart from any caller-built `extra`
+# literal); the Dictionary/JSON/RPC work runs in _drain_replay_event_queue
+# during _process. Gates are evaluated HERE (see the queue doc at the vars).
 func _record_replay_audio_event(kind: String, position: Vector3, speed: float,
-		extra: Dictionary = {}) -> void:
+		extra: Dictionary = _EMPTY_EXTRA) -> void:
 	if not NetworkManager.is_host:
 		return
 	# Don't shadow live events into the replay buffer while a replay is
@@ -1817,22 +1878,56 @@ func _record_replay_audio_event(kind: String, position: Vector3, speed: float,
 	# not the clip (which ends at the goal-moment frame).
 	if NetworkManager.is_replay_mode() or _is_celebration_phase():
 		return
-	var ts: float = NetworkManager.local_time()
-	var event: Dictionary = {
-		"kind": kind,
-		"pos": [position.x, position.y, position.z],
-		"speed": speed,
-	}
-	for k: Variant in extra:
-		event[k] = extra[k]
-	if _recorder != null:
-		_recorder.record_event(ts, event)
-	if _replay_file_writer != null and _should_record_to_file():
-		_replay_file_writer.enqueue_event(ts, JSON.stringify(event).to_utf8_buffer())
-	# Mirror the event onto every client / spectator so their recorders see
-	# the same timeline. Required for the goal-replay cinematic to use the
-	# same shot anchor + adaptive clip start everywhere.
-	NetworkManager.notify_replay_event_to_all(ts, event)
+	# Nothing consumes events (no recorder, no file, no clients to mirror to):
+	# skip queueing entirely. Ordered so a live match (recorder always present)
+	# short-circuits before the peers query.
+	if _recorder == null and _replay_file_writer == null \
+			and NetworkManager.connected_peer_ids().is_empty():
+		return
+	if _replay_evt_count >= _REPLAY_EVENT_QUEUE_CAP:
+		push_warning("Replay event queue full — dropping '%s'" % kind)
+		return
+	var i: int = _replay_evt_count
+	_replay_evt_kinds[i] = kind
+	_replay_evt_pos[i] = position
+	_replay_evt_speed[i] = speed
+	_replay_evt_ts[i] = NetworkManager.local_time()
+	_replay_evt_to_file[i] = 1 if _replay_file_writer != null and _should_record_to_file() else 0
+	_replay_evt_extra[i] = extra
+	_replay_evt_count += 1
+
+
+# _process side of _record_replay_audio_event: builds each queued event's
+# Dictionary (same field order as always — kind, pos, speed, then extras — so
+# the JSON payload written to the .mreplay file is byte-for-byte what the
+# synchronous path produced), feeds the in-memory recorder, the file writer,
+# and the client mirror RPC. Also called before the writer closes so end-of-
+# game events land in the file.
+func _drain_replay_event_queue() -> void:
+	if _replay_evt_count == 0:
+		return
+	for i: int in _replay_evt_count:
+		var pos: Vector3 = _replay_evt_pos[i]
+		var event: Dictionary = {
+			"kind": _replay_evt_kinds[i],
+			"pos": [pos.x, pos.y, pos.z],
+			"speed": _replay_evt_speed[i],
+		}
+		var extra: Dictionary = _replay_evt_extra[i]
+		for k: Variant in extra:
+			event[k] = extra[k]
+		var ts: float = _replay_evt_ts[i]
+		if _recorder != null:
+			_recorder.record_event(ts, event)
+		if _replay_evt_to_file[i] == 1 and _replay_file_writer != null:
+			_replay_file_writer.enqueue_event(ts, JSON.stringify(event).to_utf8_buffer())
+		# Mirror the event onto every client / spectator so their recorders see
+		# the same timeline. Required for the goal-replay cinematic to use the
+		# same shot anchor + adaptive clip start everywhere.
+		NetworkManager.notify_replay_event_to_all(ts, event)
+		_replay_evt_kinds[i] = ""
+		_replay_evt_extra[i] = _EMPTY_EXTRA
+	_replay_evt_count = 0
 
 
 # Client / spectator side: host broadcast each event it recorded; we mirror
@@ -2420,6 +2515,9 @@ func _open_replay_file_writer() -> void:
 func _close_replay_file_writer() -> void:
 	if _replay_file_writer == null:
 		return
+	# Queued-but-undrained events (final horn, OS window close) must reach the
+	# writer before its worker drains for the last time.
+	_drain_replay_event_queue()
 	_replay_file_writer.close_async(_build_replay_footer())
 	_replay_file_writer = null
 
@@ -3063,11 +3161,12 @@ func _on_server_puck_poke_checked_by(peer_id: int) -> void:
 func _on_possession_established(peer_id: int, team_id: int) -> void:
 	if _shot_tracker != null:
 		_shot_tracker.on_possession_established(peer_id)
-	# Sync immediately when a turnover/faceoff stat lands so the HUD stat feed
-	# (and client scoreboards) see it now, not on the next unrelated stat event.
+	# A turnover/faceoff stat landed — mark for the per-broadcast-interval flush
+	# (≤ one broadcast interval of delay for the HUD stat feed / client
+	# scoreboards) instead of re-encoding the full roster per event.
 	if _turnover_tracker != null \
 			and _turnover_tracker.on_possession_established(peer_id):
-		_sync_stats_to_clients()
+		_stats_sync_gate.mark_dirty()
 	# NHL/ARCADE offside: the defending team ESTABLISHING possession (this
 	# same signal — held it or made a deliberate play, not a raw touch) voids
 	# an active offside in their own zone. Reuses the identical "control"
@@ -3103,7 +3202,7 @@ func _on_server_puck_touched_while_loose(peer_id: int) -> void:
 	_state_machine.notify_puck_touch(peer_id)
 	_consume_pending_faceoff()
 	if _shot_tracker.on_block(peer_id):
-		_sync_stats_to_clients()
+		_stats_sync_gate.mark_dirty()
 		return
 	_shot_tracker.on_deflection(peer_id)
 	# The deflect/body-block handlers set the puck's redirected velocity before
@@ -3117,7 +3216,7 @@ func _on_puck_touched_by_goalie(goalie: Goalie) -> void:
 		return
 	var defending_team_id: int = _defending_team_id_for_goalie(goalie)
 	_shot_tracker.on_goalie_touch(defending_team_id)
-	_sync_stats_to_clients()
+	_stats_sync_gate.mark_dirty()
 
 
 func _defending_team_id_for_goalie(goalie: Goalie) -> int:
@@ -3886,8 +3985,15 @@ func _observe_telemetry() -> void:
 
 
 func _sync_stats_to_clients() -> void:
+	# An immediate sync supersedes any pending contact-path flush (StatsSyncGate)
+	# — clear it so the next broadcast tick doesn't re-encode redundantly.
+	_stats_sync_gate.clear()
 	stats_updated.emit()
 	if not NetworkManager.is_host or _codec == null:
+		return
+	# No clients connected (offline / free play / drills): the RPC loop below
+	# would send to nobody, so skip the full-roster encode outright.
+	if NetworkManager.connected_peer_ids().is_empty():
 		return
 	NetworkManager.send_stats_to_all(_codec.encode_stats())
 
@@ -3967,9 +4073,10 @@ func _on_impact_landed(hitter_peer_id: int, victim_peer_id: int,
 
 # Host-only. The hit stat may land up to POSSESSION_LOSS_WINDOW_S after the
 # contact (it waits for the victim to lose the puck — see HitTracker), so this
-# only syncs stats; the impact broadcast already fired from _on_impact_landed.
+# only marks stats for the per-broadcast-interval flush; the impact broadcast
+# already fired from _on_impact_landed.
 func _on_hit_credited(_victim_peer_id: int, _force: float, _hit_dir: Vector3) -> void:
-	_sync_stats_to_clients()
+	_stats_sync_gate.mark_dirty()
 
 
 # Drives the body-check VFX + sound on every machine (clients via the RPC signal,

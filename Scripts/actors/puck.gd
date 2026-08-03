@@ -201,14 +201,78 @@ var _team_resolver: Callable = Callable()
 func set_team_resolver(resolver: Callable) -> void:
 	_team_resolver = resolver
 
+# _init (not _ready) so a bare Puck.new() in tests has a working queue without
+# entering the tree.
+func _init() -> void:
+	_event_types.resize(CONTACT_QUEUE_CAPACITY)
+	_event_floats.resize(CONTACT_QUEUE_CAPACITY)
+	_event_objs_a.resize(CONTACT_QUEUE_CAPACITY)
+	_event_objs_b.resize(CONTACT_QUEUE_CAPACITY)
+
+
+func _queue_contact_event(event_type: ContactEvent, obj_a: Object = null,
+		obj_b: Object = null, value: float = 0.0) -> void:
+	if _event_count >= CONTACT_QUEUE_CAPACITY:
+		push_warning("Puck contact-event queue full — dropping event %d" % event_type)
+		return
+	_event_types[_event_count] = event_type
+	_event_objs_a[_event_count] = obj_a
+	_event_objs_b[_event_count] = obj_b
+	_event_floats[_event_count] = value
+	_event_count += 1
+
+
+# Emits every queued contact signal in emission order. Called by GameManager at
+# physics priority 2, immediately before the snapshot capture + broadcast (see
+# the queue doc above). An event queued outside the physics frame (a lag-comp
+# deflect applied on RPC arrival) drains on the NEXT frame's hook — still ahead
+# of the first snapshot that reflects its state change — so its skater can have
+# been freed in between; stale refs are skipped rather than emitted. A listener
+# that causes a further queue during the drain is serviced in the same pass
+# (the loop re-reads _event_count), still ahead of the capture.
+func drain_contact_events() -> void:
+	var i: int = 0
+	while i < _event_count:
+		# Variant, not Object: assigning a freed instance to a typed Object var
+		# raises a debug error before is_instance_valid can rule on it. Payload-
+		# carrying events gate on is_instance_valid themselves (a freed instance
+		# also compares == null, so a shared null-or-valid check can't tell an
+		# intentionally payload-less event from a stale one).
+		var obj: Variant = _event_objs_a[i]
+		match _event_types[i]:
+			ContactEvent.BOARDS:
+				puck_hit_boards.emit()
+			ContactEvent.POST:
+				puck_touched_post.emit()
+			ContactEvent.NET:
+				puck_hit_goal_body.emit()
+			ContactEvent.GOALIE_TOUCH:
+				if is_instance_valid(obj):
+					puck_touched_goalie.emit(obj as Goalie)
+			ContactEvent.GOALIE_CATCH:
+				if is_instance_valid(obj):
+					puck_caught_by_goalie.emit(obj as Goalie)
+			ContactEvent.LOOSE_TOUCH:
+				if is_instance_valid(obj):
+					puck_touched_loose.emit(obj as Skater)
+			ContactEvent.BODY_BLOCK:
+				if is_instance_valid(obj):
+					puck_body_blocked.emit(obj as Skater)
+		i += 1
+	for j: int in _event_count:
+		_event_objs_a[j] = null
+		_event_objs_b[j] = null
+	_event_count = 0
+
 # ── Analytic host drive (the ONE puck simulation) ─────────────────────────────
 # The LOOSE puck is driven by the deterministic analytic sim on every host:
 # integration + ice friction + gravity + board caroms (PuckAuthorityRules / step_puck_3d),
 # goal-frame reflection (PuckGeometryCollision: posts / crossbar / top + back/side net), and
 # goalie detection + response (GoalieContactDetector + GoalieSaveRules.resolve_contact).
 # The puck is a plain Node3D — no physics engine ever touches it; gameplay pickup /
-# deflect / poke / goal-detection are analytic too, and the drive emits every contact
-# feedback signal itself. Clients never run this (_physics_process is host-only);
+# deflect / poke / goal-detection are analytic too, and the drive detects every contact
+# itself, queueing the feedback signals for the pre-capture drain (see the deferred
+# contact-event queue above). Clients never run this (_physics_process is host-only);
 # they render through PuckController's shared-solver prediction.
 var _goalie_provider: Callable = Callable()  # returns Array of live Goalie nodes for contact detection
 # Sub-step ranges/counts and the goalie-detect gate live on PuckAuthorityRules —
@@ -239,6 +303,36 @@ var _contact_latch_boards: bool = false
 var _contact_latch_post: bool = false
 var _contact_latch_net: bool = false
 var _contact_latch_goalie: bool = false
+
+# ── Deferred contact-event queue ──────────────────────────────────────────────
+# Contact signals whose emission sites sit inside the 120 Hz timed physics
+# sections (_drive_analytic here; the deflect / body-block interaction checks
+# PuckController drives) are latched into this fixed-size queue instead of
+# fanning out synchronously — each emit reaches sounds, VFX, RPC sends, stat
+# tracking and replay recording, and that fan-out was being paid inside the
+# tick's timed critical section. GameManager drains the queue (via
+# drain_contact_events) at physics priority 2, in emission order, in the SAME
+# physics frame, immediately BEFORE the snapshot ring capture + broadcast — so
+# clients observe the identical event-vs-state ordering the synchronous emits
+# produced. puck_stripped / puck_released stay synchronous everywhere: their
+# listeners read call-scoped transient state on the same stack
+# (PuckController.is_processing_stick_lift, the queued release velocity read by
+# the dump-release check, the goalie reaction back-date consumed by
+# _on_puck_released).
+#
+# Preallocated parallel arrays (allocation-free per tick); each slot carries
+# the event type, up to two object refs and one float payload (current events
+# use only the first object slot). Overflow policy: DROP-NEWEST with a
+# push_warning — the capacity covers every emitter's per-tick maximum several
+# times over, so overflow means a runaway emitter, and dropping the newest
+# keeps the already-queued (older) events and their ordering intact.
+enum ContactEvent { BOARDS, POST, NET, GOALIE_TOUCH, GOALIE_CATCH, LOOSE_TOUCH, BODY_BLOCK }
+const CONTACT_QUEUE_CAPACITY: int = 16
+var _event_types := PackedInt32Array()
+var _event_objs_a: Array = []
+var _event_objs_b: Array = []
+var _event_floats := PackedFloat32Array()
+var _event_count: int = 0
 # Replay playback hold: the replay drivers own the puck transform while a goal /
 # post-game replay plays — the drive must not simulate the loose puck underneath,
 # so the drivers raise this for the playback's duration.
@@ -418,7 +512,7 @@ func apply_blade_deflect(skater: Skater) -> void:
 	# the full deflect lockout (which is meant to stop re-touching a live redirect).
 	var is_bobble: bool = new_vel.length() < bobble_speed_threshold
 	_set_cooldown(skater, bobble_cooldown if is_bobble else deflect_cooldown)
-	puck_touched_loose.emit(skater)
+	_queue_contact_event(ContactEvent.LOOSE_TOUCH, skater)
 
 func on_body_block(blocker: Skater) -> void:
 	if not _is_server:
@@ -444,7 +538,7 @@ func on_body_block(blocker: Skater) -> void:
 	linear_velocity = PuckCollisionRules.body_block_velocity(
 			linear_velocity, contact_normal, dampen)
 	_set_cooldown(blocker, body_block_cooldown)
-	puck_body_blocked.emit(blocker)
+	_queue_contact_event(ContactEvent.BODY_BLOCK, blocker)
 
 func on_body_check(checker: Skater, victim: Skater, impact_force: float, hit_direction: Vector3) -> void:
 	if not _is_server:
@@ -754,10 +848,11 @@ func _drive_analytic(dt: float) -> void:
 	var touched_post: bool = false
 	var touched_net: bool = false
 	var touched_goalie: bool = false
-	# Emissions are DEFERRED to after the commit below: synchronous listeners
-	# (the save sound reading puck velocity, stat sync) must see this tick's
-	# committed post-contact state, not last tick's — Jolt's body_entered fired
-	# mid-step with current state; emitting mid-loop here read stale fields.
+	# Emissions are DEFERRED to after the commit below (and from there to the
+	# pre-capture drain): listeners (the save sound reading puck velocity, stat
+	# sync) must see this tick's committed post-contact state, not last tick's —
+	# Jolt's body_entered fired mid-step with current state; emitting mid-loop
+	# here read stale fields.
 	var emit_goalie: Goalie = null
 	var emit_caught: Goalie = null
 	for _sub in substeps:
@@ -844,19 +939,20 @@ func _drive_analytic(dt: float) -> void:
 	global_position = pos
 
 	# Deferred contact signals (see the emit_* locals above): edge-gated by the
-	# cross-tick latches, fired against the committed state. Order matters — the
-	# goalie touch fires before the catch (the controller relies on that
-	# sequence to transition the catching goalie first).
+	# cross-tick latches, queued against the committed state and emitted by the
+	# pre-capture drain (drain_contact_events) later this same frame. Order
+	# matters — the goalie touch fires before the catch (the controller relies
+	# on that sequence to transition the catching goalie first).
 	if touched_boards and not _contact_latch_boards:
-		puck_hit_boards.emit()
+		_queue_contact_event(ContactEvent.BOARDS)
 	if touched_post and not _contact_latch_post:
-		puck_touched_post.emit()
+		_queue_contact_event(ContactEvent.POST)
 	if touched_net and not _contact_latch_net:
-		puck_hit_goal_body.emit()
+		_queue_contact_event(ContactEvent.NET)
 	if emit_goalie != null:
-		puck_touched_goalie.emit(emit_goalie)
+		_queue_contact_event(ContactEvent.GOALIE_TOUCH, emit_goalie)
 	if emit_caught != null:
-		puck_caught_by_goalie.emit(emit_caught)
+		_queue_contact_event(ContactEvent.GOALIE_CATCH, emit_caught)
 	_contact_latch_boards = touched_boards
 	_contact_latch_post = touched_post
 	_contact_latch_net = touched_net
