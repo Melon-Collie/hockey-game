@@ -1,7 +1,8 @@
 # mitts_native — GDExtension hot-path kernels
 
 C++ ports of per-tick math kernels, registered as `Native*` classes
-(`NativeTopHandIK`, `NativeBottomHandIK`, `NativeSkaterGait`). The GDScript
+(`NativeTopHandIK`, `NativeBottomHandIK`, `NativeSkaterGait`,
+`NativeSkaterMovement`, `NativePuckStep`, `NativeGoalieBodyPose`). The GDScript
 originals (in `Scripts/domain/rules/` and `Scripts/controllers/`) remain the
 behavioral reference; each ported kernel is pinned to its reference by a
 seeded fuzz test (`tests/unit/rules/test_native_ik_parity.gd`,

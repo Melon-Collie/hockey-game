@@ -1,6 +1,7 @@
 #include "register_types.h"
 
 #include "native_bottom_hand_ik.h"
+#include "native_goalie_body_pose.h"
 #include "native_puck_step.h"
 #include "native_skater_gait.h"
 #include "native_skater_movement.h"
@@ -22,6 +23,7 @@ void initialize_mitts_native_module(ModuleInitializationLevel p_level) {
 	ClassDB::register_class<mitts::NativeSkaterGait>();
 	ClassDB::register_class<mitts::NativeSkaterMovement>();
 	ClassDB::register_class<mitts::NativePuckStep>();
+	ClassDB::register_class<mitts::NativeGoalieBodyPose>();
 }
 
 void uninitialize_mitts_native_module(ModuleInitializationLevel p_level) {

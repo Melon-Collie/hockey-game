@@ -1,6 +1,7 @@
 #pragma once
 
 #include <godot_cpp/classes/ref_counted.hpp>
+#include <godot_cpp/variant/packed_vector3_array.hpp>
 #include <godot_cpp/variant/vector3.hpp>
 
 namespace mitts {
@@ -231,6 +232,12 @@ public:
 	godot::Vector3 get_glove_rot() const { return out_glove_rot; }
 	godot::Vector3 get_blocker_pos() const { return out_blocker_pos; }
 	godot::Vector3 get_blocker_rot() const { return out_blocker_rot; }
+
+	// All 12 outputs in one crossing (order: left pad pos/rot, right pad
+	// pos/rot, body, head, glove, blocker). One small allocation per call —
+	// measured cheaper than 12 getter crossings; per-goalie per-tick rate, so
+	// the churn is negligible.
+	godot::PackedVector3Array get_outputs_packed() const;
 };
 
 } // namespace mitts
