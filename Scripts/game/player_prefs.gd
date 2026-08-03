@@ -228,9 +228,9 @@ var preferred_color_slot: int = -1  # team color preset slot index; -1 → use t
 # Packed StickTapeConfig code (blade tape color + coverage + knob color +
 # handle style).
 var stick_tape_code: int = StickTapeConfig.DEFAULT_CODE
-# Packed GearStyleConfig code (skate model + glove model + lace color) — the
-# Equipment section's gear cosmetics, carried through the join handshake like
-# the tape job.
+# Packed GearStyleConfig code (skate/glove/stick models + lace color + helmet
+# face gear) — the Equipment section's gear cosmetics, carried through the
+# join handshake like the tape job.
 var gear_style_code: int = GearStyleConfig.DEFAULT_CODE
 
 # Per-player build (attributes v4, body + gear): a free HEIGHT in inches

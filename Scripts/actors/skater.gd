@@ -101,10 +101,17 @@ var reception_ceiling_mult: float = 1.0
 # uniform is applied; SkaterUniformCoordinator resolves the palette picks
 # against the team accent when it paints. Never null after _init.
 var tape_config: StickTapeConfig = StickTapeConfig.new()
-# The player's gear cosmetics (skate + glove color) — same contract as
-# tape_config: set from the replicated per-peer code before the uniform is
-# applied, resolved against the kit by the uniform coordinator. Never null.
+# The player's gear cosmetics (skate/glove models, laces, stick, helmet face
+# gear) — same contract as tape_config: set from the replicated per-peer code
+# before the uniform is applied, resolved against the kit by the uniform
+# coordinator. Never null.
 var gear_style: GearStyleConfig = GearStyleConfig.new()
+# The face piece (visor / cage / fishbowl) riding the HELMET bone through a
+# BoneAttachment3D, so it follows head yaw and the appearance rig's head-bulk
+# scale with no per-frame code here. Both null while the pick is bare — the
+# common case pays for no node at all.
+var _face_gear_attach: BoneAttachment3D = null
+var _face_gear_mesh: MeshInstance3D = null
 @export var wall_squeeze_threshold: float = 0.3
 # When the puck is lost on the boards (blade squeezed past the threshold above),
 # it squirts ALONG the boards in the carrier's travel direction. This blends a
@@ -1167,14 +1174,46 @@ func set_tape_config(config: StickTapeConfig) -> void:
 		_uniform.refresh_tape()
 
 
-# Installs a new gear look (skate + glove color) and repaints the affected
-# parts. Same live-cosmetic contract as set_tape_config.
+# Installs a new gear look (models, laces, face gear) and repaints the
+# affected parts. Same live-cosmetic contract as set_tape_config.
 func set_gear_style(config: GearStyleConfig) -> void:
 	if config == null:
 		return
 	gear_style = config
+	_apply_face_gear()
 	if _uniform != null:
 		_uniform.refresh_gear_style()
+
+
+# Swaps the rendered face piece to the current pick. Geometry only — the
+# uniform coordinator owns the material (and its ghost fade). Safe before the
+# rig exists; _build_arm_rig re-applies once the skeleton is up.
+func _apply_face_gear() -> void:
+	if _arm_skeleton == null:
+		return
+	var mesh: ArrayMesh = SkaterMeshBuilder.shared_face_gear(gear_style.helmet_face)
+	if mesh == null:
+		if _face_gear_attach != null:
+			_arm_skeleton.remove_child(_face_gear_attach)
+			_face_gear_attach.queue_free()
+			_face_gear_attach = null
+			_face_gear_mesh = null
+		return
+	if _face_gear_attach == null:
+		_face_gear_attach = BoneAttachment3D.new()
+		_face_gear_attach.name = "FaceGear"
+		_arm_skeleton.add_child(_face_gear_attach)
+		# bone_idx after add_child — the setter binds against the parent skeleton.
+		_face_gear_attach.bone_idx = SkaterMeshBuilder.UpperBone.HELMET
+		_face_gear_mesh = MeshInstance3D.new()
+		_face_gear_attach.add_child(_face_gear_mesh)
+	_face_gear_mesh.mesh = mesh
+
+
+# The face piece's render node, for the uniform coordinator's paint and ghost
+# fade. Null while the pick is bare.
+func face_gear_mesh() -> MeshInstance3D:
+	return _face_gear_mesh
 
 
 # The uniform pass installs a fresh shaft ShaderMaterial (uniform apply,
@@ -2276,6 +2315,10 @@ func _build_arm_rig() -> void:
 	var cuff_radius: float = arm_mesh_thickness * 0.6
 	set_arm_cuff_radius(SkaterMeshBuilder.UpperBone.TOP_CUFF, cuff_radius)
 	set_arm_cuff_radius(SkaterMeshBuilder.UpperBone.BOTTOM_CUFF, cuff_radius)
+
+	# The gear style may have landed before the rig (spawn order is
+	# registry-driven); now that the helmet bone exists, dress it.
+	_apply_face_gear()
 
 
 # The per-skater material for one upper-body surface, created from the shared

@@ -187,7 +187,8 @@ func test_normalize_packs_pinned_cosmetics() -> void:
 			"tape_knob": 2, "knob_style": StickTapeConfig.KnobStyle.CANDY_CANE,
 			"skate_model": GearModelRegistry.SKATE_RETRO,
 			"glove_model": GearModelRegistry.GLOVE_TRICOLOR,
-			"lace_color": 5, "stick_model": StickModelRegistry.STICK_VOLT})
+			"lace_color": 5, "stick_model": StickModelRegistry.STICK_VOLT,
+			"helmet_face": GearModelRegistry.FACE_CAGE})
 	var tape: StickTapeConfig = StickTapeConfig.from_code(int(norm.tape_code))
 	assert_eq(tape.blade_color, 5)
 	assert_eq(tape.span, StickTapeConfig.Span.TOE)
@@ -198,16 +199,19 @@ func test_normalize_packs_pinned_cosmetics() -> void:
 	assert_eq(gear.glove_model, GearModelRegistry.GLOVE_TRICOLOR)
 	assert_eq(gear.lace_color, 5)
 	assert_eq(gear.stick_model, StickModelRegistry.STICK_VOLT)
+	assert_eq(gear.helmet_face, GearModelRegistry.FACE_CAGE)
 
 
 func test_normalize_coerces_out_of_range_cosmetics() -> void:
 	var norm: Dictionary = BotIdentityRegistry.normalize_entry({
-			"name": "Forged", "tape_blade": 99, "skate_model": -3, "stick_model": 42})
+			"name": "Forged", "tape_blade": 99, "skate_model": -3, "stick_model": 42,
+			"helmet_face": 77})
 	var tape: StickTapeConfig = StickTapeConfig.from_code(int(norm.tape_code))
 	assert_true(TapeColorRegistry.is_valid(tape.blade_color), "blade tape coerces legal")
 	var gear: GearStyleConfig = GearStyleConfig.from_code(int(norm.gear_style_code))
 	assert_true(GearModelRegistry.is_valid_skate(gear.skate_model), "skate model coerces legal")
 	assert_true(StickModelRegistry.is_valid(gear.stick_model), "stick model coerces legal")
+	assert_true(GearModelRegistry.is_valid_face(gear.helmet_face), "face option coerces legal")
 
 
 func test_normalize_omits_unpinned_cosmetic_groups() -> void:
@@ -254,6 +258,45 @@ func test_every_bundled_card_pins_its_cosmetics() -> void:
 				"bot '%s' should pin a tape job" % entry.get("name", "?"))
 		assert_true(norm.has("gear_style_code"),
 				"bot '%s' should pin gear" % entry.get("name", "?"))
+
+
+# The roster's face mix is authored intent: visors are the pro-lineup default,
+# with bare heads, cages and fishbowls sprinkled in so a bot game shows the
+# whole catalogue. Every option present + visor plurality pins the mix without
+# pinning per-card picks.
+func test_bundled_roster_wears_a_visor_heavy_face_mix() -> void:
+	var counts: Dictionary = {}
+	for entry: Dictionary in _bundled_entries():
+		assert_true(entry.has("helmet_face"),
+				"bot '%s' should pin a face option" % entry.get("name", "?"))
+		var face: int = int(entry.get("helmet_face", -1))
+		assert_true(GearModelRegistry.is_valid_face(face),
+				"bot '%s' face option legal" % entry.get("name", "?"))
+		counts[face] = int(counts.get(face, 0)) + 1
+	for option: int in GearModelRegistry.face_count():
+		assert_gt(int(counts.get(option, 0)), 0,
+				"some bundled card wears face option %d" % option)
+	for option: int in [GearModelRegistry.FACE_NONE, GearModelRegistry.FACE_CAGE,
+			GearModelRegistry.FACE_FISHBOWL]:
+		assert_gt(int(counts.get(GearModelRegistry.FACE_VISOR, 0)),
+				int(counts.get(option, 0)), "visors are the plurality look")
+
+
+func test_fallback_faces_lean_visor() -> void:
+	# The hash table is weighted like the curated roster — mostly visors. Counted
+	# over many generic names (deterministic: String.hash is stable), the visor
+	# must beat every other option, and the spread must still reach them all.
+	var counts: Dictionary = {}
+	for i: int in 200:
+		var gear: GearStyleConfig = GearStyleConfig.from_code(
+				BotIdentityRegistry.fallback_gear_style_code("Bot %d" % i))
+		counts[gear.helmet_face] = int(counts.get(gear.helmet_face, 0)) + 1
+	for option: int in GearModelRegistry.face_count():
+		assert_gt(int(counts.get(option, 0)), 0,
+				"the fallback table reaches face option %d" % option)
+		if option != GearModelRegistry.FACE_VISOR:
+			assert_gt(int(counts.get(GearModelRegistry.FACE_VISOR, 0)),
+					int(counts.get(option, 0)), "visor outnumbers option %d" % option)
 
 
 func test_pick_for_slot_falls_back_when_position_pool_exhausted() -> void:

@@ -39,7 +39,9 @@ class_name BotIdentityRegistry
 #     2 black, 3.. the flair colors), "tape_span" (StickTapeConfig.Span),
 #     "knob_style" (StickTapeConfig.KnobStyle);
 #   gear     — "skate_model" / "glove_model" (GearModelRegistry),
-#     "lace_color" (TapeColorRegistry), "stick_model" (StickModelRegistry).
+#     "lace_color" (TapeColorRegistry), "stick_model" (StickModelRegistry),
+#     "helmet_face" (GearModelRegistry FACE_*: 0 bare / 1 visor / 2 cage /
+#     3 fishbowl).
 # Pinning ANY field of a group claims the whole group (unpinned fields sit at
 # the stock defaults); a card that pins neither field of a group draws a
 # stable fallback look from its name hash at spawn instead (see the fallback
@@ -57,7 +59,8 @@ const _USER_JSON_PATH: String = "user://bot_identities.json"
 const _RES_JSON_PATH:  String = "res://data/bot_identities.json"
 
 const _TAPE_KEYS: Array[String] = ["tape_blade", "tape_span", "tape_knob", "knob_style"]
-const _GEAR_KEYS: Array[String] = ["skate_model", "glove_model", "lace_color", "stick_model"]
+const _GEAR_KEYS: Array[String] = ["skate_model", "glove_model", "lace_color",
+		"stick_model", "helmet_face"]
 
 # TapeColorRegistry indices the fallback tables reach for by name (same local-
 # constant convention as GearStyleConfig — these are wire values, not lookups).
@@ -98,6 +101,12 @@ const _FB_STICK: Array[int] = [StickModelRegistry.STICK_STEALTH, StickModelRegis
 		StickModelRegistry.STICK_VOLT, StickModelRegistry.STICK_STEALTH,
 		StickModelRegistry.STICK_SPLIT, StickModelRegistry.STICK_STEALTH,
 		StickModelRegistry.STICK_REDLINE, StickModelRegistry.STICK_STEALTH]
+# Visor-heavy like a real pro lineup, with bare heads for the old-school and
+# the occasional cage or fishbowl for flavor.
+const _FB_FACE: Array[int] = [GearModelRegistry.FACE_VISOR, GearModelRegistry.FACE_VISOR,
+		GearModelRegistry.FACE_NONE, GearModelRegistry.FACE_VISOR,
+		GearModelRegistry.FACE_CAGE, GearModelRegistry.FACE_VISOR,
+		GearModelRegistry.FACE_FISHBOWL, GearModelRegistry.FACE_NONE]
 
 static var _identities: Array[Dictionary] = []
 static var _loaded: bool = false
@@ -213,7 +222,8 @@ static func normalize_entry(entry: Dictionary) -> Dictionary:
 				int(entry.get("skate_model", 0)),
 				int(entry.get("glove_model", 0)),
 				int(entry.get("lace_color", GearStyleConfig.LACE_DEFAULT_INDEX)),
-				int(entry.get("stick_model", 0))).to_code()
+				int(entry.get("stick_model", 0)),
+				int(entry.get("helmet_face", GearModelRegistry.FACE_NONE))).to_code()
 	return out
 
 
@@ -237,11 +247,16 @@ static func fallback_tape_code(bot_name: String) -> int:
 
 
 # Gear/stick counterpart of fallback_tape_code; hash slices are disjoint from
-# the tape ones so the two looks vary independently.
+# the tape ones so the two looks vary independently. The face draws from a
+# DERIVED hash rather than a yet-higher slice: String.hash is djb2-style, so
+# names sharing a prefix ("Bot 1".."Bot 12") only vary the low ~25 bits and a
+# bit-26 slice would deal every generic bot the same face.
 static func fallback_gear_style_code(bot_name: String) -> int:
 	var h: int = bot_name.hash()
+	var hf: int = ("%s/face" % bot_name).hash()
 	return GearStyleConfig.new(
 			_FB_SKATE[(h >> 14) % _FB_SKATE.size()],
 			_FB_GLOVE[(h >> 17) % _FB_GLOVE.size()],
 			_FB_LACES[(h >> 20) % _FB_LACES.size()],
-			_FB_STICK[(h >> 23) % _FB_STICK.size()]).to_code()
+			_FB_STICK[(h >> 23) % _FB_STICK.size()],
+			_FB_FACE[(hf >> 2) % _FB_FACE.size()]).to_code()

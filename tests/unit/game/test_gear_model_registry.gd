@@ -140,6 +140,30 @@ func test_no_two_models_are_the_same_design() -> void:
 		seen.append(key)
 
 
+# Face options are fixed looks, not paint rows — what is worth pinning is the
+# wire/table alignment, that row 0 is bare (an untouched save renders exactly
+# the pre-face look), and that each option keeps the transparency class its
+# material factory builds from: the shields translucent, the cage solid.
+func test_face_options_stay_aligned_and_keep_their_looks() -> void:
+	assert_eq(GearModelRegistry.FACE_NAME_KEYS.size(), GearModelRegistry.face_count(),
+			"every face option is named")
+	assert_eq(GearModelRegistry.FACE_NONE, 0, "row 0 is bare")
+	for option: int in [GearModelRegistry.FACE_VISOR, GearModelRegistry.FACE_FISHBOWL]:
+		var a: float = GearModelRegistry.face_color(option).a
+		assert_true(a > 0.0 and a < 1.0, "shield option %d is translucent" % option)
+	assert_eq(GearModelRegistry.face_color(GearModelRegistry.FACE_CAGE).a, 1.0,
+			"the cage is solid steel")
+
+
+func test_forged_face_options_read_as_bare() -> void:
+	assert_false(GearModelRegistry.is_valid_face(-1))
+	assert_false(GearModelRegistry.is_valid_face(GearModelRegistry.face_count()))
+	for option: int in [-1, -999, 99]:
+		assert_eq(GearModelRegistry.face_color(option),
+				GearModelRegistry.face_color(GearModelRegistry.FACE_NONE),
+				"a forged face option carries no piece")
+
+
 func test_forged_models_paint_stock_gear() -> void:
 	assert_false(GearModelRegistry.is_valid_skate(-1))
 	assert_false(GearModelRegistry.is_valid_glove(GearModelRegistry.glove_count()))

@@ -107,3 +107,8 @@ GEAR_MODEL_PRO,Pro,Pro
 GEAR_MODEL_CONTRAST,Contrast,Contraste
 GEAR_MODEL_VINTAGE,Vintage,Clásico
 GEAR_MODEL_TRICOLOR,Tri-Color,Tricolor
+GEAR_FACE_LABEL,Face:,Careta:
+GEAR_FACE_NONE,None,Ninguna
+GEAR_FACE_VISOR,Visor,Visera
+GEAR_FACE_CAGE,Cage,Rejilla
+GEAR_FACE_FISHBOWL,Fishbowl,Burbuja

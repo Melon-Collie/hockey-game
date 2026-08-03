@@ -3,13 +3,17 @@ extends Control
 
 # The gear workbench: the equipment picks that live below the stick — SKATE
 # PROFILE (the blade grind, the one gameplay row), the skate and glove MODELS,
-# and the lace color — arranged as compact rows around a live turntable preview
-# assembled from the skater's own shared meshes (boot on its holder and steel
-# with its ankle collar, gloved fist with its cuff ring). A model paints the
-# WHOLE piece from GearModelRegistry's slots — true black plus the wearing
-# team's own white, primary and secondary — so the turntable shows the design
-# you are buying on the kit you are buying it for; each row's dropdown carries
-# a swatch strip of the model's zones next to its name.
+# the lace color, and the helmet FACE option — arranged as compact rows around
+# a live turntable preview assembled from the skater's own shared meshes (boot
+# on its holder and steel with its ankle collar, gloved fist with its cuff
+# ring, helmet with the picked face piece). A model paints the WHOLE piece
+# from GearModelRegistry's slots — true black plus the wearing team's own
+# white, primary and secondary — so the turntable shows the design you are
+# buying on the kit you are buying it for; each row's dropdown carries a
+# swatch strip of the model's zones next to its name. Face options are fixed
+# looks (visor smoke, cage steel, fishbowl clear), so their row is plain names
+# and the preview helmet wears a neutral display shell rather than a kit
+# color.
 #
 # Same sub-editor contract as StickEditorPopup: opened by PlayerSettingsPopup
 # over its own modal, it edits pending values and hands them back through
@@ -18,7 +22,8 @@ extends Control
 # applied Done. The profile row locks during online play; models and laces are
 # cosmetic and never lock.
 
-signal gear_edited(profile: int, skate_model: int, glove_model: int, lace_color: int)
+signal gear_edited(profile: int, skate_model: int, glove_model: int,
+		lace_color: int, helmet_face: int)
 
 const _PROFILE_TOOLTIP: String = "Blade grind.\nAgility = quicker first step & tighter cornering, lower top speed.\nPower = higher top speed & better glide, wider turns."
 const _PROFILE_KEYS: Array[StringName] = [
@@ -49,6 +54,7 @@ var _profile: int = PlayerAttributes.GEAR_BALANCED
 var _skate_model: int = 0
 var _glove_model: int = 0
 var _lace_color: int = GearStyleConfig.LACE_DEFAULT_INDEX
+var _face_option: int = GearModelRegistry.FACE_NONE
 var _gear_locked: bool = false
 # The kit a model's TEAM / ACCENT / LIGHT zones resolve against — the pending
 # team pick, so the turntable previews the sweater you are about to wear.
@@ -66,6 +72,7 @@ var _profile_btn: OptionButton = null
 var _skate_btn: OptionButton = null
 var _glove_btn: OptionButton = null
 var _lace_dd: SwatchDropdown = null
+var _face_btn: OptionButton = null
 var _lock_label: Label = null
 
 # Preview scene.
@@ -78,6 +85,8 @@ var _skate_stripe: MeshInstance3D = null
 var _laces: MeshInstance3D = null
 var _fist: MeshInstance3D = null
 var _cuff: MeshInstance3D = null
+var _helmet: MeshInstance3D = null
+var _face_piece: MeshInstance3D = null
 
 # Focus scope (see ControllerNav.open_modal).
 var _focus_background: Control = null
@@ -169,6 +178,13 @@ func _build() -> void:
 	_lace_dd = SwatchDropdown.new(Vector2(180, 36))
 	_lace_dd.selected.connect(_on_lace_color_selected)
 	_add_row(rows, tr(&"GEAR_LACES_LABEL"), _lace_dd, false, "")
+
+	# Face options are fixed looks with no kit zones, so the items are plain
+	# names filled once here rather than rebuilt per open().
+	_face_btn = _model_button(_on_face_option_selected)
+	for i: int in GearModelRegistry.face_count():
+		_face_btn.add_item(tr(GearModelRegistry.FACE_NAME_KEYS[i]), i)
+	_add_row(rows, tr(&"GEAR_FACE_LABEL"), _face_btn, false, "")
 
 	var legend := Label.new()
 	legend.text = tr(&"STICK_GAMEPLAY_LEGEND")
@@ -365,6 +381,23 @@ func _build_preview(vbox: VBoxContainer) -> void:
 			Vector3(0.16, 1.9 * _FIST_SCALE + SkaterMeshBuilder.CUFF_HEIGHT_M * 0.4, 0.0))
 	_turntable.add_child(_cuff)
 
+	# Helmet behind the pair, spun to face the camera at rest (the mesh's face
+	# opening is −Z), seated so the nape rim just clears the disc. The head/neck
+	# skin surface keeps the mesh's default skin material; the shell is painted
+	# a neutral display dark in _repaint_preview (face looks are kit-free, so
+	# the case doesn't pretend to know your team's helmet). The face piece
+	# shares the helmet's transform, exactly as it rides the HELMET bone on the
+	# rink.
+	var helmet_at := Transform3D(Basis(Vector3.UP, PI), Vector3(0.0, 0.115, -0.18))
+	_helmet = MeshInstance3D.new()
+	_helmet.mesh = SkaterMeshBuilder.shared_helmet_assembly()
+	_helmet.transform = helmet_at
+	_turntable.add_child(_helmet)
+
+	_face_piece = MeshInstance3D.new()
+	_face_piece.transform = helmet_at
+	_turntable.add_child(_face_piece)
+
 
 # ── Host API ─────────────────────────────────────────────────────────────────
 
@@ -384,12 +417,13 @@ func set_focus_scope(background: Control, restore: Control) -> void:
 # (calf girth laterally, height vertically; the boot deliberately never
 # scales), so the preview skate is the one this build wears on the ice.
 func open(profile: int, skate_model: int, glove_model: int, lace_color: int,
-		gear_locked: bool, team_colors: Dictionary,
+		helmet_face: int, gear_locked: bool, team_colors: Dictionary,
 		attrs: PlayerAttributes = null) -> void:
 	_profile = clampi(profile, 0, _PROFILE_KEYS.size() - 1)
 	_skate_model = clampi(skate_model, 0, GearModelRegistry.skate_count() - 1)
 	_glove_model = clampi(glove_model, 0, GearModelRegistry.glove_count() - 1)
 	_lace_color = lace_color
+	_face_option = clampi(helmet_face, 0, GearModelRegistry.face_count() - 1)
 	_gear_locked = gear_locked
 	_team_accent = team_colors.primary
 	_kit_gloves = team_colors.gloves
@@ -409,7 +443,7 @@ func open(profile: int, skate_model: int, glove_model: int, lace_color: int,
 
 
 func _done() -> void:
-	gear_edited.emit(_profile, _skate_model, _glove_model, _lace_color)
+	gear_edited.emit(_profile, _skate_model, _glove_model, _lace_color, _face_option)
 	_close()
 
 
@@ -456,6 +490,11 @@ func _on_lace_color_selected(index: int) -> void:
 	_repaint_preview()
 
 
+func _on_face_option_selected(index: int) -> void:
+	_face_option = index
+	_repaint_preview()
+
+
 # ── Rendering ────────────────────────────────────────────────────────────────
 
 func _skate_zone(zone: int) -> Color:
@@ -476,6 +515,7 @@ func _refresh() -> void:
 	_profile_btn.select(clampi(_profile, 0, _PROFILE_KEYS.size() - 1))
 	_profile_btn.disabled = _gear_locked
 	_lock_label.visible = _gear_locked
+	_face_btn.select(_face_option)
 	_rebuild_model_items()
 
 	var lace_colors: Array[Color] = []
@@ -552,6 +592,13 @@ func _repaint_preview() -> void:
 			_glove_zone(GearModelRegistry.GLOVE_FINGERS), 0.9)
 	_cuff.material_override = _preview_mat(
 			_glove_zone(GearModelRegistry.GLOVE_CUFF), 0.9)
+	# Neutral display shell (helmet gloss); the skin surface keeps its default.
+	_paint_surface(_helmet, SkaterMeshBuilder.HELMET_SURF_SHELL,
+			Color(0.16, 0.16, 0.18), 0.28)
+	# The face piece is the rink's own mesh and material — null mesh for bare.
+	_face_piece.mesh = SkaterMeshBuilder.shared_face_gear(_face_option)
+	_face_piece.material_override = \
+			SkaterMeshBuilder.make_face_gear_material(_face_option)
 
 
 func _paint_surface(mi: MeshInstance3D, surface: int, color: Color,

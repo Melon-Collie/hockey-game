@@ -79,6 +79,7 @@ var _pending_skate_model: int = 0
 var _pending_glove_model: int = 0
 var _pending_lace_color: int = GearStyleConfig.LACE_DEFAULT_INDEX
 var _pending_stick_model: int = 0
+var _pending_helmet_face: int = GearModelRegistry.FACE_NONE
 var _name_valid: bool = true
 var _number_valid: bool = true
 # Online matches lock the build (attributes replicate at join); cosmetics stay
@@ -284,17 +285,18 @@ func _open_gear_editor() -> void:
 	# against the pending team pick, not just one accent color.
 	_gear_popup.set_focus_scope(self, null)
 	_gear_popup.open(_pending_profile, _pending_skate_model, _pending_glove_model,
-			_pending_lace_color, _build_locked, _pending_team_colors(),
-			_pending_attributes())
+			_pending_lace_color, _pending_helmet_face, _build_locked,
+			_pending_team_colors(), _pending_attributes())
 
 
 func _on_gear_edited(profile: int, skate_model: int, glove_model: int,
-		lace_color: int) -> void:
+		lace_color: int, helmet_face: int) -> void:
 	if not _build_locked:
 		_pending_profile = profile
 	_pending_skate_model = skate_model
 	_pending_glove_model = glove_model
 	_pending_lace_color = lace_color
+	_pending_helmet_face = helmet_face
 	_update_apply_state()
 
 
@@ -685,7 +687,7 @@ func _pending_team_colors() -> Dictionary:
 
 func _pending_gear_code() -> int:
 	return GearStyleConfig.new(_pending_skate_model, _pending_glove_model,
-			_pending_lace_color, _pending_stick_model).to_code()
+			_pending_lace_color, _pending_stick_model, _pending_helmet_face).to_code()
 
 
 func _snapshot_gear() -> GearStyleConfig:
@@ -705,14 +707,15 @@ func _is_stick_dirty() -> bool:
 			or _pending_stick_model != _snapshot_gear().stick_model
 
 
-# Same visibility contract for the gear workbench's picks (its three fields of
+# Same visibility contract for the gear workbench's picks (its four fields of
 # the gear code — the stick model field belongs to the stick note above).
 func _is_gear_dirty() -> bool:
 	var gear: GearStyleConfig = _snapshot_gear()
 	return _pending_profile != int(_snapshot.get("profile", 0)) \
 			or _pending_skate_model != gear.skate_model \
 			or _pending_glove_model != gear.glove_model \
-			or _pending_lace_color != gear.lace_color
+			or _pending_lace_color != gear.lace_color \
+			or _pending_helmet_face != gear.helmet_face
 
 
 func _is_build_dirty() -> bool:
@@ -832,6 +835,7 @@ func _restore_from_snapshot() -> void:
 	_pending_glove_model = gear.glove_model
 	_pending_lace_color = gear.lace_color
 	_pending_stick_model = gear.stick_model
+	_pending_helmet_face = gear.helmet_face
 	_name_field.text = _pending_name
 	_number_field.text = str(_pending_number)
 	_left_btn.button_pressed = _pending_is_left

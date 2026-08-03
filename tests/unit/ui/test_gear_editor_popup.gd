@@ -32,9 +32,14 @@ func _glove_btn() -> OptionButton:
 	return _popup.get("_glove_btn") as OptionButton
 
 
-func _open(skate_model: int, glove_model: int) -> void:
+func _face_btn() -> OptionButton:
+	return _popup.get("_face_btn") as OptionButton
+
+
+func _open(skate_model: int, glove_model: int,
+		helmet_face: int = GearModelRegistry.FACE_NONE) -> void:
 	_popup.open(PlayerAttributes.GEAR_BALANCED, skate_model, glove_model,
-			GearStyleConfig.LACE_DEFAULT_INDEX, false, {
+			GearStyleConfig.LACE_DEFAULT_INDEX, helmet_face, false, {
 				"primary": _PRIMARY,
 				"secondary": _SECONDARY,
 				"light": _LIGHT,
@@ -119,10 +124,28 @@ func test_done_hands_back_the_picks() -> void:
 	watch_signals(_popup)
 	_skate_btn().item_selected.emit(GearModelRegistry.SKATE_PRO)
 	_glove_btn().item_selected.emit(GearModelRegistry.GLOVE_VINTAGE)
+	_face_btn().item_selected.emit(GearModelRegistry.FACE_CAGE)
 	_popup.call("_done")
 	assert_signal_emitted_with_parameters(_popup, "gear_edited",
 			[PlayerAttributes.GEAR_BALANCED, GearModelRegistry.SKATE_PRO,
-			GearModelRegistry.GLOVE_VINTAGE, GearStyleConfig.LACE_DEFAULT_INDEX])
+			GearModelRegistry.GLOVE_VINTAGE, GearStyleConfig.LACE_DEFAULT_INDEX,
+			GearModelRegistry.FACE_CAGE])
+
+
+func test_face_row_lists_the_options_and_dresses_the_preview() -> void:
+	_open(0, 0, GearModelRegistry.FACE_VISOR)
+	assert_eq(_face_btn().item_count, GearModelRegistry.face_count(),
+			"every face option is offered")
+	assert_eq(_face_btn().selected, GearModelRegistry.FACE_VISOR)
+	var piece: MeshInstance3D = _popup.get("_face_piece") as MeshInstance3D
+	assert_not_null(piece.mesh, "the picked visor stands on the helmet")
+	var mat: StandardMaterial3D = piece.material_override as StandardMaterial3D
+	assert_lt(mat.albedo_color.a, 1.0, "the visor preview is translucent")
+	# A face pick reaches the preview live, and bare removes the piece.
+	_face_btn().item_selected.emit(GearModelRegistry.FACE_CAGE)
+	assert_eq(piece.mesh, SkaterMeshBuilder.shared_face_gear(GearModelRegistry.FACE_CAGE))
+	_face_btn().item_selected.emit(GearModelRegistry.FACE_NONE)
+	assert_null(piece.mesh, "bare leaves the helmet open")
 
 
 func test_each_item_carries_its_own_zones_as_a_swatch() -> void:

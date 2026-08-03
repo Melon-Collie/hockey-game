@@ -1,10 +1,11 @@
 extends SceneTree
 
 # Dev visualizer: renders the whole gear catalogue offscreen — every skate model
-# above its name, every glove model above its own — and saves PNGs from two
-# angles, so gear changes can be SEEN without launching the game. Each piece is
-# the gear workbench's own assembly (shared SkaterMeshBuilder parts, the seats
-# from GearEditorPopup._build_preview — keep the two in sync) painted through
+# above its name, every glove model above its own, and the helmet face options
+# on a third shelf — and saves PNGs from two angles, so gear changes can be
+# SEEN without launching the game. Each piece is the gear workbench's own
+# assembly (shared SkaterMeshBuilder parts, the seats from
+# GearEditorPopup._build_preview — keep the two in sync) painted through
 # GearModelRegistry, so what lands in the PNG is what the rink paints.
 #
 # Needs a real (software) renderer, not --headless. On the web container:
@@ -32,8 +33,9 @@ const _TEAM_SLOT_ENV: String = "MITTS_TEAM_SLOT"
 const _SPACING_M: float = 0.42
 # Total horizontal margin around the lineup, in metres of world space.
 const _ORTHO_MARGIN_M: float = 0.44
-# The gloves stand on their own shelf above the skates.
+# The gloves stand on their own shelf above the skates; the helmets above both.
 const _GLOVE_ROW_Y: float = 0.42
+const _FACE_ROW_Y: float = 0.84
 const _LABEL_DROP_M: float = 0.055
 # Glove display sizes — larger than the workbench's, so a glove reads at about
 # the scale of the skate under it (the live rig sizes the fist off the hand
@@ -53,7 +55,7 @@ var _team_name: String = ""
 
 
 func _init() -> void:
-	DisplayServer.window_set_size(Vector2i(1800, 640))
+	DisplayServer.window_set_size(Vector2i(1800, 900))
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
 	e.background_mode = Environment.BG_COLOR
@@ -76,7 +78,7 @@ func _init() -> void:
 	# grow when a model is added to the catalogue.
 	camera.keep_aspect = Camera3D.KEEP_WIDTH
 	camera.size = span + _ORTHO_MARGIN_M
-	camera.position = Vector3(0.0, 0.30, 1.0)
+	camera.position = Vector3(0.0, 0.55, 1.0)
 	root.add_child(camera)
 
 	var light := DirectionalLight3D.new()
@@ -91,12 +93,20 @@ func _init() -> void:
 
 	_add_shelf(span, 0.0)
 	_add_shelf(span, _GLOVE_ROW_Y)
+	_add_shelf(span, _FACE_ROW_Y)
 
 	for model: int in GearModelRegistry.skate_count():
-		_place(span, model, 0.0, GearModelRegistry.SKATE_NAME_KEYS[model], _build_skate)
+		_place(span, float(model), model, 0.0,
+				GearModelRegistry.SKATE_NAME_KEYS[model], _build_skate)
 	for model: int in GearModelRegistry.glove_count():
-		_place(span, model, _GLOVE_ROW_Y, GearModelRegistry.GLOVE_NAME_KEYS[model],
-				_build_glove)
+		_place(span, float(model), model, _GLOVE_ROW_Y,
+				GearModelRegistry.GLOVE_NAME_KEYS[model], _build_glove)
+	# The face row is shorter than the model rows — shift it half the
+	# difference so it sits centered over them.
+	var face_shift: float = float(count - GearModelRegistry.face_count()) * 0.5
+	for option: int in GearModelRegistry.face_count():
+		_place(span, float(option) + face_shift, option, _FACE_ROW_Y,
+				GearModelRegistry.FACE_NAME_KEYS[option], _build_face)
 
 	process_frame.connect(_on_frame)
 
@@ -104,9 +114,11 @@ func _init() -> void:
 # Seats one catalogue row entry: the piece hangs off a holder so the second
 # shot can yaw the whole assembly in one write, and its label is NOT a child
 # of that holder — labels must keep facing the camera when the pieces turn.
-func _place(span: float, model: int, row_y: float, name_key: StringName,
+# `col` is the lineup column (fractional for centered short rows); `model`
+# is the catalogue index handed to `build`.
+func _place(span: float, col: float, model: int, row_y: float, name_key: StringName,
 		build: Callable) -> void:
-	var x: float = -span * 0.5 + _SPACING_M * float(model)
+	var x: float = -span * 0.5 + _SPACING_M * col
 	var holder := Node3D.new()
 	holder.position = Vector3(x, row_y, 0.0)
 	root.add_child(holder)
@@ -203,6 +215,27 @@ func _build_glove(holder: Node3D, model: int) -> void:
 			Vector3(0.0, 1.9 * _FIST_SCALE + SkaterMeshBuilder.CUFF_HEIGHT_M * 0.4, 0.0))
 	cuff.material_override = _mat(_glove_zone(model, GearModelRegistry.GLOVE_CUFF), 0.9)
 	holder.add_child(cuff)
+
+
+# One helmet under `holder`, spun to face the camera (the mesh's face opening
+# is −Z), wearing the option's piece and the kit's own helmet color; the
+# head/neck skin surface keeps the assembly's default skin material. The face
+# piece paints through the rink's own material factory, so the smoke/steel/
+# clear looks in the PNG are the ones the ice shows.
+func _build_face(holder: Node3D, option: int) -> void:
+	var helmet_at := Transform3D(Basis(Vector3.UP, PI), Vector3(0.0, 0.115, 0.0))
+	var helmet := MeshInstance3D.new()
+	helmet.mesh = SkaterMeshBuilder.shared_helmet_assembly()
+	helmet.transform = helmet_at
+	helmet.set_surface_override_material(SkaterMeshBuilder.HELMET_SURF_SHELL,
+			_mat(_kit.uniform.helmet, 0.28))
+	holder.add_child(helmet)
+
+	var piece := MeshInstance3D.new()
+	piece.mesh = SkaterMeshBuilder.shared_face_gear(option)
+	piece.material_override = SkaterMeshBuilder.make_face_gear_material(option)
+	piece.transform = helmet_at
+	holder.add_child(piece)
 
 
 func _skate_zone(model: int, zone: int) -> Color:

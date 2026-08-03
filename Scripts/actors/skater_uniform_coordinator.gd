@@ -63,6 +63,9 @@ var _jersey_viewport: SubViewport
 var _jersey_decal: JerseyDecal
 var _shoulder_viewport: SubViewport
 var _shoulder_decal: ShoulderDecal
+# Whether the skater is currently ghost-faded — read by the face-gear repaint,
+# whose design alpha is not 1.0 and so can't be restored by _fade_material.
+var _ghosted: bool = false
 
 
 func setup(skater: Skater) -> void:
@@ -202,6 +205,10 @@ func apply_uniform(colors: Dictionary) -> void:
 
 	# Butt-end knob — recreated here so the tape color tracks the kit.
 	_rebuild_stick_knob()
+
+	# Face gear — fixed look, no kit resolution; painted with the uniform so a
+	# piece equipped before the first uniform pass isn't left unpainted.
+	_repaint_face_gear()
 
 	# Gloves: the gear style's glove MODEL paints the back of the hand, the
 	# fingers and the wrist cuff rings, each from black / white / the kit's own
@@ -538,6 +545,7 @@ func refresh_gear_style() -> void:
 	_repaint_gloves()
 	_repaint_skates()
 	_repaint_laces()
+	_repaint_face_gear()
 	if _skater.stick_mesh.material_override is ShaderMaterial:
 		_skater.stick_mesh.material_override = _make_stick_shaft_mat()
 		_rebuild_blade()
@@ -594,6 +602,24 @@ func _repaint_gloves() -> void:
 	_paint_glove_cuffs(_glove_zone_color(GearModelRegistry.GLOVE_CUFF))
 
 
+# Face gear fades with the body, but unlike every other part its DESIGN alpha
+# is not 1.0 (the shields are transparent by design), so it cannot ride the
+# generic _fade_material restore — the material is rebuilt from its factory
+# (SkaterMeshBuilder, with the geometry — face looks are kit-free) instead,
+# with the ghost factor layered on top. Called from the uniform pass, the live
+# gear refresh and apply_ghost, so a face pick changed mid-ghost stays faded.
+func _repaint_face_gear() -> void:
+	var face: MeshInstance3D = _skater.face_gear_mesh()
+	if face == null:
+		return
+	var mat: StandardMaterial3D = SkaterMeshBuilder.make_face_gear_material(
+			_skater.gear_style.helmet_face)
+	if _ghosted:
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.albedo_color.a *= 0.3
+	face.material_override = mat
+
+
 # The cuff rings are surfaces of the arm rig's shared mesh, so a gear-colour
 # change is a repaint and a resize — the geometry is permanent. (This used to
 # free and recreate two MeshInstance3Ds on every uniform apply and every live
@@ -611,6 +637,9 @@ func _paint_glove_cuffs(gloves_color: Color) -> void:
 
 
 func apply_ghost(ghost: bool) -> void:
+	# Face gear first (transparent by design — see _repaint_face_gear).
+	_ghosted = ghost
+	_repaint_face_gear()
 	# The stick shaft and blade are handled apart from the loop: their
 	# overrides are ShaderMaterials (flex/brand, carbon weave), which the
 	# StandardMaterial3D cast below can't see — the loop would replace them
