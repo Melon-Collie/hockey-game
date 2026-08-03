@@ -1,16 +1,18 @@
 extends GutTest
 
-# Guards the model↔simulation mirrors: GameRules constants that MUST equal a live
-# physics-material value the host simulates. A silent drift here is exactly what
-# caused the historical 10× ice-friction bug (model 0.1 vs live 0.01), so these
-# assertions fail CI the moment the pair diverges.
+# Pins the GameRules constants that used to mirror a live PhysicsMaterial. A
+# silent drift here is what caused the historical 10× ice-friction bug (model 0.1
+# vs live 0.01).
 #
-# Note the asymmetry:
-#   - ICE_FRICTION is now SINGLE-SOURCED (HockeyRink builds the ice material from
-#     the constant), so it structurally cannot drift and needs no runtime guard —
-#     the derivation test below just documents the relationship.
-#   - PUCK_BOARD_BOUNCE mirrors a STATIC resource (boards.tres) a const can't
-#     reach, so it's the one pair a test has to enforce.
+# READ THIS BEFORE TRUSTING IT: the simulation half of the mirror is gone. Nothing
+# collides through the physics server any more, so boards.tres is no longer read
+# by anything at runtime — the analytic carom applies PUCK_BOARD_BOUNCE and
+# PUCK_BOARD_FRICTION directly, and they are now the only authority. What is left
+# below pins a resource against a constant that no longer derives from it, which
+# is worth exactly as much as keeping the .tres file is: the pair can still be
+# read as the documented rim-feel numbers, but a drift no longer breaks the game.
+# Retiring the resources and this file together is the honest end state, once
+# RinkArena.tscn stops referencing them.
 
 
 const _BOARDS_MAT: PhysicsMaterial = preload("res://Physics/boards.tres")
@@ -32,8 +34,10 @@ func test_board_friction_matches_boards_material() -> void:
 
 
 func test_puck_ice_decel_derives_from_ice_friction_and_gravity() -> void:
-	# PUCK_ICE_DECEL_M_S2 is the Coulomb decel a = μ·g the prediction paths apply.
-	# Locks the derivation so a stray literal can't replace the computed value.
+	# PUCK_ICE_DECEL_M_S2 is the Coulomb decel a = μ·g every path applies — host
+	# drive, client prediction, and the AI model alike. Locks the derivation so a
+	# stray literal can't replace the computed value. This one never had a
+	# simulation half to drift from; ICE_FRICTION has always been the source.
 	assert_almost_eq(GameRules.PUCK_ICE_DECEL_M_S2,
 			GameRules.ICE_FRICTION * GameRules.GRAVITY_M_S2, 1e-6,
 			"PUCK_ICE_DECEL_M_S2 must stay = ICE_FRICTION × GRAVITY_M_S2")

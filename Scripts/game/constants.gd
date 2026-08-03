@@ -8,33 +8,25 @@ extends Node
 # ── Collision Layers ──────────────────────────────────────────────────────────
 # NOTHING IN THE GAME COLLIDES THROUGH THE PHYSICS SERVER. Every contact — puck
 # vs. geometry, skater vs. skater, skater vs. boards / net / goalie, blade vs.
-# puck — is solved analytically in GDScript, and no code anywhere runs a ray,
-# shape, or overlap query. Consequently every collision_mask in the project is 0
-# and these layers produce no engine collision at all.
+# puck — is solved analytically in GDScript, no code anywhere runs a ray, shape,
+# or overlap query, and every collision_mask in the project is 0. The rink, the
+# nets, and the actors carry no colliders at all; the goalie is the sole
+# exception, and only because his parts ARE the save geometry.
 #
-# They survive as IDENTITY TAGS on the remaining StaticBody3D geometry: the parts
-# carry a shape and a transform the analytic solvers read, and a NONZERO layer is
-# what marks such a part live — GoalieContactDetector skips any part whose
-# collision_layer is 0 (that is how a goalie part is disabled). Keep them distinct
-# so the tags stay readable.
+# So a layer here is not a collision filter. It is an IDENTITY TAG on the goalie's
+# StaticBody3D parts, whose shapes and transforms GoalieContactDetector reads
+# directly — and a NONZERO tag is what marks a part live, since the detector skips
+# any part whose collision_layer is 0 (that is how set_stick_collision_enabled
+# takes the stick out of play mid-sweep).
 #
-# Layer 1 (bit 0, value  1) — walls, ice
-# Layer 2 (bit 1, value  2) — free (was the skater blade Area3Ds)
+# Layer 1 (bit 0, value  1) — tutorial/drill obstacle walls
 # Layer 3 (bit 2, value  4) — goalie stick
-# Layer 4 (bit 3, value  8) — free (was the puck RigidBody3D)
-# Layer 5 (bit 4, value 16) — free (was the skater CharacterBody3D bodies)
-# Layer 6 (bit 5, value 32) — perimeter boards
-# Layer 7 (bit 6, value 64) — goal-net frame + panels
 # Layer 8 (bit 7, value 128) — goalie bodies (pads/body/head/glove/blocker)
+# Layers 2, 4, 5, 6, 7 are free: they tagged the skater blade Area3Ds, the puck
+# RigidBody3D, the skater CharacterBody3Ds, the boards, and the net, none of
+# which exist any more.
 const LAYER_WALLS: int          = 1
 const LAYER_GOALIE_STICK: int   = 4
-# Boards and the net are tagged apart from the ice because the skater's boundary
-# is not their mesh: both are concave, and the rounded-rect boundary
-# (GameRules.clamp_to_rink_inner) and net box (GameRules.push_out_of_net) the
-# clamps use are smooth where the mesh is not — the same boundary the analytic
-# puck sim caroms off, so puck and skater agree on where the rink ends.
-const LAYER_BOARDS: int         = 32
-const LAYER_NET: int            = 64
 const LAYER_GOALIE_BODIES: int  = 128
 
 # ── Network (transport-level) ─────────────────────────────────────────────────

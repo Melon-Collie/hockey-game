@@ -24,6 +24,18 @@ const SKATER_SCENE: PackedScene = preload("res://Scenes/Skater.tscn")
 const PUCK_SCENE: PackedScene = preload("res://Scenes/Puck.tscn")
 const GOALIE_SCENE: PackedScene = preload("res://Scenes/Goalie.tscn")
 
+# Checked by base type rather than by instantiating: building a rink paints a
+# ~10M-pixel ice texture pixel-by-pixel in GDScript, which has no place in a unit
+# suite. The base type is the load-bearing half anyway — a script that extends a
+# PhysicsBody3D puts one in the tree wherever it is used.
+const PHYSICS_FREE_SCRIPTS: Array[String] = [
+	"res://Scripts/actors/skater.gd",
+	"res://Scripts/actors/puck.gd",
+	"res://Scripts/actors/hockey_rink.gd",
+	"res://Scripts/actors/hockey_goal.gd",
+	"res://Scripts/actors/goalie.gd",
+]
+
 
 func _spawn(scene: PackedScene) -> Node:
 	var actor: Node = scene.instantiate()
@@ -102,6 +114,27 @@ func test_no_actor_masks_anything() -> void:
 					"%s masks layer(s) %d — nothing in this project queries or " \
 					% [actor.get_path_to(obj), obj.collision_mask] \
 					+ "collides, so every mask must be 0")
+
+
+# The rink and the nets are geometry the player skates around, but the boundary
+# every actor is actually held against is analytic (GameRules.clamp_to_rink_inner
+# / push_out_of_net) — smooth where the built mesh is faceted. Their colliders
+# were duplicating that boundary badly and answering to nobody.
+func test_world_geometry_scripts_are_not_physics_bodies() -> void:
+	for path: String in PHYSICS_FREE_SCRIPTS:
+		var script: GDScript = load(path) as GDScript
+		assert_eq(script.get_instance_base_type(), "Node3D",
+				"%s must extend Node3D — a PhysicsBody3D base puts a body in the " \
+				% path + "tree everywhere the script is used")
+
+
+func test_goal_builds_no_colliders() -> void:
+	var goal := HockeyGoal.new()
+	add_child_autofree(goal)
+	var objects: Array[CollisionObject3D] = _collision_objects(goal)
+	assert_eq(objects.size(), 0,
+			"the goal must build meshes only — post, crossbar and net caroms are " \
+			+ "analytic (PuckGeometryCollision). Found: " + _paths(objects, goal))
 
 
 # Guards the guard: the checks above pass by finding NOTHING, which is also what

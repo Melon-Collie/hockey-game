@@ -74,17 +74,25 @@ in GDScript. No code runs a ray, shape, or overlap query, and every
 
 | Constant | Value | Tags |
 |----------|-------|------|
-| `LAYER_WALLS` | 1 | Ice surface |
+| `LAYER_WALLS` | 1 | Tutorial / drill obstacle walls |
 | `LAYER_GOALIE_STICK` | 4 | Goalie stick |
-| `LAYER_BOARDS` | 32 | Perimeter boards |
-| `LAYER_NET` | 64 | Goal-net frame + panels |
 | `LAYER_GOALIE_BODIES` | 128 | Goalie pads / body / head / glove / blocker |
 
-What survives is a handful of `StaticBody3D`s carrying shapes and transforms the
-analytic solvers read, and the layers above are identity tags on them: a NONZERO
-layer marks a part live, which is how `GoalieContactDetector` skips a disabled
-one. Layers 2 (skater blade `Area3D`s), 8 (the puck `RigidBody3D`) and 16 (skater
-`CharacterBody3D`s) are retired along with the nodes that carried them.
+The **goalie is the only thing left with colliders**, and only because his parts
+*are* the save geometry: `GoalieContactDetector` reads their shapes and
+transforms directly. So a layer is an identity tag, not a filter — a NONZERO tag
+marks a part live, which is how a disabled part is skipped. The rink, the nets,
+the skaters and the puck carry nothing; the retired layers (blade `Area3D`s, the
+puck `RigidBody3D`, the skater `CharacterBody3D`s, the boards, the net) went with
+the nodes that carried them.
+
+The rink and net colliders are worth a note, because deleting them was not purely
+a cost decision: they were a *second, worse* copy of a boundary that already
+exists. The perimeter was a 256-segment `ConcavePolygonShape3D` and the net a
+stack of AABBs, while everything that actually reasons about those surfaces —
+blade clamp, AI carom, puck-OOB, `Skater.clamp_body_to_rink` /
+`clamp_body_to_net` — uses the smooth `GameRules` boundary. Two descriptions of
+one wall, one of them read by nobody.
 
 Keeping every actor out of the simulation is worth real host budget, not just
 tidiness: a single active body or monitoring sensor switches on Jolt's per-step
@@ -269,7 +277,7 @@ The only legitimately hand-set numbers in the AI are **feel / tactical tunables*
 - 120 Hz physics tick (Rocket League parity; the analytic puck step sub-steps near the goal frame — `PuckAuthorityRules.frame_substeps` — so a hard shot can't tunnel the pipes at this rate)
 - **15 FPS host floor.** `max_physics_steps_per_frame` sits at Godot's default of 8 (P6 pinned it to 8 in `project.godot`, but 8 is the default so the editor strips it on save — it's a documented constraint, not a persisted setting). At the 120 Hz tick the host must render ≥ `120 / 8 = 15` FPS to keep physics real-time; below that, the sim dilates (slow-motion vs. the wall clock that clock-sync and broadcast cadence use) and every client interpolator extrapolates at once. Dropping the tick 240→120 Hz halved this floor (it was 30 FPS) and halved the per-tick host budget — per-actor allocation work and analytic-collision cost both scale with the rate. Raising the cap to tolerate even lower framerates risks a physics "spiral of death" (more catch-up steps make each frame slower still), so the floor is the deliberate failure mode. Keep the host comfortably above it via the per-tick perf budget; watch the F3 tick p95/p99 telemetry for transient dips (a GC hitch or heavy reconcile-replay frame can momentarily blow past it).
 - Puck mass 0.17 kg, collision cylinder radius 0.065 m / height 0.035 m (oversized vs. a regulation 76 mm × 25 mm puck — a gameplay allowance; pickup/poke are center-based via `PICKUP_RADIUS`, so the collision size only affects physical bounces, fitting through goalie gaps, and the goal-mouth clearance in `GoalDetectionRules`, not corralling. `ice_height`/`PUCK_START_POS` track the cylinder half-height (0.0175) — update both if the height changes. `GameRules.PUCK_COLLISION_RADIUS`/`PUCK_COLLISION_HALF_HEIGHT` are the disc the analytic solver and the goal test sweep; the puck renders flat, so its horizontal reach 0.065 ≠ its vertical reach 0.0175, and both must stay in sync with the `Puck.tscn` mesh)
-- `GameRules.ICE_FRICTION = 0.05` — realistic puck-on-ice μ, and the **single source of truth**: the analytic puck step and the AI/client trajectory model both read this one constant, so sim and model are the same number and can't drift. (There is no ice `.tres` — an orphaned `Physics/ice.tres` was removed after it once misled `ICE_FRICTION` to 0.1 while the live ice ran 0.01.) The board-restitution mirror (`PUCK_BOARD_BOUNCE` ↔ `boards.tres` `bounce`) *can't* be single-sourced (static resource), so `tests/unit/rules/test_physics_material_mirrors.gd` guards it in CI. `GameRules.GRAVITY_M_S2 = 9.8` is pinned to Godot's un-overridden engine default (not textbook 9.81) by that same test, so a project-setting override can't leave two gravities in the build.
+- `GameRules.ICE_FRICTION = 0.05` — realistic puck-on-ice μ, and the **single source of truth**: the analytic puck step and the AI/client trajectory model both read this one constant, so sim and model are the same number and can't drift. (There is no ice `.tres` — an orphaned `Physics/ice.tres` was removed after it once misled `ICE_FRICTION` to 0.1 while the live ice ran 0.01.) `PUCK_BOARD_BOUNCE` / `PUCK_BOARD_FRICTION` are likewise authoritative: with the boards carrying no collider, `Physics/boards.tres` is read by nothing at runtime and survives only as a scene property pending removal (`test_physics_material_mirrors.gd` still pins the pair, and says so in its header). `GameRules.GRAVITY_M_S2 = 9.8` is pinned to Godot's un-overridden engine default (not textbook 9.81) by that same test, so a project-setting override can't leave two gravities in the build.
 - Puck velocity is clamped inside the shared analytic step (`PuckAuthorityRules` — host drive and client prediction alike), so every peer simulates from a sane speed.
 
 ---

@@ -3,9 +3,14 @@ extends Node3D
 
 # Low board laid across a drill lane so a flat shot or pass can't get through —
 # the obstacle that gives LOW loft (the saucer) a reason to exist. Procedural
-# (no scene edits), following the TutorialTargets pattern. One StaticBody3D on
-# LAYER_WALLS so the puck (whose mask includes walls) clanks off it; skaters
-# collide too, which is fine — it reads as a physical board on the ice.
+# (no scene edits), following the TutorialTargets pattern.
+#
+# THE WALL DOES NOT CURRENTLY STOP ANYTHING. Its StaticBody3D is inert: the puck
+# is analytically integrated and has no physics body, and the only obstacles the
+# analytic sim knows about are the rink boundary, the goal frame, and the goalie.
+# A flat shot passes straight through, so the drills below read as passable when
+# they are meant to demand a saucer. Fixing it means teaching the analytic puck
+# step about drill obstacles — tracked as a GitHub issue.
 #
 # Used by the Shooting module's saucer wave and the Passing module's saucer
 # drill. show_wall() replaces any existing wall; clear() removes it.
