@@ -2,9 +2,10 @@ class_name GearModelRegistry
 extends RefCounted
 
 # The catalogue of skate and glove MODELS — the equipment a player picks in the
-# gear workbench. A model is not a color pick: it is a fixed design that paints
-# every zone of the piece at once, the way buying a real pair decides the boot,
-# the ankle cuff and the accent band together.
+# gear workbench — plus the helmet FACE options (visor / cage / fishbowl; see
+# their own section below). A model is not a color pick: it is a fixed design
+# that paints every zone of the piece at once, the way buying a real pair
+# decides the boot, the ankle cuff and the accent band together.
 #
 # Zones paint from four SLOTS, three of which are the wearer's own kit, so a
 # design reads as itself on every team while still belonging to that team:
@@ -144,6 +145,63 @@ const _GLOVE_MODELS: Array[Array] = [
 	[Paint.ACCENT, Paint.TEAM, Paint.TEAM],     # Two-Tone — the pairing flipped
 	[Paint.TEAM, Paint.ACCENT, Paint.LIGHT],    # Tri-Color — the full kit colorway
 ]
+
+
+# ── Helmet face gear ─────────────────────────────────────────────────────────
+# The face options are fixed LOOKS, not paint rows: a visor is smoked
+# polycarbonate and a cage is bare steel whoever wears them, so unlike the
+# model lists nothing here resolves against the kit. Same wire rules though —
+# indices ride the packed GearStyleConfig code, rows are append-only, and
+# index 0 (bare) is what an untouched player wears. Cosmetic only: no option
+# reads or writes anything gameplay (a vision tradeoff would be a fidelity
+# lever, which the attributes constitution bans).
+
+const FACE_NONE: int = 0
+const FACE_VISOR: int = 1
+const FACE_CAGE: int = 2
+const FACE_FISHBOWL: int = 3
+
+const FACE_NAME_KEYS: Array[StringName] = [
+	&"GEAR_FACE_NONE",
+	&"GEAR_FACE_VISOR",
+	&"GEAR_FACE_CAGE",
+	&"GEAR_FACE_FISHBOWL",
+]
+
+# Albedo (alpha included — the shields are transparent by design) per option,
+# index-aligned with FACE_NAME_KEYS. Row 0 is unused (bare = no piece) but
+# keeps the tables aligned with the names.
+const _FACE_COLORS: Array[Color] = [
+	Color(0, 0, 0, 0),                    # FACE_NONE — no piece
+	Color(0.10, 0.11, 0.13, 0.42),        # visor — smoked polycarbonate
+	Color(0.13, 0.13, 0.14, 1.0),         # cage — dark welded steel
+	Color(0.85, 0.92, 0.97, 0.18),        # fishbowl — near-clear full shield
+]
+
+const _FACE_ROUGHNESS: Array[float] = [
+	0.0,
+	0.05,   # visor gloss
+	0.35,   # painted steel
+	0.04,   # fishbowl gloss
+]
+
+
+static func face_count() -> int:
+	return FACE_NAME_KEYS.size()
+
+
+static func is_valid_face(option: int) -> bool:
+	return option >= 0 and option < FACE_NAME_KEYS.size()
+
+
+# The fixed look of one face option. A forged index reads the bare row (which
+# renders nothing), matching from_code's clamp rather than throwing here.
+static func face_color(option: int) -> Color:
+	return _FACE_COLORS[option] if is_valid_face(option) else _FACE_COLORS[FACE_NONE]
+
+
+static func face_roughness(option: int) -> float:
+	return _FACE_ROUGHNESS[option] if is_valid_face(option) else 0.0
 
 
 static func skate_count() -> int:

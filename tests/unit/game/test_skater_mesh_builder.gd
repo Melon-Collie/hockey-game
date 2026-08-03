@@ -201,6 +201,38 @@ func test_skate_blade_reaches_the_lifted_ice_depth() -> void:
 			"the boot sole should ride on the blade, clear of the ice")
 
 
+# Face gear is the one open-sheet family (millimetre glazing and cage wire —
+# no closed solid to sign-check), so it gets its own contract instead of a
+# PartSpec row: bare and forged picks carry no mesh, and every real piece
+# stays on the face — inside the shield radius, in the helmet's front half
+# (the face is −Z), and below the brow rim so nothing pokes through the shell
+# dome. The visor-vs-fishbowl depth split is design intent worth pinning too:
+# a visor that reaches the chin IS a fishbowl.
+func test_face_gear_pieces_sit_on_the_face() -> void:
+	assert_null(SkaterMeshBuilder.shared_face_gear(GearModelRegistry.FACE_NONE),
+			"bare carries no mesh")
+	assert_null(SkaterMeshBuilder.shared_face_gear(-1), "forged picks carry no mesh")
+	assert_null(SkaterMeshBuilder.shared_face_gear(99), "forged picks carry no mesh")
+	var brow_y: float = 0.158 * cos(PI * 0.40) + 0.005
+	for option: int in [GearModelRegistry.FACE_VISOR, GearModelRegistry.FACE_CAGE,
+			GearModelRegistry.FACE_FISHBOWL]:
+		var mesh: ArrayMesh = SkaterMeshBuilder.shared_face_gear(option)
+		assert_not_null(mesh, "option %d has a mesh" % option)
+		var verts: PackedVector3Array = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+		assert_gt(verts.size(), 0, "option %d has geometry" % option)
+		for v: Vector3 in verts:
+			assert_lt(v.length(), 0.158 + 0.001,
+					"option %d stays inside the shield radius" % option)
+			assert_lt(v.z, 0.001, "option %d stays on the face half" % option)
+			assert_lt(v.y, brow_y, "option %d stays under the brow rim" % option)
+	var visor: AABB = _surface_bounds(
+			SkaterMeshBuilder.shared_face_gear(GearModelRegistry.FACE_VISOR), 0)
+	var bowl: AABB = _surface_bounds(
+			SkaterMeshBuilder.shared_face_gear(GearModelRegistry.FACE_FISHBOWL), 0)
+	assert_gt(visor.position.y, -0.05, "the visor stops above the mouth")
+	assert_lt(bowl.position.y, -0.10, "the fishbowl covers past the chin")
+
+
 # One surface's own bounds. ArrayMesh.get_aabb() unions every surface, which
 # would let a piece drift outside its envelope as long as a sibling covered it.
 func _surface_bounds(mesh: ArrayMesh, surface: int) -> AABB:

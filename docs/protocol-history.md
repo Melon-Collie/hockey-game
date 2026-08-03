@@ -233,3 +233,8 @@ here whenever you bump, in the same format.
 #      colorway. Same payload shape (still one int), but a v53 peer masks the
 #      field off and silently renders every custom stick as the house design,
 #      so mixed builds must be refused.
+# v55: helmet face gear — the packed GearStyleConfig code grows a fifth field
+#      (bits 20–24): a GearModelRegistry face option (bare / visor / cage /
+#      fishbowl) rendered on the helmet. Same payload shape (still one int),
+#      but a v54 peer masks the field off and renders every face bare, so
+#      mixed builds must be refused.

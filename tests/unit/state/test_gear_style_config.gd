@@ -16,6 +16,7 @@ func test_default_decodes_to_the_kit_look() -> void:
 	assert_eq(config.lace_color, GearStyleConfig.LACE_DEFAULT_INDEX, "laces default white")
 	assert_eq(config.stick_model, StickModelRegistry.STICK_STEALTH,
 			"the stick defaults to the house model")
+	assert_eq(config.helmet_face, GearModelRegistry.FACE_NONE, "the face defaults bare")
 
 
 func test_every_legal_pick_round_trips() -> void:
@@ -23,12 +24,14 @@ func test_every_legal_pick_round_trips() -> void:
 		for glove: int in GearModelRegistry.glove_count():
 			for lace: int in TapeColorRegistry.count():
 				for stick: int in StickModelRegistry.count():
-					var config := GearStyleConfig.new(skate, glove, lace, stick)
-					var back: GearStyleConfig = GearStyleConfig.from_code(config.to_code())
-					assert_eq(back.skate_model, skate)
-					assert_eq(back.glove_model, glove)
-					assert_eq(back.lace_color, lace)
-					assert_eq(back.stick_model, stick)
+					for face: int in GearModelRegistry.face_count():
+						var config := GearStyleConfig.new(skate, glove, lace, stick, face)
+						var back: GearStyleConfig = GearStyleConfig.from_code(config.to_code())
+						assert_eq(back.skate_model, skate)
+						assert_eq(back.glove_model, glove)
+						assert_eq(back.lace_color, lace)
+						assert_eq(back.stick_model, stick)
+						assert_eq(back.helmet_face, face)
 
 
 func test_garbage_codes_coerce_to_legal_looks() -> void:
@@ -38,6 +41,7 @@ func test_garbage_codes_coerce_to_legal_looks() -> void:
 		assert_true(GearModelRegistry.is_valid_glove(config.glove_model), "glove model legal")
 		assert_true(TapeColorRegistry.is_valid(config.lace_color), "lace color legal")
 		assert_true(StickModelRegistry.is_valid(config.stick_model), "stick model legal")
+		assert_true(GearModelRegistry.is_valid_face(config.helmet_face), "face option legal")
 		# And the coerced look re-packs stably (idempotent coercion).
 		var code2: int = config.to_code()
 		assert_eq(GearStyleConfig.from_code(code2).to_code(), code2)

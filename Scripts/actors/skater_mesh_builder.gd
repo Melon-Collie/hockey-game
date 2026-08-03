@@ -900,6 +900,120 @@ static func _build_helmet() -> ArrayMesh:
 	return st.commit()
 
 
+# ── Helmet face gear ─────────────────────────────────────────────────────────
+# Visor / cage / fishbowl, in the helmet's own frame (face toward −Z, matching
+# the head's forward offset) so the piece can ride the HELMET bone. All three
+# are sections of a sphere just proud of the shell, sampled with the helmet's
+# latitude convention: the shields are one solid patch each, the cage is the
+# same patch emitted as thin strips (its bars). Looks (color/alpha/roughness)
+# live in GearModelRegistry.FACE_*; the meshes carry no default material —
+# SkaterUniformCoordinator.make_face_gear_material is the one paint source.
+
+const _FACE_SHIELD_RADIUS: float = 0.158  # proud of the 0.155 shell
+# Visor: brow to just under the eye line (the equator). Ends short of the ear
+# loops (rim dips at ±90° from the face) so it reads as clipped to the rim.
+const _VISOR_V0: float = 0.41   # tucked under the brow rim (front cut 0.40)
+const _VISOR_V1: float = 0.55
+const _VISOR_HALF_ARC: float = 1.25   # rad each side of dead front
+# Fishbowl: the same shield carried down past the chin (the head ball's south
+# pole region — v 0.78 is jaw depth on the shield's slightly larger radius).
+const _FISHBOWL_V1: float = 0.78
+const _FISHBOWL_HALF_ARC: float = 1.35
+# Cage: a bar lattice over the fishbowl's opening. Bar half-width is metres of
+# arc, converted per-axis to parameter half-widths where the bars are emitted.
+const _CAGE_RADIUS: float = 0.157
+const _CAGE_BAR_HALF_M: float = 0.003
+const _CAGE_V0: float = 0.42
+const _CAGE_V1: float = 0.72
+const _CAGE_HALF_ARC: float = 1.15
+const _CAGE_H_BAR_COUNT: int = 4
+const _CAGE_V_BAR_OFFSETS: Array[float] = [-0.84, -0.42, 0.0, 0.42, 0.84]
+
+
+# The face piece for one GearModelRegistry FACE_* option — null for bare (and
+# for a forged index, matching the registry's clamp).
+static func shared_face_gear(option: int) -> ArrayMesh:
+	match option:
+		GearModelRegistry.FACE_VISOR:
+			return _shared("face_visor", _build_visor)
+		GearModelRegistry.FACE_CAGE:
+			return _shared("face_cage", _build_cage)
+		GearModelRegistry.FACE_FISHBOWL:
+			return _shared("face_fishbowl", _build_fishbowl)
+		_:
+			return null
+
+
+static func _build_visor() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)  # flat shading — see class doc block
+	_sphere_patch(st, _FACE_SHIELD_RADIUS, _VISOR_V0, _VISOR_V1,
+			PI - _VISOR_HALF_ARC, PI + _VISOR_HALF_ARC, 2, 8)
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_fishbowl() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)  # flat shading — see class doc block
+	_sphere_patch(st, _FACE_SHIELD_RADIUS, _VISOR_V0, _FISHBOWL_V1,
+			PI - _FISHBOWL_HALF_ARC, PI + _FISHBOWL_HALF_ARC, 3, 10)
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_cage() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)  # flat shading — see class doc block
+	# Latitude half-width of a horizontal bar: metres over the pole-to-pole arc.
+	var dv: float = _CAGE_BAR_HALF_M / (PI * _CAGE_RADIUS)
+	for i: int in _CAGE_H_BAR_COUNT:
+		var v: float = lerpf(_CAGE_V0 + dv, _CAGE_V1 - dv,
+				float(i) / float(_CAGE_H_BAR_COUNT - 1))
+		_sphere_patch(st, _CAGE_RADIUS, v - dv, v + dv,
+				PI - _CAGE_HALF_ARC, PI + _CAGE_HALF_ARC, 1, 8)
+	# Azimuth half-width of a vertical bar: metres over the ring radius at the
+	# lattice's mid-latitude. Constant per bar, so bars taper slightly toward
+	# the brow where rings shrink — as welded cage wire does.
+	var dth: float = _CAGE_BAR_HALF_M \
+			/ (_CAGE_RADIUS * sin(PI * (_CAGE_V0 + _CAGE_V1) * 0.5))
+	for off: float in _CAGE_V_BAR_OFFSETS:
+		_sphere_patch(st, _CAGE_RADIUS, _CAGE_V0, _CAGE_V1,
+				PI + off - dth, PI + off + dth, 4, 1)
+	st.generate_normals()
+	return st.commit()
+
+
+# One rectangular patch of a sphere between two (latitude, azimuth) corners,
+# sampled on a v_steps × th_steps quad grid. Conventions match _build_helmet:
+# θ = 0 is +Z (the back) advancing toward +X, v is the latitude fraction, and
+# the quad winding faces outward. UVs are nominal — every face piece is
+# solid-painted. Open sheet, not a solid: the shields are millimetre glazing
+# and the bars are wire, so a closed back would double the triangles to say
+# nothing (their materials go two-sided or transparent instead).
+static func _sphere_patch(st: SurfaceTool, radius: float, v0: float, v1: float,
+		th0: float, th1: float, v_steps: int, th_steps: int) -> void:
+	for j in v_steps:
+		var va: float = lerpf(v0, v1, float(j) / float(v_steps))
+		var vb: float = lerpf(v0, v1, float(j + 1) / float(v_steps))
+		for k in th_steps:
+			var ta: float = lerpf(th0, th1, float(k) / float(th_steps))
+			var tb: float = lerpf(th0, th1, float(k + 1) / float(th_steps))
+			_uv_quad(st,
+					_sphere_point(radius, va, ta), Vector2.ZERO,
+					_sphere_point(radius, va, tb), Vector2(0.1, 0.0),
+					_sphere_point(radius, vb, tb), Vector2(0.1, 0.1),
+					_sphere_point(radius, vb, ta), Vector2(0.0, 0.1))
+
+
+static func _sphere_point(radius: float, v: float, theta: float) -> Vector3:
+	var ring_r: float = radius * sin(PI * v)
+	return Vector3(sin(theta) * ring_r, radius * cos(PI * v), cos(theta) * ring_r)
+
+
 static func _build_neck() -> ArrayMesh:
 	return _build_lathe(_NECK_PROFILE, 8, 1.0, 1.0)
 
