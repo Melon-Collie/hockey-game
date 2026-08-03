@@ -33,6 +33,13 @@ class Contact:
 static var _native_obb: RefCounted = null
 static var _native_obb_checked: bool = false
 
+# Non-box marker in a Goalie's cached half-extent array (a real half extent is
+# never negative); the shared frozen empty keeps the fixture path allocation-free
+# (an empty PackedVector3Array default-constructs without a heap buffer, so the
+# halves local needs no shared counterpart).
+const _NON_BOX_HALF := Vector3(-1.0, -1.0, -1.0)
+const _EMPTY_BODIES: Array[Node] = []
+
 
 static func nearest(goalies: Array, prev: Vector3, curr: Vector3, radius: float,
 		scratch: SweptDiscOBB.Result, out: Contact) -> bool:
@@ -48,21 +55,36 @@ static func nearest(goalies: Array, prev: Vector3, curr: Vector3, radius: float,
 	for goalie: Node in goalies:
 		if goalie == null:
 			continue
-		# Real goalies serve a cached part list (the subtree is static after _ready;
+		# Real goalies serve cached part lists (the subtree is static after _ready;
 		# a fresh recursive gather per query allocated hundreds of arrays/tick in a
-		# crease scramble). Non-Goalie roots (test fixtures) fall back to a gather.
+		# crease scramble, and the owning-body walk + box-size read cost engine
+		# calls per part per query). Non-Goalie roots (test fixtures) fall back to
+		# a live gather + per-part resolution.
+		var real: Goalie = goalie as Goalie
 		var shapes: Array[CollisionShape3D]
-		if goalie is Goalie:
-			shapes = (goalie as Goalie).get_collision_parts()
+		var bodies: Array[Node] = _EMPTY_BODIES
+		var halves: PackedVector3Array
+		if real != null:
+			shapes = real.get_collision_parts()
+			bodies = real.get_collision_part_bodies()
+			halves = real.get_collision_part_half_extents()
 		else:
 			shapes = _collision_shapes(goalie)
-		for cs: CollisionShape3D in shapes:
+		for i: int in shapes.size():
+			var cs: CollisionShape3D = shapes[i]
 			if cs.disabled:
 				continue
-			var box := cs.shape as BoxShape3D
-			if box == null:
+			var half: Vector3
+			var body: Node
+			if real != null:
+				half = halves[i]
+				body = bodies[i]
+			else:
+				var box := cs.shape as BoxShape3D
+				half = box.size * 0.5 if box != null else _NON_BOX_HALF
+				body = _part_body(cs)
+			if half.x < 0.0:
 				continue
-			var body: Node = _part_body(cs)
 			# Layer 0 == collision off (the runtime toggle mechanism); a part Jolt
 			# would not collide must not contact analytically either.
 			if body is CollisionObject3D and (body as CollisionObject3D).collision_layer == 0:
@@ -70,7 +92,7 @@ static func nearest(goalies: Array, prev: Vector3, curr: Vector3, radius: float,
 			var contact_hit: bool
 			if _native_obb != null:
 				contact_hit = _native_obb.obb_contact(
-						prev, curr, radius, cs.global_transform, box.size * 0.5)
+						prev, curr, radius, cs.global_transform, half)
 				if contact_hit:
 					scratch.toi = _native_obb.get_obb_toi()
 					scratch.point = _native_obb.get_obb_point()
@@ -78,7 +100,7 @@ static func nearest(goalies: Array, prev: Vector3, curr: Vector3, radius: float,
 					scratch.depth = _native_obb.get_obb_depth()
 			else:
 				contact_hit = SweptDiscOBB.contact(
-						prev, curr, radius, cs.global_transform, box.size * 0.5, scratch)
+						prev, curr, radius, cs.global_transform, half, scratch)
 			if contact_hit:
 				if scratch.toi < out.toi:
 					out.toi = scratch.toi
@@ -108,25 +130,37 @@ static func gather_boxes(goalies: Array, packed: PackedFloat32Array,
 	for goalie: Node in goalies:
 		if goalie == null:
 			continue
+		var real: Goalie = goalie as Goalie
 		var shapes: Array[CollisionShape3D]
-		if goalie is Goalie:
-			shapes = (goalie as Goalie).get_collision_parts()
+		var bodies: Array[Node] = _EMPTY_BODIES
+		var halves: PackedVector3Array
+		if real != null:
+			shapes = real.get_collision_parts()
+			bodies = real.get_collision_part_bodies()
+			halves = real.get_collision_part_half_extents()
 		else:
 			shapes = _collision_shapes(goalie)
-		for cs: CollisionShape3D in shapes:
+		for i: int in shapes.size():
+			var cs: CollisionShape3D = shapes[i]
 			if cs.disabled:
 				continue
-			var box := cs.shape as BoxShape3D
-			if box == null:
+			var half: Vector3
+			var body: Node
+			if real != null:
+				half = halves[i]
+				body = bodies[i]
+			else:
+				var box := cs.shape as BoxShape3D
+				half = box.size * 0.5 if box != null else _NON_BOX_HALF
+				body = _part_body(cs)
+			if half.x < 0.0:
 				continue
-			var body: Node = _part_body(cs)
 			if body is CollisionObject3D and (body as CollisionObject3D).collision_layer == 0:
 				continue
 			var base: int = idx * 15
 			if packed.size() < base + 15:
 				packed.resize(base + 15)
 			var xf: Transform3D = cs.global_transform
-			var half: Vector3 = box.size * 0.5
 			packed[base] = xf.basis.x.x
 			packed[base + 1] = xf.basis.x.y
 			packed[base + 2] = xf.basis.x.z
@@ -197,7 +231,8 @@ static func _gather_cs(node: Node, found: Array[CollisionShape3D]) -> void:
 
 
 # The StaticBody3D that owns a CollisionShape3D — the part whose node name classifies the
-# save surface (Glove / Body / Head / Blocker / Stick / pad).
+# save surface (Glove / Body / Head / Blocker / Stick / pad). Fixture fallback only:
+# real Goalies serve this pre-resolved from get_collision_part_bodies().
 static func _part_body(cs: CollisionShape3D) -> Node:
 	var p: Node = cs.get_parent()
 	while p != null and not (p is StaticBody3D):

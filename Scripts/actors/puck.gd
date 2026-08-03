@@ -227,6 +227,8 @@ var _native_step: RefCounted = null
 var _gather_packed := PackedFloat32Array()
 var _gather_parts: Array = []
 var _gather_goalies: Array = []
+# Scratch for the same-end goalie filter in _drive_analytic — reused per tick.
+var _end_goalies: Array = []
 # Shared read-only empty (const arrays are frozen) — the no-goalies-in-range default
 # every open-ice tick, instead of allocating a fresh `[]` per tick.
 const _NO_GOALIES: Array = []
@@ -699,6 +701,7 @@ func _drive_analytic(dt: float) -> void:
 	# interaction that writes linear_velocity mid-flight (deflect, poke, strip, sweep, body
 	# block) is picked up.
 	var incoming: Vector3 = get_release_velocity()
+	var incoming_speed: float = incoming.length()
 	_pending_elevation_vel = Vector3.ZERO  # consumed
 
 	# Integrate (ice friction + gravity + board caroms + clamps) AND resolve ALL near-net
@@ -718,6 +721,19 @@ func _drive_analytic(dt: float) -> void:
 	var goalies: Array = _NO_GOALIES
 	if goalie_range and not _goalie_provider.is_null():
 		goalies = _goalie_provider.call()
+		# Only the goalie(s) defending THIS end can contact the tick's sweep: a
+		# mismatched-sign goalie sits at or beyond center ice, 20+ m from a puck
+		# that is inside the detect range of the opposite goal line, while one
+		# tick's segment advances < 0.4 m — so dropping them changes nothing.
+		# The filtered list feeds BOTH the packed gather and the legacy
+		# nearest() fallback below, so the two paths stay identical.
+		if goalies.size() > 1:
+			var end_sign: float = signf(prev.z)
+			_end_goalies.clear()
+			for g: Node3D in goalies:
+				if g != null and signf(g.global_position.z) == end_sign:
+					_end_goalies.append(g)
+			goalies = _end_goalies
 	# Gather the goalie collision boxes ONCE per tick for the native fast path —
 	# the goalies don't move inside this loop, and the legacy path re-read the
 	# same engine properties per part per sub-step (up to 16x near the net).
@@ -725,7 +741,7 @@ func _drive_analytic(dt: float) -> void:
 	if not goalies.is_empty() and GoalieContactDetector.native_available():
 		goalie_box_count = GoalieContactDetector.gather_boxes(
 				goalies, _gather_packed, _gather_parts, _gather_goalies)
-	var substeps: int = PuckAuthorityRules.frame_substeps(prev.z, incoming.length(), dt)
+	var substeps: int = PuckAuthorityRules.frame_substeps(prev.z, incoming_speed, dt)
 	var sub_dt: float = dt / float(substeps)
 	var pos: Vector3 = prev
 	var vel: Vector3 = incoming
@@ -757,7 +773,7 @@ func _drive_analytic(dt: float) -> void:
 			vel = _native_step.get_velocity()
 			if _native_step.get_touched_post():
 				touched_post = true
-			if _native_step.get_touched_net() and incoming.length() >= 1.0:
+			if _native_step.get_touched_net() and incoming_speed >= 1.0:
 				touched_net = true
 		else:
 			_tick_result.touched_post = false
@@ -768,7 +784,7 @@ func _drive_analytic(dt: float) -> void:
 			vel = _tick_result.velocity
 			if _tick_result.touched_post:
 				touched_post = true
-			if _tick_result.touched_net and incoming.length() >= 1.0:
+			if _tick_result.touched_net and incoming_speed >= 1.0:
 				touched_net = true
 		# Goalie: swept-OBB over THIS sub-step's segment → deaden / steer / catch / live reflect.
 		var goalie_hit: bool = false
@@ -813,7 +829,7 @@ func _drive_analytic(dt: float) -> void:
 	# one carom must read as one thud, not a 120 Hz burst).
 	var raw := Vector2(prev.x + incoming.x * dt, prev.z + incoming.z * dt)
 	var touched_boards: bool = raw.distance_to(GameRules.clamp_to_rink_inner(raw)) > 0.001 \
-			and incoming.length() >= 1.0
+			and incoming_speed >= 1.0
 
 	# 4) Commit. The puck can never sit below the ice — re-homes the Jolt path's grounded
 	# `position.y = ice_height` pin, and catches a goalie eject / save whose normal drove the

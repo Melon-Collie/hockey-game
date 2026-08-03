@@ -484,9 +484,11 @@ func _contest_blade_velocity(skater: Skater, raw_blade_vel: Vector3) -> Vector3:
 # too-fast-or-poorly-angled) isn't corralling, so it isn't a possession contest.
 # Host present-time only, and only invoked at the rare instant a pickup is about
 # to be granted, so it adds no per-tick cost on the common no-pickup path.
-func _find_contesting_corraller(first: Skater, skaters: Array, puck_curr: Vector3, puck_airborne: bool) -> Skater:
+func _find_contesting_corraller(first: Skater, skaters: Array, puck_curr: Vector3,
+		puck_airborne: bool, now: float) -> Skater:
 	for skater: Skater in skaters:
-		if skater == first or skater.is_ghost or skater.is_knocked_down or puck.is_on_cooldown(skater):
+		if skater == first or skater.is_ghost or skater.is_knocked_down \
+				or puck.is_on_cooldown_at(skater, now):
 			continue
 		if skater.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
 				or skater.current_shot_state == SkaterStateMachine.State.FOLLOW_THROUGH:
@@ -523,6 +525,9 @@ func _check_interactions() -> void:
 		return
 	var puck_curr: Vector3 = puck.get_puck_position()
 	var skaters: Array = _skater_getter.call()
+	# One clock sample serves every cooldown gate this tick — is_on_cooldown()
+	# re-called the injected time provider per skater per loop.
+	var now: float = NetworkManager.local_time()
 
 	if puck.carrier != null:
 		if not puck.pickup_locked:
@@ -530,6 +535,11 @@ func _check_interactions() -> void:
 			# across all checkers and the lookup was being repeated.
 			var carrier_team: int = _team_id_by_skater.get(puck.carrier, -1)
 			var carrier_skater: Skater = puck.carrier
+			# Carrier pose is likewise invariant across checkers this tick (a
+			# strip/poke breaks the loop) — hoisted out of the stick-lift test.
+			var carrier_hand: Vector3 = carrier_skater.upper_body_to_global(
+					carrier_skater.get_top_hand_position())
+			var carrier_blade: Vector3 = carrier_skater.get_blade_contact_global()
 			for skater: Skater in skaters:
 				if skater == puck.carrier or skater.is_ghost or skater.is_knocked_down:
 					continue
@@ -553,9 +563,8 @@ func _check_interactions() -> void:
 					# carrier's shaft pops their blade up and strips the puck. A
 					# lifted blade pokes nothing the normal way (it's off the ice),
 					# so it's stick-lift-or-skip for this checker.
-					var vic_hand: Vector3 = carrier_skater.upper_body_to_global(carrier_skater.get_top_hand_position())
 					if PuckInteractionRules.check_blade_under_stick(
-							blade_curr, vic_hand, carrier_skater.get_blade_contact_global(),
+							blade_curr, carrier_hand, carrier_blade,
 							STICK_LIFT_RADIUS, STICK_LIFT_UNDER_MARGIN):
 						carrier_skater.force_blade_lift(STICK_LIFT_FORCED_LIFT_S)
 						_processing_stick_lift = true
@@ -573,12 +582,12 @@ func _check_interactions() -> void:
 		if not puck.pickup_locked:
 			# Body block first: a puck driven into a player's torso is absorbed/dampened before
 			# any stick play. If one lands, the velocity changed this tick — skip the pickup pass.
-			if _check_body_blocks(skaters, puck_curr):
+			if _check_body_blocks(skaters, puck_curr, now):
 				return
 			# On-ice/off-ice gate is invariant across skaters this tick.
 			var puck_airborne: bool = puck.is_airborne()
 			for skater: Skater in skaters:
-				if skater.is_ghost or skater.is_knocked_down or puck.is_on_cooldown(skater):
+				if skater.is_ghost or skater.is_knocked_down or puck.is_on_cooldown_at(skater, now):
 					continue
 				# Committed to a body check — the stick is off the ice, so no
 				# corral/receive (mirrors the poke + claim + provisional gates).
@@ -631,7 +640,8 @@ func _check_interactions() -> void:
 					# puck squirts free biased toward the stronger blade. Otherwise this
 					# skater takes it. Mirrors the client-claim contest window; the scan
 					# only runs at the rare moment a pickup would actually happen.
-					var contender: Skater = _find_contesting_corraller(skater, skaters, puck_curr, puck_airborne)
+					var contender: Skater = _find_contesting_corraller(
+							skater, skaters, puck_curr, puck_airborne, now)
 					if contender != null:
 						# Present-time contest — both blades are host-live this tick, so
 						# feed their live kinematics (the claim path feeds rewound ones).
@@ -661,9 +671,9 @@ func _check_interactions() -> void:
 # (matching the old Area mask); the body_block_cooldown de-dups the level-triggered test the
 # way the Area's edge trigger did. Knocked-down players still block, as before. Returns true
 # on the first block so the caller skips the pickup pass this tick.
-func _check_body_blocks(skaters: Array, puck_curr: Vector3) -> bool:
+func _check_body_blocks(skaters: Array, puck_curr: Vector3, now: float) -> bool:
 	for skater: Skater in skaters:
-		if skater.is_ghost or puck.is_on_cooldown(skater):
+		if skater.is_ghost or puck.is_on_cooldown_at(skater, now):
 			continue
 		var axis := Vector2(skater.global_position.x, skater.global_position.z)
 		var reach: float = skater.get_body_block_radius() + GameRules.PUCK_COLLISION_RADIUS

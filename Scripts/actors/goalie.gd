@@ -168,12 +168,41 @@ func set_stick_collision_enabled(enabled: bool) -> void:
 # above) is filtered at QUERY time from the live layer/disabled flags, so the cache
 # never goes stale.
 var _collision_parts_cache: Array[CollisionShape3D] = []
+# Parallel to _collision_parts_cache: the owning StaticBody3D per part (the
+# parent-walk GoalieContactDetector paid per part per query) and each BoxShape3D's
+# half extents (its per-query `box.size * 0.5` read). Both are fixed once the
+# subtree exists; (-1,-1,-1) marks a non-box shape, standing in for the detector's
+# live `shape as BoxShape3D == null` skip. Lifetime matches the shapes cache (all
+# nodes are in this goalie's own subtree), so freeing the goalie frees the lot.
+var _collision_part_bodies: Array[Node] = []
+var _collision_part_half_extents: PackedVector3Array = PackedVector3Array()
 
 
 func get_collision_parts() -> Array[CollisionShape3D]:
 	if _collision_parts_cache.is_empty():
 		_gather_collision_parts(self, _collision_parts_cache)
+		for cs: CollisionShape3D in _collision_parts_cache:
+			var p: Node = cs.get_parent()
+			while p != null and not (p is StaticBody3D):
+				p = p.get_parent()
+			_collision_part_bodies.append(p)
+			var box := cs.shape as BoxShape3D
+			_collision_part_half_extents.append(
+					box.size * 0.5 if box != null else Vector3(-1.0, -1.0, -1.0))
 	return _collision_parts_cache
+
+
+# Parallel caches — valid after get_collision_parts() has filled the shapes cache.
+func get_collision_part_bodies() -> Array[Node]:
+	if _collision_parts_cache.is_empty():
+		get_collision_parts()
+	return _collision_part_bodies
+
+
+func get_collision_part_half_extents() -> PackedVector3Array:
+	if _collision_parts_cache.is_empty():
+		get_collision_parts()
+	return _collision_part_half_extents
 
 
 static func _gather_collision_parts(node: Node, found: Array[CollisionShape3D]) -> void:
