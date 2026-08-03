@@ -2,13 +2,16 @@ extends GutTest
 
 # ── Goalie pose GDScript-vs-native micro-benchmark (report-only; NOT in the
 # default suite) ─ Times GoalieBodyConfigBuilder.build against the C++ port
-# (NativeGoalieBodyPose, native/src/) across representative states. The native
-# rows include the full per-call boundary price: the 25-arg build call plus
-# all 12 Vector3 output getters.
+# (NativeGoalieBodyPose, native/src/) across representative states, with two
+# retrieval shapes per state: 12 individual getters vs get_outputs_packed()
+# (one crossing + one small alloc).
 #
-# Context: the pose solve is ~30% of the goalie tick (33 µs of 111 µs,
-# benchmarks/test_goalie_micro_benchmark.gd), and the goalie is the most
-# expensive actor per capita on the host tick.
+# Measured verdict: this kernel is BOUNDARY-BOUND. The builder's math is
+# already cheap in GDScript (2-6 µs/call — the goalie micro-bench's 33 µs
+# "body parts" slice is mostly work outside this builder), so the 25-arg call
+# dominates: getter retrieval runs 0.5-1.6x (RVH regresses), packed 0.8-2.5x.
+# Wire it only via the packed path if at all; the real goalie win is a WIDER
+# tick slice behind one boundary, not this solve alone.
 #
 # Run explicitly:
 #   bash .claude/hooks/run-gut.sh -gdir=res://benchmarks
