@@ -1003,7 +1003,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	# has_method() call at 120 Hz (test stubs may not implement it).
 	_game_state_has_faceoff_prep = game_state.has_method("is_faceoff_prep")
 	_game_state_has_period_break = game_state.has_method("is_period_break")
-	process_physics_priority = -1  # Run before Skater.move_and_slide
+	process_physics_priority = -1  # Run before Skater's integration step
 	skater.body_checked_player.connect(_on_body_checked_player)
 	skater.body_check_received.connect(_on_body_check_received)
 	_ik.setup(skater, self)
@@ -1083,7 +1083,6 @@ var _base_skater_weight:                float = 0.0
 var _base_skater_body_check_brace_resistance: float = 0.0
 var _base_skater_body_check_transfer:   float = 0.0
 var _base_skater_collision_radius:      float = 0.0
-var _base_skater_collision_height:      float = 0.0
 var _base_backhand_power_coefficient:   float = 0.0
 # The blade curve's angle ladder (tan per elevated loft level) for the
 # charged-shot release math — set per-build from the curve gear in
@@ -1334,19 +1333,12 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	max_blade_speed = _base_max_blade_speed * lever_ratio
 	max_blade_accel = _base_max_blade_accel / pow(lever_ratio, blade_inertia_exponent) \
 			if _base_max_blade_accel > 0.0 else 0.0
-	# Hitbox: cylinder radius scales with height (frame width — a taller player is
-	# a bit wider). Height is held CONSTANT for every player — a taller cylinder
-	# grew tall enough to touch several faces of the concave net/goal geometry at
-	# once and wedge the body in a corner. The visual mesh still scales on Y
-	# (appearance coordinator), so big players still look tall; only the physics
-	# hitbox height is fixed. Skater._ready() duplicated the shape so this mutation
-	# is per-instance and won't leak.
-	var col: CollisionShape3D = skater.get_node_or_null("CollisionShape3D") as CollisionShape3D
-	if col != null:
-		var cyl: CylinderShape3D = col.shape as CylinderShape3D
-		if cyl != null:
-			cyl.radius = _base_skater_collision_radius * attrs.radius_mult()
-			cyl.height = _base_skater_collision_height
+	# Hitbox: the contact disc scales with height (frame width — a taller player is
+	# a bit wider). There is no vertical extent to scale: every contact path the
+	# radius feeds is a flat XZ test (skater-vs-skater, the rink / net / goalie
+	# clamps). The visual mesh still scales on Y (appearance coordinator), so big
+	# players look tall without reaching further.
+	skater.body_collision_radius = _base_skater_collision_radius * attrs.radius_mult()
 	# Attribute scaling rewrote the exports the cached configs were built
 	# from — drop them so the next tick rebuilds with the new values.
 	_ik.invalidate_configs()
@@ -1389,12 +1381,7 @@ func _capture_attribute_bases() -> void:
 	_base_skater_weight                       = skater.weight
 	_base_skater_body_check_transfer          = skater.body_check_transfer
 	_base_skater_body_check_brace_resistance  = skater.body_check_brace_resistance
-	var col: CollisionShape3D = skater.get_node_or_null("CollisionShape3D") as CollisionShape3D
-	if col != null:
-		var cyl: CylinderShape3D = col.shape as CylinderShape3D
-		if cyl != null:
-			_base_skater_collision_radius = cyl.radius
-			_base_skater_collision_height = cyl.height
+	_base_skater_collision_radius = skater.body_collision_radius
 	_attr_base_captured = true
 
 
@@ -1885,7 +1872,6 @@ func on_puck_picked_up_network() -> void:
 		# window if the wind-up didn't already, so the graded centre bonus applies
 		# to a catch made during the hold exactly as to one made during the charge.
 		skater.set_slapper_zone(false)
-		skater.set_slapper_mode(true)
 		var side_sign: float = -1.0 if skater.is_left_handed else 1.0
 		skater.enter_slapshot_pinning(side_sign * slapper_zone_offset_x, slapper_zone_offset_z)
 		if _aiming.one_timer_window_timer <= 0.0:
@@ -1896,7 +1882,6 @@ func on_puck_picked_up_network() -> void:
 		# switch into the with-puck charge — same setup as the carry → slapshot
 		# entry path (without the pin the puck snaps to the overhead wind-up blade).
 		skater.set_slapper_zone(false)
-		skater.set_slapper_mode(true)
 		var blade_side_sign: float = -1.0 if skater.is_left_handed else 1.0
 		skater.enter_slapshot_pinning(blade_side_sign * slapper_zone_offset_x, slapper_zone_offset_z)
 		_sm.set_state(State.SLAPPER_CHARGE_WITH_PUCK)
@@ -2144,7 +2129,6 @@ func _transition_to_skating() -> void:
 	else:
 		_pose.reset_lean_and_lag()
 		skater.set_lower_body_lag(0.0)
-	skater.set_slapper_mode(false)
 	skater.set_slapper_zone(false)
 	skater.exit_slapshot_pinning()
 	_hide_slapshot_hud()
@@ -2239,7 +2223,6 @@ func _enter_slapper_charge(input: InputState) -> void:
 	_sm.locked_slapper_dir = to_mouse_from_blade.normalized() if to_mouse_from_blade.length() > move_deadzone else _pose.facing
 	skater.slapper_aim_dir = Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
 	if has_puck:
-		skater.set_slapper_mode(true)
 		# Pin the carried puck to the slapper-zone ice spot for the duration of
 		# the wind-up so it doesn't ride up with the blade as the stick lifts
 		# overhead. The pin travels with the player (so coasting/braking still

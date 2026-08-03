@@ -249,7 +249,7 @@ func setup(assigned_puck: Puck, assigned_is_server: bool) -> void:
 	# StateBufferManager stamps rewind snapshots with) so is_on_cooldown_at can be
 	# queried at a claimant's view-time. Injected here to keep the actor clock-agnostic.
 	puck.set_time_provider(NetworkManager.local_time)
-	process_physics_priority = 1  # Run after Skater.move_and_slide so blade world pos is current
+	process_physics_priority = 1  # Run after Skater's integration so blade world pos is current
 	if is_server:
 		puck.puck_released.connect(_on_puck_released)
 		puck.puck_stripped.connect(_on_puck_stripped)

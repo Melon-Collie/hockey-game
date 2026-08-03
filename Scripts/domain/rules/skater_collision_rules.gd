@@ -1,9 +1,8 @@
 class_name SkaterCollisionRules
 
 # Analytic disc-vs-disc resolution for skater bodies on the XZ plane. This is the
-# body-check redesign's contact core: it replaces BOTH move_and_slide's rigid
-# cylinder separation AND the old restitution "bounce" (the pinball) with two
-# clean pieces —
+# body-check contact core, and it is the ONLY thing separating two skaters —
+# nothing collides through the physics server. Two clean pieces —
 #
 #   1. Positional separation: overlapping discs are pushed apart along the
 #      center-to-center axis, split by inverse mass (the lighter body moves more).
@@ -24,8 +23,8 @@ class_name SkaterCollisionRules
 #                     barely slows (drive-through) while the victim is launched.
 #   * transfer small: a glancing, uncommitted bump — the victim barely moves and
 #                     the attacker keeps most of its speed (glances off), which is
-#                     what fixes the "skate into someone and your momentum just
-#                     stops" feel that move_and_slide produced.
+#                     what keeps an uncommitted bump from reading as "skate into
+#                     someone and your momentum just stops".
 # Drive-through vs. grind is thus emergent from the mass ratio (Δv = J/m), NOT a
 # hand-shaped restitution curve — the grounded-model discipline (see Scripts/domain/ai/CLAUDE.md).
 #

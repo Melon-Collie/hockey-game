@@ -1,5 +1,5 @@
 class_name Skater
-extends CharacterBody3D
+extends Node3D
 
 # ── Character ─────────────────────────────────────────────────────────────────
 # Set before add_child() at spawn; can also be flipped at runtime (free-play
@@ -195,6 +195,13 @@ var _face_gear_mesh: MeshInstance3D = null
 @export var stick_whip_hz: float = 9.0           # release-whip oscillation frequency
 @export var stick_whip_damping: float = 14.0     # release-whip decay rate
 
+# ── Body Footprint ────────────────────────────────────────────────────────────
+# Radius (m) of the disc every analytic contact path treats as this skater's
+# body: skater-vs-skater in _resolve_player_collisions and the rink / net /
+# goalie containment clamps. Scaled per-build by SkaterController.apply_attributes
+# (radius_mult), so read it through collision_radius() rather than caching it.
+@export var body_collision_radius: float = 0.35
+
 # ── Body Check Tuning ─────────────────────────────────────────────────────────
 @export var weight: float = 1.0
 # Fraction of closing momentum the inelastic resolver transfers on a committed
@@ -334,8 +341,8 @@ signal body_check_impulse_applied(impulse: Vector3)
 # being hit. Host-authoritative consumers gate on is_host; see
 # SkaterController._on_body_check_received.
 signal body_check_received(impulse: Vector3)
-# Fired at the END of _physics_process, AFTER move_and_slide + collision
-# resolution + rink clamp have settled this tick's position and velocity. The
+# Fired at the END of _physics_process, AFTER integration + collision resolution
+# + the containment clamps have settled this tick's position and velocity. The
 # local player's controller uses it to capture its reconcile prediction snapshot
 # at the same post-integration sub-step the host samples for its world-state
 # broadcast (StateBufferManager.capture → fill_network_state, which reads the
@@ -425,8 +432,7 @@ func get_team_id() -> int:
 
 # Returns the live (cached) list of ALL skaters, set by PlayerRegistry on spawn.
 # _resolve_player_collisions iterates it (skipping self) to resolve skater-vs-
-# skater contact analytically now that skaters are off each other's move_and_slide
-# mask. Empty Callable (tutorial dummy / test) → no skater-vs-skater resolution.
+# skater contact. Empty Callable (tutorial dummy / test) → no resolution.
 var _skater_collision_provider: Callable = Callable()
 # Stable, machine-consistent id (the owning peer_id) set by PlayerRegistry on
 # spawn. Used ONLY to break exact head-on ties in the aggressor gate — it must be
@@ -445,7 +451,7 @@ func set_skater_collision_provider(provider: Callable) -> void:
 # Live (cached) goalie pose list — one Dictionary per goalie with
 # position / rotation_y / is_butterfly — set by GameManager on spawn
 # (get_goalie_data). clamp_body_to_goalies reads it to hold the skater clear of
-# each goalie now that skater-vs-goalie is analytic (move_and_slide is gone).
+# each goalie — skater-vs-goalie contact is analytic.
 # Empty Callable (tutorial dummy / test) → no goalie block.
 var _goalie_data_provider: Callable = Callable()
 
@@ -455,10 +461,9 @@ func set_goalie_data_provider(provider: Callable) -> void:
 
 
 # Set true by the analytic containment clamps (rink / net / goalie) on any tick
-# they reposition the body — the analytic stand-in for the CharacterBody
-# is_on_wall() flag move_and_slide used to raise. LocalController reads it to
-# suppress reconcile jitter while a skater is pinned against a boundary. Reset at
-# the start of each _physics_process integration.
+# they reposition the body — i.e. the skater is pinned against a boundary this
+# tick. LocalController reads it to suppress reconcile jitter there. Reset at the
+# start of each _physics_process integration.
 var _touched_boundary: bool = false
 
 
@@ -466,11 +471,20 @@ func is_touching_boundary() -> bool:
 	return _touched_boundary
 
 
-# The disc radius used for analytic skater-vs-skater contact — the (Size-scaled)
-# physics cylinder radius, so the hitbox and the contact geometry stay identical.
+# The (Size-scaled) disc radius every analytic contact path shares — skater-vs-
+# skater and the three containment clamps read the same number, so the hitbox and
+# the contact geometry cannot drift apart.
 func collision_radius() -> float:
-	return _collision_cyl.radius if _collision_cyl != null else 0.5
+	return body_collision_radius
+
+
 # ── Runtime ───────────────────────────────────────────────────────────────────
+# World-space velocity in m/s, integrated into global_position once per tick in
+# _physics_process. Y stays 0 (top-down game, no gravity). Owned by whichever
+# machine simulates this skater; it is on the wire (SkaterNetworkState) and the
+# reconcile replay rewinds and re-integrates it, so nothing may mutate it outside
+# a controller's tick or the replay will not reproduce the live result.
+var velocity: Vector3 = Vector3.ZERO
 var _facing: Vector2 = Vector2.DOWN
 # Loft mode (0 flat / 1 low saucer / 2 high). Set each tick by the controller
 # from the input frame; replicated so remotes/AI read it directly.
@@ -544,16 +558,12 @@ var _draw_peak_host_time: float = 0.0        # shared host-time of the retained 
 var _draw_drop_host_time: float = -1.0       # shared host-time of the drop, -1 until marked
 var _draw_peak_decay: float = 0.0            # m/s per second (set by begin_draw_tracking)
 var _draw_valid_window_s: float = 0.0        # auto-end this long after the drop
-# Last known-finite body position, cached each tick before move_and_slide so the
-# non-finite guard (_sanitize_physics_state) can restore a sane position if some
-# upstream bug ever feeds NaN/Inf into the body. Seeded from the spawn position.
+# Last known-finite body position, cached each tick before the integration step so
+# the non-finite guard (_sanitize_physics_state) can restore a sane position if
+# some upstream bug ever feeds NaN/Inf into the body. Seeded from the spawn position.
 var _last_finite_position: Vector3 = Vector3.ZERO
 var _prev_blade_contact: Vector3 = Vector3.ZERO
 var _last_wall_normal: Vector3 = Vector3.ZERO
-var _collision_cyl: CylinderShape3D = null
-var _blade_area: Area3D = null
-var _slapper_zone_area: Area3D = null
-var _slapper_zone_sphere: SphereShape3D = null
 var _default_upper_body_y: float = 0.0
 var _default_lower_body_y: float = 0.0
 # Cosmetic vertical drop of the whole visible body (torso + hips) while in
@@ -562,6 +572,14 @@ var _default_lower_body_y: float = 0.0
 # crouch through _apply_body_height (the single writer of both body Ys).
 var _skating_crouch_drop: float = 0.0
 var _block_stance_active: bool = false
+# Slapper one-timer zone — armed only while charging a slapper without the puck
+# (see set_slapper_zone). Plain state: the zone is an ice-plane disc the analytic
+# one-timer scans test against, not anything the engine knows about.
+var _slapper_zone_active: bool = false
+var _slapper_zone_radius: float = 0.0
+# Zone center in skater-local space; get_slapper_zone_global_position rotates it
+# with the body and drops it to the ice plane.
+var _slapper_zone_offset: Vector3 = Vector3.ZERO
 var _skeleton_root_offset: float = 0.0  # see set_skeleton_root_offset
 # Sticky carry side: 0 when not carrying, +1 forehand, -1 backhand.
 # Advanced by update_carry_side() each tick from the IK pipeline.
@@ -572,7 +590,7 @@ var _carry_side: int = 0
 var _carry_side_smoothed: float = 0.0
 # Visual-only offset applied to MeshRoot each frame. Set by LocalController
 # during reconcile blending to ease the visible correction over a few ticks.
-# Physics body (CharacterBody3D) is always at the authoritative position.
+# The body itself is always at the authoritative position.
 var visual_offset: Vector3 = Vector3.ZERO:
 	set(v):
 		visual_offset = v
@@ -590,20 +608,9 @@ var _appearance: SkaterAppearanceCoordinator
 func _ready() -> void:
 	add_to_group("skaters")
 
-	# Per-instance collision shape so SkaterController.apply_attributes
-	# can scale this skater's hitbox without mutating the shared
-	# SubResource referenced by every other Skater in the scene. Cache the
-	# cylinder so the rink clamp can read the current (Size-scaled) radius each
-	# tick without a node lookup; apply_attributes mutates this same instance.
-	var col: CollisionShape3D = $CollisionShape3D
-	if col != null and col.shape != null:
-		col.shape = col.shape.duplicate()
-		_collision_cyl = col.shape as CylinderShape3D
-
 	# Stick-flex prep: the shaft BoxMesh is a scene sub-resource shared by
 	# every skater — duplicate it before subdividing (the flex shader needs
-	# vertices along the length to bend), same discipline as the collision
-	# shape above so instances don't share the mutation.
+	# vertices along the length to bend) so instances don't share the mutation.
 	var shaft: BoxMesh = stick_mesh.mesh as BoxMesh
 	if shaft != null:
 		shaft = shaft.duplicate() as BoxMesh
@@ -648,36 +655,6 @@ func _ready() -> void:
 	_last_finite_position = global_position
 	_default_upper_body_y = upper_body.position.y
 	_default_lower_body_y = lower_body.position.y
-
-	collision_layer = Constants.LAYER_SKATER_BODIES
-	collision_mask  = Constants.MASK_SKATER
-
-	_blade_area = Area3D.new()
-	_blade_area.name = "BladeArea"
-	_blade_area.collision_layer = Constants.LAYER_BLADE_AREAS
-	_blade_area.collision_mask = 0
-	# Offset the pickup sphere forward by half the blade length so it centers
-	# on mid-blade (the contact point) rather than the heel (Marker3D origin).
-	_blade_area.position = Vector3(0.0, 0.0, -blade_length * 0.5)
-	var blade_shape := CollisionShape3D.new()
-	var blade_sphere := SphereShape3D.new()
-	blade_sphere.radius = 0.3
-	blade_shape.shape = blade_sphere
-	_blade_area.add_child(blade_shape)
-	blade.add_child(_blade_area)
-
-	# Slapper one-timer zone: ice-level sphere on the skater body. Activated
-	# only during SLAPPER_CHARGE_WITHOUT_PUCK via set_slapper_zone().
-	_slapper_zone_area = Area3D.new()
-	_slapper_zone_area.name = "SlapperZoneArea"
-	_slapper_zone_area.collision_layer = 0
-	_slapper_zone_area.collision_mask = 0
-	var zone_shape := CollisionShape3D.new()
-	_slapper_zone_sphere = SphereShape3D.new()
-	_slapper_zone_sphere.radius = 1.0
-	zone_shape.shape = _slapper_zone_sphere
-	_slapper_zone_area.add_child(zone_shape)
-	add_child(_slapper_zone_area)
 
 	_build_leg_rig()
 	_build_arm_rig()
@@ -773,13 +750,10 @@ func _physics_process(delta: float) -> void:
 	# This should never fire; when it does it logs the offending state so the
 	# upstream source is findable.
 	_sanitize_physics_state()
-	# Integrate velocity → position directly. move_and_slide() is gone: its only
-	# real collisions were skater-vs-goalie-body (now analytic in
-	# clamp_body_to_goalies below) and the ice floor — a no-op under the Y-lock,
-	# since velocity.y is pinned to 0 (top-down game, no gravity). Boards, net, and
-	# skater-vs-skater were already analytic. This `pos += vel·dt` is now bit-
-	# identical to LocalController's reconcile-replay integration, so the live tick
-	# and the replay no longer differ on the move step.
+	# The whole move step: no engine body, no solver, just integration. This is the
+	# same `pos += vel·dt` LocalController's reconcile replay runs, so the live tick
+	# and the replay cannot differ here. Y needs no handling — velocity.y is pinned
+	# to 0 (top-down game, no gravity).
 	_touched_boundary = false
 	global_position += velocity * delta
 	# Capture velocity BEFORE the analytic skater-vs-skater resolution so the delta
@@ -790,24 +764,19 @@ func _physics_process(delta: float) -> void:
 	var body_check_delta: Vector3 = velocity - vel_pre_body_check
 	if body_check_delta.length_squared() > 0.0001:
 		body_check_impulse_applied.emit(body_check_delta)
-	# Boards are off the skater's physics mask (a CharacterBody cylinder wedges in
-	# the concave corner mesh), so hold the body inside the rink analytically.
-	# Runs AFTER the body-check delta is captured so a board slide never reads as
-	# a hit. The reconcile replay calls the same methods (see LocalController).
+	# Containment: the rink boundary, the net, and the goalie footprint are all
+	# held analytically against the same disc (collision_radius). The rink clamp
+	# runs AFTER the body-check delta is captured so a board slide never reads as
+	# a hit. The reconcile replay calls the same three methods (see LocalController).
 	clamp_body_to_rink()
-	# Net is off the skater's physics mask too (a cylinder wedges in the concave
-	# pocket like the boards) — hold the body clear of the goal-net box analytically.
 	clamp_body_to_net()
-	# Goalie bodies are no longer on the skater physics mask now that move_and_slide
-	# is gone — hold the skater clear of the goalie footprint analytically so you
-	# can't walk through the goalie (see clamp_body_to_goalies).
 	clamp_body_to_goalies()
 	_update_blade_elevation(delta)
 	_forced_lift_timer = maxf(_forced_lift_timer - delta, 0.0)
 	_update_blade_lift(delta)
 	_update_commit_lift(delta)
-	# Position + velocity are now fully settled for this tick (move_and_slide,
-	# body-check collision resolution, and the rink clamp above have all run).
+	# Position + velocity are now fully settled for this tick (integration,
+	# body-check resolution, and the containment clamps above have all run).
 	# The local controller captures its reconcile prediction snapshot here so it
 	# reads the same post-integration state the host broadcasts (see the signal
 	# doc-comment). Blade elevation/lift above is cosmetic and doesn't touch the
@@ -836,18 +805,15 @@ func _sanitize_physics_state() -> void:
 
 
 func _resolve_player_collisions() -> void:
-	# Skaters are off each other's move_and_slide mask (see Constants.MASK_SKATER):
-	# skater-vs-skater contact is resolved analytically here via SkaterCollisionRules
-	# (inelastic disc model, no restitution bounce). Iterates the registry's
-	# cached skater list rather than get_slide_collision(). No provider (tutorial
-	# dummy / unit test) → no skater-vs-skater resolution.
+	# Skater-vs-skater contact, resolved against the registry's cached skater list
+	# via SkaterCollisionRules (inelastic disc model, no restitution bounce). No
+	# provider (tutorial dummy / unit test) → no skater-vs-skater resolution.
 	if not _skater_collision_provider.is_valid():
 		return
 	# A ghosted skater (offside / icing / crease-dwell) has no physical presence:
-	# it neither delivers nor receives body contact. The physics layers set_ghost
-	# zeroes don't cover this path — skater-vs-skater contact is analytic, so the
-	# ghost gate has to live here. is_ghost replicates (SkaterNetworkState), so
-	# every machine skips the same pairs and the aggressor gate stays deterministic.
+	# it neither delivers nor receives body contact. is_ghost replicates
+	# (SkaterNetworkState), so every machine skips the same pairs and the aggressor
+	# gate below stays deterministic.
 	if is_ghost:
 		return
 	var others: Array = _skater_collision_provider.call()
@@ -865,8 +831,7 @@ func _resolve_player_collisions() -> void:
 		var dist: float = d.length()
 		var n: Vector3 = Vector3(1.0, 0.0, 0.0) if dist < 0.0001 else d / dist
 		# Aggressor gate — resolve each pair EXACTLY once, from the side moving toward
-		# the other more (replicating move_and_slide's old "only the moving body
-		# reports a slide collision"). agg_metric = (v_self + v_other)·n: > 0 → self is
+		# the other more. agg_metric = (v_self + v_other)·n: > 0 → self is
 		# the aggressor and resolves this pair; < 0 → the other side does; ~0 (head-on
 		# or both still) → the lower instance id resolves. Deterministic across
 		# machines (velocities + ids replicate), so prediction and reconcile agree.
@@ -929,17 +894,15 @@ func _resolve_player_collisions() -> void:
 # Holds the body inside the rink by projecting its XZ onto the inner board
 # boundary (the same GameRules.clamp_to_rink_inner the puck-OOB check, blade
 # clamp, and reconcile replay use) and removing any velocity pointing into the
-# boards, so the skater slides smoothly along them. Replaces physics collision
-# with the concave board mesh, which pinned the CharacterBody cylinder in a
-# vertical-only crease in the corners. Pure value-type math — no allocation, so
-# it's hot-path safe at 120 Hz × actors. Called live after move_and_slide and
-# re-used by LocalController's reconcile replay so both paths agree.
+# boards, so the skater slides smoothly along them. Pure value-type math — no
+# allocation, so it's hot-path safe at 120 Hz × actors. Called live from the
+# integration step and re-used by LocalController's reconcile replay so both paths
+# agree.
 func clamp_body_to_rink() -> void:
-	# Inset the boundary by the (Size-scaled) cylinder radius so the body's EDGE
-	# stops at the boards, matching where physics collision used to halt it —
-	# otherwise the center reaches the surface and the body clips in by its radius
-	# (worse for bigger players).
-	var radius: float = _collision_cyl.radius if _collision_cyl != null else 0.0
+	# Inset the boundary by the (Size-scaled) body radius so the body's EDGE stops
+	# at the boards — otherwise the center reaches the surface and the body clips in
+	# by its radius (worse for bigger players).
+	var radius: float = collision_radius()
 	var xz := Vector2(global_position.x, global_position.z)
 	var clamped: Vector2 = GameRules.clamp_to_rink_inner(xz, radius)
 	if xz.distance_squared_to(clamped) <= 1e-6:
@@ -958,18 +921,16 @@ func clamp_body_to_rink() -> void:
 	_touched_boundary = true
 
 
-# Holds the body out of the goal-net pocket analytically. The net is off the
-# skater physics mask (LAYER_NET, puck-only) because a CharacterBody cylinder
-# shoved into the concave back corner wedges and freezes — most reliably when the
-# goalie bulldozes a skater across the goal line before the crease-dwell ghost
-# fires. Mirrors clamp_body_to_rink: project the XZ clear of the net box via
-# GameRules.push_out_of_net (radius-inset so the body EDGE stops at the panels)
-# and strip any velocity pointing into the net, so the skater slides free instead
-# of being re-seated by the shove next tick. Pure value-type math — no allocation,
-# hot-path safe at 120 Hz × actors. Called live after move_and_slide (and after
-# clamp_body_to_rink) and re-used by LocalController's reconcile replay.
+# Holds the body out of the goal-net pocket. Mirrors clamp_body_to_rink: project
+# the XZ clear of the net box via GameRules.push_out_of_net (radius-inset so the
+# body EDGE stops at the panels) and strip any velocity pointing into the net, so
+# the skater slides free instead of being re-seated by the shove next tick — most
+# often when the goalie bulldozes a skater across the goal line before the
+# crease-dwell ghost fires. Pure value-type math — no allocation, hot-path safe at
+# 120 Hz × actors. Called live after clamp_body_to_rink and re-used by
+# LocalController's reconcile replay.
 func clamp_body_to_net() -> void:
-	var radius: float = _collision_cyl.radius if _collision_cyl != null else 0.0
+	var radius: float = collision_radius()
 	var xz := Vector2(global_position.x, global_position.z)
 	var pushed: Vector2 = GameRules.push_out_of_net(xz, radius)
 	if xz.distance_squared_to(pushed) <= 1e-6:
@@ -988,25 +949,23 @@ func clamp_body_to_net() -> void:
 	_touched_boundary = true
 
 
-# Holds the skater clear of every goalie's footprint analytically so you can't
-# walk through the goalie now that the goalie body parts are off the skater
-# physics mask (move_and_slide is gone). Mirrors clamp_body_to_net: push the XZ
-# out of the goalie footprint — a cylinder while standing/RVH, an oriented box in
-# the butterfly (the leg pads spread wide) — and strip any velocity pointing into
-# the goalie so the skater slides along it instead of being re-seated next tick.
-# Reads the same host-refreshed goalie pose cache the blade clamp uses (position /
-# rotation_y / is_butterfly). A ghosted skater (crease-dwell / offside) passes
-# through, matching the mask drop in set_ghost and the is_ghost gate in
-# _resolve_player_collisions. Pure value-type math — no allocation, hot-path safe
-# at 120 Hz × actors. Called live after the rink/net clamps and re-used by
-# LocalController's reconcile replay so both paths agree.
+# Holds the skater clear of every goalie's footprint so you can't walk through the
+# goalie. Mirrors clamp_body_to_net: push the XZ out of the goalie footprint — a
+# cylinder while standing/RVH, an oriented box in the butterfly (the leg pads
+# spread wide) — and strip any velocity pointing into the goalie so the skater
+# slides along it instead of being re-seated next tick. Reads the same
+# host-refreshed goalie pose cache the blade clamp uses (position / rotation_y /
+# is_butterfly). A ghosted skater (crease-dwell / offside) passes through, matching
+# the is_ghost gate in _resolve_player_collisions. Pure value-type math — no
+# allocation, hot-path safe at 120 Hz × actors. Called live after the rink/net
+# clamps and re-used by LocalController's reconcile replay so both paths agree.
 func clamp_body_to_goalies() -> void:
 	if is_ghost or not _goalie_data_provider.is_valid():
 		return
 	var goalie_data: Array = _goalie_data_provider.call()
 	if goalie_data == null:
 		return
-	var radius: float = _collision_cyl.radius if _collision_cyl != null else 0.0
+	var radius: float = collision_radius()
 	var xz := Vector2(global_position.x, global_position.z)
 	for data: Dictionary in goalie_data:
 		var gpos: Vector3 = data["position"]
@@ -2454,38 +2413,27 @@ func upper_body_to_local(world_pos: Vector3) -> Vector3:
 
 
 # ── Ghost Mode ────────────────────────────────────────────────────────────────
+# A ghost (offside / icing / crease-dwell) has no interactive presence: every
+# path that could touch it gates on is_ghost — skater-vs-skater in
+# _resolve_player_collisions, the goalie clamp, and the puck's pickup/contest
+# scans — so this only has to flip the flag and repaint. is_ghost replicates
+# (SkaterNetworkState), so every machine drops the same skater out of play.
 func set_ghost(ghost: bool) -> void:
 	if is_ghost == ghost:
 		return
 	is_ghost = ghost
-	if ghost:
-		_blade_area.collision_layer = 0
-		_slapper_zone_area.collision_layer = 0
-		collision_layer = 0
-		# Bare LAYER_WALLS = ice only: goalie bodies live on their own
-		# LAYER_GOALIE_BODIES (dropped here), so a ghost skates through the
-		# goalie too. Skater-vs-skater contact is analytic and gated on
-		# is_ghost in _resolve_player_collisions.
-		collision_mask = Constants.LAYER_WALLS
-	else:
-		_blade_area.collision_layer = Constants.LAYER_BLADE_AREAS
-		collision_layer = Constants.LAYER_SKATER_BODIES
-		collision_mask = Constants.MASK_SKATER
 	_uniform.apply_ghost(ghost)
 	_hud.apply_ghost(ghost)
 
 
 # ── Shot-Block Stance ─────────────────────────────────────────────────────────
 # The block's BODY pose (the one-knee drop) is the gait's, off the replicated
-# shot state; this flag is the collision half — it widens the body-block
-# cylinder below. Taking the blade OUT of puck play is not the layer flip here
-# (nothing has masked LAYER_BLADE_AREAS since puck contact went analytic) but
-# the SHOT_BLOCKING gates on the analytic paths themselves: PuckController's
-# corral and contest scans, PickupClaimResolver, LocalController's provisional
-# pickup.
+# shot state; this flag is the collision half — it widens the body-block cylinder
+# below. Taking the blade OUT of puck play is handled by the SHOT_BLOCKING gates
+# on the analytic paths themselves: PuckController's corral and contest scans,
+# PickupClaimResolver, LocalController's provisional pickup.
 func set_block_stance(active: bool) -> void:
 	_block_stance_active = active
-	_blade_area.collision_layer = 0 if active else Constants.LAYER_BLADE_AREAS
 
 
 # The body-block CYLINDER the analytic detector tests against (PuckController) — a vertical
@@ -2512,33 +2460,32 @@ func get_body_block_y_range() -> Vector2:
 
 
 # ── Slapper Zone ──────────────────────────────────────────────────────────────
-func set_slapper_mode(active: bool) -> void:
-	_blade_area.collision_layer = 0 if active else Constants.LAYER_BLADE_AREAS
-
-
+# Arms the one-timer catch zone: a disc of `radius` centered `offset_x` to the
+# blade side and `offset_z` ahead, in skater-local space. Disarming keeps the last
+# geometry — every caller gates on is_slapper_zone_active() first.
 func set_slapper_zone(active: bool, radius: float = 0.0, offset_x: float = 0.0, offset_z: float = 0.0) -> void:
 	if active and radius > 0.0:
-		_slapper_zone_sphere.radius = radius
+		_slapper_zone_radius = radius
 		var blade_side_sign: float = -1.0 if is_left_handed else 1.0
-		_slapper_zone_area.position = Vector3(blade_side_sign * offset_x, 0.0, offset_z)
-		# Anchor to ice level — the Skater root is at body-center height, so a
-		# local Y of 0 lands the sphere up at chest height where the puck can
-		# never reach it. Setting global Y after rebases local Y without
-		# touching XZ.
-		_slapper_zone_area.global_position.y = 0.0
-	_slapper_zone_area.collision_layer = Constants.LAYER_BLADE_AREAS if active else 0
+		_slapper_zone_offset = Vector3(blade_side_sign * offset_x, 0.0, offset_z)
+	_slapper_zone_active = active
 
 
 func is_slapper_zone_active() -> bool:
-	return _slapper_zone_area.collision_layer != 0
+	return _slapper_zone_active
 
 
+# Rotates the local offset onto the skater's current facing and drops it to the
+# ice plane — the Skater origin sits at body-center height, so a zone left at the
+# body's Y would float at chest height where the puck can never reach it.
 func get_slapper_zone_global_position() -> Vector3:
-	return _slapper_zone_area.global_position
+	var world: Vector3 = to_global(_slapper_zone_offset)
+	world.y = 0.0
+	return world
 
 
 func get_slapper_zone_radius() -> float:
-	return _slapper_zone_sphere.radius
+	return _slapper_zone_radius
 
 
 # ── Uniform / Appearance (delegate to SkaterUniformCoordinator) ───────────────

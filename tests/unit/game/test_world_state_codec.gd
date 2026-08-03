@@ -1,7 +1,7 @@
 extends GutTest
 
 # WorldStateCodec — round-trip serialization tests.
-# World-state encode/decode uses live controllers (CharacterBody3D etc.), so
+# World-state encode/decode uses live controllers and scene actors, so
 # those aren't covered here. Stats are pure Array<->Dictionary conversions
 # and fully testable.
 
@@ -312,7 +312,7 @@ func test_skater_stamina_quantizes_within_tolerance() -> void:
 # The replay viewer / goal-replay driver decode packets through decode_for_replay
 # instead of decode_world_state precisely because it must NOT mutate the live
 # state machine. These build a world-state buffer by hand (the live encoder pulls
-# from CharacterBody3D controllers, untestable headless) using the same documented
+# from live scene controllers, untestable headless) using the same documented
 # layout and the static quantizers the round-trip tests above already validate.
 
 func _append_s32(buf: PackedByteArray, v: int) -> void:

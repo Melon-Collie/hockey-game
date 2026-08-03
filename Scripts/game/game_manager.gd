@@ -2786,8 +2786,8 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	# reaches into an autoload itself.
 	record.skater.is_host_machine = NetworkManager.is_host
 	record.skater.is_local_skater = record.is_local
-	# Analytic skater-vs-goalie body block (move_and_slide is gone) reads the same
-	# host-refreshed goalie pose cache the blade clamp uses. get_goalie_data returns
+	# The analytic skater-vs-goalie body block reads the same host-refreshed goalie
+	# pose cache the blade clamp uses. get_goalie_data returns
 	# empty until goalies exist (tutorial dummy / test), so the block no-ops there.
 	record.skater.set_goalie_data_provider(get_goalie_data)
 	if record.is_local:
@@ -5465,8 +5465,8 @@ func get_goalie_data() -> Array[Dictionary]:
 # writes per goalie rather than a full Array+Dictionary allocation. The single-
 # net drill goalies (tutorial / penalty), kept out of the `goalies` array, are
 # appended when present so the analytic blade AND body clamps hold the skater
-# clear of them too — otherwise the move_and_slide removal would let a skater
-# walk through the drill goalie into the net.
+# clear of them too — nothing else would stop a skater walking through the drill
+# goalie into the net.
 func _refresh_goalie_data_cache() -> void:
 	var n: int = goalies.size()
 	var extra: int = 0

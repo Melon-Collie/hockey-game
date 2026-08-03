@@ -1,8 +1,6 @@
 [gd_scene format=3 uid="uid://bu5a1k2dpj8ot"]
 
 [ext_resource type="Script" uid="uid://dhrq0fb8ehjmm" path="res://Scripts/actors/goalie.gd" id="1_fbmg1"]
-[ext_resource type="PhysicsMaterial" uid="uid://7yjnea4uow2s" path="res://Physics/goalie_pad.tres" id="2_168ps"]
-[ext_resource type="PhysicsMaterial" uid="uid://dsxtpnvcngajr" path="res://Physics/goalie_stick.tres" id="3_jpvxq"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_fbmg1"]
 size = Vector3(0.28, 0.84, 0.2)
@@ -103,7 +101,6 @@ height = 0.1
 script = ExtResource("1_fbmg1")
 
 [node name="LeftPad" type="StaticBody3D" parent="." unique_id=1190163544]
-physics_material_override = ExtResource("2_168ps")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="LeftPad" unique_id=1872238537]
 shape = SubResource("BoxShape3D_fbmg1")
@@ -112,7 +109,6 @@ shape = SubResource("BoxShape3D_fbmg1")
 mesh = SubResource("BoxMesh_168ps")
 
 [node name="RightPad" type="StaticBody3D" parent="." unique_id=1435961568]
-physics_material_override = ExtResource("2_168ps")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="RightPad" unique_id=1459539296]
 shape = SubResource("BoxShape3D_jpvxq")
@@ -121,7 +117,6 @@ shape = SubResource("BoxShape3D_jpvxq")
 mesh = SubResource("BoxMesh_0fnhx")
 
 [node name="Body" type="StaticBody3D" parent="." unique_id=1962591082]
-physics_material_override = ExtResource("2_168ps")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Body" unique_id=981675903]
 shape = SubResource("BoxShape3D_e8rcv")
@@ -130,7 +125,6 @@ shape = SubResource("BoxShape3D_e8rcv")
 mesh = SubResource("BoxMesh_cwmwh")
 
 [node name="Head" type="StaticBody3D" parent="." unique_id=1016498205]
-physics_material_override = ExtResource("2_168ps")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Head" unique_id=245778333]
 shape = SubResource("BoxShape3D_cdb6r")
@@ -139,7 +133,6 @@ shape = SubResource("BoxShape3D_cdb6r")
 mesh = SubResource("SphereMesh_cdb6r")
 
 [node name="Glove" type="StaticBody3D" parent="." unique_id=304258065]
-physics_material_override = ExtResource("2_168ps")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Glove" unique_id=1294887346]
 shape = SubResource("BoxShape3D_8k2b8")
@@ -159,7 +152,6 @@ mesh = SubResource("SphereMesh_e8rcv")
 
 [node name="Stick" type="StaticBody3D" parent="BlockArm" unique_id=359484771]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.25, 0)
-physics_material_override = ExtResource("3_jpvxq")
 
 [node name="StickShaftMesh" type="MeshInstance3D" parent="BlockArm/Stick" unique_id=1070572832]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.25, 0)
@@ -187,7 +179,6 @@ shape = SubResource("BoxShape3D_cwmwh")
 
 [node name="Blocker" type="StaticBody3D" parent="BlockArm" unique_id=415853721]
 transform = Transform3D(0.8660254, -0.5, 0, 0.5, 0.8660254, 0, 0, 0, 1, -0.06, 0.03, -0.05)
-physics_material_override = ExtResource("2_168ps")
 
 [node name="BlockerPadCollider" type="CollisionShape3D" parent="BlockArm/Blocker" unique_id=1315615311]
 shape = SubResource("BoxShape3D_waq38")

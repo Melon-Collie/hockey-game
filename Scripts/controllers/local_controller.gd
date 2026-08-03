@@ -102,7 +102,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 		func(impulse: Vector3) -> void:
 			hit_received.emit(impulse))
 	# Capture the reconcile prediction snapshot AFTER the body has integrated this
-	# tick (move_and_slide + collisions + clamp), matching the post-move sub-step
+	# tick (integration + collisions + clamps), matching the post-move sub-step
 	# the host samples for its broadcast. _snapshot_pending gates it to exactly the
 	# ticks the old inline calls fired on. Fires at Skater priority 0, after this
 	# controller's priority -1 pass has already set _current_input and the flag.
@@ -258,7 +258,7 @@ func _physics_process(delta: float) -> void:
 	if _input_history.size() > rtt_cap:
 		_input_history.pop_front()
 	_process_input(_current_input, _current_input.delta)
-	# Snapshot is deferred to skater.post_move_integrated (post move_and_slide) so
+	# Snapshot is deferred to skater.post_move_integrated (post integration) so
 	# it captures the same post-integration position the host broadcasts.
 	_snapshot_pending = true
 	skater.current_shot_state = _sm.get_state() as int
@@ -481,8 +481,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# Suppress reconcile jitter while pressing against a boundary. Analytic
 	# containment (boards / net / goalie) vs. server-physics noise repeatedly sets
 	# small visual_offsets that compound into visible oscillation. is_touching_boundary
-	# is the analytic stand-in for the old move_and_slide is_on_wall() flag — it's
-	# raised by the clamps whenever they repositioned the body last tick.
+	# is raised by the clamps whenever they repositioned the body last tick.
 	# Errors above 5 cm are real desync and still fire through.
 	if skater.is_touching_boundary() and skater.global_position.distance_to(server_state.position) < 0.05:
 		return
@@ -496,7 +495,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 				divergence_upper_body, server_state.upper_body_rotation_y)) >= reconcile_upper_body_rotation_threshold)
 	# Diagnostic: express the same-timestamp position offset in units of one tick
 	# of travel, signed +/- by whether the prediction leads or lags the server
-	# along the velocity. ~+1.0 = predicted is one move_and_slide AHEAD of the
+	# along the velocity. ~+1.0 = predicted is one integration step AHEAD of the
 	# server; ~-1.0 = one behind. Isolates a capture/integration phase mismatch
 	# (vs random non-determinism, which wouldn't sit at a clean +/-1).
 	if predicted != null:
@@ -575,7 +574,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# gates correctly from the first replayed tick.
 	knockdown_timer = server_state.knockdown_timer
 	skater.is_knocked_down = knockdown_timer > 0.0
-	# Snap facing for replay accuracy — facing drives move_and_slide direction,
+	# Snap facing for replay accuracy — facing drives the direction of travel,
 	# so the replay must start from the server's facing to reproduce the trajectory.
 	_pose.facing = server_state.facing
 	skater.set_facing(_pose.facing)
@@ -614,7 +613,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		# Re-resolve skater-vs-skater body checks against where the host actually had
 		# the other skaters at this input's timestamp (from their interpolation
 		# buffers). Runs AFTER integration to mirror the host exactly: the live resolver
-		# runs after move_and_slide, so it (a) evaluates contact geometry at the
+		# runs after the integration step, so it (a) evaluates contact geometry at the
 		# POST-integration self position — the same instant host_ts=T samples the others
 		# at and the authoritative snapshot captures — and (b) applies dvel after the
 		# move, landing it on the next tick. Running before integration (the old
@@ -623,18 +622,14 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		# does. sep still lands before the clamps below. Replaces the impulse bridge.
 		_replay_resolve_body_checks(input.host_timestamp, input.hit_held)
 		# Clamp to the rink boundary after every replay step — the same analytic
-		# projection the live tick applies (boards are off the skater's physics
-		# mask). Without this, a board interaction that differed by even one frame
-		# between client and host compounds into a divergence feedback loop that
-		# triggers repeated reconciles.
+		# projection the live tick applies. Without this, a board interaction that
+		# differed by even one frame between client and host compounds into a
+		# divergence feedback loop that triggers repeated reconciles.
 		skater.clamp_body_to_rink()
-		# Same for the goal net (also off the skater physics mask) — keep the replay
-		# in lockstep with the live tick so a net brush can't compound into a reconcile
-		# loop.
+		# Same for the goal net — keep the replay in lockstep with the live tick so a
+		# net brush can't compound into a reconcile loop.
 		skater.clamp_body_to_net()
-		# And the goalie footprint — the live tick blocks the skater out of the goalie
-		# analytically now (move_and_slide is gone), so the replay must too or a goalie
-		# brush compounds into a reconcile loop.
+		# And the goalie footprint, for the same reason.
 		skater.clamp_body_to_goalies()
 		# Re-record this input's prediction from the corrected trajectory. The
 		# stale pre-correction snapshots were made on the trajectory the replay

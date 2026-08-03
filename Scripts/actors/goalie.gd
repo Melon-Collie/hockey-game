@@ -7,8 +7,9 @@ extends Node3D
 # is baked into the mesh layout — different states get the blade in the right
 # place via different blocker rotations, not by tracking the blade
 # independently. The Blocker pad and Stick are SEPARATE child StaticBody3Ds
-# under BlockArm so they can carry different physics materials (pad absorbs,
-# stick rebounds), but they share the BlockArm transform.
+# under BlockArm — the analytic save resolver identifies the struck part BY NODE
+# NAME (Puck._classify_save_part → GoalieSaveRules.SavePart), so a pad rebound and
+# a stick rebound have to be two nodes. They share the BlockArm transform.
 @onready var _left_pad: StaticBody3D = $LeftPad
 @onready var _right_pad: StaticBody3D = $RightPad
 @onready var _body: StaticBody3D = $Body
@@ -66,23 +67,22 @@ var _last_block_arm_pos: Vector3
 
 
 func _ready() -> void:
-	# The stick is a hooked shape that snagged skaters when it shared LAYER_WALLS
-	# with the rest of the goalie. Move it to LAYER_GOALIE_STICK: the skater
-	# mask omits that layer so players pass through instead of getting caught
-	# (the puck's stick rebounds are analytic — GoalieContactDetector).
+	# Identity tags, not collision (see Constants — every mask in the project is 0).
+	# The stick is tagged apart from the body because the two are read differently:
+	# skaters ignore it entirely, while the body parts define the footprint
+	# Skater.clamp_body_to_goalies holds them out of. Both feed the puck's analytic
+	# save contacts, which read these parts' shapes and transforms directly
+	# (GoalieContactDetector) — and skip any part whose layer is 0, which is how
+	# set_stick_collision_enabled takes the stick out of play mid-sweep.
 	_stick.collision_layer = Constants.LAYER_GOALIE_STICK
-	# The body parts come off the scene-default LAYER_WALLS onto their own
-	# LAYER_GOALIE_BODIES so a ghosted skater (whose mask drops back to bare
-	# LAYER_WALLS — see Skater.set_ghost) passes through the goalie while still
-	# standing on the ice. MASK_SKATER includes the new layer, so non-ghost
-	# skaters bump exactly as before; the puck's save contacts are analytic
-	# (GoalieContactDetector reads these same parts), so no mask is involved.
 	_left_pad.collision_layer = Constants.LAYER_GOALIE_BODIES
 	_right_pad.collision_layer = Constants.LAYER_GOALIE_BODIES
 	_body.collision_layer = Constants.LAYER_GOALIE_BODIES
 	_head.collision_layer = Constants.LAYER_GOALIE_BODIES
 	_glove.collision_layer = Constants.LAYER_GOALIE_BODIES
 	_blocker.collision_layer = Constants.LAYER_GOALIE_BODIES
+	for part: StaticBody3D in [_stick, _left_pad, _right_pad, _body, _head, _glove, _blocker]:
+		part.collision_mask = 0
 	# Swap the scene's primitive part meshes for the shared low-poly faceted
 	# set (colliders untouched). Before the uniform coordinator only by
 	# convention — painting is material_override / ShaderMaterial, mesh-free.
@@ -151,9 +151,9 @@ func get_goalie_rotation_y() -> float:
 func get_glove_position() -> Vector3:
 	return _glove.position
 
-# Clear-sweep follow-through moves the BlockArm (and its child Stick, whose
-# collider is real — puck bounces off LAYER_GOALIE_STICK during saves) through
-# the puck's exit path. Without this, that "cosmetic" swing can re-strike the
+# Clear-sweep follow-through moves the BlockArm (and its child Stick, off which
+# the puck rebounds during saves) through the puck's exit path. Without this, that
+# "cosmetic" swing can re-strike the
 # puck moments after the clear velocity was imparted and deflect it anywhere,
 # including back into the goalie's own net. Disabled for the swing's duration.
 func set_stick_collision_enabled(enabled: bool) -> void:

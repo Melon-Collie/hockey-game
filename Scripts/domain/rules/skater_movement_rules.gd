@@ -130,7 +130,7 @@ class ForwardResult:
 # facing evolution are deliberately omitted. Facing affects only the thrust-
 # alignment scale and turns slowly over the ~interp_delay span, so it is held
 # constant here; the caller renders facing via the existing angular-velocity
-# extrapolation. The residual vs the host's true move_and_slide is corrected by the
+# extrapolation. The residual vs the host's true integration is corrected by the
 # next snapshot — what must match exactly is client-render vs host-rewind, and both
 # run THIS function on the same inputs. Fills the caller-owned `result`.
 # `stagger_timer` / `body_check_cfg` (optional): the snapshot's replicated

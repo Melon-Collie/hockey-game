@@ -578,7 +578,7 @@ func _clamp_blade_butterfly_box(blade_world: Vector3, gpos: Vector3, rot_y: floa
 # ── Geometry Helpers ──────────────────────────────────────────────────────────
 # Converts the world-space blade_height to upper-body-local Y.
 # Uses the upper body's world Y so the result is correct regardless of where
-# the skater's CharacterBody3D origin sits above the ice.
+# the skater's body origin sits above the ice.
 func blade_y_local() -> float:
 	# Add the eased stick-lift offset so a lifted blade (and the hand/stick the
 	# IK solves from it) rises off the ice. blend is 0 in all shot/carry states

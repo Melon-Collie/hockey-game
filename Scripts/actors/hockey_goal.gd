@@ -1,6 +1,6 @@
 @tool
 class_name HockeyGoal
-extends StaticBody3D
+extends Node3D
 
 signal goal_scored
 
@@ -36,16 +36,6 @@ const PIPE_RADIAL_SEGMENTS: int = 8
 const NET_TEXTURE_PATH: String    = "res://Assets/textures/net_diamond.png"
 const NET_TEXTURE_TILE_SIZE: float = 0.164  # 4 diamonds × 41mm each
 
-# Physics materials split by surface. The main HockeyGoal body carries the pipe
-# frame (posts/crossbar/bends → lively steel ping); _net_body carries the net
-# panels + skirt (twine → absorbs, puck drops). Neither existed before, so the
-# whole goal ran on the engine default (friction 1.0, bounce 0.0) — pipe pinged
-# dead and the net had no distinct feel. See the .tres files for the numbers and
-# the combine reasoning (the puck carries no material, so each collapses to the
-# surface value).
-const PIPE_MATERIAL: PhysicsMaterial = preload("res://Physics/goal_pipe.tres")
-const NET_MATERIAL: PhysicsMaterial = preload("res://Physics/goal_net.tres")
-
 # All net panels share one ShaderMaterial (goal_net.gdshader) so GoalVFX can
 # drive a single ripple uniform on goal. Rebuilt per _rebuild().
 const NET_SHADER_PATH: String = "res://Shaders/goal_net.gdshader"
@@ -56,7 +46,6 @@ const LAMP_HEIGHT: float = 3.2
 const LAMP_BEHIND_BOARDS: float = 0.35
 
 var defending_team_id: int = -1  # set by GameManager when goals are assigned to teams
-var _net_body: StaticBody3D = null  # holds net-panel collision shapes; kept separate so puck can distinguish pipe vs net contact
 var _net_material: ShaderMaterial = null  # shared across all net panels; GoalVFX tweens its ripple uniform
 
 
@@ -98,15 +87,6 @@ func goal_line_z() -> float:
 		_rebuild()
 
 func _ready() -> void:
-	# Pipe frame (posts/crossbar/bends live directly on this StaticBody3D).
-	# _rebuild() only frees children, never touches self's material, so setting
-	# it once here survives every rebuild.
-	physics_material_override = PIPE_MATERIAL
-	# Frame shares the net's layer so skaters don't physics-collide with the posts
-	# either (they're kept clear of the whole net footprint analytically); the puck
-	# pings off the pipe analytically too (PuckGeometryCollision reads the same
-	# geometry). See _net_body / GameRules.push_out_of_net.
-	collision_layer = Constants.LAYER_NET
 	_rebuild()
 
 func _rebuild() -> void:
@@ -123,15 +103,6 @@ func _rebuild() -> void:
 
 	for child in get_children():
 		child.queue_free()
-
-	_net_body = StaticBody3D.new()
-	# LAYER_NET (not LAYER_WALLS): skaters DON'T physics-collide with the panels —
-	# a CharacterBody cylinder wedges in the concave net pocket. Skaters are held
-	# clear analytically via GameRules.push_out_of_net (see Skater.clamp_body_to_net);
-	# the puck plays the panels analytically (PuckGeometryCollision).
-	_net_body.collision_layer = Constants.LAYER_NET
-	_net_body.physics_material_override = NET_MATERIAL  # twine absorbs; puck drops instead of pinging
-	add_child(_net_body)
 
 	var goal_z: float = facing * (rink_length / 2.0 - distance_from_end)
 	_net_material = _make_net_material(goal_z)
@@ -168,8 +139,7 @@ func _build_mouth(goal_z: float) -> void:
 			Basis(),
 			post_height,
 			POST_RADIUS,
-			post_color,
-			true
+			post_color
 		)
 
 	# Crossbar: spans between the two bend end-points at the top.
@@ -182,8 +152,7 @@ func _build_mouth(goal_z: float) -> void:
 		crossbar_basis,
 		crossbar_len,
 		POST_RADIUS,
-		post_color,
-		true
+		post_color
 	)
 
 	# Two mouth-corner bends (quarter torus each).
@@ -199,7 +168,7 @@ func _build_mouth(goal_z: float) -> void:
 		# Bend ends at the crossbar end:     offset (0, +MOUTH_CORNER_RADIUS, 0) from center
 		var start_offset := Vector3(side * MOUTH_CORNER_RADIUS, 0.0, 0.0)
 		var end_offset := Vector3(0.0, MOUTH_CORNER_RADIUS, 0.0)
-		_add_quarter_bend(center, start_offset, end_offset, post_color, true)
+		_add_quarter_bend(center, start_offset, end_offset, post_color)
 
 
 # --------------------------------------------------------------------------
@@ -232,9 +201,7 @@ func _build_skirt(goal_z: float) -> void:
 			rail_basis,
 			rail_len,
 			POST_RADIUS,
-			post_color,
-			true,
-			true
+			post_color
 		)
 
 		# Corner bend in the X-Z plane at y = POST_RADIUS.
@@ -246,7 +213,7 @@ func _build_skirt(goal_z: float) -> void:
 		# End:   where the back rail ends on this side — offset (0, 0, facing*r) from center
 		var start_offset := Vector3(side * SKIRT_CORNER_RADIUS, 0.0, 0.0)
 		var end_offset := Vector3(0.0, 0.0, facing * SKIRT_CORNER_RADIUS)
-		_add_quarter_bend(corner_center, start_offset, end_offset, post_color, true, true)
+		_add_quarter_bend(corner_center, start_offset, end_offset, post_color)
 
 	# Back rail along X axis, spanning between the two corner end-points
 	var back_rail_len: float = (POST_HALF_WIDTH - corner_x_offset) * 2.0
@@ -256,9 +223,7 @@ func _build_skirt(goal_z: float) -> void:
 		back_rail_basis,
 		back_rail_len,
 		POST_RADIUS,
-		post_color,
-		true,
-		true
+		post_color
 	)
 
 
@@ -287,8 +252,7 @@ func _build_crown(goal_z: float) -> void:
 			rail_basis,
 			rail_len,
 			POST_RADIUS,
-			crown_color,
-			false  # crown has no collision; net panels handle it
+			crown_color
 		)
 
 		var corner_center_x: float = side * (CROWN_HALF_WIDTH - corner_x_offset)
@@ -296,7 +260,7 @@ func _build_crown(goal_z: float) -> void:
 		var corner_center := Vector3(corner_center_x, y, corner_center_z)
 		var start_offset := Vector3(side * CROWN_CORNER_RADIUS, 0.0, 0.0)
 		var end_offset := Vector3(0.0, 0.0, facing * CROWN_CORNER_RADIUS)
-		_add_quarter_bend(corner_center, start_offset, end_offset, crown_color, false)
+		_add_quarter_bend(corner_center, start_offset, end_offset, crown_color)
 
 	var back_rail_len: float = (CROWN_HALF_WIDTH - corner_x_offset) * 2.0
 	var back_rail_basis := Basis(Vector3(0, 0, 1), PI / 2.0)
@@ -305,8 +269,7 @@ func _build_crown(goal_z: float) -> void:
 		back_rail_basis,
 		back_rail_len,
 		POST_RADIUS,
-		crown_color,
-		false
+		crown_color
 	)
 
 
@@ -322,7 +285,7 @@ func _build_back_support(goal_z: float) -> void:
 	var dir: Vector3 = (top_point - bot_point).normalized()
 	var length: float = top_point.distance_to(bot_point)
 	var cyl_basis: Basis = _basis_from_up(dir)
-	_add_cylinder(mid, cyl_basis, length, POST_RADIUS, crown_color, false)
+	_add_cylinder(mid, cyl_basis, length, POST_RADIUS, crown_color)
 
 
 # --------------------------------------------------------------------------
@@ -433,9 +396,7 @@ func _add_cylinder(
 	xform: Basis,
 	length: float,
 	radius: float,
-	color: Color,
-	with_collision: bool,
-	use_net_body: bool = false
+	color: Color
 ) -> void:
 	var cyl := CylinderMesh.new()
 	cyl.height = length
@@ -448,18 +409,6 @@ func _add_cylinder(
 	_apply_mat(mesh_inst, color)
 	add_child(mesh_inst)
 
-	if with_collision:
-		var shape := CylinderShape3D.new()
-		shape.height = length
-		shape.radius = radius
-		var col := CollisionShape3D.new()
-		col.shape = shape
-		col.transform = Transform3D(xform, pos)
-		if use_net_body:
-			_net_body.add_child(col)
-		else:
-			add_child(col)
-
 
 # Build a quarter-circle bend. The bend lies in the plane defined by the
 # two offset vectors from the center; it starts at (center + start_offset)
@@ -470,9 +419,7 @@ func _add_quarter_bend(
 	center: Vector3,
 	start_offset: Vector3,
 	end_offset: Vector3,
-	color: Color,
-	with_collision: bool,
-	use_net_body: bool = false
+	color: Color
 ) -> void:
 	var radius: float = start_offset.length()
 	var u: Vector3 = start_offset.normalized()  # unit vector from center to arc start
@@ -490,7 +437,7 @@ func _add_quarter_bend(
 		var dir: Vector3 = (p1 - p0).normalized()
 		var seg_basis: Basis = _basis_from_up(dir)
 		# Overlap slightly so there's no visible seam
-		_add_cylinder(mid, seg_basis, seg_len * 1.05, POST_RADIUS, color, with_collision, use_net_body)
+		_add_cylinder(mid, seg_basis, seg_len * 1.05, POST_RADIUS, color)
 
 
 # Project a 3D point onto a 2D UV coordinate, given an anchor point and two
@@ -541,35 +488,12 @@ func _add_net_tri(a: Vector3, b: Vector3, c: Vector3) -> void:
 	_apply_mat_net(mesh_inst)
 	add_child(mesh_inst)
 
-	# AABB collision box
-	var min_p: Vector3 = Vector3(
-		min(min(a.x, b.x), c.x),
-		min(min(a.y, b.y), c.y),
-		min(min(a.z, b.z), c.z)
-	)
-	var max_p: Vector3 = Vector3(
-		max(max(a.x, b.x), c.x),
-		max(max(a.y, b.y), c.y),
-		max(max(a.z, b.z), c.z)
-	)
-	var box_size: Vector3 = max_p - min_p
-	if box_size.x < POST_RADIUS: box_size.x = POST_RADIUS
-	if box_size.y < POST_RADIUS: box_size.y = POST_RADIUS
-	if box_size.z < POST_RADIUS: box_size.z = POST_RADIUS
-	var box_center: Vector3 = (min_p + max_p) / 2.0
-	var shape := BoxShape3D.new()
-	shape.size = box_size
-	var col := CollisionShape3D.new()
-	col.shape = shape
-	col.position = box_center
-	_net_body.add_child(col)
-
 
 # Build an arbitrary quadrilateral net panel from four corners in world space.
 # Corners must be given in order around the quad (A, B, C, D — either CW or CCW).
 # The mesh is rendered double-sided via the net material's CULL_DISABLED flag.
-# Collision uses a cheap axis-aligned BoxShape3D sized to the quad's bounding
-# region (padded to POST_RADIUS on any thin axis).
+# Mesh only: the puck's carom off the panels is analytic (PuckGeometryCollision),
+# and the skater is held out of the pocket by GameRules.push_out_of_net.
 func _add_net_quad(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	# --- Mesh ---
 	var verts := PackedVector3Array([a, b, c, a, c, d])  # two triangles (ABC, ACD)
@@ -605,29 +529,6 @@ func _add_net_quad(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	# trapezoid panel this is slightly larger than the visual mesh where the
 	# slant is, but the back panel covers that overlap region, so the extra
 	# collision is functionally redundant and keeps physics cheap.
-	var min_p: Vector3 = Vector3(
-		min(min(a.x, b.x), min(c.x, d.x)),
-		min(min(a.y, b.y), min(c.y, d.y)),
-		min(min(a.z, b.z), min(c.z, d.z))
-	)
-	var max_p: Vector3 = Vector3(
-		max(max(a.x, b.x), max(c.x, d.x)),
-		max(max(a.y, b.y), max(c.y, d.y)),
-		max(max(a.z, b.z), max(c.z, d.z))
-	)
-	var box_size: Vector3 = max_p - min_p
-	# Give the thin axis a non-zero thickness (POST_RADIUS)
-	if box_size.x < POST_RADIUS: box_size.x = POST_RADIUS
-	if box_size.y < POST_RADIUS: box_size.y = POST_RADIUS
-	if box_size.z < POST_RADIUS: box_size.z = POST_RADIUS
-	var box_center: Vector3 = (min_p + max_p) / 2.0
-	var shape := BoxShape3D.new()
-	shape.size = box_size
-	var col := CollisionShape3D.new()
-	col.shape = shape
-	col.position = box_center
-	_net_body.add_child(col)
-
 
 # Host-only swept goal test, driven once per physics tick by GameManager (which
 # owns the authoritative puck and its previous position). Emits `goal_scored` the

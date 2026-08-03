@@ -359,7 +359,7 @@ func set_goalie_provider(provider: Callable) -> void:
 	_goalie_provider = provider
 
 func _ready() -> void:
-	process_physics_priority = 1  # Run after Skater.move_and_slide so blade world pos is current
+	process_physics_priority = 1  # Run after Skater's integration so blade world pos is current
 	_build_deaden_cfg()
 	_native_step = NativePuckStepFactory.make_configured()
 

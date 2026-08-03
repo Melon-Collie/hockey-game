@@ -136,7 +136,7 @@ func test_transfer_scales_impulse_linearly() -> void:
 func test_low_transfer_barely_slows_attacker() -> void:
 	var out := _res()
 	# The "skate into someone uncommitted" case: small transfer → the attacker
-	# keeps most of its speed instead of dead-stopping (the move_and_slide feel).
+	# keeps most of its speed instead of dead-stopping.
 	SkaterCollisionRules.resolve(out,
 		Vector3.ZERO, Vector3(6.0, 0.0, 0.0), 80.0, R,
 		Vector3(0.8, 0.0, 0.0), Vector3.ZERO, 80.0, R, 0.2)

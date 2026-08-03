@@ -173,11 +173,9 @@ static func is_over_net_footprint(world_xz: Vector2) -> bool:
 	var az: float = absf(world_xz.y)
 	return az >= GOAL_LINE_Z - NET_PUCK_BUFFER and az <= GOAL_LINE_Z + NET_DEPTH + NET_PUCK_BUFFER
 
-# Projects a skater's XZ clear of the goal-net exclusion box so a CharacterBody
-# cylinder can never seat into the concave net pocket (back + side panels), the
-# same wedge-and-freeze failure the boards have. The net is off the skater physics
-# mask (LAYER_NET, puck-only); skaters are held clear analytically here, mirroring
-# clamp_to_rink_inner for the boards. Returns world_xz unchanged when the center is
+# Projects a skater's XZ clear of the goal-net exclusion box — a smooth stand-in
+# for the concave net pocket (back + side panels), mirroring what
+# clamp_to_rink_inner does for the boards. Returns world_xz unchanged when the center is
 # already outside the box. Handles both net ends (|z|). Pure value-type math — no
 # allocation, hot-path safe at 120 Hz × actors.
 #
@@ -215,10 +213,8 @@ static func push_out_of_net(world_xz: Vector2, radius: float = 0.0) -> Vector2:
 	return Vector2(max_x, world_xz.y)
 
 # ── Goalie body containment (analytic skater block) ─────────────────────────
-# Base goalie footprint for the analytic skater body-block. The goalie body
-# parts used to stop skaters via move_and_slide (LAYER_GOALIE_BODIES on the
-# skater mask); with move_and_slide removed the block is analytic, like the
-# boards/net. Two footprints by stance: a cylinder while standing/RVH, a wide-
+# Base goalie footprint for the analytic skater body-block, like the boards/net.
+# Two footprints by stance: a cylinder while standing/RVH, a wide-
 # but-shallow oriented box in the butterfly (the leg pads spread laterally).
 # These mirror the blade clamp's goalie_block_radius / butterfly_pad_half_* on
 # SkaterController — the goalie is beatable-realism furniture here, not a precise
@@ -308,7 +304,7 @@ const NET_ENTRY_HALF_WIDTH: float = (
 const ICE_FRICTION: float = 0.05
 # Gravity used for the Coulomb conversion below. Matches Godot's engine default
 # (physics/3d/default_gravity = 9.8, un-overridden) rather than textbook 9.81;
-# tests/unit/rules/test_physics_material_mirrors.gd pins the pair.
+# tests/unit/rules/test_physics_constant_mirrors.gd pins the pair.
 const GRAVITY_M_S2: float = 9.8
 # Puck deceleration on ice — constant Coulomb model. The puck slides flat
 # (Puck.tscn locks angular X/Z), so friction force = μ·m·g and a = μ·g ≈ 0.49 m/s²,
@@ -323,16 +319,14 @@ const PUCK_ICE_DECEL_M_S2: float = ICE_FRICTION * GRAVITY_M_S2
 # a grounded stick, and where it must land to be receivable) agrees with
 # the live interaction gate.
 const PUCK_AIRBORNE_HEIGHT_M: float = 0.05
-# Board restitution coefficient — the value the analytic carom actually applies.
-# Mirrors Physics/boards.tres `bounce`, which can't be single-sourced (a static
-# resource a const can't reach), so tests/unit/rules/test_physics_material_mirrors.gd
-# guards the pair: change one, CI fails until the other matches.
+# Board restitution coefficient — sole authority, applied by the analytic carom.
+# Tune the rim's liveliness here; nothing else describes the boards.
 const PUCK_BOARD_BOUNCE: float = 0.4
-# Board kinetic friction coefficient. Mirrors Physics/boards.tres `friction` (guarded by
-# test_physics_material_mirrors alongside the bounce). On a carom the boards bleed tangential
-# speed via Coulomb friction proportional to the normal impulse — this is what stops a hard
-# rim-around from circling the rink forever (ice friction alone is far too weak to kill it).
-# Applied by AITrajectory's carom, which is the host drive and the client prediction alike.
+# Board kinetic friction coefficient. On a carom the boards bleed tangential speed
+# via Coulomb friction proportional to the normal impulse — this is what stops a
+# hard rim-around from circling the rink forever (ice friction alone is far too
+# weak to kill it). Applied by AITrajectory's carom, which is the host drive and
+# the client prediction alike.
 const PUCK_BOARD_FRICTION: float = 0.25
 # Silent grace before an out-of-play puck is whistled dead. Short enough that
 # the stoppage feels responsive, long enough that a transient penetration spike

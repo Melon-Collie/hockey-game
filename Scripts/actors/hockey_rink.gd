@@ -1,6 +1,6 @@
 @tool
 class_name HockeyRink
-extends StaticBody3D
+extends Node3D
 
 @export var rink_length: float = 60.0:
 	set(v):
@@ -27,28 +27,6 @@ extends StaticBody3D
 @export var corner_segments: int = 48:
 	set(v):
 		corner_segments = v
-		_rebuild()
-# Collision tessellation runs independently of the visual mesh. The puck slides
-# along the inner face of a triangulated arc, and every facet transition leaks
-# a sliver of energy through bounce restitution (puck velocity isn't tangent
-# to the next facet's normal). Energy retained per corner ≈ exp(-(1-e²)·π²/(4N))
-# for restitution e and N segments — at N=256 with e=0.4 the restitution loss
-# per corner is under 1%. Visual mesh stays at corner_segments for cheap rendering.
-#
-# Restitution is only half the corner-loss story, and NOT the half that made
-# rim-arounds feel dead: the puck also slides the curve under sustained normal
-# (centripetal) load, so board FRICTION bleeds tangential speed capstan-style —
-# retained speed ≈ exp(-μ·π/2) per 90° corner, independent of N (tessellation
-# fixes only the restitution facet loss above). At the engine-default μ≈1.0 a
-# rim shed ~80% of its speed per corner, and even the first corrected value
-# (0.3) still shed ~38%. Physics/boards.tres now sets μ=0.15 — real dasher
-# facing is HDPE/UHMW sheet, chosen for exactly this slickness (rubber-on-
-# polyethylene kinetic μ ≈ 0.1–0.2) — so a hard rim keeps ~79% of its pace per
-# corner, the classic rim-around. Tune the rim feel there, not by raising
-# segment count.
-@export var corner_collision_segments: int = 256:
-	set(v):
-		corner_collision_segments = v
 		_rebuild()
 @export var wall_color: Color = Color(0.95, 0.95, 0.95):
 	set(v):
@@ -164,11 +142,6 @@ const CAP_RAIL_HEIGHT: float = 0.05
 # (renders both sides), and coplanar opaque-vs-double-sided-transparent
 # z-fights along the seam.
 const GLASS_LIFT: float = 0.001
-# Collision-only perimeter height. Must stay above the puck's vertical clamp
-# (Puck.max_height 3.0 + ice half-height 0.0125 ≈ 3.01 m) so an elevated
-# deflection that pegs the clamp can't slip over the visible glass and out of the
-# rink. Purely a collider extent — the glass mesh stops at glass_y_top.
-const COLLISION_OVERGLASS_TOP: float = 3.2
 # Recess the kickplate's bottom this far below the ice plane. The merged
 # perimeter band uses cull_disabled (renders both sides of every face), so
 # the bottom cap would z-fight the ice plane at y=0 if they were coplanar.
@@ -186,8 +159,8 @@ const KICKPLATE_ICE_OFFSET: float = 0.005
 # Texture resolution: pixels per meter
 var _px_per_meter: float = 80.0
 
-# cache key → products dict {ice_tex, stripe_tex, band_* ArrayMeshes,
-# collision_shape}. Every product is a deterministic function of the exports
+# cache key → products dict {ice_tex, stripe_tex, band_* ArrayMeshes}. Every
+# product is a deterministic function of the exports
 # in _cache_key() — the ice albedo alone is a ~10M-pixel image painted
 # pixel-by-pixel in GDScript, the dominant rebuild cost — so they're built
 # once per param set and shared across rink instances for the process
@@ -207,10 +180,6 @@ var _ice_material: ShaderMaterial = null
 var _render_targets_freed: bool = false
 
 func _ready() -> void:
-	# Boards live on their own collision layer (puck masks it, skaters don't) so a
-	# skater CharacterBody cylinder never wedges in the concave corner mesh; the
-	# skater is held inside the rink analytically instead. See Constants.LAYER_BOARDS.
-	collision_layer = Constants.LAYER_BOARDS
 	_rebuild()
 	if not Engine.is_editor_hint() and _scratch_map != null:
 		# period_synced emits `new_period: int`; clear() takes no args, so we
@@ -297,12 +266,6 @@ func _rebuild() -> void:
 	_add_band_instance(products.band_cap, cap_mat)
 	_add_band_instance(products.band_glass, _make_glass_material())
 
-	# Single collision around the entire perimeter (shape built/cached in
-	# _get_or_build_products — see the doc there for the geometry rationale).
-	var perimeter_col := CollisionShape3D.new()
-	perimeter_col.shape = products.collision_shape
-	add_child(perimeter_col)
-
 	# --- Painted stripes ---
 	# Goal-line stripes on each corner's white-board zone, drawn where the line
 	# crosses the curve. Position is the canonical goal-line Z from GameRules
@@ -327,13 +290,13 @@ func _rebuild() -> void:
 
 # ── Build cache ──────────────────────────────────────────────────────────────
 
-# Every export that moves a cached product: dims/segments shape the meshes
-# and collision, the ice/line colors are baked into the two painted textures.
+# Every export that moves a cached product: dims/segments shape the meshes, the
+# ice/line colors are baked into the two painted textures.
 # Colors that only feed per-instance materials (wall/kickplate/cap/glass,
 # emission, ice-shader params) are deliberately absent.
 func _cache_key() -> String:
 	return str([rink_length, rink_width, corner_radius, wall_height,
-			wall_thickness, corner_segments, corner_collision_segments,
+			wall_thickness, corner_segments,
 			kickplate_height, glass_height, glass_thickness, _px_per_meter,
 			ice_color, red_line_color, blue_line_color])
 
@@ -360,24 +323,11 @@ func _get_or_build_products() -> Dictionary:
 	var cap_half_thick: float = board_half_thick + CAP_RAIL_PROTRUSION
 	var glass_half_thick: float = glass_thickness / 2.0
 
-	# Collision: single loop around the entire perimeter, replacing the old
-	# BoxShape3D / ConcavePolygonShape3D pair that caught fast pucks at the
-	# straight↔corner seam. Uses its own (much higher) corner tessellation so
-	# rim-around contact loss stays under 1% per corner.
-	#
-	# The INNER face sits at the kickplate lip (kick_half_thick), the innermost
-	# visible surface, so the puck stops at what the player sees instead of
-	# sinking 1 cm into the kickplate against the boards' face. This is the same
-	# surface the blade clamp, AI trajectory reflection, and puck-OOB check use
+	# The kickplate lip (kick_half_thick) is the innermost visible surface, and it
+	# is where the analytic boundary sits — so the puck and the skater stop at what
+	# the player sees rather than at the boards' face 1 cm behind it. Same surface
+	# the blade clamp, AI trajectory reflection, and puck-OOB check use
 	# (GameRules.INNER_* / KICKPLATE_INWARD_LIP — keep them in sync).
-	#
-	# The collision extends ABOVE the visible glass (glass_y_top ≈ 2.90 m) up to
-	# COLLISION_OVERGLASS_TOP: the puck's vertical clamp (Puck.max_height + its
-	# ice half-height ≈ 3.01 m) sits above the glass, so without this an elevated
-	# deflection that pegs the clamp cruised through the gap between the glass top
-	# and the clamp and escaped the rink. Collision-only — the visual glass stays
-	# at glass_y_top. Keep COLLISION_OVERGLASS_TOP comfortably above Puck.max_height.
-	var collision_stations: Array = _build_perimeter_stations(corner_collision_segments)
 
 	var products: Dictionary = {
 		"ice_tex": _build_ice_texture(),
@@ -399,9 +349,6 @@ func _get_or_build_products() -> Dictionary:
 		# its bottom cap doesn't z-fight the cap rail's top.
 		"band_glass": _perimeter_band_mesh(stations, glass_half_thick, glass_half_thick,
 				glass_y_bot, glass_y_top),
-		"collision_shape": _build_perimeter_collision_shape(collision_stations,
-				kick_half_thick, board_half_thick,
-				0.0, maxf(glass_y_top, COLLISION_OVERGLASS_TOP)),
 	}
 	_build_cache[key] = products
 	return products
@@ -556,36 +503,6 @@ func _add_ice(tex: ImageTexture) -> void:
 		0.5 + half_size / rink_length
 	))
 
-	# Ice collision — needs its own StaticBody3D so physics_material_override applies
-	var ice_body := StaticBody3D.new()
-	# Ice stays on LAYER_WALLS (skaters + puck both collide with it). Only the
-	# perimeter boards move to LAYER_BOARDS; the ice is a flat slab and never
-	# produces the concave-corner crease that wedged the skater.
-	ice_body.collision_layer = Constants.LAYER_WALLS
-	# Single source of truth: the live ice friction the host simulates IS
-	# GameRules.ICE_FRICTION (realistic puck-on-ice μ ~0.05). The AI/client
-	# prediction model reads the same constant, so the two can never drift — no
-	# hand-sync, no ice .tres. (Puck-on-ice glide only; boards own the rim feel.)
-	var phys_mat := PhysicsMaterial.new()
-	phys_mat.friction = GameRules.ICE_FRICTION
-	phys_mat.bounce = 0.0
-	ice_body.physics_material_override = phys_mat
-	add_child(ice_body)
-
-	# Ice collision: a deep slab, top face at y=0. Depth matters — a flat-bottomed
-	# body resting flush on a *thin* slab generates contacts against BOTH faces
-	# (the collision margin spans the volume), so a skater on the ice picked up an
-	# opposing +Y/-Y normal pair. Harmless on open ice (Y is axis-locked), but in
-	# a corner those two verticals plus the wall normal leave move_and_slide no
-	# free direction and the skater freezes against the boards. A 2 m slab keeps
-	# the bottom face far below any body resting on the surface, so only the +Y
-	# top contact is ever generated. Invisible and free (nothing lives below y=0).
-	var col := CollisionShape3D.new()
-	var shape := BoxShape3D.new()
-	shape.size = Vector3(rink_width, 2.0, rink_length)
-	col.shape = shape
-	col.position = Vector3(0, -1.0, 0)
-	ice_body.add_child(col)
 
 func _draw_v_line(img: Image, x: float, thickness: int, color: Color) -> void:
 	var half_t: float = thickness / 2.0
@@ -988,38 +905,6 @@ func _add_band_instance(mesh: ArrayMesh, material: Material) -> void:
 	mi.mesh = mesh
 	mi.material_override = material
 	add_child(mi)
-
-
-# Builds a single ConcavePolygonShape3D wrapping the entire wall (cached).
-# inner_offset is the kickplate's half-thickness so the collision's inner face
-# sits at the kickplate lip (the innermost visible surface); outer_offset is
-# the boards' wall_thickness/2 (the outer board face).
-func _build_perimeter_collision_shape(stations: Array,
-		inner_offset: float, outer_offset: float,
-		y_bot: float, y_top: float) -> ConcavePolygonShape3D:
-	var data: Dictionary = _emit_perimeter_band_arrays(
-			stations, inner_offset, outer_offset, y_bot, y_top, true, true)
-	var tris := PackedVector3Array()
-	var idx: PackedInt32Array = data.indices
-	var verts: PackedVector3Array = data.verts
-	for j in range(0, idx.size(), 3):
-		tris.append(verts[idx[j]])
-		tris.append(verts[idx[j + 1]])
-		tris.append(verts[idx[j + 2]])
-	var shape := ConcavePolygonShape3D.new()
-	shape.set_faces(tris)
-	# Backface collision so a puck that ends up on the wrong side of a
-	# triangle (CCD glance, reconcile nudge, numerical penetration) still
-	# generates contacts instead of falling through the band unopposed. Note
-	# this is best-effort, not a guarantee: the triangles are zero-thickness
-	# surfaces, so once a sliding body's center crosses a facet plane the
-	# nearest-side depenetration can just as well push it OUTWARD. The puck
-	# doesn't rely on this collider at all — it never touches the physics
-	# engine; its containment is the per-sub-step clamp to
-	# GameRules.clamp_to_rink_inner (the same boundary this collider is built
-	# on) inside the analytic drive.
-	shape.backface_collision = true
-	return shape
 
 
 func _add_corner_stripe(center: Vector3, a0: float, a1: float, stripe: Dictionary) -> void:

@@ -1,19 +1,21 @@
 extends GutTest
 
-# Guards the rink-geometry mirrors: HockeyRink's export defaults and lip
-# constant MUST stay in sync with the GameRules boundary constants, because
-# everything analytic — the blade clamp, AI trajectory reflection, the client
-# puck extrapolation board check, and the puck-OOB whistle — reasons against
-# GameRules.INNER_*, while the puck physically collides with geometry built
-# from HockeyRink's values. A silent drift would re-open the gap where the
-# physics wall and the modelled wall disagree (puck sinking into the kickplate
-# visual, OOB false reads). RinkArena.tscn instantiates the rink with NO
-# geometry overrides, so the script defaults ARE the live values; if a scene
-# override is ever added, these mirrors (and this test) need rethinking.
+# Guards the rink-geometry mirrors: HockeyRink's export defaults and lip constant
+# MUST stay in sync with the GameRules boundary constants. Everything analytic —
+# the blade clamp, AI trajectory reflection, the client puck extrapolation board
+# check, the puck-OOB whistle, and the skater's own rink clamp — reasons against
+# GameRules.INNER_*, while HockeyRink's values are what the player actually SEES.
+#
+# That makes this the only coupling left between the two, and the reason it still
+# matters: the boards carry no collider any more, so a drift no longer shows up as
+# a physics bug that someone trips over. It shows up as a puck caroming off empty
+# air a centimetre from the kickplate, or sinking into it — with nothing else in
+# the codebase to catch it. RinkArena.tscn instantiates the rink with NO geometry
+# overrides, so the script defaults ARE the live values; if a scene override is
+# ever added, these mirrors (and this test) need rethinking.
 #
 # wall_height needs no guard — it is single-sourced (its export default reads
-# GameRules.BOARD_TOP_HEIGHT), same reasoning as ICE_FRICTION in
-# test_physics_material_mirrors.gd.
+# GameRules.BOARD_TOP_HEIGHT).
 
 const _RINK: GDScript = preload("res://Scripts/actors/hockey_rink.gd")
 

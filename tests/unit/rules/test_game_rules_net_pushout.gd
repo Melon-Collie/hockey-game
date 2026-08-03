@@ -1,7 +1,7 @@
 extends GutTest
 
 # GameRules.push_out_of_net — analytic goal-net exclusion projection. Keeps a
-# skater's CharacterBody cylinder out of the concave net pocket (the boards-style
+# skater's body disc out of the concave net pocket (the boards-style
 # wedge that freezes a skater the goalie shoves across the goal line).
 #
 # Geometry under test (near/positive-Z net):
