@@ -602,34 +602,18 @@ func _repaint_gloves() -> void:
 	_paint_glove_cuffs(_glove_zone_color(GearModelRegistry.GLOVE_CUFF))
 
 
-# The face piece's fixed look — the one gear piece whose colors never resolve
-# against the kit (a visor is smoked polycarbonate and a cage bare steel
-# whoever wears them). Static so the gear workbench turntable dresses its
-# preview from the same factory. The shields carry their transparency in the
-# registry alpha; the cage is an open lattice of one-sided strips, so it
-# renders two-sided instead.
-static func make_face_gear_material(option: int) -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = GearModelRegistry.face_color(option)
-	mat.roughness = GearModelRegistry.face_roughness(option)
-	if mat.albedo_color.a < 1.0:
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	if option == GearModelRegistry.FACE_CAGE:
-		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	return mat
-
-
 # Face gear fades with the body, but unlike every other part its DESIGN alpha
 # is not 1.0 (the shields are transparent by design), so it cannot ride the
-# generic _fade_material restore — the material is rebuilt from the registry
-# instead, with the ghost factor layered on top. Called from the uniform pass,
-# the live gear refresh and apply_ghost, so a face pick changed mid-ghost
-# stays faded.
+# generic _fade_material restore — the material is rebuilt from its factory
+# (SkaterMeshBuilder, with the geometry — face looks are kit-free) instead,
+# with the ghost factor layered on top. Called from the uniform pass, the live
+# gear refresh and apply_ghost, so a face pick changed mid-ghost stays faded.
 func _repaint_face_gear() -> void:
 	var face: MeshInstance3D = _skater.face_gear_mesh()
 	if face == null:
 		return
-	var mat: StandardMaterial3D = make_face_gear_material(_skater.gear_style.helmet_face)
+	var mat: StandardMaterial3D = SkaterMeshBuilder.make_face_gear_material(
+			_skater.gear_style.helmet_face)
 	if _ghosted:
 		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		mat.albedo_color.a *= 0.3

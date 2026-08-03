@@ -598,7 +598,7 @@ func _repaint_preview() -> void:
 	# The face piece is the rink's own mesh and material — null mesh for bare.
 	_face_piece.mesh = SkaterMeshBuilder.shared_face_gear(_face_option)
 	_face_piece.material_override = \
-			SkaterUniformCoordinator.make_face_gear_material(_face_option)
+			SkaterMeshBuilder.make_face_gear_material(_face_option)
 
 
 func _paint_surface(mi: MeshInstance3D, surface: int, color: Color,

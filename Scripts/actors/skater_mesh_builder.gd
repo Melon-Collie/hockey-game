@@ -930,6 +930,24 @@ const _CAGE_H_BAR_COUNT: int = 4
 const _CAGE_V_BAR_OFFSETS: Array[float] = [-0.84, -0.42, 0.0, 0.42, 0.84]
 
 
+# The face piece's fixed look — the one gear piece whose colors never resolve
+# against the kit (a visor is smoked polycarbonate and a cage bare steel
+# whoever wears them), so the material lives here with the geometry instead of
+# on the uniform coordinator, and the gear workbench turntable and the capture
+# tool dress their previews from the same factory. The shields carry their
+# transparency in the registry alpha; the cage is an open lattice of one-sided
+# strips, so it renders two-sided instead.
+static func make_face_gear_material(option: int) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = GearModelRegistry.face_color(option)
+	mat.roughness = GearModelRegistry.face_roughness(option)
+	if mat.albedo_color.a < 1.0:
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	if option == GearModelRegistry.FACE_CAGE:
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return mat
+
+
 # The face piece for one GearModelRegistry FACE_* option — null for bare (and
 # for a forged index, matching the registry's clamp).
 static func shared_face_gear(option: int) -> ArrayMesh:
