@@ -218,3 +218,112 @@ Two traps the sweep hit, both worth remembering:
 `HostCostProbe` carries the same discipline in a smaller form: means and window
 peaks are both over **ticks**, so a per-actor section's peak is the tick's total
 rather than the worst single actor.
+
+## Follow-up sweep: what is still open, and four things that are not
+
+A second pass over the paths the 5v5 investigation did not cover — the render-rate
+UI/overlay `_process` set, the client frame, the snapshot capture ring, and the
+one axis the whole record above ignores (the GPU). Two open items came out of it;
+the rest of the candidates were measured and are recorded here as dead so the
+next reader does not re-derive them.
+
+### Open: the cosmetic rig gate is not an on-screen gate
+
+`Skater._process` (`skater.gd:691`) wraps the pose solve and mesh rebuild in
+`if is_visible_in_tree():`, and the comment beside it justifies the gate as "an
+off-screen skater needs no animated pose". But `is_visible_in_tree()` is Godot's
+*explicit* visibility — it is true for every skater that has not been deliberately
+hidden, whether or not it is in frustum. The renderer culls the skater's *draw*;
+its per-frame CPU pose solve runs anyway. The stated intent is unrealized, and
+nothing in the project uses `VisibleOnScreenNotifier3D` (checked — the only
+frustum handling anywhere is the crowd's per-section AABBs and the two VFX
+emitters' oversized boxes, all GPU-side).
+
+The cost being paid for a skater nobody can see, from
+`benchmarks/test_gait_micro_benchmark.gd` (headless):
+
+```
+_render_pose_update (WHOLE)        30.80 µs
+  gait (_skating.apply)            21.85        ← 71%
+  head tracking                     1.31
+  bottom-hand IK                    2.74
+[write] update_arm_mesh             5.27
+[write] update_bottom_arm_mesh      5.32
+[write] update_stick_mesh           2.47
+                                   ─────
+                                   43.86 µs per skater per rendered frame
+```
+
+The existing settled early-out does not cover this: at rest the gait costs 1.44 µs,
+but gliding is 19.40 and skating 22.04, and an off-screen skater in live play is
+moving. `SkaterVFX._process` (`skater_vfx.gd:114`) has no visibility gate at all
+and would ride the same flag.
+
+Sizing it honestly: on the reference machine the whole cosmetic rig measured
+1.63 ms for 10 skaters, so ~163 µs per skater per frame. Four skaters out of
+frame is ~0.65 ms — comparable to the half-rate **Rig solve LOD** above, but with
+*zero* visual degradation, and the two compose (LOD the on-screen remotes, gate
+the off-screen ones). **The caveat that matters:** this saves most when the roster
+is spread (rush, breakout, D-zone cycle with the far pair out of frame) and least
+in a scrum where everyone is on screen — and the scrum is where the worst frames
+already are. It raises the average; it may not move the minimum. Measure both.
+
+### Open: nothing in this document is GPU-side
+
+Every number above is main-thread CPU. The one place the HUD rework moved work
+*onto* the GPU has never been measured from that side: `Shaders/ice.gdshader`
+runs its player-ring loop (`:190`, up to `ring_count` = 12) and its chevron loop
+(`:211`, up to `chevron_count` × `stack` = 36) **per fragment of the whole
+26 × 60 m ice plane**, each iteration doing a distance field, an `fwidth`, two
+`smoothstep`s and a blend. There is no spatial reject: a ring is ~0.5 m across, so
+better than 99% of ice fragments run the full per-ring math to composite nothing.
+
+Two structural fixes, in order of payoff:
+
+- Hoist one per-fragment pixel footprint (`fwidth` of the world XZ) out of both
+  loops instead of taking a derivative per ring and per chevron — 48 `fwidth`
+  calls become 1. This also puts derivatives back into uniform control flow,
+  which is what makes the next item legal.
+- Bounding-reject each ring/chevron against that footprint before the smoothsteps.
+  The branch is spatially coherent, so it is close to free per warp.
+
+Sized by hand this is ~0.1 ms on the reference 3080 and 1–3 ms on an integrated
+GPU or a Deck — i.e. it is a low-end and high-resolution item, not a reference-machine
+one. Do not ship it on this estimate; the F3 perf page already reports `gpu_ms`,
+and the video options (MSAA, render scale, shadow-light count, SSAO, SDFGI) are
+the confounders to pin before A/B-ing. Note the AA feather changes slightly under
+the hoist — an isotropic footprint over-widens a radial one by up to √2, so this
+is a visual change, not a pure win.
+
+### Measured and dead — do not re-derive these
+
+- **`for i in range(n)` is not an allocation.** GDScript's compiler special-cases
+  `range()` in a `for` header. Measured at n = 270, 200k reps: `range(n)` 3.669 µs
+  per loop vs `for i in n` 3.623 µs — inside noise. This kills the "hot-path
+  `range()` churn" reading of `Trajectory.predict_final` (`trajectory.gd:37,60`,
+  the 270-step path the AI micro-bench prices at 222 µs), of
+  `BufferedStateInterpolator.find_bracket:51` (per interpolated actor per client
+  tick), and of `GameManager._refresh_goalie_data_cache:5482`. All three are fine
+  as written.
+- **`get_nodes_in_group` is not worth caching at this size.** Issue #625 proposes
+  swapping the per-frame group lookups (`ice_scratch_map.gd:106`,
+  `ice_ring_field.gd:114`) for `PlayerRegistry.skaters()`. Measured over 10 nodes,
+  200k reps: group lookup + iterate 0.177 µs, cached `Array[Node]` + iterate
+  **0.225 µs** — the typed-array iteration costs more than the lookup saves. The
+  swap is a small regression *and* it narrows group membership (tutorial puppets).
+  That bullet should come off #625.
+- **Font shaping is already cached.** `Font` keeps an LRU of shaped `TextLine`s, so
+  the per-frame `get_string_size` + `draw_string` pairs in `player_name_overlay.gd`
+  and `off_screen_player_indicators.gd` are cache hits on stable text: 2.12 µs for
+  ten names (0.21 µs each) against 59.5 µs for ten misses (5.95 µs each, 28×). The
+  overlays only pay the miss price if the drawn string or font size actually
+  changes, which for name plates it does not.
+- **The snapshot capture ring is already allocation-free.** `StateBufferManager.capture`
+  fills pre-allocated slots via `fill_network_state` / `fill_state`; the only churn
+  left is ~5 Dictionary lookups per peer per tick for the ring pointers, which is
+  not worth a struct.
+
+Everything else the sweep turned up — per-frame material and transform writes with
+no dirty guard (`puck_shadow`, `puck_vfx`), the goalie-data cache's string-keyed
+Dictionary writes, `GameCamera` framing at 120 Hz — was already on issues #625 and
+#622 before this pass started.
