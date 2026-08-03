@@ -760,7 +760,3 @@ func _make_hud_ice_material() -> StandardMaterial3D:
 	mat.albedo_color = Color(MenuStyle.HUD_ICE.r, MenuStyle.HUD_ICE.g,
 			MenuStyle.HUD_ICE.b, MenuStyle.HUD_OPACITY)
 	return mat
-
-
-
-
