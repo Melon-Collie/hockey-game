@@ -1,6 +1,7 @@
 #include "register_types.h"
 
 #include "native_bottom_hand_ik.h"
+#include "native_skater_gait.h"
 #include "native_top_hand_ik.h"
 
 #include <gdextension_interface.h>
@@ -16,6 +17,7 @@ void initialize_mitts_native_module(ModuleInitializationLevel p_level) {
 	}
 	ClassDB::register_class<mitts::NativeTopHandIK>();
 	ClassDB::register_class<mitts::NativeBottomHandIK>();
+	ClassDB::register_class<mitts::NativeSkaterGait>();
 }
 
 void uninitialize_mitts_native_module(ModuleInitializationLevel p_level) {

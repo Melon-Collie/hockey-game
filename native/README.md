@@ -1,11 +1,15 @@
 # mitts_native — GDExtension hot-path kernels
 
 C++ ports of per-tick math kernels, registered as `Native*` classes
-(`NativeTopHandIK`, `NativeBottomHandIK`). The GDScript originals in
-`Scripts/domain/rules/` remain the behavioral reference; each ported kernel is
-pinned to its reference by a seeded fuzz test
-(`tests/unit/rules/test_native_ik_parity.gd`). **Change a solver in both places
-or not at all** — the parity test is the gate.
+(`NativeTopHandIK`, `NativeBottomHandIK`, `NativeSkaterGait`). The GDScript
+originals (in `Scripts/domain/rules/` and `Scripts/controllers/`) remain the
+behavioral reference; each ported kernel is pinned to its reference by a
+seeded fuzz test (`tests/unit/rules/test_native_ik_parity.gd`,
+`test_native_gait_parity.gd`). **Change a solver in both places or not at
+all** — the parity tests are the gate. `NativeSkaterGait` additionally loads
+its ~126 tunables from the controller's @exports by name via
+`configure(controller)`; renaming an export fails the configure parity test
+rather than silently desyncing.
 
 This directory exists because interpreter overhead on the 120 Hz tick (and its
 reconcile-replay amplification) is the game's scripting bottleneck. The rule
