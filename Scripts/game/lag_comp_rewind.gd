@@ -177,6 +177,23 @@ static func forward_predict_skater(snap: SkaterNetworkState, ctrl: SkaterControl
 			Constants.REMOTE_FORWARD_PREDICT_FRACTION, interp_delay_ms / 1000.0)
 	if ticks <= 0:
 		return false
+	var nm: RefCounted = ctrl.native_movement()
+	if nm != null:
+		# get_movement_config() is still consulted for its side effect of
+		# re-normalizing cfg.thrust to base — but the native instance was
+		# configured from the base-thrust build, so it already integrates at
+		# base + the symmetric stagger scaling, same as the client render.
+		nm.integrate_forward(
+				snap.position, snap.velocity,
+				WorldStateCodec.quantize_move_intent(snap.move_intent),
+				atan2(snap.facing.x, snap.facing.y), false,
+				snap.brake_intent, snap.sprint_active,
+				1.0 / float(Constants.PHYSICS_TICK), ticks,
+				Constants.FORWARD_PREDICT_INTENT_DECAY_TICKS,
+				snap.stagger_timer, true)
+		scratch.position = nm.get_forward_position()
+		scratch.velocity = nm.get_forward_velocity()
+		return true
 	SkaterMovementRules.integrate_forward(
 			snap.position, snap.velocity,
 			WorldStateCodec.quantize_move_intent(snap.move_intent),

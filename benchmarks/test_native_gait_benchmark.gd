@@ -60,6 +60,9 @@ func before_all() -> void:
 	_controller = SkaterController.new()
 	add_child(_controller)
 	_controller.setup(_skater, _puck, _state)
+	# The coordinator is wired to the native port — null its handle so the
+	# GDScript rows below measure the actual GDScript body.
+	_controller._skating._native = null
 
 	_native = ClassDB.instantiate(&"NativeSkaterGait")
 	_native.set_state_ids(

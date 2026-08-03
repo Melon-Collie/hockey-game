@@ -122,6 +122,9 @@ var _goalie_provider: Callable = Callable()
 # ── Phase-3/4b loose-puck prediction scratch (client only; see _predict_loose) ──
 var _predict_frame_scratch: PuckGeometryCollision.Result = null
 var _predict_tick_result: PuckAuthorityRules.TickResult = null
+# NativePuckStep (null = extension absent, GDScript step). Same factory as the
+# host drive's instance, so prediction and authority run the identical step.
+var _native_step: RefCounted = null
 var _predict_goalie_contact: GoalieContactDetector.Contact = null
 var _predict_obb_scratch: SweptDiscOBB.Result = null
 # _run_prediction's output slots (filled per call; members so the per-frame
@@ -263,6 +266,7 @@ func setup(assigned_puck: Puck, assigned_is_server: bool) -> void:
 		_predict_tick_result = PuckAuthorityRules.TickResult.new()
 		_predict_goalie_contact = GoalieContactDetector.Contact.new()
 		_predict_obb_scratch = SweptDiscOBB.Result.new()
+		_native_step = NativePuckStepFactory.make_configured()
 
 func set_peer_id_resolver(resolver: Callable) -> void:
 	_peer_id_resolver = resolver
@@ -1104,20 +1108,31 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 		var tick_vel_in: Vector3 = vel
 		var tick_post: bool = false
 		var tick_net: bool = false
-		var substeps: int = PuckAuthorityRules.frame_substeps(pos.z, vel.length(), dt)
-		var sub_dt: float = dt / float(substeps)
-		for _sub in substeps:
-			_predict_tick_result.touched_post = false
-			_predict_tick_result.touched_net = false
-			PuckAuthorityRules.step_frame_substep(pos, vel, sub_dt, radius,
-					puck.max_speed, puck.ice_height, puck.max_height,
-					_predict_frame_scratch, _predict_tick_result)
-			pos = _predict_tick_result.position
-			vel = _predict_tick_result.velocity
-			if _predict_tick_result.touched_post:
-				tick_post = true
-			if _predict_tick_result.touched_net:
-				tick_net = true
+		if _native_step != null:
+			# The whole sub-stepped tick crosses the boundary once — the shape
+			# the per-frame re-predict multiplies (age ticks x up to 16 substeps).
+			_native_step.clear_touched()
+			_native_step.step_tick(pos, vel, dt, radius,
+					puck.max_speed, puck.ice_height, puck.max_height)
+			pos = _native_step.get_position()
+			vel = _native_step.get_velocity()
+			tick_post = _native_step.get_touched_post()
+			tick_net = _native_step.get_touched_net()
+		else:
+			var substeps: int = PuckAuthorityRules.frame_substeps(pos.z, vel.length(), dt)
+			var sub_dt: float = dt / float(substeps)
+			for _sub in substeps:
+				_predict_tick_result.touched_post = false
+				_predict_tick_result.touched_net = false
+				PuckAuthorityRules.step_frame_substep(pos, vel, sub_dt, radius,
+						puck.max_speed, puck.ice_height, puck.max_height,
+						_predict_frame_scratch, _predict_tick_result)
+				pos = _predict_tick_result.position
+				vel = _predict_tick_result.velocity
+				if _predict_tick_result.touched_post:
+					tick_post = true
+				if _predict_tick_result.touched_net:
+					tick_net = true
 		if tick_post and not span_post:
 			span_post = true
 			if not _pred_cue_post_prev:
@@ -1168,14 +1183,20 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 		# every collision the step resolves: at 33 m/s the remainder is ~0.28 m, so
 		# an approach frame could render the puck through a board (clamped back, but
 		# only for the boards) or inside a post / the net panels.
-		var rem_steps: int = PuckAuthorityRules.frame_substeps(pos.z, vel.length(), frac)
-		var rem_dt: float = frac / float(rem_steps)
-		for _r in rem_steps:
-			PuckAuthorityRules.step_frame_substep(pos, vel, rem_dt, radius,
-					puck.max_speed, puck.ice_height, puck.max_height,
-					_predict_frame_scratch, _predict_tick_result)
-			pos = _predict_tick_result.position
-			vel = _predict_tick_result.velocity
+		if _native_step != null:
+			_native_step.step_tick(pos, vel, frac, radius,
+					puck.max_speed, puck.ice_height, puck.max_height)
+			pos = _native_step.get_position()
+			vel = _native_step.get_velocity()
+		else:
+			var rem_steps: int = PuckAuthorityRules.frame_substeps(pos.z, vel.length(), frac)
+			var rem_dt: float = frac / float(rem_steps)
+			for _r in rem_steps:
+				PuckAuthorityRules.step_frame_substep(pos, vel, rem_dt, radius,
+						puck.max_speed, puck.ice_height, puck.max_height,
+						_predict_frame_scratch, _predict_tick_result)
+				pos = _predict_tick_result.position
+				vel = _predict_tick_result.velocity
 	# No goal prediction, for ANY predicted puck: park an inbound puck on the
 	# goal line inside the posts and let the authoritative outcome arrive (the
 	# goal horn is a host decision, like the save).

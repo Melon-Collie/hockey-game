@@ -1284,6 +1284,9 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# applies to the leg pivot chain, so flexed knees sink a tall build
 	# proportionally deeper.
 	_skating.leg_scale = m_height
+	# The native gait port caches its tunables like the configs below —
+	# attribute scaling just rewrote its sources (max_speed etc.), so reload.
+	_skating.native_reconfigure()
 	# Reach ROM is a derived property of arm length — forehand from the
 	# anatomical cross-body ratio, backhand from the chain geometry (see the
 	# _ROM_FOREHAND_OF_ARM doc block). Bigger arms naturally yield more reach
@@ -2648,9 +2651,15 @@ func _apply_block_movement(_input: InputState, delta: float) -> void:
 	# hockey-stop skid VFX (gated on speed, so it only shows while sliding to a
 	# stop, not once planted).
 	skater.is_braking = true
-	skater.velocity = SkaterMovementRules.apply_movement(
-			skater.velocity, Vector2.ZERO, skater.rotation.y,
-			false, true, delta, _block_movement_config())
+	var block_cfg: SkaterMovementRules.MovementConfig = _block_movement_config()
+	if _native_block_move != null:
+		skater.velocity = _native_block_move.apply_movement(
+				skater.velocity, Vector2.ZERO, skater.rotation.y,
+				false, true, delta, false)
+	else:
+		skater.velocity = SkaterMovementRules.apply_movement(
+				skater.velocity, Vector2.ZERO, skater.rotation.y,
+				false, true, delta, block_cfg)
 
 func _effective_one_timer_leniency() -> float:
 	var puck_xz_speed: float = Vector2(puck.linear_velocity.x, puck.linear_velocity.z).length()
@@ -2732,9 +2741,14 @@ func _apply_movement(input: InputState, delta: float) -> void:
 	# cfg.thrust is set from `thrust` every tick (cheap, no allocation), so the
 	# penalty is transient and never compounds into the cached config.
 	cfg.thrust = thrust * BodyCheckRules.thrust_mult(stagger_timer, _body_check_config())
-	skater.velocity = SkaterMovementRules.apply_movement(
-			skater.velocity, input.move_vector, skater.rotation.y,
-			has_puck, input.brake, delta, cfg, sprint_active)
+	if _native_move != null:
+		skater.velocity = _native_move.apply_movement_with_thrust(
+				skater.velocity, input.move_vector, skater.rotation.y,
+				has_puck, input.brake, delta, sprint_active, cfg.thrust)
+	else:
+		skater.velocity = SkaterMovementRules.apply_movement(
+				skater.velocity, input.move_vector, skater.rotation.y,
+				has_puck, input.brake, delta, cfg, sprint_active)
 
 # Movement configs are cached — _apply_movement runs every physics tick (and
 # once per reconcile-replayed input), and the source exports change only in
@@ -2743,11 +2757,30 @@ func _apply_movement(input: InputState, delta: float) -> void:
 # the shared one — mutating the cached base would corrupt normal skating.
 var _cached_move_cfg: SkaterMovementRules.MovementConfig = null
 var _cached_block_move_cfg: SkaterMovementRules.MovementConfig = null
+# NativeSkaterMovement instances (null = extension absent, GDScript fallback).
+# Configured lazily alongside their MovementConfig — the cache invalidation in
+# apply_attributes reconfigures them on the next build. Stagger params ride
+# along because integrate_forward applies the stagger thrust penalty natively.
+var _native_move: RefCounted = null
+var _native_block_move: RefCounted = null
 
 func _movement_config() -> SkaterMovementRules.MovementConfig:
 	if _cached_move_cfg == null:
 		_cached_move_cfg = _build_movement_config()
+		if ClassDB.class_exists(&"NativeSkaterMovement"):
+			_native_move = ClassDB.instantiate(&"NativeSkaterMovement")
+			_native_move.configure(_cached_move_cfg)
+			var bc: BodyCheckRules.Config = _body_check_config()
+			_native_move.set_stagger_params(bc.max_stagger_seconds, bc.max_thrust_penalty)
 	return _cached_move_cfg
+
+# The configured native movement kernel for this skater, or null when the
+# extension isn't loaded. Shared by the live tick, RemoteController's stage-3
+# forward prediction, and the host's claim rewind — one instance per skater so
+# render == rewind runs the identical code path.
+func native_movement() -> RefCounted:
+	_movement_config()
+	return _native_move
 
 # Public read of the cached movement config (built from this skater's scaled
 # tuning, rebuilt on apply_attributes). Consumed by stage-3 remote forward-
@@ -2784,6 +2817,9 @@ func _block_movement_config() -> SkaterMovementRules.MovementConfig:
 		_cached_block_move_cfg = _build_movement_config()
 		_cached_block_move_cfg.max_speed = max_speed * block_speed_multiplier
 		_cached_block_move_cfg.thrust = thrust * block_speed_multiplier
+		if ClassDB.class_exists(&"NativeSkaterMovement"):
+			_native_block_move = ClassDB.instantiate(&"NativeSkaterMovement")
+			_native_block_move.configure(_cached_block_move_cfg)
 	return _cached_block_move_cfg
 
 func _build_movement_config() -> SkaterMovementRules.MovementConfig:

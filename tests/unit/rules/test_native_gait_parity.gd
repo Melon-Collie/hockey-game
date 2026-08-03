@@ -89,6 +89,10 @@ func before_all() -> void:
 	_controller = SkaterController.new()
 	add_child(_controller)
 	_controller.setup(_skater, _puck, _state)
+	# The coordinator is now WIRED to the native port — null its handle so the
+	# reference side of this parity suite runs the actual GDScript body instead
+	# of comparing the native port against itself.
+	_controller._skating._native = null
 	# GUT yields frames between test functions; a live controller would tick
 	# the GDScript gait during those frames while the native one stands still,
 	# permanently offsetting the stride phase. All stepping here is explicit.

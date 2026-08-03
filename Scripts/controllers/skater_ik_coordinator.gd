@@ -62,10 +62,18 @@ var last_target_blade_world: Vector3 = Vector3.ZERO
 var _cached_top_cfg: TopHandIK.Config = null
 var _cached_bottom_cfg: BottomHandIK.Config = null
 var _ik_result := TopHandIK.Result.new()
+# Native IK solvers (null = extension absent, GDScript fallback). Config
+# properties sync inside the cached-config builders — the same rebuild moment —
+# so invalidate_configs() covers both representations.
+var _native_top: RefCounted = null
+var _native_bottom: RefCounted = null
 
 func setup(skater: Skater, controller: SkaterController) -> void:
 	_skater = skater
 	_controller = controller
+	if ClassDB.class_exists(&"NativeTopHandIK"):
+		_native_top = ClassDB.instantiate(&"NativeTopHandIK")
+		_native_bottom = ClassDB.instantiate(&"NativeBottomHandIK")
 
 # Drop the cached configs so the next solve rebuilds them from the controller
 # exports. Called by SkaterController.apply_attributes (stick length, ROM, and
@@ -163,9 +171,15 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 		# precision (hand + lean blade_y) below. Uses rest blade_y for the projection:
 		# the sub-cm lean refinement the iterative solve adds is irrelevant to a point
 		# that's about to be capped and re-solved.
-		var target_blade_local: Vector3 = TopHandIK.project_blade(
-				_skater.shoulder.position, target_blade_xz, blade_side_sign,
-				_ik_config(blade_y_local()))
+		var target_blade_local: Vector3
+		if _native_top != null:
+			_ik_config(blade_y_local())
+			target_blade_local = _native_top.project_blade(
+					_skater.shoulder.position, target_blade_xz, blade_side_sign)
+		else:
+			target_blade_local = TopHandIK.project_blade(
+					_skater.shoulder.position, target_blade_xz, blade_side_sign,
+					_ik_config(blade_y_local()))
 		target_blade_world = _skater.upper_body_to_global(target_blade_local)
 		target_blade_world.y = 0.0
 		last_target_blade_world = target_blade_world
@@ -402,12 +416,18 @@ func _solve_top_hand(desired_blade_xz: Vector2, blade_side_sign: float) -> TopHa
 	var blade_y: float = blade_y_local()
 	var ik: TopHandIK.Result = _ik_result
 	for i in 3:
-		TopHandIK.solve(
-				_skater.shoulder.position,
-				desired_blade_xz,
-				blade_side_sign,
-				_ik_config(blade_y),
-				ik)
+		if _native_top != null:
+			_ik_config(blade_y)
+			_native_top.solve(_skater.shoulder.position, desired_blade_xz, blade_side_sign)
+			ik.hand = _native_top.get_hand()
+			ik.blade = _native_top.get_blade()
+		else:
+			TopHandIK.solve(
+					_skater.shoulder.position,
+					desired_blade_xz,
+					blade_side_sign,
+					_ik_config(blade_y),
+					ik)
 		blade_y = blade_y_lean_corrected(ik.blade.x, ik.blade.z)
 	return ik
 
@@ -426,10 +446,16 @@ func update_bottom_hand() -> void:
 	var grip_y: float = lerpf(hand_local.y, blade_local.y, _controller.bottom_hand_grip_fraction) + _controller.bh_hand_y
 	var cfg: BottomHandIK.Config = _bottom_hand_ik_config()
 	cfg.hand_y = grip_y
-	var bh: Vector3 = BottomHandIK.solve(
-			_skater.bottom_shoulder.position,
-			grip_target_xz,
-			cfg)
+	var bh: Vector3
+	if _native_bottom != null:
+		_native_bottom.hand_y = grip_y
+		bh = _native_bottom.solve(
+				_skater.bottom_shoulder.position, grip_target_xz, cfg.backhand_angle)
+	else:
+		bh = BottomHandIK.solve(
+				_skater.bottom_shoulder.position,
+				grip_target_xz,
+				cfg)
 	_skater.set_bottom_hand_position(bh)
 
 # ── Net Exclusion Clamp ───────────────────────────────────────────────────────
@@ -583,7 +609,17 @@ func _ik_config(blade_y: float) -> TopHandIK.Config:
 		_cached_top_cfg.rom_backhand_angle_max = deg_to_rad(_controller.rom_backhand_angle_max_deg)
 		_cached_top_cfg.rom_forehand_reach_max = _controller.rom_forehand_reach_max
 		_cached_top_cfg.rom_backhand_reach_max = _controller.rom_backhand_reach_max
+		if _native_top != null:
+			_native_top.stick_length = _cached_top_cfg.stick_length
+			_native_top.hand_rest_y = _cached_top_cfg.hand_rest_y
+			_native_top.hand_y_max = _cached_top_cfg.hand_y_max
+			_native_top.rom_forehand_angle_max = _cached_top_cfg.rom_forehand_angle_max
+			_native_top.rom_backhand_angle_max = _cached_top_cfg.rom_backhand_angle_max
+			_native_top.rom_forehand_reach_max = _cached_top_cfg.rom_forehand_reach_max
+			_native_top.rom_backhand_reach_max = _cached_top_cfg.rom_backhand_reach_max
 	_cached_top_cfg.blade_y = blade_y
+	if _native_top != null:
+		_native_top.blade_y = blade_y
 	return _cached_top_cfg
 
 func _bottom_hand_ik_config() -> BottomHandIK.Config:
@@ -592,6 +628,9 @@ func _bottom_hand_ik_config() -> BottomHandIK.Config:
 		_cached_bottom_cfg.hand_y = _controller.bh_hand_y
 		_cached_bottom_cfg.release_angle_max = deg_to_rad(_controller.bh_release_angle_deg)
 		_cached_bottom_cfg.release_angle_band = deg_to_rad(_controller.bh_release_angle_band_deg)
+		if _native_bottom != null:
+			_native_bottom.release_angle_max = _cached_bottom_cfg.release_angle_max
+			_native_bottom.release_angle_band = _cached_bottom_cfg.release_angle_band
 	_cached_bottom_cfg.backhand_angle = _bh_backhand_angle()
 	return _cached_bottom_cfg
 

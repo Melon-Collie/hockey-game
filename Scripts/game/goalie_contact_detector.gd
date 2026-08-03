@@ -27,8 +27,19 @@ class Contact:
 # deliberately disables the stick collider for the swing's duration
 # (Goalie.set_stick_collision_enabled), and the analytic test must honour that the same way
 # Jolt did, or the goalie's own sweep ricochets off his "disabled" blade.
+# Native swept-OBB atom (null = extension absent, GDScript SweptDiscOBB). The
+# obb_contact method needs no geometry configuration, so a bare instance
+# suffices; misses cost one boundary crossing, hits add four getters.
+static var _native_obb: RefCounted = null
+static var _native_obb_checked: bool = false
+
+
 static func nearest(goalies: Array, prev: Vector3, curr: Vector3, radius: float,
 		scratch: SweptDiscOBB.Result, out: Contact) -> bool:
+	if not _native_obb_checked:
+		_native_obb_checked = true
+		if ClassDB.class_exists(&"NativePuckStep"):
+			_native_obb = ClassDB.instantiate(&"NativePuckStep")
 	out.hit = false
 	out.part = null
 	out.goalie = null
@@ -56,7 +67,19 @@ static func nearest(goalies: Array, prev: Vector3, curr: Vector3, radius: float,
 			# would not collide must not contact analytically either.
 			if body is CollisionObject3D and (body as CollisionObject3D).collision_layer == 0:
 				continue
-			if SweptDiscOBB.contact(prev, curr, radius, cs.global_transform, box.size * 0.5, scratch):
+			var contact_hit: bool
+			if _native_obb != null:
+				contact_hit = _native_obb.obb_contact(
+						prev, curr, radius, cs.global_transform, box.size * 0.5)
+				if contact_hit:
+					scratch.toi = _native_obb.get_obb_toi()
+					scratch.point = _native_obb.get_obb_point()
+					scratch.normal = _native_obb.get_obb_normal()
+					scratch.depth = _native_obb.get_obb_depth()
+			else:
+				contact_hit = SweptDiscOBB.contact(
+						prev, curr, radius, cs.global_transform, box.size * 0.5, scratch)
+			if contact_hit:
 				if scratch.toi < out.toi:
 					out.toi = scratch.toi
 					out.point = scratch.point

@@ -64,6 +64,16 @@ public:
 			double facing_rotation_y,
 			bool has_puck, bool brake, double delta, bool sprint_active) const;
 
+	// The live-tick shape: SkaterController scales cfg.thrust by the stagger
+	// penalty each tick, so the effective thrust arrives per call instead of
+	// forcing a per-tick reconfigure.
+	godot::Vector3 apply_movement_with_thrust(
+			const godot::Vector3 &current_velocity,
+			const godot::Vector2 &move_input,
+			double facing_rotation_y,
+			bool has_puck, bool brake, double delta, bool sprint_active,
+			double thrust) const;
+
 	void integrate_forward(
 			const godot::Vector3 &position,
 			const godot::Vector3 &velocity,

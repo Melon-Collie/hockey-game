@@ -219,6 +219,9 @@ var _goalie_contact: GoalieContactDetector.Contact = null
 var _goalie_scratch: SweptDiscOBB.Result = null
 var _save_result: GoalieSaveRules.ContactResult = null
 var _tick_result: PuckAuthorityRules.TickResult = null
+# NativePuckStep (null = extension absent, GDScript step below). Configured in
+# _ready via the shared factory so host drive and client prediction match.
+var _native_step: RefCounted = null
 # Shared read-only empty (const arrays are frozen) — the no-goalies-in-range default
 # every open-ice tick, instead of allocating a fresh `[]` per tick.
 const _NO_GOALIES: Array = []
@@ -257,6 +260,7 @@ func set_goalie_provider(provider: Callable) -> void:
 func _ready() -> void:
 	process_physics_priority = 1  # Run after Skater.move_and_slide so blade world pos is current
 	_build_deaden_cfg()
+	_native_step = NativePuckStepFactory.make_configured()
 
 	# Swap the scene's cylinder for the shared beveled low-poly puck
 	# (cosmetic — the puck's physics radius is GameRules', not this mesh's).
@@ -733,16 +737,27 @@ func _drive_analytic(dt: float) -> void:
 		# Integration + boards + goal frame: the SHARED Phase-3 step (identical on
 		# the client's prediction path), so static-geometry motion agrees by
 		# construction. Touched flags OR-accumulate; clear per sub-step read.
-		_tick_result.touched_post = false
-		_tick_result.touched_net = false
-		PuckAuthorityRules.step_frame_substep(pos, vel, sub_dt, radius,
-				max_speed, ice_height, max_height, _frame_result, _tick_result)
-		pos = _tick_result.position
-		vel = _tick_result.velocity
-		if _tick_result.touched_post:
-			touched_post = true
-		if _tick_result.touched_net and incoming.length() >= 1.0:
-			touched_net = true
+		if _native_step != null:
+			_native_step.clear_touched()
+			_native_step.step_frame_substep(pos, vel, sub_dt, radius,
+					max_speed, ice_height, max_height)
+			pos = _native_step.get_position()
+			vel = _native_step.get_velocity()
+			if _native_step.get_touched_post():
+				touched_post = true
+			if _native_step.get_touched_net() and incoming.length() >= 1.0:
+				touched_net = true
+		else:
+			_tick_result.touched_post = false
+			_tick_result.touched_net = false
+			PuckAuthorityRules.step_frame_substep(pos, vel, sub_dt, radius,
+					max_speed, ice_height, max_height, _frame_result, _tick_result)
+			pos = _tick_result.position
+			vel = _tick_result.velocity
+			if _tick_result.touched_post:
+				touched_post = true
+			if _tick_result.touched_net and incoming.length() >= 1.0:
+				touched_net = true
 		# Goalie: swept-OBB over THIS sub-step's segment → deaden / steer / catch / live reflect.
 		if not goalies.is_empty() and GoalieContactDetector.nearest(
 				goalies, sub_prev, pos, radius, _goalie_scratch, _goalie_contact):

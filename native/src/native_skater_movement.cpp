@@ -120,6 +120,16 @@ Vector3 NativeSkaterMovement::apply_movement(
 			has_puck, brake, delta, sprint_active, cfg.thrust);
 }
 
+Vector3 NativeSkaterMovement::apply_movement_with_thrust(
+		const Vector3 &current_velocity,
+		const Vector2 &move_input,
+		double facing_rotation_y,
+		bool has_puck, bool brake, double delta, bool sprint_active,
+		double thrust) const {
+	return apply_movement_internal(current_velocity, move_input, facing_rotation_y,
+			has_puck, brake, delta, sprint_active, thrust);
+}
+
 void NativeSkaterMovement::integrate_forward(
 		const Vector3 &position,
 		const Vector3 &velocity,
@@ -160,6 +170,10 @@ void NativeSkaterMovement::_bind_methods() {
 			"current_velocity", "move_input", "facing_rotation_y",
 			"has_puck", "brake", "delta", "sprint_active"),
 			&NativeSkaterMovement::apply_movement);
+	ClassDB::bind_method(D_METHOD("apply_movement_with_thrust",
+			"current_velocity", "move_input", "facing_rotation_y",
+			"has_puck", "brake", "delta", "sprint_active", "thrust"),
+			&NativeSkaterMovement::apply_movement_with_thrust);
 	ClassDB::bind_method(D_METHOD("integrate_forward",
 			"position", "velocity", "move_input", "facing_rotation_y",
 			"has_puck", "brake", "sprint_active", "dt", "ticks",

@@ -2,7 +2,7 @@
 
 C++ ports of per-tick math kernels, registered as `Native*` classes
 (`NativeTopHandIK`, `NativeBottomHandIK`, `NativeSkaterGait`,
-`NativeSkaterMovement`, `NativePuckStep`, `NativeGoalieBodyPose`). The GDScript
+`NativeSkaterMovement`, `NativePuckStep`). The GDScript
 originals (in `Scripts/domain/rules/` and `Scripts/controllers/`) remain the
 behavioral reference; each ported kernel is pinned to its reference by a
 seeded fuzz test (`tests/unit/rules/test_native_ik_parity.gd`,
@@ -63,6 +63,39 @@ The micro-benchmark (`benchmarks/test_ik_micro_benchmark.gd`) reports
 GDScript-vs-native µs/call including boundary-crossing cost. Compare
 relatively within one run; a debug engine build inflates both sides
 differently.
+
+## Wired call sites
+
+Every port is live behind a null-checked native handle created where its
+GDScript config is built — the extension missing simply leaves the handle
+null and the reference GDScript path runs (fresh clones, CI, and any platform
+without a built binary lose performance, never correctness):
+
+- **Gait** — inside `SkaterSkatingCoordinator` (`_apply_native`): all five
+  `apply()` call sites route through the coordinator, which republishes the
+  public channels (`stride_phase`, yaw offsets, trunk adds) so external
+  readers see a truthful surface. Reconfigured from
+  `SkaterController.apply_attributes` via `native_reconfigure()`.
+- **Movement** — `SkaterController._apply_movement` / `_apply_block_movement`
+  (per-tick thrust rides `apply_movement_with_thrust`), plus the batched
+  `integrate_forward` in `RemoteController` (stage-3 render) and
+  `LagCompRewind.forward_predict_skater` (host claim rewind) — both through
+  the SAME per-skater instance (`SkaterController.native_movement()`), which
+  is what keeps render == rewind.
+- **Blade IK** — `SkaterIKCoordinator` (`project_blade`, the 3-pass
+  `_solve_top_hand`, `update_bottom_hand`); config syncs inside the cached-
+  config builders, so `invalidate_configs()` covers both representations.
+- **Puck step** — host drive (`Puck._drive_analytic`, per sub-step so the
+  goalie interleave keeps its exact order) and client prediction
+  (`PuckController._run_prediction`, whole-tick `step_tick` batching), both
+  configured by `NativePuckStepFactory` so authority and prediction run the
+  identical step.
+- **Swept-OBB atom** — `GoalieContactDetector.nearest` (host saves + client
+  goalie-stop prediction).
+
+The parity suites force the GDScript path on their reference objects (e.g.
+nulling `_skating._native`) — a parity test must never compare the native
+port against itself.
 
 ## Adding a kernel
 
