@@ -14,17 +14,21 @@ func test_default_decodes_to_the_kit_look() -> void:
 	assert_eq(config.skate_model, GearModelRegistry.SKATE_BLACKOUT, "skates default all-black")
 	assert_eq(config.glove_model, GearModelRegistry.GLOVE_TEAM, "gloves default to the kit")
 	assert_eq(config.lace_color, GearStyleConfig.LACE_DEFAULT_INDEX, "laces default white")
+	assert_eq(config.stick_model, StickModelRegistry.STICK_STEALTH,
+			"the stick defaults to the house model")
 
 
 func test_every_legal_pick_round_trips() -> void:
 	for skate: int in GearModelRegistry.skate_count():
 		for glove: int in GearModelRegistry.glove_count():
 			for lace: int in TapeColorRegistry.count():
-				var config := GearStyleConfig.new(skate, glove, lace)
-				var back: GearStyleConfig = GearStyleConfig.from_code(config.to_code())
-				assert_eq(back.skate_model, skate)
-				assert_eq(back.glove_model, glove)
-				assert_eq(back.lace_color, lace)
+				for stick: int in StickModelRegistry.count():
+					var config := GearStyleConfig.new(skate, glove, lace, stick)
+					var back: GearStyleConfig = GearStyleConfig.from_code(config.to_code())
+					assert_eq(back.skate_model, skate)
+					assert_eq(back.glove_model, glove)
+					assert_eq(back.lace_color, lace)
+					assert_eq(back.stick_model, stick)
 
 
 func test_garbage_codes_coerce_to_legal_looks() -> void:
@@ -33,6 +37,7 @@ func test_garbage_codes_coerce_to_legal_looks() -> void:
 		assert_true(GearModelRegistry.is_valid_skate(config.skate_model), "skate model legal")
 		assert_true(GearModelRegistry.is_valid_glove(config.glove_model), "glove model legal")
 		assert_true(TapeColorRegistry.is_valid(config.lace_color), "lace color legal")
+		assert_true(StickModelRegistry.is_valid(config.stick_model), "stick model legal")
 		# And the coerced look re-packs stably (idempotent coercion).
 		var code2: int = config.to_code()
 		assert_eq(GearStyleConfig.from_code(code2).to_code(), code2)
@@ -50,6 +55,8 @@ func test_migration_keeps_the_stock_look_stock() -> void:
 			_legacy_code(2, TapeColorRegistry.TEAM_INDEX, 1))
 	assert_eq(migrated.to_code(), GearStyleConfig.DEFAULT_CODE,
 			"an untouched pre-models save is still the stock kit")
+	assert_eq(migrated.stick_model, StickModelRegistry.STICK_STEALTH,
+			"a pre-stick-models save carries the house stick")
 
 
 func test_migration_maps_picks_onto_designs() -> void:

@@ -45,6 +45,20 @@ uniform vec4 brand_color : source_color = vec4(1.0);
 uniform float brand_from_butt_m = 0.55;
 uniform float brand_len_m = 0.194;
 
+// Colorway bands (StickModelRegistry): up to two painted spans along the
+// shaft, each in real metres from its anchor end (0 = butt, 1 = blade) —
+// the same metric placement as the brand, so a blade-anchored kick zone
+// stays pinned at the blade whatever the live length. from == to disables a
+// slot. Painted under the wordmark and the grip wrap, so both always win.
+uniform vec4 band1_color : source_color = vec4(0.0);
+uniform float band1_from_m = 0.0;
+uniform float band1_to_m = 0.0;
+uniform int band1_anchor = 0;
+uniform vec4 band2_color : source_color = vec4(0.0);
+uniform float band2_from_m = 0.0;
+uniform float band2_to_m = 0.0;
+uniform int band2_anchor = 0;
+
 // Candy-cane pitch: one full turn per this much shaft, half tape half bare.
 const float CANDY_PERIOD_M = 0.075;
 // Shaft cross-section half-extents (the 0.04 × 0.05 BoxMesh) — the side-face
@@ -75,6 +89,16 @@ void fragment() {
 		if (taped) {
 			col = grip_color.rgb;
 			rough = 0.9;  // cloth over composite
+		}
+	}
+	if (!taped) {
+		float d1 = band1_anchor == 1 ? shaft_len_m - from_butt : from_butt;
+		if (d1 >= band1_from_m && d1 < band1_to_m) {
+			col = band1_color.rgb;
+		}
+		float d2 = band2_anchor == 1 ? shaft_len_m - from_butt : from_butt;
+		if (d2 >= band2_from_m && d2 < band2_to_m) {
+			col = band2_color.rgb;
 		}
 	}
 	if (!taped && abs(obj_pos.x) > HALF_W * 0.98) {

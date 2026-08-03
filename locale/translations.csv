@@ -71,7 +71,14 @@ TAPE_HANDLE_FULL,Full grip,Empuñadura completa
 STICK_GAMEPLAY_LEGEND,* affects gameplay,* afecta a la jugabilidad
 TAPE_COLOR_TEAM_SHORT,Team,Equipo
 STICK_COL_GEAR,GEAR,EQUIPAMIENTO
-STICK_COL_TAPE,TAPE,CINTA
+STICK_COL_STYLE,STYLE,ESTILO
+STICK_MODEL_LABEL,Model,Modelo
+STICK_MODEL_STEALTH,Stealth,Stealth
+STICK_MODEL_REDLINE,Redline,Redline
+STICK_MODEL_VOLT,Volt,Volt
+STICK_MODEL_SPLIT,Split,Dividido
+STICK_MODEL_WHITEOUT,Whiteout,Todo blanco
+STICK_MODEL_WOODIE,Woodie,Madera
 EDIT_PENDING_NOTE,Unapplied changes,Cambios sin aplicar
 PLAYER_SKIN_LABEL,Skin:,Piel:
 PLAYER_POSITION_LABEL,Position:,Posición:

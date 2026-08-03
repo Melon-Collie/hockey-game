@@ -78,6 +78,7 @@ var _pending_tape: int = StickTapeConfig.DEFAULT_CODE
 var _pending_skate_model: int = 0
 var _pending_glove_model: int = 0
 var _pending_lace_color: int = GearStyleConfig.LACE_DEFAULT_INDEX
+var _pending_stick_model: int = 0
 var _name_valid: bool = true
 var _number_valid: bool = true
 # Online matches lock the build (attributes replicate at join); cosmetics stay
@@ -263,15 +264,18 @@ func _open_stick_editor() -> void:
 	# previews the kit the player is about to wear.
 	var accent: Color = _pending_team_colors().primary
 	_stick_popup.set_focus_scope(self, null)
-	_stick_popup.open(_pending_attributes(), _pending_tape, _build_locked, accent)
+	_stick_popup.open(_pending_attributes(), _pending_tape, _pending_stick_model,
+			_build_locked, accent)
 
 
-func _on_stick_edited(curve: int, flex: int, length: int, tape_code: int) -> void:
+func _on_stick_edited(curve: int, flex: int, length: int, tape_code: int,
+		stick_model: int) -> void:
 	if not _build_locked:
 		_pending_curve = curve
 		_pending_flex = flex
 		_pending_length = length
 	_pending_tape = tape_code
+	_pending_stick_model = stick_model
 	_update_apply_state()
 
 
@@ -681,22 +685,34 @@ func _pending_team_colors() -> Dictionary:
 
 func _pending_gear_code() -> int:
 	return GearStyleConfig.new(_pending_skate_model, _pending_glove_model,
-			_pending_lace_color).to_code()
+			_pending_lace_color, _pending_stick_model).to_code()
+
+
+func _snapshot_gear() -> GearStyleConfig:
+	return GearStyleConfig.from_code(
+			int(_snapshot.get("gear", GearStyleConfig.DEFAULT_CODE)))
 
 
 # Whether the stick the player would get on Apply differs from the one the rink
 # is showing — pending stick edits are otherwise invisible behind the button.
+# The stick MODEL is compared apart from the rest of the gear code because it
+# is edited here, in the stick workbench, not the gear one.
 func _is_stick_dirty() -> bool:
 	return _pending_curve != int(_snapshot.get("curve", 0)) \
 			or _pending_flex != int(_snapshot.get("flex", 0)) \
 			or _pending_length != int(_snapshot.get("length", 0)) \
-			or _pending_tape != int(_snapshot.get("tape", 0))
+			or _pending_tape != int(_snapshot.get("tape", 0)) \
+			or _pending_stick_model != _snapshot_gear().stick_model
 
 
-# Same visibility contract for the gear workbench's picks.
+# Same visibility contract for the gear workbench's picks (its three fields of
+# the gear code — the stick model field belongs to the stick note above).
 func _is_gear_dirty() -> bool:
+	var gear: GearStyleConfig = _snapshot_gear()
 	return _pending_profile != int(_snapshot.get("profile", 0)) \
-			or _pending_gear_code() != int(_snapshot.get("gear", GearStyleConfig.DEFAULT_CODE))
+			or _pending_skate_model != gear.skate_model \
+			or _pending_glove_model != gear.glove_model \
+			or _pending_lace_color != gear.lace_color
 
 
 func _is_build_dirty() -> bool:
@@ -815,6 +831,7 @@ func _restore_from_snapshot() -> void:
 	_pending_skate_model = gear.skate_model
 	_pending_glove_model = gear.glove_model
 	_pending_lace_color = gear.lace_color
+	_pending_stick_model = gear.stick_model
 	_name_field.text = _pending_name
 	_number_field.text = str(_pending_number)
 	_left_btn.button_pressed = _pending_is_left
