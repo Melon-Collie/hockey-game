@@ -364,7 +364,7 @@ func test_a_row_aims_the_case_at_its_own_group() -> void:
 	assert_eq(_popup.get("_focus"), LockerMannequin.Focus.GLOVES)
 	_btn("_face_btn").focus_entered.emit()
 	assert_eq(_popup.get("_focus"), LockerMannequin.Focus.HELMET)
-	_btn("_curve_btn").focus_entered.emit()
+	_btn("_length_btn").focus_entered.emit()
 	assert_eq(_popup.get("_focus"), LockerMannequin.Focus.STICK)
 
 
@@ -378,12 +378,100 @@ func test_hovering_a_control_aims_the_case() -> void:
 	assert_eq(_popup.get("_focus"), LockerMannequin.Focus.STICK)
 
 
+# The stick takes three shots because one cannot serve its eight rows. Each row
+# has to ask for the shot its own pick actually shows up in.
+func test_the_stick_rows_ask_for_the_shot_that_shows_their_pick() -> void:
+	_open()
+	for name: String in ["_length_btn", "_flex_btn", "_stick_model_btn"]:
+		_popup.call("_set_focus", LockerMannequin.Focus.FULL)
+		_btn(name).mouse_entered.emit()
+		assert_eq(_popup.get("_focus"), LockerMannequin.Focus.STICK,
+				"%s frames the whole stick" % name)
+	for name: String in ["_curve_btn", "_span_btn"]:
+		_popup.call("_set_focus", LockerMannequin.Focus.FULL)
+		_btn(name).mouse_entered.emit()
+		assert_eq(_popup.get("_focus"), LockerMannequin.Focus.BLADE,
+				"%s frames the blade" % name)
+	for name: String in ["_style_btn"]:
+		_popup.call("_set_focus", LockerMannequin.Focus.FULL)
+		_btn(name).mouse_entered.emit()
+		assert_eq(_popup.get("_focus"), LockerMannequin.Focus.GRIP,
+				"%s frames the butt end" % name)
+
+
+# Every framing has to actually CONTAIN its subject, at every build — a whole-
+# stick shot that crops a long cut on a tall player is the bug this replaced.
+func test_the_whole_stick_shot_contains_the_whole_stick() -> void:
+	for height: int in [PlayerAttributes.HEIGHT_MIN, PlayerAttributes.HEIGHT_MAX]:
+		for length: int in 3:
+			_open(GearStyleConfig.new(), StickTapeConfig.DEFAULT_CODE,
+					PlayerAttributes.new(height,
+						PlayerAttributes.coerce_weight(height, 190), 1, 1, 1, length))
+			var extent: Vector2 = _mannequin().focus_extent(LockerMannequin.Focus.STICK)
+			var mid: Vector3 = _mannequin().focus_anchor(LockerMannequin.Focus.STICK)
+			for focus: int in [LockerMannequin.Focus.BLADE, LockerMannequin.Focus.GRIP]:
+				var end_point: Vector3 = _mannequin().focus_anchor(focus)
+				assert_lte(absf(end_point.y - mid.y), extent.y,
+						"the stick shot holds its ends (height %d, cut %d)"
+						% [height, length])
+	# And the whole-stick shot is a real step in from the wide one, or hovering
+	# a stick row would look like nothing happened.
+	_open()
+	assert_lt(_mannequin().focus_extent(LockerMannequin.Focus.STICK).y,
+			_mannequin().focus_extent(LockerMannequin.Focus.FULL).y,
+			"the stick shot is tighter than the wide shot")
+	assert_lt(_mannequin().focus_extent(LockerMannequin.Focus.BLADE).y,
+			_mannequin().focus_extent(LockerMannequin.Focus.STICK).y,
+			"the blade shot is tighter than the whole stick")
+
+
+# Dragging up pulls the camera in and down pushes it out, and the zoom clamps
+# against the CURRENT framing rather than winding up — a multiplier that ran
+# past its stop would leave the drag dead until it had been wound all the way
+# back.
+func test_dragging_up_and_down_zooms() -> void:
+	_open()
+	var wide: float = _popup.call("_framed_distance")
+	_popup.call("_zoom_by", -60.0)
+	var closer: float = _popup.call("_framed_distance")
+	assert_lt(closer, wide, "dragging up pulls the camera in")
+	_popup.call("_zoom_by", 120.0)
+	assert_gt(_popup.call("_framed_distance"), closer, "dragging down pushes it out")
+
+	# Wind it hard against each stop, then reverse ONE step: the distance has to
+	# move straight away.
+	for i: int in 40:
+		_popup.call("_zoom_by", -100.0)
+	var pinned_near: float = _popup.call("_framed_distance")
+	_popup.call("_zoom_by", 40.0)
+	assert_gt(_popup.call("_framed_distance"), pinned_near,
+			"the near stop does not wind up")
+	for i: int in 40:
+		_popup.call("_zoom_by", 100.0)
+	var pinned_far: float = _popup.call("_framed_distance")
+	_popup.call("_zoom_by", -40.0)
+	assert_lt(_popup.call("_framed_distance"), pinned_far,
+			"the far stop does not wind up")
+
+
+# Moving to another group hands back a framed shot, not whatever the last drag
+# left behind.
+func test_changing_focus_clears_the_hand_zoom() -> void:
+	_open()
+	_popup.call("_zoom_by", -80.0)
+	assert_lt(_popup.get("_zoom"), 1.0)
+	_btn("_face_btn").mouse_entered.emit()
+	assert_almost_eq(_popup.get("_zoom"), 1.0, 0.0001,
+			"the new framing starts framed")
+
+
 # Each framing has to be its own shot — a piece anchor that never moved off the
 # wide one would dolly nowhere.
 func test_each_framing_looks_somewhere_different() -> void:
 	_open()
 	var seen: Array[Vector3] = []
 	for focus: int in [LockerMannequin.Focus.FULL, LockerMannequin.Focus.STICK,
+			LockerMannequin.Focus.BLADE, LockerMannequin.Focus.GRIP,
 			LockerMannequin.Focus.SKATES, LockerMannequin.Focus.GLOVES,
 			LockerMannequin.Focus.HELMET]:
 		var anchor: Vector3 = _mannequin().focus_anchor(focus)

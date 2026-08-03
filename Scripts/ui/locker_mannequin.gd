@@ -29,9 +29,12 @@ extends Node3D
 # bow that leaves the hands behind reads as broken rather than as flex. The
 # FLEX row carries the fitted stiffness number instead.
 
-# The camera framings the locker dollies between — one per group of rows, plus
-# the wide shot nothing is focused.
-enum Focus { FULL, STICK, SKATES, GLOVES, HELMET }
+# The camera framings the locker dollies between, plus the wide shot nothing is
+# focused. The stick takes THREE of them because one shot cannot serve its eight
+# rows: it is nearly as long as the player is tall, so a framing that contains
+# all of it is barely a zoom at all. LENGTH and FLEX want the whole stick, CURVE
+# and the blade tape want the blade, the knob and the wrap want the butt end.
+enum Focus { FULL, STICK, BLADE, GRIP, SKATES, GLOVES, HELMET }
 
 # ── Rig rest pose (Scenes/Skater.tscn, MeshRoot-local) ───────────────────────
 # Leg offsets are relative to the LEG pivot so the chain reads as the scene's
@@ -113,12 +116,29 @@ const _SHAFT_CROSS := Vector2(0.04, 0.05)
 const _KNOB_HEIGHT_M: float = 0.05
 
 # ── Camera framings, indexed by Focus ────────────────────────────────────────
-# Distance from the anchor, and the yaw the figure turns to present the piece
-# (mirrored by shooting side, so the gear you are looking at faces the glass).
-# Pitch is the camera's elevation: above for the head, below for the boots.
-const _FOCUS_DIST: Array[float] = [2.45, 1.30, 0.62, 0.55, 0.52]
-const _FOCUS_YAW_DEG: Array[float] = [22.0, 38.0, 26.0, 34.0, 18.0]
-const _FOCUS_PITCH_DEG: Array[float] = [-3.0, 6.0, 24.0, 5.0, -8.0]
+# The yaw the figure turns to present the piece (mirrored by shooting side, so
+# the gear you are looking at faces the glass) and the camera's elevation:
+# above for the head, well below for boots on the floor, and down onto the
+# blade, which lies on the ice.
+const _FOCUS_YAW_DEG: Array[float] = [22.0, 40.0, 52.0, 30.0, 26.0, 34.0, 18.0]
+const _FOCUS_PITCH_DEG: Array[float] = [-3.0, 4.0, 26.0, -2.0, 24.0, 5.0, -8.0]
+# Half-extent of each subject (width, height) in metres — the caller turns
+# these into a distance with its own lens, so "how big is the thing" lives here
+# and "how wide does the case see" lives there. The four fixed-size subjects
+# are constants; FULL, STICK and GLOVES are measured per build in _pose,
+# because a stick's length and a figure's height genuinely change what has to
+# fit in frame.
+const _FOCUS_EXTENT: Array[Vector2] = [
+	Vector2(0.55, 0.95),   # FULL   — measured
+	Vector2(0.45, 0.75),   # STICK  — measured
+	Vector2(0.22, 0.13),   # BLADE
+	Vector2(0.15, 0.17),   # GRIP
+	# SKATES — the PAIR, so width binds: the boots sit ±0.13 apart and each is
+	# ~0.30 front-to-back, which the presentation yaw turns partly into width.
+	Vector2(0.24, 0.16),
+	Vector2(0.16, 0.22),   # GLOVES — measured
+	Vector2(0.19, 0.19),   # HELMET
+]
 
 # Surface finishes, matching the rink's (SkaterUniformCoordinator).
 const _CLOTH_ROUGH: float = 0.9
@@ -155,7 +175,9 @@ var _knob: MeshInstance3D = null
 # Focus anchors, in THIS node's space — recomputed by every apply() because the
 # pieces move with the build's height and the picked stick length.
 var _anchors: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO,
-	Vector3.ZERO, Vector3.ZERO]
+	Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
+# Seeded from _FOCUS_EXTENT; the measured framings overwrite their own entry.
+var _extents: Array[Vector2] = _FOCUS_EXTENT.duplicate()
 # The posed shaft line, in rig space. Written by the stick pass and read by the
 # arm pass right after it — the grips are solved onto this line.
 var _shaft_heel: Vector3 = Vector3.ZERO
@@ -267,8 +289,10 @@ func focus_anchor(focus: int) -> Vector3:
 	return _anchors[clampi(focus, 0, _anchors.size() - 1)]
 
 
-func focus_distance(focus: int) -> float:
-	return _FOCUS_DIST[clampi(focus, 0, _FOCUS_DIST.size() - 1)]
+# Half-extent (width, height) of what this framing has to contain, in metres.
+# The caller owns the lens, so it converts this into a distance.
+func focus_extent(focus: int) -> Vector2:
+	return _extents[clampi(focus, 0, _extents.size() - 1)]
 
 
 # The yaw the figure turns to, mirrored so the piece under inspection swings
@@ -349,9 +373,19 @@ func _pose(attrs: PlayerAttributes, tape: StickTapeConfig,
 
 	# Anchors so far are rig-local (the stick and arm passes wrote theirs the
 	# same way); the two body framings join them here.
-	_anchors[Focus.FULL] = Vector3(0.0, (_lift(_LEG_Y, m_height) + shoulder_y) * 0.5, 0.0)
 	_anchors[Focus.SKATES] = Vector3(0.0, boot_y, _BOOT_DZ)
 	_anchors[Focus.HELMET] = _helmet.position
+	# The wide shot holds the whole standing figure, so it grows with the build.
+	# Crown comes off the posed helmet's own bounds rather than a copy of the
+	# builder's radius, which would drift the first time the shell changed. The
+	# anchor sits at the midpoint of ice-to-crown so the extent below actually
+	# centres what it measures.
+	var crown: float = (_helmet.transform * _helmet.get_aabb()).end.y
+	_anchors[Focus.FULL] = Vector3(0.0, (_ICE_Y + crown) * 0.5, 0.0)
+	_extents[Focus.FULL] = Vector2(
+			maxf(_FOCUS_EXTENT[Focus.FULL].x, _extents[Focus.STICK].x),
+			(crown - _ICE_Y) * 0.5 + 0.06)
+	_extents[Focus.HELMET] = _FOCUS_EXTENT[Focus.HELMET] * m_head
 
 	# Seat the whole rig so the runner's contact lands on this node's origin.
 	# The boot is the one unscaled part, so its contact does not follow the
@@ -418,7 +452,23 @@ func _pose_stick(attrs: PlayerAttributes, tape: StickTapeConfig) -> void:
 	_shaft_heel = heel
 	_shaft_up = _stick_root.basis * axis
 	_shaft_len = stick_len
-	_anchors[Focus.STICK] = heel + _shaft_up * (stick_len * 0.5)
+
+	# Three shots down the stick. The blade lies flat on the ice half a blade
+	# ahead of the heel; the grip sits at the butt, where the knob and the top
+	# of the wrap are; the whole-stick shot splits the difference.
+	var blade_len: float = GameRules.DEFAULT_BLADE_LENGTH_M
+	_anchors[Focus.BLADE] = heel \
+			+ _stick_root.basis * Vector3(0.0, 0.0, -blade_len * 0.5)
+	_anchors[Focus.GRIP] = heel + _shaft_up * (stick_len - _KNOB_HEIGHT_M)
+	_anchors[Focus.STICK] = (_anchors[Focus.BLADE] + _anchors[Focus.GRIP]) * 0.5
+	# What the whole-stick shot has to contain. Measuring it rather than fixing
+	# it is what keeps a LONG cut on a tall build from hanging out of frame:
+	# the blade runs forward and the shaft climbs, so the two axes are set by
+	# different pieces.
+	var span: Vector3 = _anchors[Focus.GRIP] - _anchors[Focus.BLADE]
+	_extents[Focus.STICK] = Vector2(
+			maxf(absf(span.x), blade_len) * 0.5 + 0.10,
+			absf(span.y) * 0.5 + 0.10)
 
 
 # Both arms, shoulder → elbow → fist. The top hand belongs to the shoulder AWAY
@@ -465,6 +515,10 @@ func _pose_arms(is_left_handed: bool, shoulder_x: float, shoulder_y: float,
 				Basis(grip.x * _CUFF_RADIUS, grip.y, grip.z * _CUFF_RADIUS), wrist)
 
 	_anchors[Focus.GLOVES] = (grips[0] + grips[1]) * 0.5
+	# Both fists plus the shaft between them — how far apart they sit is solved,
+	# not fixed, so the shot that holds them has to be measured too.
+	var spread: float = grips[0].distance_to(grips[1]) * 0.5 + _HAND_RADIUS * 2.0
+	_extents[Focus.GLOVES] = Vector2(maxf(spread * 0.6, 0.14), spread)
 
 
 # How far along the shaft a hand can grip: the points within `reach` of the

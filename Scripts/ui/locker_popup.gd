@@ -67,6 +67,9 @@ const _SWATCH_W: int = 36
 const _SWATCH_H: int = 18
 
 const _CASE_SIZE := Vector2(340, 470)
+const _CASE_FOV: float = 45.0
+# Breathing room around whatever a framing has to contain.
+const _FRAME_MARGIN: float = 1.12
 const _LABEL_W: float = 96.0
 const _FIELD_W: float = 176.0
 
@@ -76,6 +79,11 @@ const _EASE_PER_S: float = 7.0
 # The wide shot turns; a focused shot holds still so the piece can be read.
 const _IDLE_RAD_PER_S: float = 0.35
 const _DRAG_RAD_PER_PX: float = 0.008
+# Drag up pulls in, drag down pushes out. Multiplicative, so the rate feels the
+# same nose-to-nose with a skate as it does on the wide shot.
+const _DRAG_ZOOM_PER_PX: float = 0.004
+const _ZOOM_NEAR_M: float = 0.22
+const _ZOOM_FAR_M: float = 4.5
 
 # Pending picks (working state between open() and Done).
 var _attrs: PlayerAttributes = null
@@ -117,6 +125,9 @@ var _dist: float = 2.45
 var _pitch: float = 0.0
 var _yaw: float = 0.0
 var _target_yaw: float = 0.0
+# Hand zoom on top of the framing's own distance, 1.0 = whatever the framing
+# asked for. Cleared when the focus moves, like the presented yaw is.
+var _zoom: float = 1.0
 var _dragging: bool = false
 
 # Focus scope (see ControllerNav.open_modal).
@@ -140,7 +151,7 @@ func _process(delta: float) -> void:
 		_target_yaw += _IDLE_RAD_PER_S * delta
 	var t: float = minf(_EASE_PER_S * delta, 1.0)
 	_yaw = lerpf(_yaw, _target_yaw, t)
-	_dist = lerpf(_dist, _mannequin.focus_distance(_focus), t)
+	_dist = lerpf(_dist, _framed_distance(), t)
 	_pitch = lerpf(_pitch, _mannequin.focus_pitch(_focus), t)
 	_anchor = _anchor.lerp(_mannequin.focus_anchor(_focus), t)
 	_mannequin.rotation.y = _yaw
@@ -149,6 +160,22 @@ func _process(delta: float) -> void:
 	var aimed: Vector3 = Basis(Vector3.UP, _yaw) * _anchor
 	_camera.position = aimed + Vector3(0.0, sin(_pitch), -cos(_pitch)) * _dist
 	_camera.look_at(aimed)
+
+
+# How far back the current framing has to sit, with the hand zoom on top. The
+# mannequin says how big the subject is; the lens is this dialog's, so the
+# conversion lives here. The case is PORTRAIT, so a wide subject (the skate
+# pair) is bound by the horizontal angle while a tall one (the whole stick) is
+# bound by the vertical — take whichever needs more room.
+func _base_distance() -> float:
+	var extent: Vector2 = _mannequin.focus_extent(_focus)
+	var v_tan: float = tan(deg_to_rad(_CASE_FOV * 0.5))
+	var h_tan: float = v_tan * (_CASE_SIZE.x / _CASE_SIZE.y)
+	return maxf(extent.y / v_tan, extent.x / h_tan) * _FRAME_MARGIN
+
+
+func _framed_distance() -> float:
+	return clampf(_base_distance() * _zoom, _ZOOM_NEAR_M, _ZOOM_FAR_M)
 
 
 # ── Construction ─────────────────────────────────────────────────────────────
@@ -302,17 +329,23 @@ func _build_case(row: HBoxContainer) -> void:
 func _build_stick_column(row: HBoxContainer) -> void:
 	var col := _column(row)
 	col.add_child(_section_header(tr(&"LOCKER_SEC_STICK")))
+	# Each row asks for the shot its own pick shows up in: cut and stiffness are
+	# properties of the whole stick, the pattern and the tape live on the blade,
+	# and the knob and wrap are up at the butt.
 	var stick: int = LockerMannequin.Focus.STICK
+	var blade: int = LockerMannequin.Focus.BLADE
+	var grip: int = LockerMannequin.Focus.GRIP
 
 	_length_btn = _option_button(_LENGTH_KEYS, _LENGTH_TOOLTIP, _on_length_selected)
 	_add_row(col, tr(&"STICK_GEAR_LENGTH"), _length_btn, true, _LENGTH_TOOLTIP, stick)
 	_curve_btn = _option_button(_CURVE_KEYS, _CURVE_TOOLTIP, _on_curve_selected)
-	_add_row(col, tr(&"STICK_GEAR_CURVE"), _curve_btn, true, _CURVE_TOOLTIP, stick)
+	_add_row(col, tr(&"STICK_GEAR_CURVE"), _curve_btn, true, _CURVE_TOOLTIP, blade)
 	_flex_btn = _option_button(_FLEX_KEYS, _FLEX_TOOLTIP, _on_flex_selected)
 	_add_row(col, tr(&"STICK_GEAR_FLEX"), _flex_btn, true, _FLEX_TOOLTIP, stick)
 
 	# Stick colorways are fixed designs with no kit zones, so the items fill
-	# once here rather than per open() the way the gear models do.
+	# once here rather than per open() the way the gear models do. The colorway
+	# runs the length of the stick, so it takes the whole-stick shot.
 	_stick_model_btn = _bare_option_button(_on_stick_model_selected)
 	for model: int in StickModelRegistry.count():
 		_stick_model_btn.add_icon_item(
@@ -322,14 +355,14 @@ func _build_stick_column(row: HBoxContainer) -> void:
 
 	_blade_color_dd = SwatchDropdown.new(Vector2(_FIELD_W, 36))
 	_blade_color_dd.selected.connect(_on_blade_color_selected)
-	_add_row(col, tr(&"TAPE_BLADE_LABEL"), _blade_color_dd, false, "", stick)
+	_add_row(col, tr(&"TAPE_BLADE_LABEL"), _blade_color_dd, false, "", blade)
 	_span_btn = _option_button(_SPAN_KEYS, "", _on_span_selected)
-	_add_row(col, tr(&"TAPE_COVERAGE_LABEL"), _span_btn, false, "", stick)
+	_add_row(col, tr(&"TAPE_COVERAGE_LABEL"), _span_btn, false, "", blade)
 	_knob_color_dd = SwatchDropdown.new(Vector2(_FIELD_W, 36))
 	_knob_color_dd.selected.connect(_on_knob_color_selected)
-	_add_row(col, tr(&"TAPE_KNOB_LABEL"), _knob_color_dd, false, "", stick)
+	_add_row(col, tr(&"TAPE_KNOB_LABEL"), _knob_color_dd, false, "", grip)
 	_style_btn = _option_button(_STYLE_KEYS, "", _on_style_selected)
-	_add_row(col, tr(&"TAPE_HANDLE_LABEL"), _style_btn, false, "", stick)
+	_add_row(col, tr(&"TAPE_HANDLE_LABEL"), _style_btn, false, "", grip)
 
 
 func _build_gear_column(row: HBoxContainer) -> void:
@@ -474,7 +507,8 @@ func open(attrs: PlayerAttributes, tape_code: int, gear_code: int,
 	_focus = LockerMannequin.Focus.FULL
 	_target_yaw = _mannequin.focus_yaw(_focus)
 	_yaw = _target_yaw
-	_dist = _mannequin.focus_distance(_focus)
+	_zoom = 1.0
+	_dist = _framed_distance()
 	_pitch = _mannequin.focus_pitch(_focus)
 	_anchor = _mannequin.focus_anchor(_focus)
 	visible = true
@@ -507,15 +541,30 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
-# Drag inside the case to turn the figure — the one thing a fixed presentation
-# angle can't give you, which is a look at the piece from the other side.
+# Drag inside the case: sideways turns the figure, up and down zooms. Between
+# them they give the two things a fixed presentation angle can't — a look at the
+# piece from the other side, and a closer one.
 func _on_case_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var button := event as InputEventMouseButton
 		if button.button_index == MOUSE_BUTTON_LEFT:
 			_dragging = button.pressed
 	elif event is InputEventMouseMotion and _dragging:
-		_target_yaw += (event as InputEventMouseMotion).relative.x * _DRAG_RAD_PER_PX
+		var motion := event as InputEventMouseMotion
+		_target_yaw += motion.relative.x * _DRAG_RAD_PER_PX
+		_zoom_by(motion.relative.y)
+
+
+# Screen Y runs downward, so a positive drag pushes the camera out. Clamped
+# against THIS framing's own distance rather than as a free multiplier: let it
+# wind up past the stop and the zoom stops responding until you have dragged
+# all the way back, which reads as the control being broken.
+func _zoom_by(dy: float) -> void:
+	var base: float = _base_distance()
+	if base <= 0.0:
+		return
+	_zoom = clampf(_zoom * exp(dy * _DRAG_ZOOM_PER_PX),
+			minf(_ZOOM_NEAR_M / base, 1.0), maxf(_ZOOM_FAR_M / base, 1.0))
 
 
 # ── Interaction ──────────────────────────────────────────────────────────────
@@ -528,6 +577,7 @@ func _set_focus(focus: int) -> void:
 		return
 	_focus = focus
 	_target_yaw = _mannequin.focus_yaw(focus)
+	_zoom = 1.0
 
 
 func _on_length_selected(option: int) -> void:
