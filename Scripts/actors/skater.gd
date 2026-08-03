@@ -745,9 +745,10 @@ func _physics_process(delta: float) -> void:
 	_prev_blade_world_pos = blade_world_pos
 	if _draw_tracking:
 		_update_draw_peak(delta)
-	# Backstop against a NaN/Inf position or velocity escaping into the transform,
-	# the wire, and every downstream analytic test. This should never fire; when it
-	# does it logs the offending state so the upstream source is findable.
+	# Backstop: never let a NaN/Inf velocity or position reach the transform write —
+	# it poisons every downstream reader (camera, IK, the wire state) irrecoverably.
+	# This should never fire; when it does it logs the offending state so the
+	# upstream source is findable.
 	_sanitize_physics_state()
 	# The whole move step: no engine body, no solver, just integration. This is the
 	# same `pos += vel·dt` LocalController's reconcile replay runs, so the live tick
@@ -756,8 +757,8 @@ func _physics_process(delta: float) -> void:
 	_touched_boundary = false
 	global_position += velocity * delta
 	# Capture velocity BEFORE the analytic skater-vs-skater resolution so the delta
-	# below isolates the body-check impulse (the resolver's self velocity change)
-	# for the reconcile replay recording.
+	# below isolates the body-check impulse (the resolver's self velocity change) for
+	# the reconcile replay recording.
 	var vel_pre_body_check: Vector3 = velocity
 	_resolve_player_collisions()
 	var body_check_delta: Vector3 = velocity - vel_pre_body_check
@@ -784,12 +785,11 @@ func _physics_process(delta: float) -> void:
 	HostCostProbe.record(HostCostProbe.Section.SKATER_PHYS, Time.get_ticks_usec() - _t0)
 
 
-# Sanitizes the body's velocity/position to finite values before the integration
-# step. A NaN reaching global_position poisons every analytic contact test, the
-# broadcast snapshot, and the reconcile buffer at once, and it never recovers on
-# its own — so clamp at the seam and log where it came from. Cheap value-type
-# checks — hot-path safe at 120 Hz × skaters; the string-formatting cost only ever
-# runs on the (should-never) failure branch.
+# Sanitizes the body's velocity/position to finite values right before the tick
+# integrates them. A NaN/Inf transform can't be un-poisoned once written (every
+# derived read — camera, IK, wire state — inherits it), so we clamp at the seam
+# and log where it came from. Cheap value-type checks — hot-path safe at 120 Hz ×
+# skaters; the string-formatting cost only ever runs on the (should-never) branch.
 func _sanitize_physics_state() -> void:
 	if not velocity.is_finite():
 		push_error("Skater '%s': non-finite velocity %s before integration — zeroing (state=%d pos=%s)."

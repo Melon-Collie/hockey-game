@@ -186,9 +186,10 @@ func test_step_puck_board_friction_bleeds_tangential_speed() -> void:
 
 
 func test_step_puck_chained_matches_predict_puck_at() -> void:
-	# The load-bearing guarantee: the shadow harness free-runs by CHAINING step_puck,
-	# and that must equal the AITrajectory predictor the AI already trusts to match
-	# Jolt. Chain N steps and compare the endpoint to predict_puck_at(N steps).
+	# The load-bearing guarantee: the puck drive free-runs by CHAINING step_puck, and
+	# that must equal the AITrajectory predictor the AI reasons with, or the bots aim
+	# at a puck future the host never produces. Chain N steps, compare to
+	# predict_puck_at(N steps).
 	var pos := Vector3(GameRules.INNER_HALF_WIDTH - 1.0, 0, 2.0)
 	var vel := Vector3(18, 0, 6)  # fast enough to carom off +X within the window
 	var dt: float = 1.0 / 12.0

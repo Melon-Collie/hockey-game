@@ -593,7 +593,7 @@ func _render_frame_cost() -> void:
 		"render thread building draw commands; scales with the draw-call count below, not with pixels")
 	_context(_band(_frac(main_ms, frame_ms), 0.60, 0.85), "Main thread",
 		"%.2f ms (%.0f%% of frame)" % [main_ms, _frac(main_ms, frame_ms) * 100.0],
-		"the frame MINUS the render terms — your _process/_physics_process, Jolt, and engine work. Not measured directly: it is what neither the GPU nor the render thread accounts for, so an idle wait on vsync lands here too (the verdict rules that out first)")
+		"the frame MINUS the render terms — your _process/_physics_process, the physics server, and engine work. Not measured directly: it is what neither the GPU nor the render thread accounts for, so an idle wait on vsync lands here too (the verdict rules that out first)")
 	_info("Peak step (last 1 s)", "process %.2f ms · physics %.2f ms" % [_peak_process_ms, _peak_physics_ms],
 		"engine's WORST single step in the last second, not an average — a peak above the frame budget is a hitch you feel, but it does not mean the typical step costs this")
 	_info("Scene", "%d draws · %d objects · %.1f M prims" % [
@@ -601,18 +601,17 @@ func _render_frame_cost() -> void:
 			int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)),
 			Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME) / 1_000_000.0],
 		"what the frame submits, engine-wide (includes shadow passes and every SubViewport); draw calls are the CPU render driver")
-	# Jolt's own load. Every actor integrates itself and every contact is analytic,
-	# so the only bodies left are inert static geometry: all three numbers should
-	# read 0, and ANY active body means one slipped back into the solver — which
-	# costs a fixed ~0.4 ms/tick of step pipeline on its own, whether or not it
-	# collides with anything. The number also separates "the physics SERVER is
-	# expensive" from "our _physics_process is expensive", which the frame residual
-	# cannot.
+	# The physics server's own load. Every actor integrates itself and every contact
+	# is analytic, so nothing should be under simulation: all three numbers read 0,
+	# and ANY active body means one slipped back into the solver — which costs a
+	# fixed ~0.4 ms/tick of step pipeline on its own, whether or not it collides
+	# with anything. The number also separates "the physics SERVER is expensive"
+	# from "our _physics_process is expensive", which the frame residual cannot.
 	_info("Physics 3D", "%d active · %d pairs · %d islands" % [
 			int(Performance.get_monitor(Performance.PHYSICS_3D_ACTIVE_OBJECTS)),
 			int(Performance.get_monitor(Performance.PHYSICS_3D_COLLISION_PAIRS)),
 			int(Performance.get_monitor(Performance.PHYSICS_3D_ISLAND_COUNT))],
-		"bodies Jolt is actually simulating; expected ~0 here — everything is analytic, so a nonzero count is a regression, not a cost centre")
+		"bodies the physics server is actually simulating; expected ~0 here — everything is analytic, so a nonzero count is a regression, not a cost centre")
 	_info("Skaters on ice", "%d · %d nodes in tree" % [
 			get_tree().get_nodes_in_group("skaters").size(),
 			int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT))],
@@ -684,7 +683,7 @@ func _frame_bound_verdict(frame_ms: float, main_ms: float) -> String:
 			and refresh > 0.0 and fps >= refresh * 0.95:
 		return "nothing — sitting at the display's %.0f Hz vsync ceiling, so these costs are upper bounds" % refresh
 	if main_ms >= maxf(_ema_gpu_ms, _ema_cpu_render_ms):
-		return "Main thread — script + Jolt + engine, NOT rendering; graphics settings cannot help this"
+		return "Main thread — script + sim + engine, NOT rendering; graphics settings cannot help this"
 	if _ema_gpu_ms >= _ema_cpu_render_ms:
 		return "GPU — cut resolution / MSAA / shadow-casting lights / transparent overdraw"
 	return "CPU render — cut VISIBLE MESH COUNT (draws), not polygons; shadow-casting lights multiply it"
