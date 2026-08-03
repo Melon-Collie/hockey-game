@@ -20,3 +20,8 @@ native/bin/
 native/.sconsign.dblite
 native/src/*.o
 native/src/*.os
+native/src/*.obj
+
+# Godot's Windows DLL-lock workaround: when a GDExtension binary is held open,
+# the editor hot-reloads from a tilde-prefixed shadow copy beside the original.
+~*.dll
