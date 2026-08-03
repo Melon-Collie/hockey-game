@@ -592,22 +592,14 @@ func _physics_process(delta: float) -> void:
 			current_snapshot.heading_omega_by_peer = _accel_tracker.heading_omega_by_peer
 			_apply_bot_carrier_reaction_delay(current_snapshot, delta)
 	HostCostProbe.record(HostCostProbe.Section.SNAPSHOT, Time.get_ticks_usec() - t_section)
-	# Centralized AI dispatch. Brains run first (team strategy) so each bot reads
-	# this tick's fresh slot assignments, then every bot dispatches against the
-	# SAME enriched snapshot the brains saw — unified perception (bots no longer
-	# lag the brains by the old priority-split tick; see docs/ai-threading-plan.md).
-	# This whole block is the seam Phase 3 lifts onto the AI worker thread; the
-	# per-bot dispatch moved here from AIController._physics_process (was prio -1).
+	# Centralized AI dispatch. The coordinator's worker runs team strategy first,
+	# then every bot against the SAME enriched snapshot the brains saw — unified
+	# perception (see docs/ai-threading-plan.md). Nothing here touches a live
+	# TeamBrain: the brain tick is on the worker, so the host's own brain writes
+	# go through the coordinator's queue and its brain reads come from the
+	# coordinator's published mirrors.
 	if current_snapshot != null:
 		if not team_brains.is_empty():
-			t_section = Time.get_ticks_usec()
-			for brain: TeamBrain in team_brains:
-				brain.tick(delta, current_snapshot)
-			# Charged before the shape tally below, which is a debug instrument
-			# armed by F6 and absent from a shipped run — folding it in would
-			# price the measurement into what is being measured.
-			HostCostProbe.record(HostCostProbe.Section.BRAINS,
-					Time.get_ticks_usec() - t_section)
 			# Shape-occupancy sample (debug instrument, F6). Sampled against the
 			# PUBLISHED state so it measures the shape actually being run, and
 			# only during live play — shares should describe hockey, not the
@@ -622,23 +614,23 @@ func _physics_process(delta: float) -> void:
 					carrier_team = _registry.team_id_by_peer.get(
 							tally_puck.carrier_peer_id, -1)
 				for brain: TeamBrain in team_brains:
-					shape_tally.accumulate(brain.team_id, brain.state, delta,
-							brain.coverage_downgraded)
+					# Mirrored, not read live — the worker owns the brain tick.
+					shape_tally.accumulate(brain.team_id,
+							_ai_coordinator.brain_state(brain.team_id), delta,
+							_ai_coordinator.brain_coverage_downgraded(brain.team_id))
 					if tally_puck != null:
 						breakout_episodes.tick(brain.team_id,
 								GameRules.GOAL_LINE_Z if brain.team_id == 0
 										else -GameRules.GOAL_LINE_Z,
 								tally_puck.position, carrier_team, delta)
 		if _registry != null:
-			# The coordinator freezes each brain's view (build_view) at the point it
-			# hands work to the worker — only while the worker is idle, so the view
-			# the worker reads is never rebuilt mid-batch.
 			t_section = Time.get_ticks_usec()
 			_ai_coordinator.dispatch(
 					_registry.ai_controllers(), team_brains, current_snapshot, delta)
 			HostCostProbe.record(HostCostProbe.Section.DISPATCH,
 					Time.get_ticks_usec() - t_section)
 	HostCostProbe.record(HostCostProbe.Section.WORKER, _ai_coordinator.last_worker_us)
+	HostCostProbe.record(HostCostProbe.Section.BRAINS, _ai_coordinator.last_brain_us)
 	t_section = Time.get_ticks_usec()
 	_update_host_puck_tracking()
 	_check_goal_crossing()
@@ -1247,6 +1239,9 @@ func _despawn_skater_for_peer(peer_id: int) -> void:
 		puck.remove_skater_cooldown(record.skater)
 	if _state_buffer_manager != null:
 		_state_buffer_manager.remove_player(peer_id)
+	# remove() queue_frees the controller, and the AI worker may be running
+	# decide() on it right now — wait the batch out before it can be freed.
+	_ai_coordinator.await_idle()
 	_registry.remove(peer_id)
 
 
@@ -2939,7 +2934,9 @@ func _enrich_snapshot_for_ai(snap: WorldSnapshot) -> void:
 		# machine's decline gates are bypassed for it too) and nobody else
 		# doubles up on the puck.
 		if puck_playable and team_id >= 0 and team_id < team_brains.size():
-			var pinged_chaser: int = team_brains[team_id].ping_chase_peer()
+			# Mirrored, not read live — the worker advances + expires the ping
+			# directives this comes from (see AICoordinator).
+			var pinged_chaser: int = _ai_coordinator.ping_chase_peer(team_id)
 			if pinged_chaser != -1 and ids.has(pinged_chaser):
 				best_pid = pinged_chaser
 		_prev_chase_by_team[team_id] = best_pid
@@ -3115,14 +3112,14 @@ func _is_dump_release(peer_id: int) -> bool:
 
 
 # Forces both team brains to re-evaluate possession state + role
-# assignments on the next physics frame, bypassing the natural
+# assignments on the next brain tick, bypassing the natural
 # TeamBrain.TICK_PERIOD rate-limit. Called from the puck pickup /
 # release hooks where the carrier change makes the current role
 # assignment immediately stale. Both teams re-tick because a carrier
-# change affects both possession states symmetrically.
+# change affects both possession states symmetrically. Queued rather than
+# applied: the worker owns the brains (see AICoordinator).
 func _force_retick_team_brains() -> void:
-	for brain: TeamBrain in team_brains:
-		brain.force_retick()
+	_ai_coordinator.queue_force_retick()
 
 
 func _on_server_puck_stripped_from(peer_id: int, stripper_peer_id: int) -> void:
@@ -4467,10 +4464,12 @@ func on_scene_exit() -> void:
 	_codec = null
 	_state_buffer_manager = null
 	current_snapshot = null
-	team_brains = []
-	# Stop + join the AI worker thread (no-op unless threaded and started), so a
-	# torn-down match never leaves a live thread referencing freed controllers.
+	# Stop + join the AI worker thread (no-op unless started), so a torn-down
+	# match never leaves a live thread referencing freed controllers. BEFORE
+	# dropping team_brains: the worker ticks them, so it must be joined while
+	# they are still the live set.
 	_ai_coordinator.shutdown()
+	team_brains = []
 	HostCostProbe.enabled = false
 	# Null PhaseCoordinator's _state_machine before stopping the driver so
 	# any replay_stopped signal that fires during teardown returns early from
@@ -5353,7 +5352,7 @@ func spawn_tutorial_bot(position: Vector3, bot_id: int = 0, team_id: int = 1) ->
 	if ai_ctrl != null:
 		ai_ctrl.set_scripted_mode(true)
 	if team.team_id < team_brains.size():
-		team_brains[team.team_id].exclude_skater(record.peer_id)
+		_ai_coordinator.queue_exclude_skater(team.team_id, record.peer_id)
 	return record
 
 
@@ -5367,7 +5366,10 @@ func despawn_tutorial_bot(record: PlayerRecord) -> void:
 	if puck != null and puck.carrier == record.skater:
 		puck.drop()
 	if record.team != null and record.team.team_id < team_brains.size():
-		team_brains[record.team.team_id].include_skater(record.peer_id)
+		_ai_coordinator.queue_include_skater(record.team.team_id, record.peer_id)
+	# See _despawn_skater_for_peer — remove() queue_frees a controller the worker
+	# may be mid-decide() on.
+	_ai_coordinator.await_idle()
 	_registry.remove(record.peer_id)
 
 
@@ -5581,8 +5583,8 @@ func _on_smart_ping_received(sender_peer_id: int, ping_type: int,
 			ping_type, target_peer_id, world_pos, sender_peer_id, carrier_pid,
 			puck.global_position if puck != null else Vector3.ZERO,
 			bot_peers, positions)
-	team_brains[sender_team].apply_ping(
-			ping_type, sender_peer_id, target_peer_id, obeyer, world_pos)
+	_ai_coordinator.queue_ping(
+			sender_team, ping_type, sender_peer_id, target_peer_id, obeyer, world_pos)
 
 
 func _collect_skater_positions() -> Dictionary:

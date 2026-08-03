@@ -14,8 +14,9 @@ extends Object
 #   • TeamBrain.tick is rate-limited to 6 Hz, so the full strategy computation
 #     lands on roughly one physics tick in twenty and costs nothing on the other
 #     nineteen — and force_retick() fires it off-cadence on every puck-carrier
-#     change, so the spikes CLUSTER in scrums.
-#   • AICoordinator only freezes brain views, preps agents and kicks a batch on
+#     change, so the spikes CLUSTER in scrums. Those spikes are off-thread now
+#     (they ride the worker batch), which is exactly why they were moved.
+#   • AICoordinator only drains brain writes, preps agents and kicks a batch on
 #     ticks where the worker is idle. Ticks therefore alternate between a heavy
 #     harvest-and-kick and a run of nearly free ones.
 # A 3 ms spike once per twenty ticks reads as 0.15 ms of mean — invisible next
@@ -32,7 +33,12 @@ extends Object
 
 enum Section {
 	SNAPSHOT,   # get_state_delayed + _enrich_snapshot_for_ai + accel tracker
-	BRAINS,     # the TeamBrain.tick loop — 6 Hz strategy plus forced re-ticks
+	# The TeamBrain.tick + build_view loop — 6 Hz strategy plus forced re-ticks.
+	# Runs at the head of the worker batch, so this is NESTED INSIDE WORKER and,
+	# like it, is context rather than main-thread cost. Broken out because the
+	# brains and the agents answer to different levers: brain cost is set by the
+	# 6 Hz cadence and the force-retick rate, agent cost by the bot count.
+	BRAINS,
 	DISPATCH,   # AICoordinator.dispatch, MAIN-thread portion only
 	# DISPATCH's two halves. Knowing the total is 0.6 ms says nothing about what
 	# to do next.
@@ -44,8 +50,8 @@ enum Section {
 	# wrong subsystem — the fix for it is a cheaper skater tick or fewer ticks,
 	# not a cheaper bot.
 	SKATER_STEP,
-	AI_KICK,    # build_view + prep_for_decide + _stabilize_snapshot, per kick
-	WORKER,     # the off-thread decide() batch: context, NOT main-thread cost
+	AI_KICK,    # brain-command drain + prep_for_decide + _stabilize_snapshot, per kick
+	WORKER,     # the whole off-thread batch: context, NOT main-thread cost
 	# ── The rest of the host's physics tick ──────────────────────────────────
 	# Everything above is reached from GameManager's AI block. These are the
 	# other per-tick bodies, each summed over its actors, so the tick's cost is
@@ -59,7 +65,7 @@ enum Section {
 
 const SECTION_COUNT: int = 12
 const SECTION_NAMES: Array[String] = [
-	"snapshot", "brains", "dispatch (total)", "  dispatch: apply",
+	"snapshot", "brains (in worker)", "dispatch (total)", "  dispatch: apply",
 	"    of which skater step", "  dispatch: kick", "worker (off-thread)",
 	"skater bodies", "puck", "goalies", "game tail", "capture + broadcast",
 ]

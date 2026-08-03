@@ -5,28 +5,48 @@ extends RefCounted
 # in docs/ai-threading-plan.md).
 #
 # The expensive decide() runs on a persistent worker thread while the main thread
-# does the rest of the physics tick. The main thread NEVER blocks on the worker:
-# each frame it harvests a finished batch if one is ready, else it reuses last
-# frame's decision (bots coast on their retained move intent). So the frame rate
-# is decoupled from the AI cost — a heavy AI tick lets the worker fall a frame or
-# two behind instead of stalling the host. Decisions are applied a frame or more
-# late; a bot's 6-60 Hz decision cadence already tolerates that.
+# does the rest of the physics tick. No tick ever blocks on the worker: each frame
+# it harvests a finished batch if one is ready, else it reuses last frame's
+# decision (bots coast on their retained move intent). So the frame rate is
+# decoupled from the AI cost — a heavy AI tick lets the worker fall a frame or two
+# behind instead of stalling the host. Decisions are applied a frame or more late;
+# a bot's 6-60 Hz decision cadence already tolerates that. (await_idle is the one
+# blocking call, on the despawn path only — see there.)
 #
 # Why this is safe to thread (see the plan): decide() reads only the frozen
 # WorldSnapshot + the frozen TeamBrainView + agent-local state and writes only
 # the agent's own InputState — no scene nodes, no autoloads, no shared team
 # state (the one residual brain write, one-timer readiness, is collected on the
-# main thread here after the worker finishes). The main thread mutates the live
-# brains (pings / retick / spawns) during the worker window, but the worker only
-# reads the frozen view, so there is no race. A tiny mutex guards only the
+# main thread here after the worker finishes). A tiny mutex guards only the
 # worker's "batch ready" flag; the decisions themselves need no lock because the
 # main thread reads a bot's InputState only while the worker is idle (between a
 # harvested batch and the next kick), never while it is being written.
+#
+# The TeamBrain tick runs on the worker too, at the head of each batch (tick →
+# build_view → decide), preserving the order those three had when the first two
+# were on main. Brains are only 6 Hz, but force_retick() fires them off-cadence
+# on every carrier flip, so their spikes cluster in scrums — exactly the worst
+# ticks. That makes them worth moving even though their mean is small.
+#
+# Moving them means the main thread can no longer touch a live brain whenever it
+# likes. Two rules keep that sound, and both are structural rather than lock-
+# based:
+#   • Every host-raised brain mutation (pings, carrier-flip re-ticks, tutorial
+#     spawn/despawn) is parked in the queues below and applied BY THE MAIN THREAD
+#     in the idle window just before the next kick. Nothing is written across the
+#     thread boundary; the only cost is a deferral of a frame or two, which is
+#     the staleness Model A already accepts.
+#   • The two live brain fields main still reads every frame — the ping-elected
+#     chaser and the possession state / coverage flag — are published into plain
+#     mirrors at kick time and read from there.
 #
 # The threaded path can't be exercised by the headless test suite (which bypasses
 # the coordinator), so it's validated in game.
 
 # ── Worker plumbing ──────────────────────────────────────────────────────────
+# Give-up bound for await_idle — see there.
+const AWAIT_IDLE_TIMEOUT_US: int = 100_000
+
 var _thread: Thread = null
 var _wake := Semaphore.new()       # main -> worker: "decide the current batch"
 var _mutex := Mutex.new()          # guards _result_ready only
@@ -47,33 +67,77 @@ var _next_bots: Array[AIController] = []
 # reused buffers below at kick time so the worker never reads them mid-mutation.
 var _worker_snapshot: WorldSnapshot = WorldSnapshot.new()
 var _worker_puck: PuckNetworkState = PuckNetworkState.new()
+
+# The live TeamBrains the worker ticks. Assigned (not copied) at kick time while
+# the worker is idle. GameManager only ever replaces the whole team_brains array
+# — never mutates its contents mid-match — so holding the reference across a
+# batch keeps the brains alive even if the host tears the match down underneath.
+var _worker_brains: Array[TeamBrain] = []
+
+# Elapsed host time since the last kick — the delta every batch runs against,
+# brains and agents alike. NOT the frame delta: kicks are skipped while the
+# worker is still busy, so a batch that only ever saw kick-frame deltas would
+# age every timer downstream of it slow by exactly the frames it missed — the
+# brain's 6 Hz accumulator and its real-time ping expiry, and each agent's own
+# cooldowns and state durations. Summing across the skip keeps all of them in
+# real time. When the worker keeps up (a kick every frame, the healthy case)
+# this equals the frame delta, so nothing changes there.
+var _delta_accum: float = 0.0
 var _worker_delta: float = 0.0
 
-# Diagnostics: wall-clock µs of the most recent worker batch. Written by the
-# worker, read by the main thread for telemetry — a benign torn-int read.
+# Diagnostics: wall-clock µs of the most recent worker batch, and of the brain
+# tick nested inside it. Written by the worker, read by the main thread for
+# telemetry — a benign torn-int read.
 var last_worker_us: int = 0
+var last_brain_us: int = 0
+
+# ── Deferred brain mutations (main thread only) ──────────────────────────────
+# Parked here by the host and drained onto the live brains in the idle window
+# before the next kick. Every one of these is event-rate — a key press, a puck
+# pickup, a tutorial spawn — never per-tick, so the allocations they make never
+# reach the hot path. The per-tick cost is iterating empty arrays.
+class PendingPing:
+	var team: int = 0
+	var type: int = 0
+	var pinger_peer: int = 0
+	var target_peer: int = 0
+	var obeyer_peer: int = 0
+	var world_pos: Vector3 = Vector3.ZERO
+
+var _pending_pings: Array[PendingPing] = []
+# Idempotent: n force_retick requests inside one window are one re-tick, which
+# is also what n direct calls produced (the brain just sets a pending flag).
+var _pending_force_retick: bool = false
+# (team_id, peer_id) pairs — Vector2i keeps them typed without an object each.
+var _pending_exclude: Array[Vector2i] = []
+var _pending_include: Array[Vector2i] = []
+
+# ── Main-thread mirrors of live brain fields ─────────────────────────────────
+# Indexed by team_id. Two host paths read a brain every frame from OUTSIDE the
+# idle window: snapshot enrichment (the GET_PUCK ping's elected chaser) and the
+# F6 shape tally (possession state + coverage downgrade). Both sources are
+# mutated by the worker's brain tick — ping directives are advanced and expired
+# in place — so main reads a published copy refreshed at each kick instead.
+# One frame stale: enrichment already saw last frame's value back when the brain
+# tick ran after it on main, and the tally is accumulating time against a state
+# that only changes at 6 Hz.
+var _ping_chase_by_team: PackedInt32Array = PackedInt32Array()
+var _state_by_team: PackedInt32Array = PackedInt32Array()
+var _coverage_downgraded_by_team: Array[bool] = []
 
 
-# Host per-frame entry: brains have already ticked + built their views on the
-# main thread; `bots` is the live AIController list; `snapshot` is this frame's
-# enriched snapshot.
+# Host per-frame entry: `bots` is the live AIController list, `brains` the live
+# TeamBrains (ticked by the worker), `snapshot` this frame's enriched snapshot.
 func dispatch(bots: Array[AIController], brains: Array[TeamBrain],
 		snapshot: WorldSnapshot, delta: float) -> void:
 	if not _thread_started:
 		_start_thread()
+	# Accrue every frame, not just kick frames — see _delta_accum.
+	_delta_accum += delta
 
 	# A. Harvest — only if the worker has finished. Never blocks: if the batch is
 	#    still cooking we leave _run_in_flight set and reuse last frame's decision.
-	if _run_in_flight:
-		_mutex.lock()
-		var ready: bool = _result_ready
-		if ready:
-			_result_ready = false
-		_mutex.unlock()
-		if ready:
-			_run_in_flight = false
-			for b: AIController in _worker_bots:
-				b.collect_one_timer_ready()
+	_try_harvest()
 
 	# B+C. Resolve each bot's mode on the main thread (begin_tick does the special
 	#      non-agent modes' node writes) and rebuild this frame's normal batch.
@@ -100,22 +164,169 @@ func dispatch(bots: Array[AIController], brains: Array[TeamBrain],
 	#    frame — it keeps working on the in-flight batch.
 	if worker_idle:
 		t_half = Time.get_ticks_usec()
-		# Freeze the brain views now, while the worker is idle — the worker reads
-		# them during the batch, so they must not be rebuilt mid-flight.
-		for brain: TeamBrain in brains:
-			brain.build_view(snapshot)
+		# Every brain write the host raised since the last kick lands here, on the
+		# main thread, with the worker provably idle.
+		_drain_brain_commands(brains)
+		# Republish what main reads off the live brains between now and the next
+		# kick — after the drain, so a ping applied this frame is visible at once.
+		_publish_brain_mirrors(brains)
 		var tmp: Array[AIController] = _worker_bots
 		_worker_bots = _next_bots
 		_next_bots = tmp
+		_worker_brains = brains
 		# Stamp rule set + host time now (worker idle) so decide() reads no
 		# autoloads and nothing the worker reads is mutated mid-batch.
 		for b: AIController in _worker_bots:
 			b.prep_for_decide()
 		_stabilize_snapshot(snapshot)
-		_worker_delta = delta
+		_worker_delta = _delta_accum
+		_delta_accum = 0.0
 		_run_in_flight = true
 		_wake.post()
 		HostCostProbe.record(HostCostProbe.Section.AI_KICK, Time.get_ticks_usec() - t_half)
+
+
+# Collect a finished batch if one is ready. Returns true when the worker is idle
+# afterwards — either it had nothing in flight, or its results are now harvested
+# and its buffers are safe for the main thread to read and rewrite. Never blocks.
+func _try_harvest() -> bool:
+	if not _run_in_flight:
+		return true
+	_mutex.lock()
+	var ready: bool = _result_ready
+	if ready:
+		_result_ready = false
+	_mutex.unlock()
+	if not ready:
+		return false
+	_run_in_flight = false
+	for b: AIController in _worker_bots:
+		b.collect_one_timer_ready()
+	return true
+
+
+# Block until the worker is idle, then release the batch's hold on its bots.
+#
+# The ONE place the host is allowed to wait on the worker, and it exists for a
+# correctness problem a non-blocking path cannot solve: freeing an AIController
+# the worker is executing decide() on. _worker_bots holds those references for
+# the length of a batch, and a despawn (peer disconnect, tutorial teardown)
+# queue_frees the controller from the main thread — the free lands at the end of
+# the frame, which can be mid-batch. There is no check that makes that safe after
+# the fact; the object has to outlive the call.
+#
+# Blocking here does not violate the never-stall-the-host rule, which is about
+# the per-tick path. Despawns are events, not ticks, and the wait is bounded by
+# one batch. Call it before dropping any bot the coordinator may be holding.
+func await_idle() -> void:
+	# Bounded, because the only way this never completes is a worker that died
+	# mid-batch (a script error inside decide() aborts the thread's call without
+	# ever setting the ready flag). A dead worker is not running decide() either,
+	# so giving up is safe — where an unbounded spin would hang the game. The
+	# bound is ~12 batches at the 8333 us tick budget: far past any real batch.
+	var deadline_us: int = Time.get_ticks_usec() + AWAIT_IDLE_TIMEOUT_US
+	while not _try_harvest():
+		if Time.get_ticks_usec() > deadline_us:
+			push_error("AICoordinator.await_idle: worker did not finish in %d us — "
+					% AWAIT_IDLE_TIMEOUT_US
+					+ "proceeding without it (worker presumed dead).")
+			# Reset both halves of the handshake, not just the in-flight flag: a
+			# worker that was merely slow rather than dead would otherwise raise
+			# the ready flag with nothing in flight, and the NEXT batch would be
+			# harvested a frame early — read while it was still being written.
+			_run_in_flight = false
+			_mutex.lock()
+			_result_ready = false
+			_mutex.unlock()
+			break
+		OS.delay_usec(100)
+	# Drop the finished batch's references so a controller freed after this
+	# returns is not still reachable from here. The next kick refills the list
+	# from the host's live bot array.
+	_worker_bots.clear()
+
+
+# ── Deferred brain mutation API (host, main thread) ──────────────────────────
+# Mirrors the TeamBrain methods the host used to call directly. Each takes
+# effect at the next kick; see the queue declarations for why that is sound.
+
+func queue_ping(team_id: int, type: int, pinger_peer: int, target_peer: int,
+		obeyer_peer: int, world_pos: Vector3) -> void:
+	var p := PendingPing.new()
+	p.team = team_id
+	p.type = type
+	p.pinger_peer = pinger_peer
+	p.target_peer = target_peer
+	p.obeyer_peer = obeyer_peer
+	p.world_pos = world_pos
+	_pending_pings.append(p)
+
+
+func queue_force_retick() -> void:
+	_pending_force_retick = true
+
+
+func queue_exclude_skater(team_id: int, peer_id: int) -> void:
+	_pending_exclude.append(Vector2i(team_id, peer_id))
+
+
+func queue_include_skater(team_id: int, peer_id: int) -> void:
+	_pending_include.append(Vector2i(team_id, peer_id))
+
+
+# Last published value of a field the host reads off a live brain every frame.
+# Defaults match what a missing/unticked brain returned before: no ping-elected
+# chaser, and the brain's own DZONE / not-downgraded starting state.
+func ping_chase_peer(team_id: int) -> int:
+	if team_id < 0 or team_id >= _ping_chase_by_team.size():
+		return -1
+	return _ping_chase_by_team[team_id]
+
+
+func brain_state(team_id: int) -> int:
+	if team_id < 0 or team_id >= _state_by_team.size():
+		return AIPossessionState.State.DZONE
+	return _state_by_team[team_id]
+
+
+func brain_coverage_downgraded(team_id: int) -> bool:
+	if team_id < 0 or team_id >= _coverage_downgraded_by_team.size():
+		return false
+	return _coverage_downgraded_by_team[team_id]
+
+
+func _drain_brain_commands(brains: Array[TeamBrain]) -> void:
+	for pair: Vector2i in _pending_exclude:
+		if pair.x >= 0 and pair.x < brains.size():
+			brains[pair.x].exclude_skater(pair.y)
+	_pending_exclude.clear()
+	for pair: Vector2i in _pending_include:
+		if pair.x >= 0 and pair.x < brains.size():
+			brains[pair.x].include_skater(pair.y)
+	_pending_include.clear()
+	for p: PendingPing in _pending_pings:
+		if p.team >= 0 and p.team < brains.size():
+			# apply_ping force_reticks the pinged team's brain itself.
+			brains[p.team].apply_ping(p.type, p.pinger_peer, p.target_peer,
+					p.obeyer_peer, p.world_pos)
+	_pending_pings.clear()
+	if _pending_force_retick:
+		_pending_force_retick = false
+		for brain: TeamBrain in brains:
+			brain.force_retick()
+
+
+func _publish_brain_mirrors(brains: Array[TeamBrain]) -> void:
+	var n: int = brains.size()
+	if _ping_chase_by_team.size() != n:
+		_ping_chase_by_team.resize(n)
+		_state_by_team.resize(n)
+		_coverage_downgraded_by_team.resize(n)
+	for i: int in n:
+		var brain: TeamBrain = brains[i]
+		_ping_chase_by_team[i] = brain.ping_chase_peer()
+		_state_by_team[i] = brain.state
+		_coverage_downgraded_by_team[i] = brain.coverage_downgraded
 
 
 # Fill _worker_snapshot with a race-safe view of this frame's snapshot. Three
@@ -179,6 +390,15 @@ func _worker_loop() -> void:
 		var t0: int = Time.get_ticks_usec()
 		var snap: WorldSnapshot = _worker_snapshot
 		var d: float = _worker_delta
+		# Team strategy first, then freeze it, then the agents that read the
+		# frozen view — the order these three ran in when the first two were on
+		# main, so cross-agent effects (one-timer readiness, slot assignment)
+		# resolve exactly as before.
+		for brain: TeamBrain in _worker_brains:
+			brain.tick(d, snap)
+		for brain: TeamBrain in _worker_brains:
+			brain.build_view(snap)
+		last_brain_us = Time.get_ticks_usec() - t0
 		for b: AIController in _worker_bots:
 			b.decide(snap, d)
 		last_worker_us = Time.get_ticks_usec() - t0
@@ -203,3 +423,15 @@ func shutdown() -> void:
 	_mutex.lock()
 	_result_ready = false
 	_mutex.unlock()
+	# Drop the joined worker's references and any brain writes the torn-down
+	# match queued but never reached a kick — the next match brings new brains,
+	# and replaying a dead match's pings onto them would be a ghost directive.
+	_worker_brains = []
+	_pending_pings.clear()
+	_pending_exclude.clear()
+	_pending_include.clear()
+	_pending_force_retick = false
+	_delta_accum = 0.0
+	_ping_chase_by_team.clear()
+	_state_by_team.clear()
+	_coverage_downgraded_by_team.clear()
