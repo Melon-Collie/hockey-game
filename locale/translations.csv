@@ -50,6 +50,7 @@ TAPE_COVERAGE_LABEL,Coverage,Cobertura
 TAPE_KNOB_LABEL,Knob,Pomo
 TAPE_SPAN_FULL,Full,Completa
 TAPE_SPAN_HEEL_TO_MID,Heel to mid,Talón a medio
+TAPE_SPAN_MID_TO_TOE,Mid to toe,Medio a puntera
 TAPE_SPAN_MID,Middle,Central
 TAPE_SPAN_TOE,Toe,Puntera
 TAPE_SPAN_NONE,None,Sin cinta
