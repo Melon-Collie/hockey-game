@@ -59,10 +59,11 @@ var leg_scale: float = 1.0
 
 # ── Runtime State ─────────────────────────────────────────────────────────────
 var stride_phase: float = 0.0
-# Per-stride trunk texture, read by SkaterPoseCoordinator when it applies the
-# torso lean (this coordinator never writes torso rotations itself — the pose
-# pass stays the single writer). Radians; updated on real ticks only, so it
-# holds steady through reconcile replay like the rest of the gait.
+# Per-stride trunk texture, written onto the cosmetic torso/helmet/shoulder
+# BONES via Skater.set_trunk_texture — never onto the UpperBody node, whose
+# rotation carries the blade markers (gameplay geometry; see the invariant in
+# SkaterPoseCoordinator._apply_lean). Radians; updated on real ticks only, so
+# it holds steady through reconcile replay like the rest of the gait.
 var trunk_pitch_add: float = 0.0
 var trunk_roll_add: float = 0.0
 # Eased 0..1 "committing a check" stance factor, tracked toward skater.hit_committed
@@ -233,6 +234,7 @@ func reset_to_rest() -> void:
 	if _skater != null:
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 		_skater.set_skating_crouch_drop(0.0)
+		_skater.set_trunk_texture(0.0, 0.0)
 
 
 # Arms the check-delivery drive (see the runtime state above). During
@@ -1206,6 +1208,7 @@ func apply(delta: float) -> void:
 	_skater.set_leg_swing(l_pitch, l_roll, l_knee, r_pitch, r_roll, r_knee)
 	_skater.set_foot_eversion(foot_evert_l, foot_evert_r)
 	_skater.set_skating_crouch_drop(drop)
+	_skater.set_trunk_texture(trunk_pitch_add, trunk_roll_add)
 
 
 # The native path: feed the replicated inputs to NativeSkaterGait, write its
@@ -1235,6 +1238,7 @@ func _apply_native(delta: float) -> void:
 		# Settle edge — mirror reset_to_rest's one-time rest-pose write.
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 		_skater.set_skating_crouch_drop(0.0)
+		_skater.set_trunk_texture(0.0, 0.0)
 		stride_phase = 0.0
 		trunk_pitch_add = 0.0
 		trunk_roll_add = 0.0
@@ -1258,3 +1262,4 @@ func _apply_native(delta: float) -> void:
 	stop_yaw_offset = _native.get_stop_yaw_offset()
 	travel_align_yaw = _native.get_travel_align_yaw()
 	shot_hip_yaw = _native.get_shot_hip_yaw()
+	_skater.set_trunk_texture(trunk_pitch_add, trunk_roll_add)

@@ -49,9 +49,11 @@ var _skater: Skater = null
 var _sm: SkaterStateMachine = null
 var _aiming: SkaterAimingBehavior = null
 var _controller: SkaterController = null  # tunables live as @export on the controller
-# Read-only source of the per-stride trunk texture (dig pitch / weight-shift
-# sway). The gait computes those values but never writes torso rotations —
-# this coordinator stays the single writer of the upper/lower-body lean.
+# Read-only source of the gait's lower-body yaw channels (hockey stop, hip
+# alignment, shot hip coil). The trunk texture goes straight onto the torso
+# bones (Skater.set_trunk_texture), not through this coordinator — see the
+# invariant in _apply_lean; this class stays the single writer of the
+# upper/lower-body NODE lean.
 var _skating: SkaterSkatingCoordinator = null
 
 func setup(skater: Skater, sm: SkaterStateMachine, aiming: SkaterAimingBehavior,
@@ -199,7 +201,8 @@ func _apply_lean() -> void:
 	# machines for reconcile). The gait runs at render rate now, so letting its
 	# stride pitch reach this frame would make the blade world depend on frame
 	# rate. Reach + velocity lean stay (both physics-rate, deterministic); the
-	# stride texture is a render-only leg concern. See Skater.render_pose_update.
+	# stride texture instead lands on the cosmetic torso/helmet/shoulder BONES
+	# via Skater.set_trunk_texture — mesh-only, so the invariant holds.
 	_skater.set_upper_body_lean(
 			upper_body_lean + velocity_lean_x + recoil_pitch,
 			upper_body_lean_roll + velocity_lean_z + recoil_roll)

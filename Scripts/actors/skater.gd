@@ -2289,9 +2289,43 @@ func set_upper_surface_material(surface: int, mat: Material) -> void:
 	_arm_mesh.set_surface_override_material(surface, mat)
 
 
+# Cosmetic per-stride trunk texture (the gait's dig lean / weight-shift sway /
+# stagger wobble), applied to the torso/helmet/shoulder-cap BONES rather than
+# the UpperBody node: the blade and shoulder markers hang under UpperBody, so
+# a node rotation would move the blade's WORLD position — physics-rate
+# gameplay geometry — while the gait runs at render rate. Bones are pure mesh,
+# so this keeps the invariant documented in SkaterPoseCoordinator._apply_lean.
+# The arms stay anchored to the (deterministic) hands and stick on purpose.
+var _trunk_texture := Basis.IDENTITY
+var _trunk_texture_pitch: float = 0.0
+var _trunk_texture_roll: float = 0.0
+
+
+func set_trunk_texture(pitch_add: float, roll_add: float) -> void:
+	if is_equal_approx(pitch_add, _trunk_texture_pitch) \
+			and is_equal_approx(roll_add, _trunk_texture_roll):
+		return
+	_trunk_texture_pitch = pitch_add
+	_trunk_texture_roll = roll_add
+	_trunk_texture = Basis.from_euler(Vector3(pitch_add, 0.0, roll_add))
+	_repose_upper_bone(SkaterMeshBuilder.UpperBone.TORSO)
+	_repose_upper_bone(SkaterMeshBuilder.UpperBone.HELMET)
+	_repose_upper_bone(SkaterMeshBuilder.UpperBone.SHOULDER_L)
+	_repose_upper_bone(SkaterMeshBuilder.UpperBone.SHOULDER_R)
+
+
 func _repose_upper_bone(bone: int) -> void:
-	_arm_skeleton.set_bone_pose(bone, Transform3D(
-			_upper_basis[bone].scaled_local(_upper_scale[bone]), _upper_pos[bone]))
+	var pose := Transform3D(
+			_upper_basis[bone].scaled_local(_upper_scale[bone]), _upper_pos[bone])
+	# The trunk texture rotates the upper-body SHELL about the trunk pivot (the
+	# skeleton lives in upper-body space, so a zero-origin premultiply is that
+	# pivot). Arm bones are excluded — they follow the hands.
+	if bone == SkaterMeshBuilder.UpperBone.TORSO \
+			or bone == SkaterMeshBuilder.UpperBone.HELMET \
+			or bone == SkaterMeshBuilder.UpperBone.SHOULDER_L \
+			or bone == SkaterMeshBuilder.UpperBone.SHOULDER_R:
+		pose = Transform3D(_trunk_texture, Vector3.ZERO) * pose
+	_arm_skeleton.set_bone_pose(bone, pose)
 
 
 # ── Torso / helmet / shoulder sizing seam ─────────────────────────────────────
