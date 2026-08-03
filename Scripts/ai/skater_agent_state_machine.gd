@@ -6051,9 +6051,9 @@ func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3,
 		puck_vel: Vector3, vmax: float = -1.0) -> Vector3:
 	var cap: float = vmax if vmax > 0.0 else _self_max_speed
 	var dt: float = CHASE_MAX_LOOKAHEAD_S / float(CHASE_TRAJECTORY_STEPS)
-	# Use puck-physics-aware prediction (ice friction + board bounces).
-	# Constant-velocity over 1.5 s consistently overshot where a sliding
-	# puck actually ends up; the new model matches Jolt's resolution.
+	# Use puck-physics-aware prediction (ice friction + board bounces) — the same
+	# step the host drives the loose puck with, so the intercept solves against
+	# where the puck actually ends up. Constant-velocity over 1.5 s overshoots.
 	var traj: Array[Vector3] = AITrajectory.predict_puck(
 			puck_pos, puck_vel, CHASE_TRAJECTORY_STEPS, dt)
 	# Kinematic reachability: for each step T on the puck trajectory,

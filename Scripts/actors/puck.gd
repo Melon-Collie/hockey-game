@@ -297,8 +297,8 @@ var _end_goalies: Array = []
 # every open-ice tick, instead of allocating a fresh `[]` per tick.
 const _NO_GOALIES: Array = []
 # Edge-trigger latches for the drive's contact signals: true = the matching contact
-# occurred LAST tick, so a sustained contact re-fires nothing (Jolt's body_entered
-# was edge-triggered per separation; the analytic tests are level-triggered).
+# occurred LAST tick, so a sustained contact re-fires nothing. The analytic tests are
+# level-triggered, so the latch is what supplies the edge.
 var _contact_latch_boards: bool = false
 var _contact_latch_post: bool = false
 var _contact_latch_net: bool = false
@@ -342,8 +342,8 @@ var _replay_hold: bool = false
 # pickup_locked: pickup_locked means "blades can't play it" and is true for every
 # dead-puck phase (goal celebration, period end, whistle), but during those
 # NOBODY owns the transform — the loose puck should keep coasting (bounce in the
-# net after a goal, slide after the buzzer), the charm the Jolt RigidBody gave for
-# free. Only motion_pinned (goalie pin) and _replay_hold freeze the drive; a mere
+# net after a goal, slide after the buzzer), which is most of the charm of a dead
+# puck. Only motion_pinned (goalie pin) and _replay_hold freeze the drive; a mere
 # pickup_lock lets the puck integrate to a natural rest while staying unplayable.
 var motion_pinned: bool = false
 
@@ -840,8 +840,8 @@ func _drive_analytic(dt: float) -> void:
 	var pos: Vector3 = prev
 	var vel: Vector3 = incoming
 	# Per-tick contact occurrence, latched across ticks so sustained contact
-	# (grinding a post, a puck resting against a pad) emits ONCE like Jolt's
-	# edge-triggered body_entered did — not per sub-step per tick. The physics
+	# (grinding a post, a puck resting against a pad) emits ONCE on entry —
+	# not per sub-step per tick. The physics
 	# response still applies every sub-step; only the SIGNALS are edge-gated
 	# (each emit fans out to sounds / RPCs / stat sync, so a level-triggered
 	# re-fire was up to 120 RPCs/s during held contact).
@@ -850,9 +850,8 @@ func _drive_analytic(dt: float) -> void:
 	var touched_goalie: bool = false
 	# Emissions are DEFERRED to after the commit below (and from there to the
 	# pre-capture drain): listeners (the save sound reading puck velocity, stat
-	# sync) must see this tick's committed post-contact state, not last tick's —
-	# Jolt's body_entered fired mid-step with current state; emitting mid-loop
-	# here read stale fields.
+	# sync) must see this tick's committed post-contact state, not last tick's.
+	# Emitting mid-loop reads stale fields.
 	var emit_goalie: Goalie = null
 	var emit_caught: Goalie = null
 	for _sub in substeps:
@@ -926,8 +925,8 @@ func _drive_analytic(dt: float) -> void:
 	var touched_boards: bool = raw.distance_to(GameRules.clamp_to_rink_inner(raw)) > 0.001 \
 			and incoming_speed >= 1.0
 
-	# 4) Commit. The puck can never sit below the ice — re-homes the Jolt path's grounded
-	# `position.y = ice_height` pin, and catches a goalie eject / save whose normal drove the
+	# 4) Commit. The puck can never sit below the ice — pins the grounded
+	# `position.y = ice_height`, and catches a goalie eject / save whose normal drove the
 	# disc down into the surface (the "puck in the ice, only the shadow shows" bug).
 	if pos.y < ice_height:
 		pos.y = ice_height

@@ -33,7 +33,7 @@ class_name SkaterCollisionRules
 # stagger / knockdown / puck-strip all key off downstream, exactly as before.
 #
 # Pure/static + value-type math (Vector3, no heap allocation beyond the caller-owned
-# Result), so it is hot-path safe at 120 Hz × pairs AND — unlike Jolt's contact
+# Result), so it is hot-path safe at 120 Hz × pairs AND — unlike an engine contact
 # solver — replays bit-identically in reconcile: live prediction, host authority,
 # and replay all call this same function on the same replicated inputs.
 

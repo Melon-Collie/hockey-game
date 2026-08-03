@@ -1841,7 +1841,7 @@ func _puck_time_to_goal_line() -> float:
 	return t if t > 0.0 else -1.0
 
 # Velocity for reading a LOOSE puck's trajectory (a shot / pass / rebound in
-# flight). On the host the authoritative Jolt `linear_velocity` is the cleanest
+# flight). On the host the authoritative `linear_velocity` is the cleanest
 # signal; the position-derived estimate is the fallback for clients (where
 # `linear_velocity` is unreliable during interpolation) and for the brief
 # frozen→dynamic release transition where it momentarily reads zero. Callers must
@@ -4254,8 +4254,8 @@ func _on_puck_released() -> void:
 	if _sm.is_post_integrated() or _sm.current == State.PLAYING_PUCK:
 		return
 	# `get_release_velocity` returns the impending velocity even when
-	# `linear_velocity` is still zero (Jolt's frozen→dynamic transition queues
-	# the velocity in `_pending_elevation_vel` for the next physics step).
+	# `linear_velocity` is still zero (release queues the velocity in
+	# `_pending_elevation_vel` for the drive's next tick).
 	# Reading raw `linear_velocity` here misses the shot every time.
 	var result: GoalieBehaviorRules.ShotResult = GoalieBehaviorRules.detect_shot(
 			puck.global_position,

@@ -46,7 +46,7 @@ static func ack_is_new(ack_ts: float, last_ack_ts: float, epsilon: float) -> boo
 # PuckController: has the client-predicted puck drifted so far from the
 # server's position that we need a hard snap (teleport / physics-glitch
 # level)? Below this threshold, the caller runs a softer velocity+position
-# lerp so Jolt doesn't get fought mid-bounce.
+# lerp so the local prediction isn't fought mid-bounce.
 static func puck_needs_hard_snap(
 		client_position: Vector3,
 		server_position: Vector3,
