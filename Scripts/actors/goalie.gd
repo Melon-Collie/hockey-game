@@ -7,8 +7,9 @@ extends Node3D
 # is baked into the mesh layout — different states get the blade in the right
 # place via different blocker rotations, not by tracking the blade
 # independently. The Blocker pad and Stick are SEPARATE child StaticBody3Ds
-# under BlockArm so they can carry different physics materials (pad absorbs,
-# stick rebounds), but they share the BlockArm transform.
+# under BlockArm — the analytic save resolver identifies the struck part BY NODE
+# NAME (Puck._classify_save_part → GoalieSaveRules.SavePart), so a pad rebound and
+# a stick rebound have to be two nodes. They share the BlockArm transform.
 @onready var _left_pad: StaticBody3D = $LeftPad
 @onready var _right_pad: StaticBody3D = $RightPad
 @onready var _body: StaticBody3D = $Body
