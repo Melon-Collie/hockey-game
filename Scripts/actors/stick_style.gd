@@ -37,7 +37,7 @@ const _BAND_PARAMS: Array[Array] = [
 # own runtime uniforms on top (flex_m, shaft_len_m, the grip wrap) — this
 # factory owns only the design.
 static func make_shaft_material(
-		model: int = StickModelRegistry.STICK_CLASSIC) -> ShaderMaterial:
+		model: int = StickModelRegistry.STICK_STEALTH) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = _FLEX_SHADER
 	mat.set_shader_parameter(&"albedo", StickModelRegistry.shaft_color(model))
@@ -57,7 +57,7 @@ static func make_shaft_material(
 
 
 static func make_blade_material(
-		model: int = StickModelRegistry.STICK_CLASSIC) -> ShaderMaterial:
+		model: int = StickModelRegistry.STICK_STEALTH) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = _CARBON_SHADER
 	var weave: Array[Color] = StickModelRegistry.blade_weave_colors(model)

@@ -7,11 +7,12 @@ extends RefCounted
 # a real stick ships in its maker's colorway whoever you play for, and the
 # player's color already rides the tape job.
 #
-# Each row is inspired by a recognizable real-world stick without naming it
-# (same convention as the M88/M92/M28 blade patterns for P88/P92/P28):
-# Redline reads as a Vapor's red kick zone, Volt as a Ribcor's acid graphic,
-# Split as an Alpha's grey upper over a black lower, Whiteout as the custom
-# all-white pro look, Woodie as a varnished-ash wood stick.
+# Every row past the house Stealth is inspired by a recognizable real-world
+# stick without naming it (same convention as the M88/M92/M28 blade patterns
+# for P88/P92/P28): Redline reads as a Vapor's red kick zone, Volt as a
+# Ribcor's acid graphic, Split as an Alpha's grey upper over a black lower,
+# Whiteout as the custom all-white pro look, Woodie as a varnished-ash wood
+# stick.
 #
 # A model paints: the shaft base, the brand wordmark, up to two BANDS (color
 # spans along the shaft, in real metres from an anchor end — the same
@@ -30,7 +31,7 @@ extends RefCounted
 const ANCHOR_BUTT: int = 0
 const ANCHOR_BLADE: int = 1
 
-const STICK_CLASSIC: int = 0
+const STICK_STEALTH: int = 0
 const STICK_REDLINE: int = 1
 const STICK_VOLT: int = 2
 const STICK_SPLIT: int = 3
@@ -38,7 +39,7 @@ const STICK_WHITEOUT: int = 4
 const STICK_WOODIE: int = 5
 
 const NAME_KEYS: Array[StringName] = [
-	&"STICK_MODEL_CLASSIC",
+	&"STICK_MODEL_STEALTH",
 	&"STICK_MODEL_REDLINE",
 	&"STICK_MODEL_VOLT",
 	&"STICK_MODEL_SPLIT",
@@ -57,7 +58,7 @@ const BLADE_CLASSIC := Color(0.05, 0.05, 0.05)
 # `blade` is {base, weave_a, weave_b} and only present when the model departs
 # from the carbon look. Index-aligned with NAME_KEYS.
 const _MODELS: Array[Dictionary] = [
-	# Classic — the house MITTS stick: near-black composite, white wordmark.
+	# Stealth — the house MITTS stick: near-black composite, white wordmark.
 	{
 		"shaft": SHAFT_CLASSIC,
 		"brand": Color(1.0, 1.0, 1.0),
@@ -124,7 +125,7 @@ static func is_valid(model: int) -> bool:
 # house stick, matching GearStyleConfig.from_code's clamp rather than throwing
 # at the paint seam.
 static func _row(model: int) -> Dictionary:
-	return _MODELS[model] if is_valid(model) else _MODELS[STICK_CLASSIC]
+	return _MODELS[model] if is_valid(model) else _MODELS[STICK_STEALTH]
 
 
 static func shaft_color(model: int) -> Color:

@@ -14,7 +14,7 @@ func test_default_decodes_to_the_kit_look() -> void:
 	assert_eq(config.skate_model, GearModelRegistry.SKATE_BLACKOUT, "skates default all-black")
 	assert_eq(config.glove_model, GearModelRegistry.GLOVE_TEAM, "gloves default to the kit")
 	assert_eq(config.lace_color, GearStyleConfig.LACE_DEFAULT_INDEX, "laces default white")
-	assert_eq(config.stick_model, StickModelRegistry.STICK_CLASSIC,
+	assert_eq(config.stick_model, StickModelRegistry.STICK_STEALTH,
 			"the stick defaults to the house model")
 
 
@@ -55,7 +55,7 @@ func test_migration_keeps_the_stock_look_stock() -> void:
 			_legacy_code(2, TapeColorRegistry.TEAM_INDEX, 1))
 	assert_eq(migrated.to_code(), GearStyleConfig.DEFAULT_CODE,
 			"an untouched pre-models save is still the stock kit")
-	assert_eq(migrated.stick_model, StickModelRegistry.STICK_CLASSIC,
+	assert_eq(migrated.stick_model, StickModelRegistry.STICK_STEALTH,
 			"a pre-stick-models save carries the house stick")
 
 

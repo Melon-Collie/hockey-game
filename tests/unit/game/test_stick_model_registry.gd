@@ -23,15 +23,15 @@ func test_table_is_index_aligned_with_its_names() -> void:
 
 
 func test_row_zero_is_the_house_stick() -> void:
-	var classic: int = StickModelRegistry.STICK_CLASSIC
-	assert_eq(StickModelRegistry.shaft_color(classic), StickModelRegistry.SHAFT_CLASSIC,
+	var stealth: int = StickModelRegistry.STICK_STEALTH
+	assert_eq(StickModelRegistry.shaft_color(stealth), StickModelRegistry.SHAFT_CLASSIC,
 			"the stock shaft is the near-black composite")
-	assert_eq(StickModelRegistry.brand_color(classic), Color(1.0, 1.0, 1.0),
+	assert_eq(StickModelRegistry.brand_color(stealth), Color(1.0, 1.0, 1.0),
 			"the stock wordmark is white")
-	assert_eq(StickModelRegistry.bands(classic).size(), 0, "the stock shaft has no bands")
-	assert_false(StickModelRegistry.has_blade_override(classic),
+	assert_eq(StickModelRegistry.bands(stealth).size(), 0, "the stock shaft has no bands")
+	assert_false(StickModelRegistry.has_blade_override(stealth),
 			"the stock blade is the carbon weave")
-	assert_eq(StickModelRegistry.blade_base_color(classic), StickModelRegistry.BLADE_CLASSIC,
+	assert_eq(StickModelRegistry.blade_base_color(stealth), StickModelRegistry.BLADE_CLASSIC,
 			"the stock bare blade is matte black")
 
 
