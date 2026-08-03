@@ -800,9 +800,9 @@ static func _build_head() -> ArrayMesh:
 	return _build_ball(HEAD_RADIUS, 10, 5, 1.0)
 
 
-# Shared part accessors for out-of-game figures (the lobby's bench dummies)
-# so every rendered player body — live or furniture — wears the same faceted
-# set from the same cache.
+# Shared part accessors for out-of-game figures (the lobby's bench dummies, the
+# locker mannequin) so every rendered player body — live or furniture — wears
+# the same faceted set from the same cache.
 static func shared_torso() -> ArrayMesh:
 	return _shared("torso", _build_torso)
 
@@ -821,6 +821,18 @@ static func shared_shoulder_cap() -> ArrayMesh:
 
 static func shared_thigh() -> ArrayMesh:
 	return _shared("thigh", _build_thigh)
+
+
+# The joint balls that close the leg chain. A figure built from thigh and sock
+# alone has a hole where each knee should be — the thigh ends at leg-local
+# −0.28 and the sock starts at −0.35, and the ball is what spans it. Both are
+# built at their real radii, so a placer scales them only by the build's dials.
+static func shared_hip_ball() -> ArrayMesh:
+	return _shared("hip", _build_hip)
+
+
+static func shared_knee_ball() -> ArrayMesh:
+	return _shared("knee", _build_knee)
 
 
 static func shared_sock() -> ArrayMesh:

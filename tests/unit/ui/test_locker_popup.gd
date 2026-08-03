@@ -269,6 +269,34 @@ func test_the_grips_stay_on_the_shaft_and_inside_the_arms_reach() -> void:
 						"hand %d is inside its arm's reach" % i)
 
 
+# Vertical extent of one part in rig space, transform included — the boot's
+# frame is rotated, so its own AABB says nothing on its own.
+func _span(mi: MeshInstance3D) -> Vector2:
+	var box: AABB = mi.transform * mi.get_aabb()
+	return Vector2(box.position.y, box.position.y + box.size.y)
+
+
+# The leg is a CHAIN, and every link has to touch the next one. Building it from
+# thigh and sock alone leaves a hole at each knee — the thigh ends well above
+# where the sock starts, and the joint ball is the only thing that spans it.
+func test_the_leg_chain_has_no_holes() -> void:
+	for height: int in [PlayerAttributes.HEIGHT_MIN, PlayerAttributes.HEIGHT_MEDIUM,
+			PlayerAttributes.HEIGHT_MAX]:
+		_open(GearStyleConfig.new(), StickTapeConfig.DEFAULT_CODE,
+				PlayerAttributes.new(height,
+					PlayerAttributes.coerce_weight(height, 190), 1, 1, 1, 1))
+		# Top-down, the way the rig chains them.
+		var chain: Array[String] = ["_hips", "_thighs", "_knees", "_socks",
+			"_collars", "_boots"]
+		for i: int in 2:
+			for link: int in chain.size() - 1:
+				var upper: Vector2 = _span(_part(chain[link], i))
+				var lower: Vector2 = _span(_part(chain[link + 1], i))
+				assert_lte(upper.x, lower.y,
+						"%s meets %s (leg %d, height %d)"
+						% [chain[link], chain[link + 1], i, height])
+
+
 # The fist and cuff bases scale their COLUMNS. Basis.scaled() scales in the
 # parent frame instead, which shears a rotated grip basis into a stretched
 # sheet — a blade-shaped artifact hanging off each wrist.
