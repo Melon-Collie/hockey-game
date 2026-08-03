@@ -173,11 +173,9 @@ static func is_over_net_footprint(world_xz: Vector2) -> bool:
 	var az: float = absf(world_xz.y)
 	return az >= GOAL_LINE_Z - NET_PUCK_BUFFER and az <= GOAL_LINE_Z + NET_DEPTH + NET_PUCK_BUFFER
 
-# Projects a skater's XZ clear of the goal-net exclusion box so a CharacterBody
-# cylinder can never seat into the concave net pocket (back + side panels), the
-# same wedge-and-freeze failure the boards have. The net is off the skater physics
-# mask (LAYER_NET, puck-only); skaters are held clear analytically here, mirroring
-# clamp_to_rink_inner for the boards. Returns world_xz unchanged when the center is
+# Projects a skater's XZ clear of the goal-net exclusion box — a smooth stand-in
+# for the concave net pocket (back + side panels), mirroring what
+# clamp_to_rink_inner does for the boards. Returns world_xz unchanged when the center is
 # already outside the box. Handles both net ends (|z|). Pure value-type math — no
 # allocation, hot-path safe at 120 Hz × actors.
 #
@@ -215,10 +213,8 @@ static func push_out_of_net(world_xz: Vector2, radius: float = 0.0) -> Vector2:
 	return Vector2(max_x, world_xz.y)
 
 # ── Goalie body containment (analytic skater block) ─────────────────────────
-# Base goalie footprint for the analytic skater body-block. The goalie body
-# parts used to stop skaters via move_and_slide (LAYER_GOALIE_BODIES on the
-# skater mask); with move_and_slide removed the block is analytic, like the
-# boards/net. Two footprints by stance: a cylinder while standing/RVH, a wide-
+# Base goalie footprint for the analytic skater body-block, like the boards/net.
+# Two footprints by stance: a cylinder while standing/RVH, a wide-
 # but-shallow oriented box in the butterfly (the leg pads spread laterally).
 # These mirror the blade clamp's goalie_block_radius / butterfly_pad_half_* on
 # SkaterController — the goalie is beatable-realism furniture here, not a precise

@@ -3,8 +3,8 @@ extends GutTest
 # PhaseCoordinator — phase-entry dispatch + goal-scoring pipeline.
 #
 # The coordinator's node-side effects (puck pickup-lock, goalie reset, skater
-# teleports, goal VFX, replay cinematic) need live CharacterBody3D/RigidBody3D
-# actors, so those are exercised via an empty registry + null puck (the getters
+# teleports, goal VFX, replay cinematic) need live scene actors, so those are
+# exercised via an empty registry + null puck (the getters
 # resolve to null/empty) — what's covered here is the *decision* logic: which
 # signals fire per phase, the carrier/own-goal scorer attribution, the
 # host-vs-client goal paths, and the client faceoff-prep guard.

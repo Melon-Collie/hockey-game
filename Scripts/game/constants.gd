@@ -6,59 +6,36 @@ extends Node
 # const class.
 
 # ── Collision Layers ──────────────────────────────────────────────────────────
+# NOTHING IN THE GAME COLLIDES THROUGH THE PHYSICS SERVER. Every contact — puck
+# vs. geometry, skater vs. skater, skater vs. boards / net / goalie, blade vs.
+# puck — is solved analytically in GDScript, and no code anywhere runs a ray,
+# shape, or overlap query. Consequently every collision_mask in the project is 0
+# and these layers produce no engine collision at all.
+#
+# They survive as IDENTITY TAGS on the remaining StaticBody3D geometry: the parts
+# carry a shape and a transform the analytic solvers read, and a NONZERO layer is
+# what marks such a part live — GoalieContactDetector skips any part whose
+# collision_layer is 0 (that is how a goalie part is disabled). Keep them distinct
+# so the tags stay readable.
+#
 # Layer 1 (bit 0, value  1) — walls, ice
-# Layer 2 (bit 1, value  2) — skater blade Area3Ds
-# Layer 3 (bit 2, value  4) — goalie stick (skaters pass through; puck contact is analytic)
-# Layer 4 (bit 3, value  8) — unused (was the puck RigidBody3D; the puck is a
-#                             plain Node3D now — every puck contact is analytic)
-# Layer 5 (bit 4, value 16) — skater CharacterBody3D bodies
-# Layer 6 (bit 5, value 32) — perimeter boards (nothing masks it since the puck
-#                             went analytic; kept isolated so nothing snags on it)
-# Layer 7 (bit 6, value 64) — goal-net frame + panels (same — puck caroms are
-#                             analytic, skaters clamp analytically)
+# Layer 2 (bit 1, value  2) — free (was the skater blade Area3Ds)
+# Layer 3 (bit 2, value  4) — goalie stick
+# Layer 4 (bit 3, value  8) — free (was the puck RigidBody3D)
+# Layer 5 (bit 4, value 16) — free (was the skater CharacterBody3D bodies)
+# Layer 6 (bit 5, value 32) — perimeter boards
+# Layer 7 (bit 6, value 64) — goal-net frame + panels
 # Layer 8 (bit 7, value 128) — goalie bodies (pads/body/head/glove/blocker)
 const LAYER_WALLS: int          = 1
-const LAYER_BLADE_AREAS: int    = 2
 const LAYER_GOALIE_STICK: int   = 4
-const LAYER_SKATER_BODIES: int  = 16
-# Boards live on their own layer so skaters DON'T collide with the concave board
-# mesh. A CharacterBody cylinder straddling the 256-segment corner mesh gets
-# pinned in a vertical-only crease (two facet normals → vertical cross product)
-# and freezes; skaters are kept off the boards and held inside the rink by
-# GameRules.clamp_to_rink_inner instead — the same rounded-rect boundary the
-# analytic puck sim caroms off. The ice stays on LAYER_WALLS, so skaters still
-# collide with it (goalie bodies moved to LAYER_GOALIE_BODIES below).
+# Boards and the net are tagged apart from the ice because the skater's boundary
+# is not their mesh: both are concave, and the rounded-rect boundary
+# (GameRules.clamp_to_rink_inner) and net box (GameRules.push_out_of_net) the
+# clamps use are smooth where the mesh is not — the same boundary the analytic
+# puck sim caroms off, so puck and skater agree on where the rink ends.
 const LAYER_BOARDS: int         = 32
-# The goal net (pipe frame + twine panels) lives on its own layer for the SAME
-# reason as the boards: a CharacterBody cylinder shoved into the concave net
-# pocket (back + side panels) wedges in a vertical-only crease and freezes — most
-# reliably when the goalie bulldozes a skater backward across the goal line before
-# the crease-dwell ghost fires. The puck plays the frame analytically
-# (PuckGeometryCollision); skaters are held clear analytically by
-# GameRules.push_out_of_net (see Skater.clamp_body_to_net).
 const LAYER_NET: int            = 64
-# Goalie bodies (pads/body/head/glove/blocker) live on their own layer, off
-# LAYER_WALLS, so a ghosted skater can drop them from its mask (see
-# Skater.set_ghost) while keeping the ice — a crease-dwell ghost must stop
-# jostling the goalie, which is the interference the mechanic exists to remove.
-# Non-ghost skaters still collide via MASK_SKATER; the puck's goalie contact is
-# analytic (GoalieContactDetector), so no mask is involved there. The goalie
-# stick stays on its separate LAYER_GOALIE_STICK (skaters always pass through
-# it, ghosted or not).
 const LAYER_GOALIE_BODIES: int  = 128
-
-# ── Composed Masks ────────────────────────────────────────────────────────────
-# Vestigial for movement since the Skater's move_and_slide was removed: the skater
-# now integrates its own motion (global_position += velocity·dt in
-# Skater._physics_process) and resolves ALL contact analytically — boards + net via
-# the GameRules clamps, skater-vs-skater via SkaterCollisionRules
-# (Skater._resolve_player_collisions), and goalie bodies via
-# GameRules.push_out_of_goalie (Skater.clamp_body_to_goalies). Nothing drives the
-# skater body off this mask anymore, but Skater.set_ghost still toggles it and it
-# names the layers a future physics query would target, so it's kept. Skaters keep
-# their LAYER_SKATER_BODIES layer (harmless; nothing masks it) so such a query
-# still has a target.
-const MASK_SKATER: int = LAYER_WALLS | LAYER_GOALIE_BODIES  # ice + goalie bodies; all skater contact is analytic now
 
 # ── Network (transport-level) ─────────────────────────────────────────────────
 const PORT: int = 7777

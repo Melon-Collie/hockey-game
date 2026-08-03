@@ -154,9 +154,9 @@ func spawn(
 	# record.team — the goalie's `carrier.get_team_id()` reads the live value
 	# from the registry rather than a cached field that drifts.
 	spawned.skater.set_team_id_resolver(func() -> int: return resolve_team_id_for_peer(peer_id))
-	# Analytic skater-vs-skater contact iterates the cached skater list (skaters are
-	# off each other's move_and_slide mask now — see Skater._resolve_player_collisions).
-	# peer_id is the machine-stable tiebreak for the aggressor gate's head-on case.
+	# Analytic skater-vs-skater contact iterates this cached skater list (see
+	# Skater._resolve_player_collisions). peer_id is the machine-stable tiebreak for
+	# the aggressor gate's head-on case.
 	spawned.skater.set_skater_collision_provider(skaters)
 	spawned.skater.collision_tiebreak_id = peer_id
 	spawned.skater.set_player_name(player_name)

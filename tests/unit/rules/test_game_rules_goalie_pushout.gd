@@ -1,7 +1,7 @@
 extends GutTest
 
 # GameRules.push_out_of_goalie — analytic skater-vs-goalie body block. Holds a
-# skater's center clear of the goalie footprint now that move_and_slide is gone
+# skater's center clear of the goalie footprint (skater-vs-goalie is analytic)
 # and the goalie body parts are off the skater physics mask (see
 # Skater.clamp_body_to_goalies). Two footprints by stance:
 #   - standing / RVH → a cylinder of `radius` around the goalie center

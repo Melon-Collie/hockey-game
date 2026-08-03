@@ -112,7 +112,7 @@ main thread, tick N            worker thread
      (InputStates from N−1)
      apply via _process_input   ── running: dispatch all bots+goalies
      → SkaterController          ── against snapshot N−1, producing
-[0]  Skater.move_and_slide          InputStates for tick N
+[0]  Skater integration             InputStates for tick N
 [+1] puck analytic step
 [+2] capture + broadcast
  └─  build+enrich snapshot N,
@@ -127,7 +127,7 @@ main thread, tick N            worker thread
   against the handed-off snapshot. Output: a result table `{peer_id: InputState}`
   + goalie decisions.
 - **Apply (main):** each controller reads its `InputState` from the result table
-  and runs `_process_input` at physics priority −1 (before `Skater.move_and_slide`
+  and runs `_process_input` at physics priority −1 (before the skater integrates
   at 0), identical to today — just fed a pre-computed input instead of computing
   inline.
 
@@ -212,7 +212,7 @@ This is valuable independent of threading (it's the clean seam #519's god-class
 decomposition wants anyway) and it de-risks the hard part: land the
 reorganization first, prove the benchmark and full suite are unchanged, *then*
 flip the loop onto a worker as an isolated change. The ordering/timing constraint
-to preserve: the decision→`_process_input`→`move_and_slide` order per skater, and
+to preserve: the decision→`_process_input`→integration order per skater, and
 the snapshot-age the agents currently read.
 
 ## Threading mechanics (Godot)

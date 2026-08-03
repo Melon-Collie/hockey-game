@@ -125,10 +125,9 @@ func _rebuild() -> void:
 		child.queue_free()
 
 	_net_body = StaticBody3D.new()
-	# LAYER_NET (not LAYER_WALLS): skaters DON'T physics-collide with the panels —
-	# a CharacterBody cylinder wedges in the concave net pocket. Skaters are held
-	# clear analytically via GameRules.push_out_of_net (see Skater.clamp_body_to_net);
-	# the puck plays the panels analytically (PuckGeometryCollision).
+	# Identity tag only (see Constants): the puck plays the panels analytically
+	# (PuckGeometryCollision) and the skater is held out of the net pocket by
+	# GameRules.push_out_of_net (see Skater.clamp_body_to_net).
 	_net_body.collision_layer = Constants.LAYER_NET
 	_net_body.physics_material_override = NET_MATERIAL  # twine absorbs; puck drops instead of pinging
 	add_child(_net_body)

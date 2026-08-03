@@ -101,6 +101,12 @@ raycasts or shape queries anywhere. The **goalie is not a physics body** at all
    skater-vs-goalie-body, is now analytic (`GameRules.push_out_of_goalie` /
    `Skater.clamp_body_to_goalies`, mirroring the boards/net clamps). Ice was already a
    no-op under the Y-lock; skater-vs-skater / boards / net were already analytic.
+   The follow-on is done too: `Skater` is a `Node3D` with a plain `velocity` field,
+   its blade / slapper-zone `Area3D`s and collision shape are gone, and no actor is
+   left in the simulation. That last step is where the host budget actually moved —
+   any single active body or monitoring sensor costs a fixed ~0.4 ms/tick of Jolt
+   step pipeline (measured, 4-core) regardless of what it collides with, so a
+   partial removal buys nothing.
 
 Existing analytic backstops that become the primary path: `board_rescue_velocity`
 (C1), the save deaden (C2), the grounded-puck Y-pin + height/speed clamps (C3), the

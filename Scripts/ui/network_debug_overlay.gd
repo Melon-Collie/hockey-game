@@ -601,11 +601,13 @@ func _render_frame_cost() -> void:
 			int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)),
 			Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME) / 1_000_000.0],
 		"what the frame submits, engine-wide (includes shadow passes and every SubViewport); draw calls are the CPU render driver")
-	# Jolt's own load. Skaters integrate analytically (CharacterBody3D, no
-	# move_and_slide) and the puck is custom-integrated, so nothing should be
-	# under simulation — active bodies above ~0 means a body slipped back into
-	# the solver, and the number separates "the physics SERVER is expensive" from
-	# "our _physics_process is expensive", which the frame residual cannot.
+	# Jolt's own load. Every actor integrates itself and every contact is analytic,
+	# so the only bodies left are inert static geometry: all three numbers should
+	# read 0, and ANY active body means one slipped back into the solver — which
+	# costs a fixed ~0.4 ms/tick of step pipeline on its own, whether or not it
+	# collides with anything. The number also separates "the physics SERVER is
+	# expensive" from "our _physics_process is expensive", which the frame residual
+	# cannot.
 	_info("Physics 3D", "%d active · %d pairs · %d islands" % [
 			int(Performance.get_monitor(Performance.PHYSICS_3D_ACTIVE_OBJECTS)),
 			int(Performance.get_monitor(Performance.PHYSICS_3D_COLLISION_PAIRS)),

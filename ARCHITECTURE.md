@@ -66,22 +66,31 @@ F3 is a *live, local* diagnostic — only the player at that machine sees it, wh
 
 ### Collision Layers
 
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| `LAYER_WALLS` | 1 | Ice surface + goalie body parts |
-| `LAYER_BLADE_AREAS` | 2 | Skater blade `Area3D`s |
-| `LAYER_GOALIE_STICK` | 4 | Goalie stick (skaters pass through; puck contact is analytic) |
-| `LAYER_SKATER_BODIES` | 16 | Skater `CharacterBody3D` bodies |
-| `LAYER_BOARDS` | 32 | Perimeter boards (skaters clamped analytically; nothing masks it since the puck went analytic) |
-| `LAYER_NET` | 64 | Goal-net frame + panels (same — skaters and puck both handled analytically) |
+**Nothing in the game collides through the physics server.** Every actor
+integrates its own motion and every contact — puck vs. geometry, skater vs.
+skater, skater vs. boards / net / goalie, blade vs. puck — is solved analytically
+in GDScript. No code runs a ray, shape, or overlap query, and every
+`collision_mask` in the project is `0`. There are no composed masks left.
 
-Layer 8 (`LAYER_PUCK`) is retired: the puck is a plain `Node3D` — no physics
-body on any peer — so every puck contact (boards, goal frame, goalie, blades,
-bodies) resolves analytically in the shared solver.
+| Constant | Value | Tags |
+|----------|-------|------|
+| `LAYER_WALLS` | 1 | Ice surface |
+| `LAYER_GOALIE_STICK` | 4 | Goalie stick |
+| `LAYER_BOARDS` | 32 | Perimeter boards |
+| `LAYER_NET` | 64 | Goal-net frame + panels |
+| `LAYER_GOALIE_BODIES` | 128 | Goalie pads / body / head / glove / blocker |
 
-Composed masks: `MASK_SKATER = LAYER_WALLS | LAYER_SKATER_BODIES` (ice + goalie bodies + other skaters; boards **and** the net are off the skater mask — a `CharacterBody` cylinder wedges in those concave meshes, so both are held clear analytically: boards via `GameRules.clamp_to_rink_inner` / `Skater.clamp_body_to_rink`, the net via `GameRules.push_out_of_net` / `Skater.clamp_body_to_net`).
+What survives is a handful of `StaticBody3D`s carrying shapes and transforms the
+analytic solvers read, and the layers above are identity tags on them: a NONZERO
+layer marks a part live, which is how `GoalieContactDetector` skips a disabled
+one. Layers 2 (skater blade `Area3D`s), 8 (the puck `RigidBody3D`) and 16 (skater
+`CharacterBody3D`s) are retired along with the nodes that carried them.
 
-The puck's pickup zone `Area3D` sits on `LAYER_WALLS | LAYER_BLADE_AREAS` (3) with `collision_mask = LAYER_BLADE_AREAS` (2) so it detects blade `Area3D`s via `area_entered`.
+Keeping every actor out of the simulation is worth real host budget, not just
+tidiness: a single active body or monitoring sensor switches on Jolt's per-step
+pipeline for a fixed ~0.4 ms/tick (measured, 4-core) whether or not it collides
+with anything. `Performance.PHYSICS_3D_ACTIVE_OBJECTS` should read 0 — the
+network debug overlay surfaces it for exactly this reason.
 
 ### Game Phases
 
@@ -99,7 +108,7 @@ Phase list, durations, constants, and the movement-lock set live under **Game Fl
 
 **`_carrier_peer_id` managed by reliable RPCs, never world state.** Unreliable packets can arrive out of order relative to pickup/release RPCs, causing the puck to flicker between carried and loose. Reliable RPCs guarantee ordering; world state is ignored for carrier identity.
 
-**Immediate physics snap, visual offset blend for the local player.** The `CharacterBody3D` always sits at the authoritative position — gradual physics blending would create a window where the client is in a known-wrong position for collision/contact logic. Instead, `LocalController.reconcile` captures `pre_reconcile_visual_pos`, runs the input replay (which snaps the body to truth), then sets `skater.visual_offset = pre_reconcile_visual_pos - skater.global_position`. `Skater.visual_offset` (`skater.gd:154`) writes into `mesh_root.position` only, so the rendered mesh stays where it was on screen while the physics body has moved. Each physics frame `LocalController._physics_process` decays the offset by `_RECONCILE_VISUAL_ALPHA = 0.20` (≈88ms to 99% convergence). The game camera reads `global_position + visual_offset` so it tracks the smoothed visual rather than fighting the physics snap; `teleport_to` clears the offset so faceoff snaps don't carry residue. Remote players don't currently need this — they're interpolated between buffered snapshots, which is inherently smooth. If trajectory-style forward-prediction is ever extended to remote skaters, the same `Skater.visual_offset` mechanism is the natural place to hook in.
+**Immediate physics snap, visual offset blend for the local player.** The body always sits at the authoritative position — gradual physics blending would create a window where the client is in a known-wrong position for collision/contact logic. Instead, `LocalController.reconcile` captures `pre_reconcile_visual_pos`, runs the input replay (which snaps the body to truth), then sets `skater.visual_offset = pre_reconcile_visual_pos - skater.global_position`. `Skater.visual_offset` (`skater.gd:154`) writes into `mesh_root.position` only, so the rendered mesh stays where it was on screen while the physics body has moved. Each physics frame `LocalController._physics_process` decays the offset by `_RECONCILE_VISUAL_ALPHA = 0.20` (≈88ms to 99% convergence). The game camera reads `global_position + visual_offset` so it tracks the smoothed visual rather than fighting the physics snap; `teleport_to` clears the offset so faceoff snaps don't carry residue. Remote players don't currently need this — they're interpolated between buffered snapshots, which is inherently smooth. If trajectory-style forward-prediction is ever extended to remote skaters, the same `Skater.visual_offset` mechanism is the natural place to hook in.
 
 **The shooter's release rides the one predicted mode via a local-release seed (Phase 4b).** There is no separate trajectory-prediction mode: on a local release/nudge, `PuckController` stores a release seed (origin + velocity + `estimated_host_time()` stamp — the same client-sent origin the host fires from) and `_predict_loose` runs the shared analytic sim forward from the SEED instead of the newest snapshot, because every buffered snapshot still shows the puck carried until the host processes the release ~one-way later. The seed hands over to normal snapshot prediction on the first loose snapshot stamped at/after the seed — the shot-launch divergence probe measures exactly that seam — and a 0.5 s timeout is the deep-loss escape (stop trusting a shot the host may never have fired). Contacts need no special exit machinery: a goalie contact is the same prediction STOP as any predicted puck (hold at the contact — the save outcome is a host decision), frame bounces are the shared solver's own geometry, and the stateless re-predict folds the authoritative outcome in the moment its snapshot lands. No goal is ever predicted — the prediction loop parks an inbound puck on the goal line inside the posts (all pucks, not just the shooter's) and lets the horn arrive from the host.
 

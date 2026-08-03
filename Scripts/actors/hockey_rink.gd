@@ -207,9 +207,9 @@ var _ice_material: ShaderMaterial = null
 var _render_targets_freed: bool = false
 
 func _ready() -> void:
-	# Boards live on their own collision layer (puck masks it, skaters don't) so a
-	# skater CharacterBody cylinder never wedges in the concave corner mesh; the
-	# skater is held inside the rink analytically instead. See Constants.LAYER_BOARDS.
+	# Identity tag only — nothing masks it (see Constants). Both the skater and the
+	# puck are held inside the rink by the smooth analytic boundary, not by this
+	# 256-segment corner mesh.
 	collision_layer = Constants.LAYER_BOARDS
 	_rebuild()
 	if not Engine.is_editor_hint() and _scratch_map != null:
@@ -572,14 +572,9 @@ func _add_ice(tex: ImageTexture) -> void:
 	ice_body.physics_material_override = phys_mat
 	add_child(ice_body)
 
-	# Ice collision: a deep slab, top face at y=0. Depth matters — a flat-bottomed
-	# body resting flush on a *thin* slab generates contacts against BOTH faces
-	# (the collision margin spans the volume), so a skater on the ice picked up an
-	# opposing +Y/-Y normal pair. Harmless on open ice (Y is axis-locked), but in
-	# a corner those two verticals plus the wall normal leave move_and_slide no
-	# free direction and the skater freezes against the boards. A 2 m slab keeps
-	# the bottom face far below any body resting on the surface, so only the +Y
-	# top contact is ever generated. Invisible and free (nothing lives below y=0).
+	# Ice collision: a deep slab, top face at y=0. Inert — nothing masks it, and
+	# nobody stands on it (skater Y is fixed and the puck's ice plane is a
+	# constant). It survives as the physical twin of the visible surface.
 	var col := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
 	shape.size = Vector3(rink_width, 2.0, rink_length)

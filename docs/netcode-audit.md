@@ -187,7 +187,7 @@ lead, lag-comp rewinds — keys off `estimated_host_time()`. The current clock:
 
 - **C1 (M).** Capture + broadcast run in `GameManager._physics_process`
   (autoload, priority 0), which executes **before** the scene's
-  `Skater.move_and_slide` (priority 0, tree-after-autoloads) and the puck
+  `Skater`'s integration step (priority 0, tree-after-autoloads) and the puck
   step (priority +1). So the packet that leaves at tick N carries the
   positions produced by tick N−1 — every tick's sim result waits ~8.3 ms
   before departure. Broadcasting from a post-physics hook (a node with
@@ -202,7 +202,7 @@ lead, lag-comp rewinds — keys off `estimated_host_time()`. The current clock:
   (client prediction snapshots are taken post-move via
   `skater.post_move_integrated`, and host capture reads post-move positions
   of the prior tick) — moving the capture point keeps that consistency
-  *only* if capture still happens after `move_and_slide` for the same tick,
+  *only* if capture still happens after the skater integrates for the same tick,
   which the priority-2 placement gives you. Re-verify one skater's
   ack-compare telemetry (`reconcile_match %`) after the move.
 - **C2 (L).** At capture time, `SkaterController` (priority −1) has already
@@ -379,8 +379,8 @@ against the code before inclusion.)
   about. `PredictedState` already records `shot_state` per tick; it is never
   used to seed the replay.
 - **F6 (M/L). Remote skater bodies still run full physics every tick, then
-  get overwritten.** `Skater._physics_process` runs `move_and_slide()` +
-  `_resolve_player_collisions()` unconditionally (`skater.gd:686-693`);
+  get overwritten.** `Skater._physics_process` integrates and runs
+  `_resolve_player_collisions()` unconditionally;
   controllers are spawned as *siblings after* the skater
   (`actor_spawner.gd:124-126`), so on clients the interpolator overwrites
   the moved position each tick and the work is discarded. Costs: wasted
