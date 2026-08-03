@@ -5,12 +5,13 @@ extends RefCounted
 # in docs/ai-threading-plan.md).
 #
 # The expensive decide() runs on a persistent worker thread while the main thread
-# does the rest of the physics tick. The main thread NEVER blocks on the worker:
-# each frame it harvests a finished batch if one is ready, else it reuses last
-# frame's decision (bots coast on their retained move intent). So the frame rate
-# is decoupled from the AI cost — a heavy AI tick lets the worker fall a frame or
-# two behind instead of stalling the host. Decisions are applied a frame or more
-# late; a bot's 6-60 Hz decision cadence already tolerates that.
+# does the rest of the physics tick. No tick ever blocks on the worker: each frame
+# it harvests a finished batch if one is ready, else it reuses last frame's
+# decision (bots coast on their retained move intent). So the frame rate is
+# decoupled from the AI cost — a heavy AI tick lets the worker fall a frame or two
+# behind instead of stalling the host. Decisions are applied a frame or more late;
+# a bot's 6-60 Hz decision cadence already tolerates that. (await_idle is the one
+# blocking call, on the despawn path only — see there.)
 #
 # Why this is safe to thread (see the plan): decide() reads only the frozen
 # WorldSnapshot + the frozen TeamBrainView + agent-local state and writes only
@@ -43,6 +44,9 @@ extends RefCounted
 # the coordinator), so it's validated in game.
 
 # ── Worker plumbing ──────────────────────────────────────────────────────────
+# Give-up bound for await_idle — see there.
+const AWAIT_IDLE_TIMEOUT_US: int = 100_000
+
 var _thread: Thread = null
 var _wake := Semaphore.new()       # main -> worker: "decide the current batch"
 var _mutex := Mutex.new()          # guards _result_ready only
@@ -63,7 +67,6 @@ var _next_bots: Array[AIController] = []
 # reused buffers below at kick time so the worker never reads them mid-mutation.
 var _worker_snapshot: WorldSnapshot = WorldSnapshot.new()
 var _worker_puck: PuckNetworkState = PuckNetworkState.new()
-var _worker_delta: float = 0.0
 
 # The live TeamBrains the worker ticks. Assigned (not copied) at kick time while
 # the worker is idle. GameManager only ever replaces the whole team_brains array
@@ -71,13 +74,16 @@ var _worker_delta: float = 0.0
 # batch keeps the brains alive even if the host tears the match down underneath.
 var _worker_brains: Array[TeamBrain] = []
 
-# Elapsed host time since the last kick, handed to TeamBrain.tick as its delta.
-# NOT the frame delta: kicks are skipped while the worker is still busy, and a
-# brain that only saw kick frames would age its 6 Hz accumulator — and its ping
-# expiry, which is real-time — slow by exactly the frames it missed. Summing
-# across the skip keeps brain cadence correct under worker overrun.
-var _brain_delta_accum: float = 0.0
-var _worker_brain_delta: float = 0.0
+# Elapsed host time since the last kick — the delta every batch runs against,
+# brains and agents alike. NOT the frame delta: kicks are skipped while the
+# worker is still busy, so a batch that only ever saw kick-frame deltas would
+# age every timer downstream of it slow by exactly the frames it missed — the
+# brain's 6 Hz accumulator and its real-time ping expiry, and each agent's own
+# cooldowns and state durations. Summing across the skip keeps all of them in
+# real time. When the worker keeps up (a kick every frame, the healthy case)
+# this equals the frame delta, so nothing changes there.
+var _delta_accum: float = 0.0
+var _worker_delta: float = 0.0
 
 # Diagnostics: wall-clock µs of the most recent worker batch, and of the brain
 # tick nested inside it. Written by the worker, read by the main thread for
@@ -126,21 +132,12 @@ func dispatch(bots: Array[AIController], brains: Array[TeamBrain],
 		snapshot: WorldSnapshot, delta: float) -> void:
 	if not _thread_started:
 		_start_thread()
-	# Accrue every frame, not just kick frames — see _brain_delta_accum.
-	_brain_delta_accum += delta
+	# Accrue every frame, not just kick frames — see _delta_accum.
+	_delta_accum += delta
 
 	# A. Harvest — only if the worker has finished. Never blocks: if the batch is
 	#    still cooking we leave _run_in_flight set and reuse last frame's decision.
-	if _run_in_flight:
-		_mutex.lock()
-		var ready: bool = _result_ready
-		if ready:
-			_result_ready = false
-		_mutex.unlock()
-		if ready:
-			_run_in_flight = false
-			for b: AIController in _worker_bots:
-				b.collect_one_timer_ready()
+	_try_harvest()
 
 	# B+C. Resolve each bot's mode on the main thread (begin_tick does the special
 	#      non-agent modes' node writes) and rebuild this frame's normal batch.
@@ -182,12 +179,71 @@ func dispatch(bots: Array[AIController], brains: Array[TeamBrain],
 		for b: AIController in _worker_bots:
 			b.prep_for_decide()
 		_stabilize_snapshot(snapshot)
-		_worker_delta = delta
-		_worker_brain_delta = _brain_delta_accum
-		_brain_delta_accum = 0.0
+		_worker_delta = _delta_accum
+		_delta_accum = 0.0
 		_run_in_flight = true
 		_wake.post()
 		HostCostProbe.record(HostCostProbe.Section.AI_KICK, Time.get_ticks_usec() - t_half)
+
+
+# Collect a finished batch if one is ready. Returns true when the worker is idle
+# afterwards — either it had nothing in flight, or its results are now harvested
+# and its buffers are safe for the main thread to read and rewrite. Never blocks.
+func _try_harvest() -> bool:
+	if not _run_in_flight:
+		return true
+	_mutex.lock()
+	var ready: bool = _result_ready
+	if ready:
+		_result_ready = false
+	_mutex.unlock()
+	if not ready:
+		return false
+	_run_in_flight = false
+	for b: AIController in _worker_bots:
+		b.collect_one_timer_ready()
+	return true
+
+
+# Block until the worker is idle, then release the batch's hold on its bots.
+#
+# The ONE place the host is allowed to wait on the worker, and it exists for a
+# correctness problem a non-blocking path cannot solve: freeing an AIController
+# the worker is executing decide() on. _worker_bots holds those references for
+# the length of a batch, and a despawn (peer disconnect, tutorial teardown)
+# queue_frees the controller from the main thread — the free lands at the end of
+# the frame, which can be mid-batch. There is no check that makes that safe after
+# the fact; the object has to outlive the call.
+#
+# Blocking here does not violate the never-stall-the-host rule, which is about
+# the per-tick path. Despawns are events, not ticks, and the wait is bounded by
+# one batch. Call it before dropping any bot the coordinator may be holding.
+func await_idle() -> void:
+	# Bounded, because the only way this never completes is a worker that died
+	# mid-batch (a script error inside decide() aborts the thread's call without
+	# ever setting the ready flag). A dead worker is not running decide() either,
+	# so giving up is safe — where an unbounded spin would hang the game. The
+	# bound is ~12 batches at the 8333 us tick budget: far past any real batch.
+	var deadline_us: int = Time.get_ticks_usec() + AWAIT_IDLE_TIMEOUT_US
+	while not _try_harvest():
+		if Time.get_ticks_usec() > deadline_us:
+			push_error("AICoordinator.await_idle: worker did not finish in %d us — "
+					% AWAIT_IDLE_TIMEOUT_US
+					+ "proceeding without it (worker presumed dead).")
+			# Reset both halves of the handshake, not just the in-flight flag: a
+			# worker that was merely slow rather than dead would otherwise raise
+			# the ready flag with nothing in flight, and the NEXT batch would be
+			# harvested a frame early — read while it was still being written.
+			_run_in_flight = false
+			_mutex.lock()
+			_result_ready = false
+			_mutex.unlock()
+			break
+		OS.delay_usec(100)
+	# Drop the finished batch's references so a controller freed after this
+	# returns is not still reachable from here. The next kick refills the list
+	# from the host's live bot array.
+	_worker_bots.clear()
 
 
 # ── Deferred brain mutation API (host, main thread) ──────────────────────────
@@ -339,7 +395,7 @@ func _worker_loop() -> void:
 		# main, so cross-agent effects (one-timer readiness, slot assignment)
 		# resolve exactly as before.
 		for brain: TeamBrain in _worker_brains:
-			brain.tick(_worker_brain_delta, snap)
+			brain.tick(d, snap)
 		for brain: TeamBrain in _worker_brains:
 			brain.build_view(snap)
 		last_brain_us = Time.get_ticks_usec() - t0
@@ -375,7 +431,7 @@ func shutdown() -> void:
 	_pending_exclude.clear()
 	_pending_include.clear()
 	_pending_force_retick = false
-	_brain_delta_accum = 0.0
+	_delta_accum = 0.0
 	_ping_chase_by_team.clear()
 	_state_by_team.clear()
 	_coverage_downgraded_by_team.clear()

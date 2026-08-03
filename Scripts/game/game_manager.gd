@@ -1239,6 +1239,9 @@ func _despawn_skater_for_peer(peer_id: int) -> void:
 		puck.remove_skater_cooldown(record.skater)
 	if _state_buffer_manager != null:
 		_state_buffer_manager.remove_player(peer_id)
+	# remove() queue_frees the controller, and the AI worker may be running
+	# decide() on it right now — wait the batch out before it can be freed.
+	_ai_coordinator.await_idle()
 	_registry.remove(peer_id)
 
 
@@ -5364,6 +5367,9 @@ func despawn_tutorial_bot(record: PlayerRecord) -> void:
 		puck.drop()
 	if record.team != null and record.team.team_id < team_brains.size():
 		_ai_coordinator.queue_include_skater(record.team.team_id, record.peer_id)
+	# See _despawn_skater_for_peer — remove() queue_frees a controller the worker
+	# may be mid-decide() on.
+	_ai_coordinator.await_idle()
 	_registry.remove(record.peer_id)
 
 

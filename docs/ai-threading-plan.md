@@ -3,17 +3,20 @@
 Status: **shipped — threading is the only path** (the single-threaded fallback
 has been removed). Bot decisions run on a dedicated AI worker thread
 (`AICoordinator`). The route there: centralize dispatch (2a) → freeze the brain
-view (3a) → split decide/apply (3b) → introduce a **non-blocking** worker (3c).
-The worker handles **skaters + brains**; the **goalie stays on the main thread**
-(non-scaling 2 actors, runs in parallel with the worker). Model A shipped
-(whole-dispatch, decisions applied a frame or more late); Model B (live reception
-re-aim on the main thread) remains the reserve lever if reception feel needs it.
-The worker NEVER blocks the host — a slow batch just makes bots coast on last
-frame's decision, so the frame rate is decoupled from AI cost. Concurrency safety
-uses a mutex on the "batch ready" flag plus per-kick copies of the fields the host
-mutates in place (see *Concurrency notes* below — the earlier "no mutex" note is
-superseded). Perf is validated in a real/Steam build, not the editor (debug +
-editor overhead masks the sim win); watch F3 sim-tick under bot load.
+view (3a) → split decide/apply (3b) → introduce a **non-blocking** worker (3c) →
+move the brain tick onto it as well (3d). The worker handles **skaters +
+brains**; the **goalie stays on the main thread** (non-scaling 2 actors, runs in
+parallel with the worker). Model A shipped (whole-dispatch, decisions applied a
+frame or more late); Model B (live reception re-aim on the main thread) remains
+the reserve lever if reception feel needs it. No host tick ever blocks on the
+worker — a slow batch just makes bots coast on last frame's decision, so the
+frame rate is decoupled from AI cost. (`await_idle()` on the despawn path is the
+one blocking call, and it is not on a tick path.) Concurrency safety uses a mutex
+on the "batch ready" flag, per-kick copies of the fields the host mutates in
+place, and — for the brains — a deferred-write queue plus published read mirrors
+(see *Concurrency notes* below; the earlier "no mutex" note is superseded). Perf
+is validated in a real/Steam build, not the editor (debug + editor overhead masks
+the sim win); watch F3 sim-tick under bot load.
 
 ## The problem
 
@@ -278,12 +281,32 @@ flips, mid-sim), and `exclude/include_skater` (on spawn/despawn). Concurrent
 read/write of a Dictionary/field across threads in GDScript is undefined
 behavior — a rare heisenberg crash, unacceptable even if infrequent.
 
-The fix is the world-snapshot principle applied to brain output: **tick the
-brains on the main thread, then freeze everything the agent reads into plain
-data (a per-team/per-peer frozen view) at kick time.** The worker's agents read
-the frozen view, never the live brain, so main can mutate the live brain freely
-during the worker window. This is why brains tick on *main* in Phase 3 (not on
-the worker) — only the per-agent dispatch goes to the worker.
+The fix is the world-snapshot principle applied to brain output: **freeze
+everything the agent reads into plain data (a per-team/per-peer frozen view)
+before the agents run.** The worker's agents read the frozen view, never the
+live brain.
+
+Phase 3a shipped that with the brains still ticking on main and `build_view`
+running at kick time. **Phase 3d moved the brain tick onto the worker as well**
+(tick → `build_view` → decide, all inside one batch), because the 6 Hz brain is
+force-reticked on every carrier flip and its cost therefore clusters in scrums —
+on the worst ticks, which are the ones that set host FPS. The frozen view is
+unchanged; what changed is who may touch the live brain and when:
+
+- Every host-raised mutation (`apply_ping`, `_force_retick_team_brains`,
+  `exclude/include_skater`) is queued on `AICoordinator` and applied **by the
+  main thread** in the idle window before the next kick. Nothing crosses the
+  thread boundary; the cost is a deferral of at most a frame or two.
+- The two live fields main still reads every frame outside that window — the
+  ping-elected chaser (snapshot enrichment) and possession state / coverage
+  downgrade (the F6 shape tally) — are published to plain mirrors at kick time.
+  Both of their sources are mutated by the worker's tick (`ping_directives` is
+  advanced and expired in place), so a live read there was the same hazard.
+- `TeamBrain.tick` takes elapsed-since-last-kick, not the frame delta. Kicks are
+  skipped while the worker is busy, and a brain seeing only kick frames would
+  age its 6 Hz accumulator and its real-time ping expiry slow by exactly the
+  frames it missed. The agents' `decide()` delta is summed the same way, for the
+  same reason.
 
 ## Staged implementation
 
@@ -318,14 +341,23 @@ the worker) — only the per-agent dispatch goes to the worker.
      decisions (the 1-tick delay buys full overlap with physics). One-timer
      readiness moved off `_set_one_timer_ready` into a main-thread
      `push_one_timer_ready()` collection so `decide()` writes no shared state.
-     Worker starts lazily, joined on world teardown + app-exit. No mutex /
-     double-buffer (results read only after `_done`, before the next kick).
-     **Flip `AICoordinator.THREADED_AI` to `true` + rebuild to enable.** Suite
-     green on the inline path; the threaded path compiles but can't be exercised
-     headlessly — needs an in-game playtest with the flag on, watching the F3
-     host-frame telemetry for the main-thread win.
+     Worker starts lazily, joined on world teardown + app-exit. No
+     double-buffer (results read only after the ready flag, before the next
+     kick). Shipped behind a flag that has since been removed — threading is
+     now the only path.
+   - **3d — Move the brain tick onto the worker too** *(done — committed).*
+     `brain.tick` + `build_view` run at the head of each batch instead of on
+     main, taking the force-retick spikes off the physics thread. Host-raised
+     brain writes are queued and drained on main in the idle window; the two
+     fields main still reads live are published to mirrors at kick. Batch delta
+     is elapsed-since-last-kick so nothing downstream ages slow when a kick is
+     skipped. `await_idle()` added for the despawn path — the one place main
+     blocks on the worker, because a controller cannot be freed while `decide()`
+     is executing on it. See **The brain-state race** above. Suite green; the
+     threaded path can't be exercised headlessly, so it needs an in-game
+     playtest watching F3.
 4. **Validate & decide** — if reception aim lag is felt, escalate the reception
-   re-aim to Model B. Tune, then flip the flag on by default.
+   re-aim to Model B.
 
 ### Concurrency notes (as shipped)
 
@@ -341,11 +373,20 @@ is stable for the whole batch, and every main write to when the worker is idle:
 - **InputState:** the worker writes each bot's `_pending_input` during its batch;
   main reads it only in `apply_decision`, which runs only while the worker is idle
   (harvested, before the next kick). No overlap, so no second buffer.
-- **Agent stamps + brain view are built at kick (worker idle).** Rule set / host
-  time move out of the per-frame `begin_tick` into `prep_for_decide`, and
-  `build_view` runs at kick, not every frame — so nothing the worker reads is
-  rewritten mid-batch. A main-only `_stale_pending` flag (not a `_pending_input`
-  write) handles the special-mode → normal transition.
+- **Agent stamps are set at kick (worker idle).** Rule set / host time move out
+  of the per-frame `begin_tick` into `prep_for_decide`, so nothing the worker
+  reads is rewritten mid-batch. A main-only `_stale_pending` flag (not a
+  `_pending_input` write) handles the special-mode → normal transition.
+- **Live brains belong to the worker.** It ticks them and builds their views
+  inside the batch. Main's writes are queued and drained in the idle window
+  before the next kick; main's two remaining per-frame reads go through mirrors
+  published at kick.
+- **Despawn is the one blocking point.** `_worker_bots` holds controller
+  references for the length of a batch, and `PlayerRegistry.remove` queue_frees
+  the controller — a free that can land mid-batch. No after-the-fact check makes
+  that safe, so the despawn paths call `await_idle()` first. Despawns are events,
+  not ticks, and the wait is bounded by one batch (and by a give-up timeout, so a
+  worker that died inside `decide()` can't hang the game).
 - **Snapshot:** fields the host rebuilds fresh each frame (skater_states, the
   teammate caches) are shared by reference; fields it mutates IN PLACE every frame
   (the accel-tracker dicts shared onto the snapshot, the reused carrier-debounce
