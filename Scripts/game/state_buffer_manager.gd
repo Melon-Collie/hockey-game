@@ -20,6 +20,28 @@ var _goalie_ptrs: Dictionary = {}      # team_id -> int
 var _goalie_counts: Dictionary = {}    # team_id -> int (entries written, capped at BUFFER_SIZE)
 var _capture_count: int = 0
 
+# Caller-owned bracket result: _find_bracket* fill this instead of returning a
+# fresh 3-element Array. The AI path queries every actor once per host tick
+# (~9 arrays/tick at 5v5), and a bracket never outlives the _interpolate_* call
+# that reads it, so one shared instance is enough. `from`/`to` are Variant
+# because the three bracket finders serve three different state types.
+class Bracket:
+	var t: float = -1.0            # < 0 = no valid bracket; read `to` alone
+	var from_state: Variant = null
+	var to_state: Variant = null
+
+	func set_none(newest: Variant) -> void:
+		t = -1.0
+		from_state = null
+		to_state = newest
+
+	func set_pair(frac: float, from_v: Variant, to_v: Variant) -> void:
+		t = frac
+		from_state = from_v
+		to_state = to_v
+
+var _bracket := Bracket.new()
+
 
 func setup(registry: PlayerRegistry, goalie_controllers: Array) -> void:
 	for peer_id: int in registry.all():
@@ -110,8 +132,19 @@ func latest_goalie_state(team_id: int) -> GoalieNetworkState:
 
 # ── Historical query (used by Phase 7 lag compensation) ──────────────────────
 
-func get_state_at(host_timestamp: float) -> WorldSnapshot:
-	var snap := WorldSnapshot.new()
+# `out` lets a per-tick caller supply a snapshot to refill instead of allocating
+# one (a WorldSnapshot is a RefCounted plus five Dictionaries — ~6 heap objects
+# per host tick on the AI path). Event-rate lag-comp callers pass nothing and
+# keep the allocating behaviour. A reused snapshot is only safe for a caller that
+# owns it outright: AICoordinator._stabilize_snapshot copies rather than aliases
+# for exactly this reason.
+func get_state_at(host_timestamp: float, out: WorldSnapshot = null) -> WorldSnapshot:
+	var snap: WorldSnapshot = out
+	if snap == null:
+		snap = WorldSnapshot.new()
+	else:
+		snap.skater_states.clear()
+		snap.goalie_states.clear()
 	snap.host_timestamp = host_timestamp
 	snap.puck_state = _interpolate_puck(host_timestamp)
 	for peer_id: int in _skater_buffers:
@@ -146,10 +179,10 @@ func _alloc_skater(peer_id: int) -> void:
 func _interpolate_skater(peer_id: int, ts: float) -> SkaterNetworkState:
 	var buf: Array = _skater_buffers[peer_id]
 	var ptr: int = _skater_ptrs[peer_id]
-	var bracket: Array = _find_bracket(buf, ptr, _skater_counts.get(peer_id, 0), ts)
-	var t: float = bracket[0]
-	var from_s: SkaterNetworkState = bracket[1]
-	var to_s: SkaterNetworkState = bracket[2]
+	_find_bracket(buf, ptr, _skater_counts.get(peer_id, 0), ts)
+	var t: float = _bracket.t
+	var from_s: SkaterNetworkState = _bracket.from_state
+	var to_s: SkaterNetworkState = _bracket.to_state
 	if t < 0.0:
 		return to_s if to_s != null else SkaterNetworkState.new()
 	var result := SkaterNetworkState.new()
@@ -197,10 +230,10 @@ func _interpolate_skater(peer_id: int, ts: float) -> SkaterNetworkState:
 
 
 func _interpolate_puck(ts: float) -> PuckNetworkState:
-	var bracket: Array = _find_bracket_puck(ts)
-	var t: float = bracket[0]
-	var from_p: PuckNetworkState = bracket[1]
-	var to_p: PuckNetworkState = bracket[2]
+	_find_bracket_puck(ts)
+	var t: float = _bracket.t
+	var from_p: PuckNetworkState = _bracket.from_state
+	var to_p: PuckNetworkState = _bracket.to_state
 	if t < 0.0:
 		return to_p if to_p != null else PuckNetworkState.new()
 	var result := PuckNetworkState.new()
@@ -212,10 +245,10 @@ func _interpolate_puck(ts: float) -> PuckNetworkState:
 
 
 func _interpolate_goalie(team_id: int, ts: float) -> GoalieNetworkState:
-	var bracket: Array = _find_bracket_goalie(team_id, ts)
-	var t: float = bracket[0]
-	var from_g: GoalieNetworkState = bracket[1]
-	var to_g: GoalieNetworkState = bracket[2]
+	_find_bracket_goalie(team_id, ts)
+	var t: float = _bracket.t
+	var from_g: GoalieNetworkState = _bracket.from_state
+	var to_g: GoalieNetworkState = _bracket.to_state
 	if t < 0.0:
 		return to_g if to_g != null else GoalieNetworkState.new()
 	var result := GoalieNetworkState.new()
@@ -230,16 +263,18 @@ func _interpolate_goalie(team_id: int, ts: float) -> GoalieNetworkState:
 	return result
 
 
-# Returns [t, from, to]. t < 0 means no valid bracket; from may be null.
+# Fills `_bracket`. t < 0 means no valid bracket; from_state may be null.
 # Binary search: O(log BUFFER_SIZE) ≈ 10 comparisons vs. up to 720 linear.
 # Timestamps are monotonically increasing so binary search is exact.
-func _find_bracket(buf: Array, write_ptr: int, count: int, ts: float) -> Array:
+func _find_bracket(buf: Array, write_ptr: int, count: int, ts: float) -> void:
 	if count == 0:
-		return [-1.0, null, null]
+		_bracket.set_none(null)
+		return
 	var newest_ptr: int = (write_ptr - 1 + BUFFER_SIZE) % BUFFER_SIZE
 	var newest = buf[newest_ptr]
 	if ts >= newest.host_timestamp:
-		return [-1.0, null, newest]
+		_bracket.set_none(newest)
+		return
 	# Binary search for the last logical index whose timestamp <= ts.
 	# Logical index 0 = oldest, count-1 = newest.
 	var oldest_ptr: int = (write_ptr - count + BUFFER_SIZE) % BUFFER_SIZE
@@ -257,24 +292,29 @@ func _find_bracket(buf: Array, write_ptr: int, count: int, ts: float) -> Array:
 	if found < 0:
 		if OS.is_debug_build():
 			push_warning("StateBufferManager: ts %.4f predates oldest buffered %.4f (skater)" % [ts, buf[oldest_ptr].host_timestamp])
-		return [-1.0, null, newest]
+		_bracket.set_none(newest)
+		return
 	if found >= count - 1:
-		return [-1.0, null, newest]
+		_bracket.set_none(newest)
+		return
 	var from_s = buf[(oldest_ptr + found) % BUFFER_SIZE]
 	var to_s = buf[(oldest_ptr + found + 1) % BUFFER_SIZE]
 	var dt: float = to_s.host_timestamp - from_s.host_timestamp
 	if dt <= 0.0:
-		return [0.0, from_s, to_s]
-	return [clampf((ts - from_s.host_timestamp) / dt, 0.0, 1.0), from_s, to_s]
+		_bracket.set_pair(0.0, from_s, to_s)
+		return
+	_bracket.set_pair(clampf((ts - from_s.host_timestamp) / dt, 0.0, 1.0), from_s, to_s)
 
 
-func _find_bracket_puck(ts: float) -> Array:
+func _find_bracket_puck(ts: float) -> void:
 	if _puck_count == 0:
-		return [-1.0, null, null]
+		_bracket.set_none(null)
+		return
 	var newest_ptr: int = (_puck_ptr - 1 + BUFFER_SIZE) % BUFFER_SIZE
 	var newest = _puck_buffer[newest_ptr]
 	if ts >= newest.host_timestamp:
-		return [-1.0, null, newest]
+		_bracket.set_none(newest)
+		return
 	var oldest_ptr: int = (_puck_ptr - _puck_count + BUFFER_SIZE) % BUFFER_SIZE
 	var lo: int = 0
 	var hi: int = _puck_count - 1
@@ -290,27 +330,32 @@ func _find_bracket_puck(ts: float) -> Array:
 	if found < 0:
 		if OS.is_debug_build():
 			push_warning("StateBufferManager: ts %.4f predates oldest buffered %.4f (puck)" % [ts, _puck_buffer[oldest_ptr].host_timestamp])
-		return [-1.0, null, newest]
+		_bracket.set_none(newest)
+		return
 	if found >= _puck_count - 1:
-		return [-1.0, null, newest]
+		_bracket.set_none(newest)
+		return
 	var from_p = _puck_buffer[(oldest_ptr + found) % BUFFER_SIZE]
 	var to_p = _puck_buffer[(oldest_ptr + found + 1) % BUFFER_SIZE]
 	var dt: float = to_p.host_timestamp - from_p.host_timestamp
 	if dt <= 0.0:
-		return [0.0, from_p, to_p]
-	return [clampf((ts - from_p.host_timestamp) / dt, 0.0, 1.0), from_p, to_p]
+		_bracket.set_pair(0.0, from_p, to_p)
+		return
+	_bracket.set_pair(clampf((ts - from_p.host_timestamp) / dt, 0.0, 1.0), from_p, to_p)
 
 
-func _find_bracket_goalie(team_id: int, ts: float) -> Array:
+func _find_bracket_goalie(team_id: int, ts: float) -> void:
 	var count: int = _goalie_counts.get(team_id, 0)
 	if count == 0:
-		return [-1.0, null, null]
+		_bracket.set_none(null)
+		return
 	var buf: Array = _goalie_buffers[team_id]
 	var write_ptr: int = _goalie_ptrs[team_id]
 	var newest_ptr: int = (write_ptr - 1 + BUFFER_SIZE) % BUFFER_SIZE
 	var newest = buf[newest_ptr]
 	if ts >= newest.host_timestamp:
-		return [-1.0, null, newest]
+		_bracket.set_none(newest)
+		return
 	var oldest_ptr: int = (write_ptr - count + BUFFER_SIZE) % BUFFER_SIZE
 	var lo: int = 0
 	var hi: int = count - 1
@@ -326,12 +371,15 @@ func _find_bracket_goalie(team_id: int, ts: float) -> Array:
 	if found < 0:
 		if OS.is_debug_build():
 			push_warning("StateBufferManager: ts %.4f predates oldest buffered %.4f (goalie team %d)" % [ts, buf[oldest_ptr].host_timestamp, team_id])
-		return [-1.0, null, newest]
+		_bracket.set_none(newest)
+		return
 	if found >= count - 1:
-		return [-1.0, null, newest]
+		_bracket.set_none(newest)
+		return
 	var from_g = buf[(oldest_ptr + found) % BUFFER_SIZE]
 	var to_g = buf[(oldest_ptr + found + 1) % BUFFER_SIZE]
 	var dt: float = to_g.host_timestamp - from_g.host_timestamp
 	if dt <= 0.0:
-		return [0.0, from_g, to_g]
-	return [clampf((ts - from_g.host_timestamp) / dt, 0.0, 1.0), from_g, to_g]
+		_bracket.set_pair(0.0, from_g, to_g)
+		return
+	_bracket.set_pair(clampf((ts - from_g.host_timestamp) / dt, 0.0, 1.0), from_g, to_g)

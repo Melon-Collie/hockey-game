@@ -258,13 +258,18 @@ func check_icing_for_loose_puck(
 
 	last_carrier_team_id = -1
 
-# Host-side: compute ghost state for all players. Returns {peer_id: should_ghost}.
+# Host-side: compute ghost state for all players into `result` as
+# {peer_id: should_ghost}. Runs every host tick, so the caller owns the
+# Dictionary and it is cleared here rather than freshly allocated (the input
+# side already reuses a scratch — see GameManager._positions_scratch). Passing
+# nothing keeps the allocating behaviour for call sites that want a fresh map.
 func compute_ghost_state(
 		player_positions: Dictionary,
 		puck_carrier_peer_id: int,
 		puck_position: Vector3,
-		delta: float = 0.0) -> Dictionary:
-	var result: Dictionary = {}
+		delta: float = 0.0,
+		result: Dictionary = {}) -> Dictionary:
+	result.clear()
 	# OFF preset disables every infraction-driven ghost.
 	if rule_set == GameRules.RuleSet.OFF:
 		_offside_peer_ids.clear()
