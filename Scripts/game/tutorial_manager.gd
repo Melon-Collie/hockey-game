@@ -833,8 +833,8 @@ func _begin_step(index: int) -> void:
 
 		STEP_BODY_CHECK:
 			_place_puck(Vector3(100.0, _ICE_Y, 100.0))
-			# Prevent race-condition re-pickup: drop() is sync but set_puck_position is
-			# deferred by Jolt; one physics tick sees the puck at the old position.
+			# The puck is parked far off-rink for this step; the cooldown keeps the
+			# just-dropped skater from re-collecting it before the body-check rep starts.
 			_puck.set_skater_cooldown(_skater, 0.5)
 			# Two hits from different approach lines (_BODY_CHECK_SPOTS).
 			_update_rep_objective()
@@ -1351,7 +1351,6 @@ func _place_puck(pos: Vector3) -> void:
 	if _puck.carrier != null:
 		_puck.drop()
 	_puck.set_puck_position(pos)
-	# Velocity: Jolt zeroes it on the first dynamic step after unfreeze, which is fine.
 	_puck.linear_velocity = Vector3.ZERO
 
 
@@ -1384,8 +1383,9 @@ func _fire_feed_from_bot(speed: float, vy: float = 0.0, at_blade: bool = false) 
 	if dir.length() < 0.01:
 		dir = Vector3.FORWARD * -1.0  # +Z fallback if player is right on top
 	dir = dir.normalized()
-	# Tiny Y floor so velocity survives Jolt's first integration step (without
-	# it a flat feed can settle inert on tick 0).
+	# Tiny Y floor so apply_release_velocity takes its queued-launch path (vel.y > 0),
+	# which is what makes same-frame get_release_velocity readers — the goalie's shot
+	# detect above all — see the full vector instead of the pre-feed value.
 	_puck.apply_release_velocity(dir * speed + Vector3(0.0, maxf(vy, 0.001), 0.0))
 
 

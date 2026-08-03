@@ -1,10 +1,8 @@
 class_name GoalieContactDetector
 extends RefCounted
 
-# Production analytic puck-vs-goalie contact detection for the determinism migration — the
-# same swept-disc-vs-oriented-boxes test the Phase-2 measurement harness validated
-# against Jolt (~97% agreement on real contacts), promoted to drive the puck. Given the puck's
-# swept segment this tick and the live goalies, it returns the NEAREST contact (smallest time
+# Analytic puck-vs-goalie contact detection: a swept-disc-vs-oriented-boxes test. Given the
+# puck's swept segment this tick and the live goalies, it returns the NEAREST contact (smallest time
 # of impact) across every goalie part's BoxShape3D: which part was struck (for save-part
 # classification), the contact point, and the outward surface normal. The response
 # (deaden / steer / catch / live reflect) is GoalieSaveRules.resolve_contact — this only finds
@@ -25,8 +23,8 @@ class Contact:
 # is a caller-owned SweptDiscOBB.Result reused across parts to stay allocation-free.
 # Skips disabled shapes and parts whose collision layer is zeroed — the goalie's clear-sweep
 # deliberately disables the stick collider for the swing's duration
-# (Goalie.set_stick_collision_enabled), and the analytic test must honour that the same way
-# Jolt did, or the goalie's own sweep ricochets off his "disabled" blade.
+# (Goalie.set_stick_collision_enabled), and the analytic test must honour that too, or the
+# goalie's own sweep ricochets off his "disabled" blade.
 # Native swept-OBB atom (null = extension absent, GDScript SweptDiscOBB). The
 # obb_contact method needs no geometry configuration, so a bare instance
 # suffices; misses cost one boundary crossing, hits add four getters.
@@ -85,8 +83,8 @@ static func nearest(goalies: Array, prev: Vector3, curr: Vector3, radius: float,
 				body = _part_body(cs)
 			if half.x < 0.0:
 				continue
-			# Layer 0 == collision off (the runtime toggle mechanism); a part Jolt
-			# would not collide must not contact analytically either.
+			# Layer 0 == collision off (the runtime toggle mechanism); a part flagged
+			# non-colliding must not register an analytic contact either.
 			if body is CollisionObject3D and (body as CollisionObject3D).collision_layer == 0:
 				continue
 			var contact_hit: bool

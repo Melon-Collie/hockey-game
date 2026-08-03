@@ -538,7 +538,7 @@ func _physics_process(delta: float) -> void:
 	# Host-frame health telemetry: wall-clock gap between consecutive physics
 	# ticks. The MEAN gap → effective tick rate (F3 "Sim rate"): ≈ target means
 	# real-time, well below means the host is overloaded and the sim is dilating.
-	# The MAX gap → worst stall (F3 "Worst stall"): CPU steal, heavy Jolt frame,
+	# The MAX gap → worst stall (F3 "Worst stall"): CPU steal, a heavy sim frame,
 	# GC pause, OS hitch. The raw gap is quantized to render frames, so we report
 	# mean+max, not percentiles. Host only — clients don't run the sim loop.
 	if NetworkManager.is_host:
@@ -3655,8 +3655,8 @@ func _note_shot_trajectory() -> void:
 		return
 	var pos: Vector3 = puck.get_puck_position()
 	# get_release_velocity, NOT linear_velocity: release() queues the launch
-	# vector for Jolt's next dynamic step, so linear_velocity reads ZERO in the
-	# same-frame window this runs in (every shot would project as off-net).
+	# vector for the analytic drive's next tick, so linear_velocity reads ZERO in
+	# the same-frame window this runs in (every shot would project as off-net).
 	# Mid-flight (deflection re-reads) the pending vector is spent and this
 	# returns live linear_velocity.
 	var vel: Vector3 = puck.get_release_velocity()

@@ -299,31 +299,22 @@ const PUCK_COLLISION_HALF_HEIGHT: float = 0.0175
 # guaranteed post ricochet, so shot-aim clamps to it.
 const NET_ENTRY_HALF_WIDTH: float = (
 		NET_HALF_WIDTH - NET_POST_RADIUS - PUCK_COLLISION_RADIUS)
-# Puck-on-ice kinetic friction coefficient (realistic μ ~0.05–0.10). SINGLE
-# SOURCE OF TRUTH: HockeyRink._add_ice() builds the live ice PhysicsMaterial
-# directly from this constant, and the AI/client-prediction model below reads it
-# too — so the sim and the model can't drift. (This replaces the old hand-synced
-# mirror that once ran the model at 0.1 while the live ice was 0.01 → pucks
-# modelled ~10× too draggy. There is no ice .tres.)
-#
-# Why the puck feels EXACTLY the surface friction (not a blend with its own):
-# Godot's PhysicsMaterial combine (per godot-proposals #11715, documenting current
-# behavior) keys off the `rough` flag — when both bodies are smooth (rough=false)
-# it takes the MINIMUM of the two frictions. The puck has no material → engine
-# default friction 1.0 (rough=false); every surface here is < 1.0 and smooth, so
-# min(1.0, surface) = the surface value. Hence ICE_FRICTION (and boards' 0.3) is
-# the effective μ the puck actually experiences. Holds while the puck's friction
-# stays ≥ every surface's.
+# Puck-on-ice kinetic friction coefficient (realistic μ ~0.05–0.10). SINGLE SOURCE
+# OF TRUTH: the analytic puck step applies it directly (through PUCK_ICE_DECEL_M_S2
+# below), and the AI/client-prediction model reads the same constant — host drive and
+# model are literally the same number, so they cannot drift. (An earlier hand-synced
+# mirror once ran the model at 0.1 against live ice at 0.01 → pucks modelled ~10× too
+# draggy. There is no ice .tres.)
 const ICE_FRICTION: float = 0.05
 # Gravity used for the Coulomb conversion below. Matches Godot's engine default
-# (physics/3d/default_gravity = 9.8, un-overridden) rather than textbook 9.81, so
-# the modelled decel equals what Jolt's contact solver actually applies.
+# (physics/3d/default_gravity = 9.8, un-overridden) rather than textbook 9.81;
+# tests/unit/rules/test_physics_material_mirrors.gd pins the pair.
 const GRAVITY_M_S2: float = 9.8
 # Puck deceleration on ice — constant Coulomb model. The puck slides flat
 # (Puck.tscn locks angular X/Z), so friction force = μ·m·g and a = μ·g ≈ 0.49 m/s²,
 # independent of speed and mass. Single source of truth for the host's real glide
-# so AI trajectory prediction and client puck extrapolation decelerate the same
-# way Jolt does — derived from ICE_FRICTION, which the live ice is also built from.
+# so AI trajectory prediction and client puck extrapolation decelerate exactly as
+# the host's drive does — all three read this one derivation from ICE_FRICTION.
 const PUCK_ICE_DECEL_M_S2: float = ICE_FRICTION * GRAVITY_M_S2
 # Height above the ice at which a puck counts as AIRBORNE — the blade-plane
 # gate: a grounded blade only plays pucks below this plane, a lifted blade
@@ -332,25 +323,20 @@ const PUCK_ICE_DECEL_M_S2: float = ICE_FRICTION * GRAVITY_M_S2
 # a grounded stick, and where it must land to be receivable) agrees with
 # the live interaction gate.
 const PUCK_AIRBORNE_HEIGHT_M: float = 0.05
-# Board restitution coefficient. Mirrors Physics/boards.tres `bounce` so AI
-# prediction models post-bounce trajectories the way Jolt resolves them. Unlike
-# ICE_FRICTION this can't be single-sourced — boards.tres is a static resource a
-# const can't reach — so tests/unit/rules/test_physics_material_mirrors.gd guards
-# the pair: change one, CI fails until the other matches. (Restitution is safe
-# whatever the combine does: Godot's non-absorbent bounce combine ADDS the two,
-# and the puck's side is 0, so 0 + 0.4 = 0.4 regardless.)
+# Board restitution coefficient — the value the analytic carom actually applies.
+# Mirrors Physics/boards.tres `bounce`, which can't be single-sourced (a static
+# resource a const can't reach), so tests/unit/rules/test_physics_material_mirrors.gd
+# guards the pair: change one, CI fails until the other matches.
 const PUCK_BOARD_BOUNCE: float = 0.4
 # Board kinetic friction coefficient. Mirrors Physics/boards.tres `friction` (guarded by
 # test_physics_material_mirrors alongside the bounce). On a carom the boards bleed tangential
 # speed via Coulomb friction proportional to the normal impulse — this is what stops a hard
 # rim-around from circling the rink forever (ice friction alone is far too weak to kill it).
-# Under the analytic puck sim this is applied in AITrajectory; Jolt applied it as contact
-# friction. Godot's friction combine is min(a, b) and the puck's side is 1.0, so the effective
-# value is min(1.0, 0.25) = 0.25 — matching this const.
+# Applied by AITrajectory's carom, which is the host drive and the client prediction alike.
 const PUCK_BOARD_FRICTION: float = 0.25
 # Silent grace before an out-of-play puck is whistled dead. Short enough that
 # the stoppage feels responsive, long enough that a transient penetration spike
-# (a slapshot buried into the boards for a tick or two before Jolt's recovery
+# (a slapshot buried into the boards for a tick or two before the carom
 # pushes it back) never false-flags — the timer resets the moment the puck
 # reads inside again.
 const PUCK_OOB_GRACE_DURATION: float = 1.0

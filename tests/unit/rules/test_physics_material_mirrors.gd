@@ -40,9 +40,9 @@ func test_puck_ice_decel_derives_from_ice_friction_and_gravity() -> void:
 
 
 func test_gravity_matches_godot_default() -> void:
-	# The model's gravity must equal what Jolt actually applies (Godot's
-	# un-overridden physics/3d/default_gravity = 9.8), not textbook 9.81, or the
-	# modelled ice decel drifts from the host's real contact-solver decel.
+	# GRAVITY_M_S2 is pinned to Godot's un-overridden physics/3d/default_gravity
+	# (9.8, not textbook 9.81). Overriding the project setting without moving the
+	# constant would leave two different gravities in the build.
 	var default_gravity: float = ProjectSettings.get_setting(
 			"physics/3d/default_gravity", 9.8)
 	assert_eq(GameRules.GRAVITY_M_S2, default_gravity,

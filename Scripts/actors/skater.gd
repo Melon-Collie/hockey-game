@@ -768,9 +768,10 @@ func _physics_process(delta: float) -> void:
 	_prev_blade_world_pos = blade_world_pos
 	if _draw_tracking:
 		_update_draw_peak(delta)
-	# Backstop: never hand a NaN/Inf velocity or position to Jolt — a non-finite
-	# value there is a hard, uncatchable native crash. This should never fire;
-	# when it does it logs the offending state so the upstream source is findable.
+	# Backstop: never let a NaN/Inf velocity or position reach the transform write —
+	# it poisons every downstream reader (camera, IK, the wire state) irrecoverably.
+	# This should never fire; when it does it logs the offending state so the
+	# upstream source is findable.
 	_sanitize_physics_state()
 	# Integrate velocity → position directly. move_and_slide() is gone: its only
 	# real collisions were skater-vs-goalie-body (now analytic in
@@ -783,8 +784,7 @@ func _physics_process(delta: float) -> void:
 	global_position += velocity * delta
 	# Capture velocity BEFORE the analytic skater-vs-skater resolution so the delta
 	# below isolates the body-check impulse (the resolver's self velocity change) for
-	# the reconcile replay recording — same as when this delta came from the old
-	# Jolt-driven _resolve_player_collisions.
+	# the reconcile replay recording.
 	var vel_pre_body_check: Vector3 = velocity
 	_resolve_player_collisions()
 	var body_check_delta: Vector3 = velocity - vel_pre_body_check
@@ -816,20 +816,20 @@ func _physics_process(delta: float) -> void:
 	HostCostProbe.record(HostCostProbe.Section.SKATER_PHYS, Time.get_ticks_usec() - _t0)
 
 
-# Sanitizes the body's velocity/position to finite values right before the Jolt
-# step. A NaN/Inf reaching move_and_slide() crashes the engine natively (no
-# GDScript try/catch can recover it), so we clamp at the seam and log where it
-# came from. Cheap value-type checks — hot-path safe at 120 Hz × skaters; the
-# string-formatting cost only ever runs on the (should-never) failure branch.
+# Sanitizes the body's velocity/position to finite values right before the tick
+# integrates them. A NaN/Inf transform can't be un-poisoned once written (every
+# derived read — camera, IK, wire state — inherits it), so we clamp at the seam
+# and log where it came from. Cheap value-type checks — hot-path safe at 120 Hz ×
+# skaters; the string-formatting cost only ever runs on the (should-never) branch.
 func _sanitize_physics_state() -> void:
 	if not velocity.is_finite():
-		push_error("Skater '%s': non-finite velocity %s before move_and_slide — zeroing (state=%d pos=%s)."
+		push_error("Skater '%s': non-finite velocity %s before integration — zeroing (state=%d pos=%s)."
 				% [name, velocity, current_shot_state, global_position])
 		velocity = Vector3.ZERO
 	if global_position.is_finite():
 		_last_finite_position = global_position
 	else:
-		push_error("Skater '%s': non-finite position %s before move_and_slide — restoring %s."
+		push_error("Skater '%s': non-finite position %s before integration — restoring %s."
 				% [name, global_position, _last_finite_position])
 		global_position = _last_finite_position
 		velocity = Vector3.ZERO
@@ -838,8 +838,7 @@ func _sanitize_physics_state() -> void:
 func _resolve_player_collisions() -> void:
 	# Skaters are off each other's move_and_slide mask (see Constants.MASK_SKATER):
 	# skater-vs-skater contact is resolved analytically here via SkaterCollisionRules
-	# (inelastic disc model, no restitution bounce) instead of Jolt's cylinder
-	# separation + the old attacker_restitution curve. Iterates the registry's
+	# (inelastic disc model, no restitution bounce). Iterates the registry's
 	# cached skater list rather than get_slide_collision(). No provider (tutorial
 	# dummy / unit test) → no skater-vs-skater resolution.
 	if not _skater_collision_provider.is_valid():

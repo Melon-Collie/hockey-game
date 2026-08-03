@@ -1,10 +1,8 @@
 class_name PuckGeometryCollision
 
-# Analytic puck-vs-goal-frame collision for the determinism migration
-# (docs/netcode-determinism-migration.md). Replaces Jolt's PhysicsMaterial restitution
-# bounce off the goal FRAME (posts, crossbar, top net panel) with deterministic analytic
-# reflections so those bounces are client-reproducible. The goalie response stays in
-# GoalieSaveRules; the back/side net panels are resolved separately.
+# Analytic puck-vs-goal-frame collision (docs/netcode-determinism-migration.md): deterministic,
+# client-reproducible reflections off the goal FRAME (posts, crossbar, top net panel). The
+# goalie response stays in GoalieSaveRules; the back/side net panels are resolved separately.
 #
 # Geometry (from HockeyGoal, NHL-regulation): posts are vertical cylinders at
 # x = ±GameRules.NET_HALF_WIDTH, z = ±GameRules.GOAL_LINE_Z, radius GameRules.NET_POST_RADIUS,
@@ -18,11 +16,10 @@ class_name PuckGeometryCollision
 # Pure / static — headless-testable, allocation-free on the per-tick path (fills a caller-
 # owned Result rather than returning a fresh object).
 
-# Restitution off a goal pipe — mirrors Physics/goal_pipe.tres `bounce`. Kept as named
-# constants here because the analytic path no longer reads the Jolt material; a puck-side
-# mirror guard (like GameRules.PUCK_BOARD_BOUNCE ↔ boards.tres) should pin the pairs.
-const POST_RESTITUTION: float = 0.55  # goal pipe (posts + crossbar)
-const NET_RESTITUTION: float = 0.05   # net panels — mirrors Physics/goal_net.tres `bounce`
+# Restitution the analytic reflections apply. These are the authoritative values — the puck
+# never reaches the engine solver, so the goal bodies' PhysicsMaterial overrides are not read.
+const POST_RESTITUTION: float = 0.55  # goal pipe (posts + crossbar) — a live ping off the iron
+const NET_RESTITUTION: float = 0.05   # net panels — twine absorbs, the puck drops
 
 
 class Result:
