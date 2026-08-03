@@ -1,0 +1,23 @@
+#!/bin/bash
+# Warns after a pull/merge when the native GDExtension sources changed — the
+# DLL is built per-machine (native/bin/ is gitignored), so playing on a stale
+# binary silently downgrades the changed kernels to the GDScript fallback.
+# The boot log ([native] hot-path kernels: ...) shows PARTIAL/absent until a
+# rebuild; this hook moves that discovery from launch time to pull time.
+#
+# Activated via: git config core.hooksPath .githooks (same wiring as
+# pre-commit). ORIG_HEAD is set by merge/pull; a fresh clone has none, so the
+# diff quietly no-ops there. See native/README.md for the build itself.
+
+changed=$(git diff --name-only ORIG_HEAD HEAD -- \
+	native/src native/SConstruct native/build_profile.json \
+	native/godot-cpp .gitmodules 2>/dev/null)
+if [ -n "$changed" ]; then
+	echo ""
+	echo "[native] This pull changed the GDExtension sources:"
+	echo "$changed" | sed 's/^/[native]   /'
+	echo "[native] Rebuild before playing:  bash native/build.sh"
+	echo "[native] (Windows: from an MSVC x64 Native Tools prompt, or add use_mingw=yes.)"
+	echo ""
+fi
+exit 0
