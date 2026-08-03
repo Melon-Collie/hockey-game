@@ -91,6 +91,98 @@ static func nearest(goalies: Array, prev: Vector3, curr: Vector3, radius: float,
 	return out.hit
 
 
+# ── Gather-once fast path (native) ────────────────────────────────────────────
+# The per-sub-step cost of nearest() is dominated by engine property reads
+# (global_transform / size / disabled / collision_layer per part), re-paid up
+# to 16x per near-net tick. The native path splits detection: gather_boxes
+# reads every eligible part ONCE per tick into a packed 15-float-per-box array
+# (basis columns, origin, half extents) plus parallel part/goalie ref arrays,
+# then nearest_packed runs the whole slab-test loop natively per sub-step with
+# zero engine reads. Callers gate on the native step being available and fall
+# back to nearest() otherwise; skip rules here MUST mirror nearest()'s.
+static func gather_boxes(goalies: Array, packed: PackedFloat32Array,
+		parts: Array, part_goalies: Array) -> int:
+	parts.clear()
+	part_goalies.clear()
+	var idx: int = 0
+	for goalie: Node in goalies:
+		if goalie == null:
+			continue
+		var shapes: Array[CollisionShape3D]
+		if goalie is Goalie:
+			shapes = (goalie as Goalie).get_collision_parts()
+		else:
+			shapes = _collision_shapes(goalie)
+		for cs: CollisionShape3D in shapes:
+			if cs.disabled:
+				continue
+			var box := cs.shape as BoxShape3D
+			if box == null:
+				continue
+			var body: Node = _part_body(cs)
+			if body is CollisionObject3D and (body as CollisionObject3D).collision_layer == 0:
+				continue
+			var base: int = idx * 15
+			if packed.size() < base + 15:
+				packed.resize(base + 15)
+			var xf: Transform3D = cs.global_transform
+			var half: Vector3 = box.size * 0.5
+			packed[base] = xf.basis.x.x
+			packed[base + 1] = xf.basis.x.y
+			packed[base + 2] = xf.basis.x.z
+			packed[base + 3] = xf.basis.y.x
+			packed[base + 4] = xf.basis.y.y
+			packed[base + 5] = xf.basis.y.z
+			packed[base + 6] = xf.basis.z.x
+			packed[base + 7] = xf.basis.z.y
+			packed[base + 8] = xf.basis.z.z
+			packed[base + 9] = xf.origin.x
+			packed[base + 10] = xf.origin.y
+			packed[base + 11] = xf.origin.z
+			packed[base + 12] = half.x
+			packed[base + 13] = half.y
+			packed[base + 14] = half.z
+			parts.append(body)
+			part_goalies.append(goalie)
+			idx += 1
+	return idx
+
+
+# The packed-gather counterpart of nearest(): one native crossing per sub-step.
+# Valid only when the native extension is loaded (callers gate on it).
+static func nearest_packed(packed: PackedFloat32Array, count: int,
+		parts: Array, part_goalies: Array,
+		prev: Vector3, curr: Vector3, radius: float, out: Contact) -> bool:
+	out.hit = false
+	out.part = null
+	out.goalie = null
+	out.toi = INF
+	out.depth = 0.0
+	if count == 0 or _native_obb == null:
+		return false
+	var best: int = _native_obb.obb_nearest(prev, curr, radius, packed, count)
+	if best < 0:
+		return false
+	out.toi = _native_obb.get_obb_toi()
+	out.point = _native_obb.get_obb_point()
+	out.normal = _native_obb.get_obb_normal()
+	out.depth = _native_obb.get_obb_depth()
+	out.part = parts[best]
+	out.goalie = part_goalies[best]
+	out.hit = true
+	return true
+
+
+# Lazily resolves the native handle outside nearest() so gather-path callers
+# can gate on it before their per-tick gather.
+static func native_available() -> bool:
+	if not _native_obb_checked:
+		_native_obb_checked = true
+		if ClassDB.class_exists(&"NativePuckStep"):
+			_native_obb = ClassDB.instantiate(&"NativePuckStep")
+	return _native_obb != null
+
+
 static func _collision_shapes(root: Node) -> Array[CollisionShape3D]:
 	var found: Array[CollisionShape3D] = []
 	_gather_cs(root, found)

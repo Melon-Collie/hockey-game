@@ -2769,9 +2769,13 @@ func _movement_config() -> SkaterMovementRules.MovementConfig:
 		_cached_move_cfg = _build_movement_config()
 		if ClassDB.class_exists(&"NativeSkaterMovement"):
 			_native_move = ClassDB.instantiate(&"NativeSkaterMovement")
-			_native_move.configure(_cached_move_cfg)
-			var bc: BodyCheckRules.Config = _body_check_config()
-			_native_move.set_stagger_params(bc.max_stagger_seconds, bc.max_thrust_penalty)
+			var missing: String = _native_move.configure(_cached_move_cfg)
+			if missing != "":
+				push_error("NativeSkaterMovement disabled — config fields missing: %s" % missing)
+				_native_move = null
+			else:
+				var bc: BodyCheckRules.Config = _body_check_config()
+				_native_move.set_stagger_params(bc.max_stagger_seconds, bc.max_thrust_penalty)
 	return _cached_move_cfg
 
 # The configured native movement kernel for this skater, or null when the
@@ -2819,7 +2823,9 @@ func _block_movement_config() -> SkaterMovementRules.MovementConfig:
 		_cached_block_move_cfg.thrust = thrust * block_speed_multiplier
 		if ClassDB.class_exists(&"NativeSkaterMovement"):
 			_native_block_move = ClassDB.instantiate(&"NativeSkaterMovement")
-			_native_block_move.configure(_cached_block_move_cfg)
+			if _native_block_move.configure(_cached_block_move_cfg) != "":
+				# Same fields as the main config — a miss there already errored.
+				_native_block_move = null
 	return _cached_block_move_cfg
 
 func _build_movement_config() -> SkaterMovementRules.MovementConfig:

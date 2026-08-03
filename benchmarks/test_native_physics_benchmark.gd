@@ -17,6 +17,7 @@ const REPS: int = 20000
 const DELTA: float = 1.0 / 120.0
 
 var _results: Array[Dictionary] = []
+var _bench_roots: Array[Node3D] = []
 
 
 func _report(label: String, gd_usec: int, nat_usec: int, reps: int) -> void:
@@ -170,3 +171,59 @@ func test_puck_step_gdscript_vs_native() -> void:
 
 	_print_results("Loose-puck step")
 	assert_true(_results.size() == 3, "benchmark produced rows")
+
+
+# The near-net goalie-contact interleave at live scale: 2 goalies x 7 box
+# parts, 16 sub-step tests per tick. Legacy re-reads engine properties per
+# part per sub-step; the native path gathers once per tick and runs the slab
+# loop natively per sub-step.
+func test_goalie_contact_gather_vs_legacy() -> void:
+	if not GoalieContactDetector.native_available():
+		pending("native extension not built — see native/README.md")
+		return
+	_results.clear()
+	var goalies: Array = []
+	for g: int in 2:
+		var root := Node3D.new()
+		add_child(root)
+		_bench_roots.append(root)
+		root.global_position = Vector3(0.4 - 0.8 * g, 0.0, 25.3)
+		for p: int in 7:
+			var body := StaticBody3D.new()
+			root.add_child(body)
+			body.position = Vector3(0.15 * (p - 3), 0.2 * p, 0.05 * (p - 3))
+			var cs := CollisionShape3D.new()
+			var box := BoxShape3D.new()
+			box.size = Vector3(0.25, 0.5, 0.2)
+			cs.shape = box
+			body.add_child(cs)
+	var scratch := SweptDiscOBB.Result.new()
+	var contact := GoalieContactDetector.Contact.new()
+	var packed := PackedFloat32Array()
+	var parts: Array = []
+	var part_goalies: Array = []
+	var prev := Vector3(0.1, 0.1, 24.9)
+	var curr := Vector3(0.15, 0.12, 25.05)
+	var ticks: int = 2000
+
+	var t0: int = Time.get_ticks_usec()
+	for _t: int in ticks:
+		for _s: int in 16:
+			var _hit: bool = GoalieContactDetector.nearest(
+					goalies, prev, curr, 0.065, scratch, contact)
+	var gd_us: int = Time.get_ticks_usec() - t0
+
+	t0 = Time.get_ticks_usec()
+	for _t: int in ticks:
+		var count: int = GoalieContactDetector.gather_boxes(
+				goalies, packed, parts, part_goalies)
+		for _s: int in 16:
+			var _hit: bool = GoalieContactDetector.nearest_packed(
+					packed, count, parts, part_goalies, prev, curr, 0.065, contact)
+	_report("goalie contact tick (16 substeps)", gd_us, Time.get_ticks_usec() - t0, ticks)
+
+	for r: Node3D in _bench_roots:
+		r.free()
+	_bench_roots.clear()
+	_print_results("Near-net goalie interleave")
+	assert_true(_results.size() == 1, "benchmark produced rows")

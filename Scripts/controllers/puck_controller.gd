@@ -125,6 +125,11 @@ var _predict_tick_result: PuckAuthorityRules.TickResult = null
 # NativePuckStep (null = extension absent, GDScript step). Same factory as the
 # host drive's instance, so prediction and authority run the identical step.
 var _native_step: RefCounted = null
+# Per-re-predict goalie-box gather scratches (GoalieContactDetector
+# .gather_boxes) — reused so the per-frame predictor allocates nothing.
+var _gather_packed := PackedFloat32Array()
+var _gather_parts: Array = []
+var _gather_goalies: Array = []
 var _predict_goalie_contact: GoalieContactDetector.Contact = null
 var _predict_obb_scratch: SweptDiscOBB.Result = null
 # _run_prediction's output slots (filled per call; members so the per-frame
@@ -1086,6 +1091,13 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 	var vel: Vector3 = start_vel
 	var radius: float = GameRules.PUCK_COLLISION_RADIUS
 	var goalies: Array = _goalie_provider.call() if not _goalie_provider.is_null() else []
+	# Gather the goalie boxes ONCE per re-predict for the native fast path —
+	# the rendered goalie pose is fixed for this frame, and the legacy path
+	# re-read the engine properties per predicted tick.
+	var goalie_box_count: int = 0
+	if not goalies.is_empty() and GoalieContactDetector.native_available():
+		goalie_box_count = GoalieContactDetector.gather_boxes(
+				goalies, _gather_packed, _gather_parts, _gather_goalies)
 	var stopped: bool = false
 	# Predicted-cue latch upkeep: a gap since the last re-predict means a new
 	# loose span (carry pin / whistle / fallback interpolation in between) —
@@ -1157,10 +1169,17 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 		# so chord-level timing is enough). The goalie pose used is the client's
 		# RENDERED (interpolated) goalie — approximate by nature, which is
 		# exactly why the response is never predicted, only the hold.
+		var pred_goalie_hit: bool = false
 		if not goalies.is_empty() \
-				and absf(pos.z) > GameRules.GOAL_LINE_Z - PuckAuthorityRules.GOALIE_DETECT_RANGE_Z \
-				and GoalieContactDetector.nearest(goalies, tick_prev, pos, radius,
-						_predict_obb_scratch, _predict_goalie_contact):
+				and absf(pos.z) > GameRules.GOAL_LINE_Z - PuckAuthorityRules.GOALIE_DETECT_RANGE_Z:
+			if goalie_box_count > 0:
+				pred_goalie_hit = GoalieContactDetector.nearest_packed(
+						_gather_packed, goalie_box_count, _gather_parts, _gather_goalies,
+						tick_prev, pos, radius, _predict_goalie_contact)
+			elif not GoalieContactDetector.native_available():
+				pred_goalie_hit = GoalieContactDetector.nearest(goalies, tick_prev, pos,
+						radius, _predict_obb_scratch, _predict_goalie_contact)
+		if pred_goalie_hit:
 			pos = _predict_goalie_contact.point \
 					+ _predict_goalie_contact.normal * _predict_goalie_contact.depth
 			span_goalie = true

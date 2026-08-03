@@ -420,8 +420,10 @@ void NativePuckStep::clear_touched() {
 
 // ── SweptDiscOBB.contact ─────────────────────────────────────────────────────
 
-bool NativePuckStep::obb_contact(const Vector3 &prev, const Vector3 &curr,
-		double radius, const Transform3D &box_transform, const Vector3 &half_extents) {
+// The slab test itself, shared by obb_contact and the packed nearest loop.
+static bool obb_contact_test(const Vector3 &prev, const Vector3 &curr,
+		double radius, const Transform3D &box_transform, const Vector3 &half_extents,
+		double &r_toi, Vector3 &r_point, Vector3 &r_normal, double &r_depth) {
 	const Transform3D inv = box_transform.affine_inverse();
 	const Vector3 p0 = inv.xform(prev);
 	const Vector3 p1 = inv.xform(curr);
@@ -482,11 +484,60 @@ bool NativePuckStep::obb_contact(const Vector3 &prev, const Vector3 &curr,
 	}
 	Vector3 local_n;
 	local_n[hit_axis] = (real_t)hit_sign;
-	obb_toi = toi;
-	obb_point = prev + (curr - prev) * (real_t)toi;
-	obb_normal = (box_transform.basis.xform(local_n)).normalized();
-	obb_depth = depth;
+	r_toi = toi;
+	r_point = prev + (curr - prev) * (real_t)toi;
+	r_normal = (box_transform.basis.xform(local_n)).normalized();
+	r_depth = depth;
 	return true;
+}
+
+bool NativePuckStep::obb_contact(const Vector3 &prev, const Vector3 &curr,
+		double radius, const Transform3D &box_transform, const Vector3 &half_extents) {
+	return obb_contact_test(prev, curr, radius, box_transform, half_extents,
+			obb_toi, obb_point, obb_normal, obb_depth);
+}
+
+int64_t NativePuckStep::obb_nearest(const Vector3 &prev, const Vector3 &curr,
+		double radius, const PackedFloat32Array &boxes, int64_t count) {
+	const int64_t available = boxes.size() / 15;
+	const int64_t n = MIN(count, available);
+	const float *b = boxes.ptr();
+	int64_t best = -1;
+	// Mirror GoalieContactDetector.nearest: strictly-smaller toi wins, so ties
+	// keep the first box encountered.
+	double best_toi = INFINITY;
+	Vector3 best_point;
+	Vector3 best_normal;
+	double best_depth = 0.0;
+	for (int64_t i = 0; i < n; i++) {
+		const float *e = b + i * 15;
+		Basis basis;
+		basis.set_column(0, Vector3(e[0], e[1], e[2]));
+		basis.set_column(1, Vector3(e[3], e[4], e[5]));
+		basis.set_column(2, Vector3(e[6], e[7], e[8]));
+		const Transform3D xform(basis, Vector3(e[9], e[10], e[11]));
+		const Vector3 half(e[12], e[13], e[14]);
+		double toi;
+		Vector3 point;
+		Vector3 normal;
+		double depth;
+		if (obb_contact_test(prev, curr, radius, xform, half, toi, point, normal, depth)) {
+			if (toi < best_toi) {
+				best = i;
+				best_toi = toi;
+				best_point = point;
+				best_normal = normal;
+				best_depth = depth;
+			}
+		}
+	}
+	if (best >= 0) {
+		obb_toi = best_toi;
+		obb_point = best_point;
+		obb_normal = best_normal;
+		obb_depth = best_depth;
+	}
+	return best;
 }
 
 void NativePuckStep::_bind_methods() {
@@ -520,6 +571,9 @@ void NativePuckStep::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("obb_contact",
 			"prev", "curr", "radius", "box_transform", "half_extents"),
 			&NativePuckStep::obb_contact);
+	ClassDB::bind_method(D_METHOD("obb_nearest",
+			"prev", "curr", "radius", "boxes", "count"),
+			&NativePuckStep::obb_nearest);
 	ClassDB::bind_method(D_METHOD("get_obb_toi"), &NativePuckStep::get_obb_toi);
 	ClassDB::bind_method(D_METHOD("get_obb_point"), &NativePuckStep::get_obb_point);
 	ClassDB::bind_method(D_METHOD("get_obb_normal"), &NativePuckStep::get_obb_normal);

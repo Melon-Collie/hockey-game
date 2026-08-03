@@ -1,6 +1,7 @@
 #pragma once
 
 #include <godot_cpp/classes/ref_counted.hpp>
+#include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/transform3d.hpp>
 
 namespace mitts {
@@ -137,6 +138,14 @@ public:
 	bool obb_contact(const godot::Vector3 &prev, const godot::Vector3 &curr,
 			double radius, const godot::Transform3D &box_transform,
 			const godot::Vector3 &half_extents);
+
+	// Nearest contact (smallest toi, first wins ties) over `count` boxes packed
+	// 15 floats each: basis columns x,y,z (9), origin (3), half extents (3) —
+	// gathered ONCE per tick by the caller so the per-sub-step test crosses the
+	// boundary once with zero engine property reads. Returns the winning box
+	// index or -1; details via the obb_* getters.
+	int64_t obb_nearest(const godot::Vector3 &prev, const godot::Vector3 &curr,
+			double radius, const godot::PackedFloat32Array &boxes, int64_t count);
 	double get_obb_toi() const { return obb_toi; }
 	godot::Vector3 get_obb_point() const { return obb_point; }
 	godot::Vector3 get_obb_normal() const { return obb_normal; }

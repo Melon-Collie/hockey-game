@@ -185,7 +185,13 @@ func setup(skater: Skater, sm: SkaterStateMachine, controller: SkaterController)
 func native_reconfigure() -> void:
 	if _native == null:
 		return
-	_native.configure(_controller)
+	var missing: String = _native.configure(_controller)
+	if missing != "":
+		# A rename/removal desynced the port's tunable table — running it with
+		# stale values would be a silent behavior fork. Loudly fall back.
+		push_error("NativeSkaterGait disabled — controller exports missing: %s" % missing)
+		_native = null
+		return
 	_native.set_leg_scale(leg_scale)
 
 # Snaps the gait back to a clean standstill and plants the legs at their rest

@@ -222,6 +222,11 @@ var _tick_result: PuckAuthorityRules.TickResult = null
 # NativePuckStep (null = extension absent, GDScript step below). Configured in
 # _ready via the shared factory so host drive and client prediction match.
 var _native_step: RefCounted = null
+# Per-tick goalie-box gather scratches (GoalieContactDetector.gather_boxes) —
+# reused so the near-net tick allocates nothing.
+var _gather_packed := PackedFloat32Array()
+var _gather_parts: Array = []
+var _gather_goalies: Array = []
 # Shared read-only empty (const arrays are frozen) — the no-goalies-in-range default
 # every open-ice tick, instead of allocating a fresh `[]` per tick.
 const _NO_GOALIES: Array = []
@@ -713,6 +718,13 @@ func _drive_analytic(dt: float) -> void:
 	var goalies: Array = _NO_GOALIES
 	if goalie_range and not _goalie_provider.is_null():
 		goalies = _goalie_provider.call()
+	# Gather the goalie collision boxes ONCE per tick for the native fast path —
+	# the goalies don't move inside this loop, and the legacy path re-read the
+	# same engine properties per part per sub-step (up to 16x near the net).
+	var goalie_box_count: int = 0
+	if not goalies.is_empty() and GoalieContactDetector.native_available():
+		goalie_box_count = GoalieContactDetector.gather_boxes(
+				goalies, _gather_packed, _gather_parts, _gather_goalies)
 	var substeps: int = PuckAuthorityRules.frame_substeps(prev.z, incoming.length(), dt)
 	var sub_dt: float = dt / float(substeps)
 	var pos: Vector3 = prev
@@ -759,8 +771,16 @@ func _drive_analytic(dt: float) -> void:
 			if _tick_result.touched_net and incoming.length() >= 1.0:
 				touched_net = true
 		# Goalie: swept-OBB over THIS sub-step's segment → deaden / steer / catch / live reflect.
-		if not goalies.is_empty() and GoalieContactDetector.nearest(
-				goalies, sub_prev, pos, radius, _goalie_scratch, _goalie_contact):
+		var goalie_hit: bool = false
+		if not goalies.is_empty():
+			if goalie_box_count > 0:
+				goalie_hit = GoalieContactDetector.nearest_packed(
+						_gather_packed, goalie_box_count, _gather_parts, _gather_goalies,
+						sub_prev, pos, radius, _goalie_contact)
+			elif not GoalieContactDetector.native_available():
+				goalie_hit = GoalieContactDetector.nearest(
+						goalies, sub_prev, pos, radius, _goalie_scratch, _goalie_contact)
+		if goalie_hit:
 			var part: int = _classify_save_part(_goalie_contact.part as Node3D)
 			var g3: Node3D = _goalie_contact.goalie as Node3D
 			var side: float = signf(pos.x - g3.global_position.x) if g3 != null else 0.0
