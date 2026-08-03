@@ -3,9 +3,9 @@ extends SceneTree
 # Dev visualizer: renders the whole gear catalogue offscreen — every skate model
 # above its name, every glove model above its own, and the helmet face options
 # on a third shelf — and saves PNGs from two angles, so gear changes can be
-# SEEN without launching the game. Each piece is the gear workbench's own
+# SEEN without launching the game. Each piece is the locker mannequin's own
 # assembly (shared SkaterMeshBuilder parts, the seats from
-# GearEditorPopup._build_preview — keep the two in sync) painted through
+# LockerMannequin._pose — keep the two in sync) painted through
 # GearModelRegistry, so what lands in the PNG is what the rink paints.
 #
 # Needs a real (software) renderer, not --headless. On the web container:
@@ -144,7 +144,7 @@ func _add_shelf(span: float, y: float) -> void:
 
 
 # One skate under `holder`, painted from the model's zones. Mirrors
-# GearEditorPopup._build_preview: the boot rides the rotated boot frame seated
+# LockerMannequin._pose: the boot rides the rotated boot frame seated
 # so the runner stands on the shelf, and the collar takes the appearance rig's
 # neutral-build scaling (calf girth laterally, height vertically — the boot
 # deliberately never scales) with the accent band seated on it.

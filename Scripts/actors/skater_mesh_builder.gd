@@ -933,8 +933,8 @@ const _CAGE_V_BAR_OFFSETS: Array[float] = [-0.84, -0.42, 0.0, 0.42, 0.84]
 # The face piece's fixed look — the one gear piece whose colors never resolve
 # against the kit (a visor is smoked polycarbonate and a cage bare steel
 # whoever wears them), so the material lives here with the geometry instead of
-# on the uniform coordinator, and the gear workbench turntable and the capture
-# tool dress their previews from the same factory. The shields carry their
+# on the uniform coordinator, and the locker mannequin and the capture tool
+# dress their previews from the same factory. The shields carry their
 # transparency in the registry alpha; the cage is an open lattice of one-sided
 # strips, so it renders two-sided instead.
 static func make_face_gear_material(option: int) -> StandardMaterial3D:

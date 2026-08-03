@@ -3,9 +3,9 @@ extends SceneTree
 # Dev visualizer: renders the whole stick-model catalogue offscreen — every
 # colorway standing on its blade above its name — and saves PNGs from two
 # angles, so stick designs can be SEEN without launching the game. Each stick
-# is the stick workbench's own assembly (procedural blade at the M92 pattern,
+# is the locker mannequin's own assembly (procedural blade at the M92 pattern,
 # shaft box on the flex shader, butt knob — the seats from
-# StickEditorPopup._rebuild_preview; keep the two in sync) painted through
+# LockerMannequin._pose_stick; keep the two in sync) painted through
 # StickStyle/StickModelRegistry, so what lands in the PNG is what the rink
 # renders. Bare blade and bare grip on purpose: the sheet shows the colorway,
 # not a tape job over it.
@@ -119,7 +119,7 @@ func _add_shelf(width: float, center_x: float) -> void:
 	root.add_child(mi)
 
 
-# One stick under `holder`, StickEditorPopup._rebuild_preview's assembly:
+# One stick under `holder`, LockerMannequin._pose_stick's assembly:
 # heel-origin blade at the pattern, shaft climbing from the heel at the lie
 # angle, knob capping the butt. All materials come from the same factories
 # the rink uses.
