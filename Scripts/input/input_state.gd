@@ -105,6 +105,14 @@ var bot_slapper_aim_dir: Vector3 = Vector3.ZERO
 # at this scored, off-the-poke-line spot (see SkaterController._apply_wrister_aim_blade)
 # restores the offset release the scorer priced. ZERO = centered (human / no offset).
 var bot_wrister_origin_offset: Vector3 = Vector3.ZERO
+# BOT-ONLY, runtime, NOT serialized. True while the agent is in PASS_PRESSED —
+# a feed or a dump, not a shot. A pass in Mitts IS a paced wrister (both fire
+# through _release_wrister), so the controller cannot tell them apart at the
+# release and the shot tracker would log an unreceived pass as a missed shot
+# attempt. Humans need no equivalent: the quick-pass button and the charged
+# wrister are already distinct inputs. Bots are host-simulated and never cross
+# the wire, so this stays off the wire format like the aim/offset commits above.
+var bot_release_is_pass: bool = false
 
 func to_array() -> Array:
 	return [

@@ -3670,6 +3670,13 @@ func _start_pending_shot_from_carrier() -> void:
 	if _possession_tracker != null:
 		_possession_tracker.on_deliberate_release(shooter_peer_id)
 	_shot_tracker.on_shot_started(shooter_peer_id)
+	# Release INTENT, which the trajectory read can't recover: a pass is a paced
+	# wrister in Mitts, so an errant one aimed up the middle projects at the far
+	# mouth and logs as a missed shot attempt from the passer's own end (#579).
+	# The controller latched it just before emitting puck_release_requested.
+	var shooter: PlayerRecord = _registry.get_record(shooter_peer_id)
+	if shooter != null and shooter.controller != null:
+		_shot_tracker.note_release_intent(shooter.controller.last_release_was_shot)
 
 
 # Re-reads the pending shot's on-net flag from the puck's live ballistic

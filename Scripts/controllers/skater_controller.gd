@@ -1742,6 +1742,18 @@ var last_release_hand: String = ""
 # Debug/HUD only: the shot-speed toast surfaces it so the full-stroke-travel
 # tunable can be calibrated against real sweeps vs twitches.
 var last_release_stroke_travel: float = -1.0
+# Whether the most recent release was a deliberate SHOT ATTEMPT rather than a
+# pass, a dump, or a forced knock-loose. Set just before puck_release_requested
+# fires; GameManager reads it at _start_pending_shot_from_carrier and hands it to
+# ShotOnGoalTracker, which cannot otherwise tell an errant pass from a missed
+# shot (a pass in Mitts IS a paced wrister, so both arrive on the same signal).
+# The read is the INPUT, not the geometry: the quick-pass button and a bot's
+# PASS_PRESSED state are passes, a charged human wrister and any slapper are
+# shots. So a human sniping with the pass button loses a Corsi attempt when it
+# misses the net entirely — the cost of trusting the control scheme, and smaller
+# than crediting every errant stretch pass that happens to line up with the far
+# mouth (#579).
+var last_release_was_shot: bool = false
 # Fired when the player releases slap while the puck is nearby but not yet
 # carried — the leniency one-timer. GameManager acquires + releases the puck;
 # the controller transitions to follow-through immediately.
@@ -1799,6 +1811,9 @@ func _clamp_slapshot_pin_from_net() -> void:
 		return
 	var away: Vector3 = clamped - pin
 	if away.length() > 0.001:
+		# Forced dispossession, not an attempt on goal — and it fires AWAY from
+		# the net by construction, so it would rarely read as directed anyway.
+		last_release_was_shot = false
 		_do_release(away.normalized(), goalie_strip_power)
 
 
@@ -1823,6 +1838,7 @@ func _clamp_carry_pin_from_net() -> void:
 		_has_prev_carry_pin = false
 		var away: Vector3 = clamped - pin
 		if away.length() > 0.001:
+			last_release_was_shot = false  # forced dispossession, see above
 			_do_release(away.normalized(), goalie_strip_power)
 		return
 	_prev_carry_pin = pin
@@ -2311,6 +2327,9 @@ func _release_wrister(input: InputState) -> void:
 		# button (_fire_quick_pass). A bare tap here fires a min-charge wrister.
 		last_release_hand = "BH" if is_backhand else "FH"
 		last_release_stroke_travel = _wrister_stroke_travel()
+		# A charged wrister is a shot unless a bot committed it as a pass — humans
+		# leave bot_release_is_pass false and pass on the dedicated button.
+		last_release_was_shot = not input.bot_release_is_pass
 		var result := ShotMechanics.release_wrister(
 				skater.global_position,
 				input.mouse_world_pos,
@@ -2348,6 +2367,7 @@ func _fire_quick_pass(input: InputState) -> void:
 		var blade_world: Vector3 = _ik.last_target_blade_world
 		last_release_hand = ""
 		last_release_stroke_travel = -1.0
+		last_release_was_shot = false  # the dedicated pass button
 		var result := ShotMechanics.release_wrister(
 				skater.global_position,
 				input.mouse_world_pos,
@@ -2376,6 +2396,7 @@ func _fire_slapper_shot(input: InputState) -> bool:
 	# Direction is locked at the moment slap was pressed — no mid-swing steering.
 	last_release_hand = ""
 	last_release_stroke_travel = -1.0
+	last_release_was_shot = true  # slappers are shots; bots only slapper on one-timers
 	var locked_dir_3d := Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
 	var cfg: ShotMechanics.SlapperConfig = _slapper_config()
 	# One-timers (puck arrived mid-charge) ride the same timer as a normal
@@ -2613,6 +2634,7 @@ func _try_one_timer_release(input: InputState) -> Dictionary:
 	result.power = ShotReleaseRules.one_timer_power(
 			result.power, one_timer_center_power_bonus, zone_xz, puck_xz, slapper_zone_radius)
 	if not is_replaying:
+		last_release_was_shot = true  # a one-timer is a shot
 		one_timer_release_requested.emit(result.direction, result.power)
 	# Same as _release_slapper — hide the HUD as soon as the shot fires so it
 	# doesn't ride along through the follow-through. The state machine copies the

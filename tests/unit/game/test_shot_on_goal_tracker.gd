@@ -668,6 +668,109 @@ func test_directed_miss_times_out_as_one_shot() -> void:
 			"a timed-out miss counts exactly once")
 
 
+func test_intended_pass_nobody_receives_is_not_a_shot() -> void:
+	# The #579 case: an errant pass. It fails both of the geometric outs by
+	# definition — the intended receiver never got it, and a stretch pass up the
+	# middle genuinely projects at the far mouth (a 15 m/s release coasts ~230 m
+	# on 0.05 friction, so reachability is real; the window is only ±2.3° wide).
+	# Only the release INTENT separates it from a missed shot.
+	_add_player(10, 0)
+	_add_player(20, 1)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(false)
+	tracker.note_directed_at_net(true)      # lines up with the far mouth
+	tracker.note_release_intent(false)      # but it was thrown as a pass
+	tracker.on_pickup(20)                   # an opponent picks it off
+	assert_signal_not_emitted(tracker, "shot_resolved")
+
+
+func test_intended_pass_that_times_out_is_not_a_shot() -> void:
+	# Same, on the other resolution path: nobody recovers it at all.
+	_add_player(10, 0)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(false)
+	tracker.note_directed_at_net(true)
+	tracker.note_release_intent(false)
+	tracker.tick(ShotOnGoalTracker.SHOT_ON_GOAL_TIMEOUT + 0.1)
+	assert_signal_not_emitted(tracker, "shot_resolved")
+
+
+func test_intended_pass_that_goes_in_is_still_a_goal() -> void:
+	# Intent gates the MISS resolution only. A feed that beats the goalie counts
+	# — the puck crossed the line, whatever it was thrown as.
+	_add_player(10, 0)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.note_release_intent(false)
+	tracker.on_goal_confirmed(10)
+	assert_signal_emitted(tracker, "shot_resolved")
+	assert_eq(_last_event().outcome, ShotEvent.Outcome.GOAL)
+
+
+func test_intended_pass_the_goalie_stops_is_still_a_save() -> void:
+	# The other half of "MISS resolution only": a pass the goalie has to stop is
+	# a shot on goal by the on-net read, and on_goalie_touch never consults intent.
+	_add_player(10, 0)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(true)
+	tracker.note_release_intent(false)
+	tracker.on_goalie_touch(1)
+	assert_signal_emitted(tracker, "shot_resolved")
+	assert_eq(_last_event().outcome, ShotEvent.Outcome.SAVED)
+
+
+func test_release_intent_defaults_to_shot() -> void:
+	# A caller that never notes intent must still log misses — the default
+	# over-credits, matching the on-net / directed reads it sits beside.
+	_add_player(10, 0)
+	_add_player(20, 1)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.note_directed_at_net(true)
+	tracker.on_pickup(20)
+	assert_signal_emitted(tracker, "shot_resolved")
+	assert_eq(_last_event().outcome, ShotEvent.Outcome.MISSED)
+
+
+func test_pass_intent_does_not_leak_into_the_next_shot() -> void:
+	# Pending state is per-release: a pass resolving as nothing must not leave
+	# the flag set for the shot that follows it.
+	_add_player(10, 0)
+	_add_player(20, 1)
+	tracker.on_shot_started(10)
+	tracker.note_directed_at_net(true)
+	tracker.note_release_intent(false)
+	tracker.on_pickup(20)                   # the pass dies here, no event
+	watch_signals(tracker)
+	tracker.on_shot_started(10)             # a real shot, intent never noted
+	tracker.note_directed_at_net(true)
+	tracker.on_pickup(20)
+	assert_signal_emitted(tracker, "shot_resolved")
+	assert_eq(_last_event().outcome, ShotEvent.Outcome.MISSED)
+
+
+func test_rebound_of_a_pass_redirected_by_a_teammate_is_a_shot() -> void:
+	# A saved release re-armed by an attacking teammate is that teammate
+	# shooting, whatever the original release was thrown as.
+	_add_player(10, 0)
+	_add_player(11, 0)
+	_add_player(20, 1)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(true)
+	tracker.note_release_intent(false)
+	tracker.on_goalie_touch(1)              # counted; pending stays for the rebound
+	watch_signals(tracker)
+	tracker.on_deflection(11)               # teammate redirects the rebound
+	tracker.note_directed_at_net(true)
+	tracker.on_pickup(20)                   # a defender kills it
+	assert_signal_emitted(tracker, "shot_resolved")
+	assert_eq(_last_event().outcome, ShotEvent.Outcome.MISSED)
+	assert_eq(_last_event().shooter_peer, 11)
+
+
 func test_post_hit_is_a_directed_miss() -> void:
 	# A post is a miss but stays a shot attempt even after on_net flips off.
 	_add_player(10, 0)

@@ -82,6 +82,17 @@ var _pending_on_net: bool = false
 # current by note_directed_at_net, and forced true on a post (a post is a directed
 # miss). A puck NOT directed at net that clears is a pass/clear, not a Corsi miss.
 var _pending_directed_at_net: bool = false
+# Whether the release was INTENDED as a shot (vs. a pass, a dump, or a forced
+# knock-loose off the net clamp). A pass in Mitts is a paced wrister, so the
+# geometry alone cannot separate them: an errant pass nobody receives fails both
+# of _resolve_pending_miss's other outs — no teammate collected it, and a stretch
+# pass up the middle genuinely projects at the far mouth — and logged as a missed
+# shot attempt from the passer's own end. Gates the MISS resolution only; a pass
+# that goes in is still a goal, and a pass the goalie stops is still handled by
+# on_goalie_touch. Armed true at release (a missed note over-credits, matching
+# the on-net/directed defaults) and set from the shooter's controller via
+# note_release_intent.
+var _pending_is_shot: bool = true
 # The pending shot's expected-goals value (AIActionScoring.expected_goals),
 # evaluated by the caller at release from the real goalie geometry and carried on
 # the resolved ShotEvent. Set via note_xg; 0 until then.
@@ -156,6 +167,9 @@ func on_deflection(peer_id: int) -> void:
 		_pending_one_timer = false
 		_pending_on_net = true
 		_pending_directed_at_net = true  # re-armed shot; note_directed_at_net corrects
+		# A teammate redirecting a live rebound is shooting, whatever the original
+		# release was — a tipped-in pass rebound is a shot attempt.
+		_pending_is_shot = true
 		_pending_xg = 0.0                # re-armed shot; note_xg re-reads its geometry
 		_pending_origin = Vector3.ZERO   # re-armed shot; note_shot_origin re-reads
 		_pending_ctx = []                # re-armed shot; note_goalie_context re-reads
@@ -209,6 +223,9 @@ func on_shot_started(shooter_peer_id: int, is_one_timer: bool = false) -> void:
 	# uncounted pending shot (a one-timer over a feed) overwrites it without
 	# resolving — the superseded feed never emits shot_counted, so it stays a pass.
 	_pending_directed_at_net = true
+	# Assume a shot too, until note_release_intent says pass — same over-credit
+	# default as the two reads above.
+	_pending_is_shot = true
 	# A shot went off — mark the turnover shot window so a recovery of it reads as
 	# a rebound (not a turnover), whether or not it turns out to be on goal.
 	shot_attempted.emit(shooter_peer_id)
@@ -232,6 +249,15 @@ func note_directed_at_net(directed: bool) -> void:
 	if _shooter_peer_id == -1:
 		return
 	_pending_directed_at_net = directed
+
+
+# Records what the release was INTENDED as, read from the shooter's input rather
+# than from the puck's geometry (SkaterController.last_release_was_shot). Gates the
+# MISS resolution only — see _pending_is_shot. No-op without a pending shot.
+func note_release_intent(is_shot: bool) -> void:
+	if _shooter_peer_id == -1:
+		return
+	_pending_is_shot = is_shot
 
 
 # Records the pending shot's expected-goals value (computed by the caller at
@@ -431,6 +457,7 @@ func clear_pending() -> void:
 	_shot_on_goal_counted = false
 	_pending_on_net = false
 	_pending_directed_at_net = false
+	_pending_is_shot = true
 	_pending_xg = 0.0
 	_pending_origin = Vector3.ZERO
 	_pending_one_timer = false
@@ -494,6 +521,8 @@ func _confirm(peer_id: int, outcome: int = ShotEvent.Outcome.SAVED) -> void:
 func _resolve_pending_miss(picker_peer_id: int) -> void:
 	if _shooter_peer_id == -1 or _shot_on_goal_counted:
 		return  # no pending shot, or already counted as on-goal / blocked
+	if not _pending_is_shot:
+		return  # released as a pass/dump nobody received — a giveaway, not a shot
 	if not _pending_directed_at_net:
 		return  # not aimed at the net — a pass or a clear, not a shot
 	if picker_peer_id != -1 and picker_peer_id != _shooter_peer_id \
