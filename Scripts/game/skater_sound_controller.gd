@@ -11,6 +11,10 @@ const _SKATE_MAX_PITCH: float = 1.15
 
 const _BRAKE_MIN_SPEED: float = 1.5        # must be moving this fast for brake sound
 
+# Last skate-loop blend factor pushed to the player (see _update_skate_loop).
+# -1 forces the first write.
+const _LEVEL_EPSILON: float = 0.002
+var _skate_level: float = -1.0
 var _skater: Skater = null
 var _skate_player: AudioStreamPlayer3D = null
 var _brake_player: AudioStreamPlayer3D = null
@@ -46,7 +50,10 @@ func _make_oneshot_player(path: String) -> AudioStreamPlayer3D:
 	return p
 
 
-func _physics_process(_delta: float) -> void:
+# Render rate, not the physics tick: this drives audio only, and it ran per
+# skater per tick. Braking is a held action lasting hundreds of ms, so the brake
+# trigger losing sub-frame precision is inaudible.
+func _process(_delta: float) -> void:
 	if _skater == null:
 		return
 
@@ -63,8 +70,14 @@ func _update_skate_loop(speed: float) -> void:
 	if speed > _SKATE_START_SPEED:
 		var t: float = clampf(
 			(speed - _SKATE_START_SPEED) / (_SKATE_MAX_SPEED - _SKATE_START_SPEED), 0.0, 1.0)
-		_skate_player.volume_db = lerpf(_SKATE_MIN_VOL_DB, _SKATE_MAX_VOL_DB, t)
-		_skate_player.pitch_scale = lerpf(_SKATE_MIN_PITCH, _SKATE_MAX_PITCH, t)
+		# Guarded on the blend factor rather than the derived values: both setters
+		# push through to the audio server, and a skater holding a steady speed
+		# (or pinned at the 0/1 ends of the ramp) re-sent identical values every
+		# frame. The epsilon is far below audible resolution on both ramps.
+		if absf(t - _skate_level) > _LEVEL_EPSILON:
+			_skate_level = t
+			_skate_player.volume_db = lerpf(_SKATE_MIN_VOL_DB, _SKATE_MAX_VOL_DB, t)
+			_skate_player.pitch_scale = lerpf(_SKATE_MIN_PITCH, _SKATE_MAX_PITCH, t)
 		if not _skate_player.playing:
 			_skate_player.play()
 	else:
