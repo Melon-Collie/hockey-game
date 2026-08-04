@@ -233,7 +233,10 @@ func _paint_static(ci: Control) -> void:
 		if not is_instance_valid(goal):
 			continue
 		var net_color: Color = _team_color(goal.defending_team_id)
-		var gz: float = goal.global_position.z
+		# goal_line_z(), NOT global_position.z: the HockeyGoal node sits at scene
+		# origin and builds its geometry around that value, so its transform reads
+		# as center ice for both ends.
+		var gz: float = goal.goal_line_z()
 		var back_z: float = gz + signf(gz) * GameRules.NET_DEPTH
 		var a: Vector2 = _map_point(-GameRules.NET_HALF_WIDTH, gz, flip)
 		var b: Vector2 = _map_point(GameRules.NET_HALF_WIDTH, back_z, flip)
@@ -251,12 +254,17 @@ func _paint_dynamic(ci: Control) -> void:
 		return
 	var flip: bool = _static_flip
 
-	# Goalies (defending-team tint), then skaters, then the puck on top.
-	for goalie: Goalie in GameManager.goalies:
-		if not is_instance_valid(goalie):
+	# Goalies (own-team tint), then skaters, then the puck on top. Walked per
+	# team rather than over GameManager.goalies: that array is positional
+	# ([top, bottom]) and carries no team id, while Team.goalie_controller is the
+	# authoritative team-to-goalie binding set at spawn.
+	for team: Team in GameManager.teams:
+		var gc: GoalieController = team.goalie_controller
+		if gc == null or gc.goalie == null or not is_instance_valid(gc.goalie):
 			continue
+		var goalie: Goalie = gc.goalie
 		var gpos: Vector2 = _map_point(goalie.global_position.x, goalie.global_position.z, flip)
-		_draw_square(ci, gpos, _GOALIE_HALF_SIZE, _goalie_team_color(goalie.global_position.z))
+		_draw_square(ci, gpos, _GOALIE_HALF_SIZE, _team_color(team.team_id))
 
 	var players: Dictionary[int, PlayerRecord] = GameManager.get_players()
 	for peer_id: int in players:
@@ -349,23 +357,6 @@ func _local_attack_up_flip() -> bool:
 	if record == null or record.team == null:
 		return false
 	return record.team.team_id == 1
-
-# Tint a goalie by the team defending the goal it's nearest to — a goalie lives
-# in its own crease, so the closest goal line is the one it defends. Robust to
-# the goalies[] ordering (which doesn't carry a team id).
-func _goalie_team_color(goalie_z: float) -> Color:
-	var best_goal: HockeyGoal = null
-	var best_dist: float = INF
-	for goal: HockeyGoal in GameManager.goals:
-		if not is_instance_valid(goal):
-			continue
-		var d: float = absf(goal.global_position.z - goalie_z)
-		if d < best_dist:
-			best_dist = d
-			best_goal = goal
-	if best_goal == null:
-		return Color(0.6, 0.6, 0.6)
-	return _team_color(best_goal.defending_team_id)
 
 # Team-identity color for net / goalie tinting: the side-aware kit jersey base,
 # the same color the skater dots wear (record.jersey_color is set from it), so
