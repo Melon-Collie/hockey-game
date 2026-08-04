@@ -184,13 +184,15 @@ var _face_gear_mesh: MeshInstance3D = null
 
 # ── Stick Flex Tuning (cosmetic) ──────────────────────────────────────────────
 # Vertex-shader shaft bow (Shaders/stick_flex.gdshader), driven entirely from
-# replicated fields (current_shot_state + shot_charge + carry side), so every
-# machine renders identical flex with no controller plumbing and no network
-# state. The shader displaces vertices BETWEEN the pinned endpoints — the
-# hand and blade anchors (gameplay) never move. Negative maxima flip the bow
-# side globally if a build reads inverted.
+# replicated fields (current_shot_state + shot_charge) and the stick's own
+# rendered pose, so every machine renders identical flex with no controller
+# plumbing and no network state. The shader displaces vertices BETWEEN the
+# pinned endpoints — the hand and blade anchors (gameplay) never move.
+# Amplitudes are unsigned metres; which way the bow points is geometry, solved
+# per frame in _stick_flex_axis.
 @export var stick_flex_max_m: float = 0.07       # mid-shaft bow at full wrister charge
-@export var stick_flex_slap_m: float = 0.10      # contact-spike bow of the slapshot downswing
+@export var stick_flex_slap_m: float = 0.10      # contact bow of the slapshot / one-timer
+@export var stick_flex_windup_m: float = 0.045   # trailing bow at a full slapper wind-up
 @export var stick_flex_load_speed: float = 10.0  # how fast the bow tracks the charge
 @export var stick_whip_hz: float = 9.0           # release-whip oscillation frequency
 @export var stick_whip_damping: float = 14.0     # release-whip decay rate
@@ -380,11 +382,24 @@ var predicted_shot_velocity: Vector3 = Vector3.ZERO
 
 # ── Stick Flex Runtime State (see Stick Flex Tuning exports) ──────────────────
 const _STICK_FLEX_SEGMENTS: int = 12   # shaft subdivisions the bend shader needs
-const _SLAP_SPIKE_SECONDS: float = 0.1 # downswing load time before the whip
+const _SLAP_SPIKE_SECONDS: float = 0.1 # contact load time before the whip
+# How much of the shot line has to lie off the shaft before the bow reaches full
+# amplitude (see _stick_flex_axis). Only the component of the drive PERPENDICULAR
+# to the shaft can bend it — an axial push compresses instead — but the fade is
+# deliberately steep: past ~17° off the shaft the bow is already saturated, so
+# this only ever damps the degenerate pose where the player shoots straight down
+# their own stick.
+const _FLEX_AXIS_SPAN: float = 0.3
 var _stick_flex: float = 0.0           # smoothed signed load bow (metres)
 var _stick_whip_amp: float = 0.0       # release-whip starting amplitude (signed)
 var _stick_whip_t: float = -1.0        # seconds since whip start; <0 = idle
-var _slap_spike_t: float = -1.0        # seconds into the slap contact spike; <0 = idle
+var _slap_spike_t: float = -1.0        # seconds into the contact spike; <0 = idle
+var _slap_spike_from: float = 0.0      # bow the contact spike ramps FROM (signed)
+# Signed −1..+1 projection of the shot line onto the shaft's bow axis, refreshed
+# by update_stick_mesh (which already has the shaft direction). Everything the
+# flex multiplies by this is therefore expressed as "toward the target", whatever
+# bearing the stick currently holds.
+var _stick_flex_axis: float = 0.0
 var _flex_prev_state: int = 0
 var _flex_sent: float = 0.0            # last uniform written (dirty guard)
 var _shaft_len_sent: float = 0.0       # last shaft_len_m uniform written (dirty guard)
@@ -1820,6 +1835,7 @@ func update_stick_mesh() -> void:
 	if to_tip.length_squared() < 0.0001:
 		return
 	var dir: Vector3 = to_tip.normalized()
+	_stick_flex_axis = _solve_stick_flex_axis(dir)
 	var butt_start: Vector3 = stick_origin - dir * SHAFT_BUTT_EXTEND_M
 	var shaft_len: float = to_tip.length() + SHAFT_BUTT_EXTEND_M + _SHAFT_TIP_OVERRUN_M
 	# Single local write, replacing position + scale.z + look_at (see
@@ -1847,6 +1863,37 @@ func update_stick_mesh() -> void:
 		if shaft_mat != null:
 			shaft_mat.set_shader_parameter(&"shaft_len_m", _shaft_len_sent)
 	_update_stick_knob(stick_origin, to_tip)
+
+
+# Which way "toward the target" points on the shaft's ONE available bow axis,
+# as a signed −1..+1 factor. `shaft_dir` is the butt→tip direction in upper-body
+# space, exactly as update_stick_mesh aims the mesh with it.
+#
+# The shader can only displace along object X, and Basis.looking_at builds that
+# axis as up × −dir — the horizontal normal of the blade's face (the same vector
+# get_carry_target_global offsets the puck along). So object X is perpendicular
+# to the shaft and rotates with its bearing: as the blade sweeps around the
+# player, a FIXED sign points at the net in some poses and behind the shooter in
+# others. The drive direction has to be re-projected onto it every frame.
+#
+# The drive is the shot line, and in upper-body space the shot line is FORWARD —
+# the torso coils onto it through every wind-up (SkaterPoseCoordinator
+# .apply_upper_body) and squares to it through the follow-through. Projecting
+# (0, 0, −1) onto the normalized face normal collapses to −shaft_dir.x over the
+# shaft's horizontal length, so the whole solve is two multiplies. The residual
+# twist cap only scales the magnitude; the SIGN — the thing that reads as
+# flexing the wrong way — is right in every pose except one where the shot line
+# lies along the shaft, and _FLEX_AXIS_SPAN fades the bow out there anyway.
+#
+# Reads only the rendered stick pose, which every machine reconstructs from the
+# replicated blade/hand markers, so the bow direction agrees across the lobby.
+# (The carry side this used to key off does not: update_carry_side runs from the
+# IK pipeline, which never touches a client-rendered remote.)
+func _solve_stick_flex_axis(shaft_dir: Vector3) -> float:
+	var horiz: float = sqrt(shaft_dir.x * shaft_dir.x + shaft_dir.z * shaft_dir.z)
+	if horiz < 0.0001:
+		return 0.0
+	return clampf(-shaft_dir.x / (horiz * _FLEX_AXIS_SPAN), -1.0, 1.0)
 
 
 # The hosel throat's tip in upper-body space: the fixed blade-local tip (the
@@ -1892,66 +1939,69 @@ func _update_stick_knob(stick_origin: Vector3, to_shaft_end: Vector3) -> void:
 
 
 # ── Stick Flex (cosmetic) ─────────────────────────────────────────────────────
-# Render-rate driver for the shaft-bow shader uniform. Load: the shaft bows
-# with wrister charge while aiming (side follows the carry face, so a
-# backhand load bows the other way). Release: the bow springs through
-# straight with a damped cosine oscillation — cos starts AT the loaded value,
-# so the whip is continuous at the release instant. Slapshot: straight
-# through the wind-up (real shafts load at CONTACT, not at the top of the
-# swing), then a quick contact spike at the start of the follow-through's
-# downswing that converts into the same whip. One-timer: the retention hold is
-# the contact, so the bow ramps in there and HOLDS loaded until the shot leaves.
-# Every input is replicated
-# (current_shot_state, shot_charge, carry side), so local, bot, and remote
-# skaters render the identical flex with zero network additions.
+# Render-rate driver for the shaft-bow shader uniform. One signed scalar carries
+# the whole swing, positive being toward the target (_stick_flex_axis resolves
+# that onto the shaft's bow axis), so the shot arc reads as one continuous load:
+#
+#   wrister aim    the puck pins the blade while the hands press into it, so the
+#                  bow leads TOWARD the target and deepens with the charge.
+#   slapper wind-up the stick is ripped back and up; the blade's inertia leaves it
+#                  behind the hands, so the bow runs the OTHER way — a trailing
+#                  load that deepens as the wind-up fills.
+#   contact        the blade catches the puck and the hands keep coming. The bow
+#                  crosses from the wind-up's trailing load through dead straight
+#                  into a full drive-side load — that snap through zero is the
+#                  moment the shot reads as leaving.
+#   release        a damped cosine from wherever the bow got to; cos starts AT
+#                  that value, so the whip is continuous at the release instant.
+#
+# A one-timer's retention hold IS the contact beat — same crossing, but it HOLDS
+# at the apex until the shot actually leaves, straining against the caught puck.
+#
+# Every input is replicated (current_shot_state, shot_charge) or re-derived from
+# the replicated stick pose, so local, bot, and remote skaters render the
+# identical flex with zero network additions.
 func _update_stick_flex(delta: float) -> void:
 	var state: int = current_shot_state
-	# The shaft bows TOWARD the loaded blade face — the side the puck is on,
-	# in the direction it's being pushed (three-point bend: puck pins the
-	# blade back, top hand pulls back, bottom hand drives the middle forward,
-	# so the belly of the C points at the target and the blade trails). An
-	# earlier tuning pass negated this after a mis-read of the in-game bow;
-	# playtest confirmed the negation had it backward.
-	var side: float = (1.0 if _carry_side_smoothed >= 0.0 else -1.0) \
-			* (-1.0 if is_left_handed else 1.0)
+	var axis: float = _stick_flex_axis
 	if state != _flex_prev_state:
 		if state == SkaterStateMachine.State.ONE_TIMER_RETENTION:
-			# The one-timer's committed hold IS the load: the blade catches the
-			# puck and the shaft bows against it for the whole beat. Same ramp the
-			# plain slapshot's contact spike uses, but it HOLDS at the apex (see
-			# the spike branch) until the shot actually leaves.
-			_slap_spike_t = 0.0
+			_start_contact_spike()
 		elif state == SkaterStateMachine.State.FOLLOW_THROUGH:
 			if _flex_prev_state == SkaterStateMachine.State.ONE_TIMER_RETENTION:
-				# Retention already loaded the shaft — release it straight into the
-				# whip from wherever the bow got to, rather than re-ramping.
+				# Retention already carried the load through contact — release it
+				# straight into the whip rather than re-ramping.
 				_slap_spike_t = -1.0
 				_start_stick_whip(_stick_flex)
 			elif _flex_prev_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK \
 					or _flex_prev_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK:
-				_slap_spike_t = 0.0
+				_start_contact_spike()
 			else:
 				# Wrister / quick release: whip from the loaded bow, with a
 				# minimum pop so uncharged snaps and passes still read.
 				var amp: float = _stick_flex
-				var min_pop: float = stick_flex_max_m * 0.35
-				if absf(amp) < min_pop:
-					amp = min_pop * side
+				var min_pop: float = stick_flex_max_m * 0.35 * axis
+				if absf(amp) < absf(min_pop):
+					amp = min_pop
 				_start_stick_whip(amp)
 		_flex_prev_state = state
 
 	var display: float
 	if _slap_spike_t >= 0.0:
-		# Downswing contact spike: ramp the bow in fast, then let it go.
+		# Contact: cross from the wind-up's trailing bow to the drive-side load.
+		# The ramp is sized to the follow-through's own downswing (SkaterShot
+		# PoseCoordinator.apply_slapper_follow_through), so the crossing lands on
+		# the frame the blade reaches the puck and the whip starts there.
 		_slap_spike_t += delta
+		var apex: float = stick_flex_slap_m * axis
 		if _slap_spike_t < _SLAP_SPIKE_SECONDS:
-			_stick_flex = stick_flex_slap_m * (_slap_spike_t / _SLAP_SPIKE_SECONDS) * side
+			_stick_flex = lerpf(_slap_spike_from, apex, _slap_spike_t / _SLAP_SPIKE_SECONDS)
 		elif state == SkaterStateMachine.State.ONE_TIMER_RETENTION:
 			# Loaded and waiting on the release — hold the bow at the apex. The
 			# transition out of retention starts the whip, not this timer, so a
 			# retention longer than the ramp reads as a stick straining against a
 			# puck it has caught instead of springing early.
-			_stick_flex = stick_flex_slap_m * side
+			_stick_flex = apex
 		else:
 			_start_stick_whip(_stick_flex)
 			_slap_spike_t = -1.0
@@ -1967,7 +2017,15 @@ func _update_stick_flex(delta: float) -> void:
 	else:
 		var target: float = 0.0
 		if state == SkaterStateMachine.State.WRISTER_AIM:
-			target = shot_charge * stick_flex_max_m * side
+			target = shot_charge * stick_flex_max_m * axis
+		elif state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK \
+				or state == SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK:
+			# Trailing wind-up load, negative because the blade lags the draw-back.
+			# sqrt-eased off the replicated charge the way every machine can — the
+			# wind-up pose fills over the same timer (SkaterController
+			# .slapper_wind_up_t), so shot_charge IS the wind-up progress, and the
+			# ease matches the torso coil's front-loaded snap.
+			target = -sqrt(clampf(shot_charge, 0.0, 1.0)) * stick_flex_windup_m * axis
 		_stick_flex = lerpf(_stick_flex, target, minf(stick_flex_load_speed * delta, 1.0))
 		display = _stick_flex
 
@@ -1977,6 +2035,14 @@ func _update_stick_flex(delta: float) -> void:
 	var mat: ShaderMaterial = stick_mesh.material_override as ShaderMaterial
 	if mat != null:
 		mat.set_shader_parameter(&"flex_m", display)
+
+
+# Begins the contact crossing FROM the live bow rather than from straight, so a
+# wound-up slapper unloads through zero on its way to the drive-side apex and a
+# short wind-up (or a quick-armed one-timer) simply travels less far.
+func _start_contact_spike() -> void:
+	_slap_spike_t = 0.0
+	_slap_spike_from = _stick_flex
 
 
 func _start_stick_whip(amp: float) -> void:

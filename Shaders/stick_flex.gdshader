@@ -13,9 +13,15 @@ shader_type spatial;
 // end (a low-kick stick); the mesh needs subdivide_depth > 0 to have
 // vertices along the length to bend (set in Skater._ready).
 //
+// A positive flex_m displaces toward object +X, which Basis.looking_at builds
+// as up x -dir: the horizontal normal of the blade's face. That axis rotates
+// with the stick's bearing, so a constant sign points at the net in one pose
+// and behind the shooter in another — Skater._solve_stick_flex_axis re-projects
+// the shot line onto it every frame and hands the signed result down.
+//
 // flex_m is driven per rendered frame by Skater._update_stick_flex from
-// replicated state (shot charge / shot state), so every machine renders
-// the identical bend.
+// replicated state (shot charge / shot state) plus the rendered stick pose,
+// so every machine renders the identical bend.
 
 // Handle wrap (StickTapeConfig.KnobStyle) is painted here rather than meshed:
 // the shaft is one stretched box, so separate wrap geometry would need
