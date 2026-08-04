@@ -549,6 +549,7 @@ int64_t NativeSkaterGait::apply(
 	}
 	stance = MAX(stance, cfg.dig_in_stance * dig);
 	stance = MAX(stance, cfg.reversal_stance * rev_amt);
+	stance = MAX(stance, cfg.carve_stance * Math::abs(carve));
 	stance = MAX(stance, cfg.wrister_load_stance * wrister_load);
 	stance = MAX(stance, cfg.slapper_load_stance * slap_load);
 	const double kick_stance = shot_kick_is_slap ? cfg.slapper_kick_stance
@@ -785,6 +786,16 @@ int64_t NativeSkaterGait::apply(
 	if (stop_blend > 0.001) {
 		trunk_roll_add += Math::deg_to_rad(cfg.hockey_stop_trunk_roll_deg) *
 				stop_blend * stop_side;
+	}
+	// Centripetal bank — see the GDScript reference.
+	if (ground_speed > 0.1) {
+		const double bank_mag = MIN(
+				Math::atan2(ground_speed * Math::abs(turn_rate), 9.8) * cfg.carve_bank_gain,
+				Math::deg_to_rad(cfg.carve_bank_max_deg)) * (1.0 - stop_blend);
+		const double centri_x = sgn(turn_rate) * -(double)local_vel.z / ground_speed;
+		const double centri_z = sgn(turn_rate) * (double)local_vel.x / ground_speed;
+		trunk_pitch_add += bank_mag * centri_z;
+		trunk_roll_add += -bank_mag * centri_x;
 	}
 
 	// Stagger stumble / knockdown factor.

@@ -758,6 +758,9 @@ func apply(delta: float) -> void:
 	# first strides, and the edges only kill momentum under bent knees.
 	stance = maxf(stance, _controller.dig_in_stance * _dig)
 	stance = maxf(stance, _controller.reversal_stance * rev_amt)
+	# A committed carve sits DOWN — the edges hold a fast arc only under bent
+	# knees, and the lowered center of mass is what lets the body bank into it.
+	stance = maxf(stance, _controller.carve_stance * absf(_carve))
 	# Shot loads sit INTO the shot as the charge builds (the slapper wind-up
 	# deepest — the power position), and the release keeps the front leg seated
 	# through the drive (the back knee is pulled out of this flex by the kick
@@ -1152,6 +1155,23 @@ func apply(delta: float) -> void:
 	if _stop_blend > 0.001:
 		trunk_roll_add += deg_to_rad(_controller.hockey_stop_trunk_roll_deg) \
 				* _stop_blend * _stop_side
+	# Centripetal bank — the trunk inclines toward the arc's center like a
+	# banking bicycle. The balancing inclination is atan(a_lat/g) with
+	# a_lat = v·ω, both from signals already smoothed above (ground speed, the
+	# turn rate), so remotes and replay derive the identical bank for free.
+	# Decomposed body-local exactly like the check-drive lean (pitch = mag·dir.z,
+	# roll = −mag·dir.x): the center sits 90° from travel in the turn sense, so
+	# the bank stays correct at any facing-vs-travel angle, forward or backward.
+	# The gain leaves the rest of the physical angle to the legs' carve lean;
+	# the stop fade hands the channel to the hockey stop's authored bank.
+	if ground_speed > 0.1:
+		var bank_mag: float = minf(
+				atan2(ground_speed * absf(_turn_rate), 9.8) * _controller.carve_bank_gain,
+				deg_to_rad(_controller.carve_bank_max_deg)) * (1.0 - _stop_blend)
+		var centri_x: float = signf(_turn_rate) * -local_vel.z / ground_speed
+		var centri_z: float = signf(_turn_rate) * local_vel.x / ground_speed
+		trunk_pitch_add += bank_mag * centri_z
+		trunk_roll_add += -bank_mag * centri_x
 
 	# Stagger stumble: a checked player visibly fights for balance. The wobble
 	# phase is derived FROM stagger_timer (a uniform countdown), so every

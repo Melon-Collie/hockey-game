@@ -406,6 +406,14 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var carve_forward_ramp: float = 1.0    # m/s of forward travel over which crossovers fade in
 @export var carve_base_lean_deg: float = 7.0   # static both-leg lean into the turn while striding a carve
 @export var carve_rock_fade: float = 0.85      # edge-rock/abduction/scissor faded out at full carve
+# Centripetal trunk bank: the inclination that balances a turn is atan(v·ω/g),
+# derived from the speed and turn rate the carve already smooths — so every
+# machine banks identically with no new state, and the angle scales with how
+# hard the arc actually is instead of a fixed lean. The legs' carve lean
+# carries part of the physical angle; the gain sets the trunk's share.
+@export var carve_bank_gain: float = 0.5       # fraction of the physical bank angle the trunk shows
+@export var carve_bank_max_deg: float = 16.0   # trunk bank cap for the tightest whips
+@export var carve_stance: float = 0.75         # stance floor at full carve — sit low to hold the edges
 # Gliding — releasing all movement keys settles the legs to rest (the stride
 # is input-gated, v15 intent byte) while this floor keeps working knees under
 # a coasting skater, scaled by speed.

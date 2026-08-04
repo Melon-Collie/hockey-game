@@ -30,9 +30,10 @@ namespace mitts {
 	X(backpedal_pitch_fade) X(backpedal_start) X(backpedal_tuck_fade) \
 	X(block_extend_knee_deg) X(block_kneel_hip_deg) X(block_kneel_shin_deg) \
 	X(block_pose_blend_speed) X(cadence_cruise_falloff) X(cadence_glide_stance_gain) \
-	X(carve_base_lean_deg) X(carve_clearance_knee_deg) X(carve_engage_speed) \
-	X(carve_forward_ramp) X(carve_min_speed) X(carve_over_pitch_deg) \
-	X(carve_over_roll_deg) X(carve_ref_turn_rate) X(carve_rock_fade) \
+	X(carve_bank_gain) X(carve_bank_max_deg) X(carve_base_lean_deg) \
+	X(carve_clearance_knee_deg) X(carve_engage_speed) X(carve_forward_ramp) \
+	X(carve_min_speed) X(carve_over_pitch_deg) X(carve_over_roll_deg) \
+	X(carve_ref_turn_rate) X(carve_rock_fade) X(carve_stance) \
 	X(carve_stride_fade) X(carve_under_roll_deg) X(celebration_leg_stance) \
 	X(check_drive_lean_deg) X(check_drive_stance) X(check_drive_time) \
 	X(crossover_lean_deg) X(crossover_phase_per_turn) X(crossover_scissor_deg) \
