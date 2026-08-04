@@ -3714,6 +3714,14 @@ func _note_shot_trajectory() -> void:
 		if shooter_team != -1 and goal.defending_team_id == shooter_team:
 			continue  # the shooter's own net — never an attempt for their team
 		var line_z: float = goal.goal_line_z()
+		# Nothing released from the shooter's own half is a shot event of any kind
+		# (see ShotOnNetRules.is_release_in_own_half for why the ballistic test
+		# can't refuse these itself). Skipped when the team won't resolve, like the
+		# own-net gate above — a drill has no half to be behind. Mid-flight
+		# deflection re-reads pass the LIVE position, so a breakout pass tipped at
+		# the blue line is judged from the tip rather than from the pass.
+		if shooter_team != -1 and ShotOnNetRules.is_release_in_own_half(pos.z, line_z):
+			continue
 		if ShotOnNetRules.is_on_net(pos, vel, line_z):
 			on_net = true
 			directed = true

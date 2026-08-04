@@ -63,3 +63,31 @@ func test_feed_from_behind_the_net_is_off_net() -> void:
 	# can never enter the net.
 	assert_false(ShotOnNetRules.is_on_net(
 			Vector3(0.5, ICE_Y, GOAL_Z + 1.5), Vector3(-0.5, 0.0, -14.0), GOAL_Z))
+
+
+# ── Own-half release gate ────────────────────────────────────────────────────
+
+func test_release_from_own_half_is_gated() -> void:
+	# Team attacking the +Z net defends -Z, so its own half is z < 0. A release
+	# from beside its own crease is the #579 case: the puck really does reach the
+	# far mouth (ICE_FRICTION 0.05 coasts a 15 m/s release ~230 m), so only the
+	# release position separates it from a shot.
+	assert_true(ShotOnNetRules.is_release_in_own_half(-GOAL_Z + 1.0, GOAL_Z))
+	# Mirrored for the other end.
+	assert_true(ShotOnNetRules.is_release_in_own_half(GOAL_Z - 1.0, -GOAL_Z))
+
+
+func test_release_from_the_attacking_half_is_not_gated() -> void:
+	# Anywhere from centre forward is a live shot: the far blue line, the point,
+	# the slot, and a wraparound behind the attacking goal line (which the
+	# approach-from-the-front check in _crosses_mouth handles instead).
+	for z: float in [1.0, GameRules.BLUE_LINE_Z, GOAL_Z - 5.0, GOAL_Z + 1.5]:
+		assert_false(ShotOnNetRules.is_release_in_own_half(z, GOAL_Z),
+				"z=%f attacking the +Z net is not an own-half release" % z)
+
+
+func test_release_on_the_centre_line_is_legal() -> void:
+	# The centre red line is z = 0 by construction. A release exactly on it is
+	# not BEHIND it — same dead-band convention as the icing release check.
+	assert_false(ShotOnNetRules.is_release_in_own_half(0.0, GOAL_Z))
+	assert_false(ShotOnNetRules.is_release_in_own_half(0.0, -GOAL_Z))

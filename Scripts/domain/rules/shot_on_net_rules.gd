@@ -45,6 +45,29 @@ static func is_directed_at_net(puck_pos: Vector3, puck_vel: Vector3, goal_line_z
 			DIRECTED_LATERAL_MARGIN, DIRECTED_VERTICAL_MARGIN)
 
 
+# Whether a release came from the shooter's OWN half, which disqualifies it as a
+# shot event outright — not an attempt, not a shot on goal, not a blocked shot.
+#
+# The ballistic tests above cannot refuse these on their own: ICE_FRICTION 0.05
+# gives PUCK_ICE_DECEL_M_S2 0.49, so a 15 m/s release coasts ~230 m against a
+# 59.7 m rink and a puck from the far end really does reach the mouth. What keeps
+# it rare is angular — ±2.115 m at ~51 m is a ±2.3° window — but an errant stretch
+# pass hits it about once a game, and it plotted a point-blank dot beside the
+# passer's OWN crease on the shot map.
+#
+# The centre red line is z = 0 by construction (rink centred on the origin, goal
+# lines at ±GameRules.GOAL_LINE_Z), so "own half" reduces to the release sitting
+# on the opposite side of centre from the net being shot at — the same convention
+# InfractionRules.check_icing uses for the icing release. A release exactly ON the
+# line is legal (the product is 0, not negative).
+#
+# Safe to make absolute because there is no goalie-pull mechanic: goalies spawn
+# for every match, so the empty-net shot from deep that a real scorer WOULD credit
+# cannot occur. Revisit this if a pulled goalie ever ships.
+static func is_release_in_own_half(release_z: float, goal_line_z: float) -> bool:
+	return release_z * goal_line_z < 0.0
+
+
 static func _crosses_mouth(puck_pos: Vector3, puck_vel: Vector3, goal_line_z: float,
 		lateral_margin: float, vertical_margin: float) -> bool:
 	if absf(puck_vel.z) < 0.001:
