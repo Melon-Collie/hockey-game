@@ -1616,16 +1616,10 @@ func apply_blade_aim_only(input: InputState, delta: float) -> void:
 
 
 # ── Network State ─────────────────────────────────────────────────────────────
-# Returns the typed network state object. Flattening to Array happens at the
-# RPC boundary (GameManager.get_world_state), not here.
-func get_network_state() -> SkaterNetworkState:
-	var state := SkaterNetworkState.new()
-	fill_network_state(state)
-	return state
-
-# Writes the current state into a caller-owned instance. StateBufferManager
-# fills its pre-allocated ring slots through this every physics tick — allocating a
-# fresh state per capture (get_network_state) defeated the ring's purpose.
+# Writes the current state into a caller-owned instance — StateBufferManager
+# fills its pre-allocated ring slots through this every physics tick, so this
+# path must not allocate. Flattening to Array happens at the RPC boundary
+# (GameManager.get_world_state), not here.
 func fill_network_state(state: SkaterNetworkState) -> void:
 	state.position = skater.global_position
 	state.velocity = skater.velocity
