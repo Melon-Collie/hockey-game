@@ -352,6 +352,10 @@ var packet_loss_pct: float = 0.0
 # client received-but-didn't-echo (Steam delivers clumpy) was miscounted as
 # dropped, inflating a clean link to ~50%. Read by get_peer_loss_rate.
 var _peer_loss_rates: Dictionary = {}
+# peer_id -> newest input stamp that peer's RemoteController already holds, in
+# raw wire units (u32 @ 0.1 ms). The input decoder's skip gate — see
+# report_input_watermark. Torn down with the rest of the per-peer books.
+var _peer_input_watermarks: Dictionary = {}
 # Jitter measurement (client side)
 var _jitter_samples: Array[float] = []
 var _last_ws_arrival_time: float = -1.0
@@ -707,6 +711,7 @@ func _on_peer_disconnected(id: int) -> void:
 	_peer_ping_ms.erase(id)
 	_peer_rtt_ema_ms.erase(id)
 	_peer_loss_rates.erase(id)
+	_peer_input_watermarks.erase(id)
 	_claim_rate_window_start.erase(id)
 	_claim_rate_count.erase(id)
 	_input_rate_window_start.erase(id)
@@ -791,6 +796,7 @@ func prepare_for_new_game() -> void:
 	_peer_ping_ms.clear()
 	_peer_rtt_ema_ms.clear()
 	_peer_loss_rates.clear()
+	_peer_input_watermarks.clear()
 	_claim_rate_window_start.clear()
 	_claim_rate_count.clear()
 	_input_rate_window_start.clear()
@@ -891,6 +897,7 @@ func reset() -> void:
 	_peer_ping_ms.clear()
 	_peer_rtt_ema_ms.clear()
 	_peer_loss_rates.clear()
+	_peer_input_watermarks.clear()
 	_claim_rate_window_start.clear()
 	_claim_rate_count.clear()
 	_input_rate_window_start.clear()
@@ -1369,25 +1376,54 @@ func receive_input_batch(data: PackedByteArray) -> void:
 	if is_host and not _rate_ok(sender_id, _INPUT_BATCH_RATE_CAP_PER_S,
 			_input_rate_window_start, _input_rate_count):
 		return
-	NetworkSimManager.send(
-		func(d: PackedByteArray, sid: int) -> void:
-			if d.size() < 3:
-				return
-			# Client-reported downstream loss (basis points) — stored verbatim as
-			# this peer's link loss (see _peer_loss_rates).
-			_peer_loss_rates[sid] = float(d.decode_u16(0)) / 100.0
-			var count: int = d.decode_u8(2)
-			if count > _MAX_INPUTS_PER_BATCH:
-				push_warning("oversized input batch from peer %d: count=%d" % [sid, count])
-				return
-			var inputs: Array[InputState] = []
-			for i: int in count:
-				var off: int = 3 + i * InputState.BYTES_SIZE
-				if off + InputState.BYTES_SIZE > d.size():
-					break
-				inputs.append(InputState.from_bytes(d, off))
-			input_batch_received.emit(sid, inputs),
-		[data, sender_id], false)
+	# Branch rather than hand NetworkSimManager a closure: with the sim disabled
+	# (every real session) send() just callv's straight through, so the closure
+	# and its args Array were allocated per packet for nothing.
+	if NetworkSimManager.enabled:
+		NetworkSimManager.send(_apply_input_batch, [data, sender_id], false)
+	else:
+		_apply_input_batch(data, sender_id)
+
+
+func _apply_input_batch(d: PackedByteArray, sid: int) -> void:
+	if d.size() < 3:
+		return
+	# Client-reported downstream loss (basis points) — stored verbatim as
+	# this peer's link loss (see _peer_loss_rates).
+	_peer_loss_rates[sid] = float(d.decode_u16(0)) / 100.0
+	var count: int = d.decode_u8(2)
+	if count > _MAX_INPUTS_PER_BATCH:
+		push_warning("oversized input batch from peer %d: count=%d" % [sid, count])
+		return
+	# Clients ship a redundant trailing window (12-24 frames) so a lost packet is
+	# covered by the next one — at 120 batches/s that makes ~119 of every 120
+	# records a duplicate the consumer's dedupe throws away. Peek each record's
+	# host_timestamp (u32 at offset 0 of the record) against the watermark the
+	# consumer reported and skip the decode entirely for stamps it already knows,
+	# instead of allocating an InputState per record and discarding it one call
+	# later. Compared in raw wire units — both sides came off this same u32 grid,
+	# so the test is exact and costs no conversion per record.
+	var watermark: int = _peer_input_watermarks.get(sid, -1)
+	var inputs: Array[InputState] = []
+	for i: int in count:
+		var off: int = 3 + i * InputState.BYTES_SIZE
+		if off + InputState.BYTES_SIZE > d.size():
+			break
+		if d.decode_u32(off) <= watermark:
+			continue
+		inputs.append(InputState.from_bytes(d, off))
+	input_batch_received.emit(sid, inputs)
+
+
+# The newest input stamp a peer's RemoteController has already processed or
+# queued (see RemoteController.receive_input_batch). Reported by the consumer
+# rather than tracked here, because only the consumer knows what it kept: an
+# input this decoder emitted may still have been rejected downstream (clock
+# warmup putting it past the future-slack window), and a watermark advanced on
+# emit would then skip the redelivery that recovers it. Absent = nothing skipped.
+func report_input_watermark(peer_id: int, host_timestamp: float) -> void:
+	_peer_input_watermarks[peer_id] = roundi(
+			maxf(host_timestamp, 0.0) * Constants.TIME_WIRE_SCALE)
 
 @rpc("authority", "unreliable_ordered")
 func receive_world_state(data: PackedByteArray) -> void:

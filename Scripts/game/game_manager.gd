@@ -3905,7 +3905,10 @@ func _on_input_batch_received(peer_id: int, inputs: Array[InputState]) -> void:
 	var remote: RemoteController = record.controller as RemoteController
 	if remote == null:
 		return
-	remote.receive_input_batch(inputs)
+	# Feed the queue's dedupe watermark back so the decoder can skip this peer's
+	# redundant records before paying for them. Reported only on the path that
+	# actually consumed the batch — a dropped batch must not advance it.
+	NetworkManager.report_input_watermark(peer_id, remote.receive_input_batch(inputs))
 
 
 # ── World state & stats RPC forwarding ───────────────────────────────────────
