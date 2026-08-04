@@ -87,6 +87,10 @@ var stride_phase: float = 0.0
 # it holds steady through reconcile replay like the rest of the gait.
 var trunk_pitch_add: float = 0.0
 var trunk_roll_add: float = 0.0
+# Inertia-filter state for the summed trunk texture (see the publish tail of
+# apply() and trunk_texture_smooth_rate).
+var _trunk_pitch_s: float = 0.0
+var _trunk_roll_s: float = 0.0
 # Eased 0..1 "committing a check" stance factor, tracked toward skater.hit_committed
 # at render rate. Drives the load-up lean / shoulder drop / crouch below.
 var _hit_commit_blend: float = 0.0
@@ -258,6 +262,8 @@ func reset_to_rest() -> void:
 	_faceoff_blend = 0.0
 	trunk_pitch_add = 0.0
 	trunk_roll_add = 0.0
+	_trunk_pitch_s = 0.0
+	_trunk_roll_s = 0.0
 	_prev_velocity = Vector3.ZERO
 	_have_prev_velocity = false
 	_fd_time = 0.0
@@ -1337,14 +1343,19 @@ func apply(delta: float) -> void:
 	var kd_t: float = clampf(
 			_controller.knockdown_timer / maxf(_controller.knockdown_getup_seconds, 0.001), 0.0, 1.0)
 
+	# The wobble is kept OUT of the summed texture and added after the inertia
+	# filter at the publish tail — a stumble is supposed to shake, and the
+	# filter would blunt exactly the frequencies that sell it.
+	var stagger_pitch: float = 0.0
+	var stagger_roll: float = 0.0
 	var stagger_t: float = clampf(
 			_controller.stagger_timer / maxf(_controller.stagger_max_seconds, 0.001), 0.0, 1.0)
 	if stagger_t > 0.0:
 		# Knockdown supersedes the stumble — fade the wobble out as the player goes down.
 		var wobble_amp: float = deg_to_rad(_controller.stagger_wobble_deg) * stagger_t * (1.0 - kd_t)
 		var wobble_phase: float = _controller.stagger_timer * TAU * _controller.stagger_wobble_hz
-		trunk_pitch_add += wobble_amp * sin(wobble_phase)
-		trunk_roll_add += wobble_amp * 0.7 * sin(wobble_phase * 1.31)
+		stagger_pitch = wobble_amp * sin(wobble_phase)
+		stagger_roll = wobble_amp * 0.7 * sin(wobble_phase * 1.31)
 
 	var foot_evert_l: float = 0.0
 	var foot_evert_r: float = 0.0
@@ -1434,6 +1445,15 @@ func apply(delta: float) -> void:
 	_skater.set_leg_swing(l_pitch, l_roll, l_knee, r_pitch, r_roll, r_knee)
 	_skater.set_foot_eversion(foot_evert_l, foot_evert_r)
 	_skater.set_skating_crouch_drop(drop)
+	# Trunk inertia: filter the summed texture, then layer the stumble wobble
+	# back on top (see trunk_texture_smooth_rate).
+	var tex_ease: float = 1.0
+	if _controller.trunk_texture_smooth_rate > 0.0:
+		tex_ease = minf(_controller.trunk_texture_smooth_rate * delta, 1.0)
+	_trunk_pitch_s = lerpf(_trunk_pitch_s, trunk_pitch_add, tex_ease)
+	_trunk_roll_s = lerpf(_trunk_roll_s, trunk_roll_add, tex_ease)
+	trunk_pitch_add = _trunk_pitch_s + stagger_pitch
+	trunk_roll_add = _trunk_roll_s + stagger_roll
 	_skater.set_trunk_texture(trunk_pitch_add, trunk_roll_add)
 
 

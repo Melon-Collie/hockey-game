@@ -205,6 +205,8 @@ void NativeSkaterGait::reset_state() {
 	faceoff_blend = 0.0;
 	trunk_pitch_add = 0.0;
 	trunk_roll_add = 0.0;
+	trunk_pitch_s = 0.0;
+	trunk_roll_s = 0.0;
 	prev_velocity = Vector3();
 	have_prev_velocity = false;
 	fd_time = 0.0;
@@ -927,11 +929,13 @@ int64_t NativeSkaterGait::apply(
 			knockdown_timer / MAX(cfg.knockdown_getup_seconds, 0.001), 0.0, 1.0);
 	const double stagger_t = CLAMP(
 			stagger_timer / MAX(cfg.stagger_max_seconds, 0.001), 0.0, 1.0);
+	double stagger_pitch = 0.0;
+	double stagger_roll = 0.0;
 	if (stagger_t > 0.0) {
 		const double wobble_amp = Math::deg_to_rad(cfg.stagger_wobble_deg) * stagger_t * (1.0 - kd_t);
 		const double wobble_phase = stagger_timer * Math_TAU * cfg.stagger_wobble_hz;
-		trunk_pitch_add += wobble_amp * Math::sin(wobble_phase);
-		trunk_roll_add += wobble_amp * 0.7 * Math::sin(wobble_phase * 1.31);
+		stagger_pitch = wobble_amp * Math::sin(wobble_phase);
+		stagger_roll = wobble_amp * 0.7 * Math::sin(wobble_phase * 1.31);
 	}
 
 	double foot_evert_l = 0.0;
@@ -993,6 +997,17 @@ int64_t NativeSkaterGait::apply(
 				sgn((double)vel_local.x);
 		drop += cfg.hit_commit_crouch_m * commit_t;
 	}
+
+	// Trunk inertia filter + post-filter stumble wobble — see the GDScript
+	// reference's publish tail.
+	double tex_ease = 1.0;
+	if (cfg.trunk_texture_smooth_rate > 0.0) {
+		tex_ease = MIN(cfg.trunk_texture_smooth_rate * delta, 1.0);
+	}
+	trunk_pitch_s = Math::lerp(trunk_pitch_s, trunk_pitch_add, tex_ease);
+	trunk_roll_s = Math::lerp(trunk_roll_s, trunk_roll_add, tex_ease);
+	trunk_pitch_add = trunk_pitch_s + stagger_pitch;
+	trunk_roll_add = trunk_roll_s + stagger_roll;
 
 	out_l_pitch = l_pitch;
 	out_l_roll = l_roll;

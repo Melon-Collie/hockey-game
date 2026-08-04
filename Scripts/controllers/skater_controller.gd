@@ -431,6 +431,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var stride_bob_m: float = 0.02            # vertical body bob per half-stride (weight transfer)
 @export var stride_sway_deg: float = 3.0          # torso weight-shift roll oscillating with the stride
 @export var stride_dig_lean_deg: float = 8.0      # extra trunk pitch from effort: forward driving, back braking
+# Trunk inertia at the texture seam: the trunk texture sums many reads and
+# each carries residual step/noise from its input; the trunk — the body's
+# most massive segment — cannot physically re-orient at those frequencies.
+# One first-order tracker on the SUMMED texture models that inertia (the
+# stagger wobble bypasses it — a stumble is supposed to shake). 0 = off.
+@export var trunk_texture_smooth_rate: float = 14.0
 # Glide-vs-push: stride amplitude scales above/below the speed baseline by the
 # sign of tangential acceleration — driving digs in, coasting settles to a glide.
 @export var stride_effort_ref_accel: float = 9.0  # m/s^2 of tangential accel mapping to full push effort

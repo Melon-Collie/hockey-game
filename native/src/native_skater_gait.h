@@ -71,6 +71,7 @@ namespace mitts {
 	X(stride_intensity_speed) X(stride_knee_deg) X(stride_pitch_deg) \
 	X(stride_push_ceiling) X(stride_push_gain) X(stride_rear_bias) \
 	X(stride_roll_deg) X(stride_skew) X(stride_sway_deg) \
+	X(trunk_texture_smooth_rate) \
 	X(weight_shift_deg) X(weight_spring_damping) X(weight_spring_stiffness) \
 	X(wrister_kick_back_deg) X(wrister_kick_hip_yaw_deg) \
 	X(wrister_kick_knee_extend_deg) X(wrister_kick_lean_deg) \
@@ -126,6 +127,8 @@ private:
 	double stride_phase = 0.0;
 	double trunk_pitch_add = 0.0;
 	double trunk_roll_add = 0.0;
+	double trunk_pitch_s = 0.0;
+	double trunk_roll_s = 0.0;
 	double hit_commit_blend = 0.0;
 	double intensity = 0.0;
 	double effort = 0.0;
