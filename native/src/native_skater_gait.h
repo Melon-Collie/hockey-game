@@ -26,7 +26,8 @@ namespace mitts {
 
 // Every controller @export the gait reads, by its exact property name.
 #define MITTS_GAIT_TUNABLES(X) \
-	X(backpedal_ccut_roll_deg) X(backpedal_chest_deg) X(backpedal_start) \
+	X(backpedal_ccut_roll_deg) X(backpedal_ccut_sweep_deg) X(backpedal_chest_deg) \
+	X(backpedal_pitch_fade) X(backpedal_start) X(backpedal_tuck_fade) \
 	X(block_extend_knee_deg) X(block_kneel_hip_deg) X(block_kneel_shin_deg) \
 	X(block_pose_blend_speed) X(cadence_cruise_falloff) X(cadence_glide_stance_gain) \
 	X(carve_base_lean_deg) X(carve_clearance_knee_deg) X(carve_engage_speed) \

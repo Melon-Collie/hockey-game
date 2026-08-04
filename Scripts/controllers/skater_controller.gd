@@ -504,8 +504,16 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var shuffle_intensity: float = 0.6       # stride intensity floor while side-stepping
 @export var shuffle_cadence_rate: float = 3.0    # rad/s stride-phase floor for the steps
 # Backpedal: intent held behind the facing — a defender's deliberate back-skate.
+# The C-cut re-shape (sweep/tuck/pitch below): real backward skating carves
+# alternating C's with the blades never leaving the ice — the push is a lateral
+# out-and-in sweep of one leg at a time, not a fore/aft pump with a recovery
+# lift. All three fade in with the backpedal read; 0 restores the mirrored
+# forward gait.
 @export var backpedal_start: float = 0.35        # backward intent fraction where the read begins
-@export var backpedal_ccut_roll_deg: float = 6.0 # extra out-and-in leg sweep (real C-cuts)
+@export var backpedal_ccut_roll_deg: float = 6.0 # extra shared edge rock under the C-cuts
+@export var backpedal_ccut_sweep_deg: float = 8.0  # extra per-leg out-and-in flare of the pushing leg
+@export var backpedal_tuck_fade: float = 0.75    # recovery-tuck lift removed at full C-cut (blades stay down)
+@export var backpedal_pitch_fade: float = 0.4    # fore/aft pump removed at full C-cut (the push is the sweep)
 @export var backpedal_chest_deg: float = 4.0     # chest-up trunk pitch over the C-cuts
 # Glide enrichment: coasting (no keys) sways weight edge-to-edge, and a carve
 # released into a glide exits the turn on its edges (one-foot-glide read).

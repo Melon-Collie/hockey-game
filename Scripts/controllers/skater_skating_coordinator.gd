@@ -904,10 +904,14 @@ func apply(delta: float) -> void:
 	# A hard carve IS the stride — the fore/aft push bleeds out as the
 	# crossover gait takes over (carve_stride_fade), instead of striding
 	# straight ahead while the legs cross. The dig-in chop shortens the push
-	# the same way: quick feet out of the start, not full extensions.
+	# the same way: quick feet out of the start, not full extensions. The
+	# backpedal fades it too: a C-cut's push is the lateral sweep (the widened
+	# abduction below), so the fore/aft pump shrinks toward a residual reach
+	# instead of pumping like a mirrored forward stride.
 	var push_amp: float = deg_to_rad(push_deg) * _intensity * push_dir * push_scale * gait_scale \
 			* (1.0 - absf(_carve) * _controller.carve_stride_fade) \
-			* (1.0 - _dig * _controller.dig_in_chop)
+			* (1.0 - _dig * _controller.dig_in_chop) \
+			* (1.0 - ccut * _controller.backpedal_pitch_fade)
 	# Rear-bias the pitch stroke so the stride pushes BACK instead of kicking
 	# forward: a CONSTANT offset shifts the whole swing rearward — the back
 	# extension reaches (1+bias)·amp while the recovery lands only
@@ -939,9 +943,12 @@ func apply(delta: float) -> void:
 	# the V-shaped hockey push — half-wave rectified (max(-s, 0) is that leg's
 	# back-extension) so only the push half of each cycle flares while the
 	# recovery returns under the body. Left leg flares toward -X: negative roll.
+	# The backpedal widens this into the C-cut's defining stroke: each leg
+	# alternately sweeps out and pulls back in while the other glides.
 	var l_ext: float = maxf(-s, 0.0)
 	var r_ext: float = maxf(-s_opp, 0.0)
-	var abduct_amp: float = deg_to_rad(_controller.stride_abduction_deg) * _intensity * push_scale * gait_scale
+	var abduct_amp: float = deg_to_rad(_controller.stride_abduction_deg
+			+ _controller.backpedal_ccut_sweep_deg * ccut) * _intensity * push_scale * gait_scale
 	l_roll -= fb_w * abduct_amp * l_ext * rock_fade
 	r_roll += fb_w * abduct_amp * r_ext * rock_fade
 
@@ -1032,7 +1039,12 @@ func apply(delta: float) -> void:
 	# folds as it swings back under the body (direction-gated on `c`, not
 	# position, so the tuck rides the return swing and not the push-out through
 	# the same spot). Negative folds the shin back under the body.
-	var tuck_amp: float = deg_to_rad(_controller.stride_knee_deg) * _intensity * push_scale * gait_scale
+	# The backpedal fades the tuck out: a C-cut keeps both blades ON the ice for
+	# the whole cycle — the sweeping leg extends and re-flexes through the
+	# stance/release channel, it never lifts under the body like a forward
+	# recovery.
+	var tuck_amp: float = deg_to_rad(_controller.stride_knee_deg) * _intensity * push_scale \
+			* gait_scale * (1.0 - _controller.backpedal_tuck_fade * ccut)
 	# The release is stride work, so it rides the stride intensity envelope
 	# like every other stroke channel (tuck/push/roll already do via their
 	# amps). Ungated, the phase — which advances with SPEED, not intent —

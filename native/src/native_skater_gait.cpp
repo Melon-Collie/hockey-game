@@ -650,7 +650,8 @@ int64_t NativeSkaterGait::apply(
 	const double push_amp = Math::deg_to_rad(push_deg) * intensity * push_dir * push_scale *
 			gait_scale *
 			(1.0 - Math::abs(carve) * cfg.carve_stride_fade) *
-			(1.0 - dig * cfg.dig_in_chop);
+			(1.0 - dig * cfg.dig_in_chop) *
+			(1.0 - ccut * cfg.backpedal_pitch_fade);
 	const double bias = cfg.stride_rear_bias;
 	l_pitch += fb_w * (s - bias) * push_amp;
 	r_pitch += fb_w * (s_opp - bias) * push_amp;
@@ -661,7 +662,8 @@ int64_t NativeSkaterGait::apply(
 	// Abduction (V-flare on the push half).
 	double l_ext = MAX(-s, 0.0);
 	double r_ext = MAX(-s_opp, 0.0);
-	const double abduct_amp = Math::deg_to_rad(cfg.stride_abduction_deg) * intensity *
+	const double abduct_amp = Math::deg_to_rad(cfg.stride_abduction_deg +
+			cfg.backpedal_ccut_sweep_deg * ccut) * intensity *
 			push_scale * gait_scale;
 	l_roll -= fb_w * abduct_amp * l_ext * rock_fade;
 	r_roll += fb_w * abduct_amp * r_ext * rock_fade;
@@ -723,7 +725,7 @@ int64_t NativeSkaterGait::apply(
 
 	// Knee flex — stance base, push extension, recovery tuck.
 	const double tuck_amp = Math::deg_to_rad(cfg.stride_knee_deg) * intensity *
-			push_scale * gait_scale;
+			push_scale * gait_scale * (1.0 - cfg.backpedal_tuck_fade * ccut);
 	const double release = cfg.stance_knee_release * intensity * gait_scale;
 	double l_knee = -(stance_knee * (1.0 - release * l_ext) + tuck_amp * MAX(c, 0.0) + l_tuck_extra);
 	double r_knee = -(stance_knee * (1.0 - release * r_ext) + tuck_amp * MAX(c_opp, 0.0) + r_tuck_extra);
