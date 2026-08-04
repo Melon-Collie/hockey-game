@@ -110,6 +110,38 @@ var _ema_frame_ms: float = 0.0
 var _peak_process_ms: float = 0.0
 var _peak_physics_ms: float = 0.0
 
+# ── Sim / render phase ───────────────────────────────────────────────────────
+# The sim integrates at a fixed Constants.PHYSICS_TICK and nothing interpolates
+# the result to the render rate, so an actor's RENDERED position is quantized to
+# the tick — while GameCamera, which smooths in _process, moves continuously at
+# the render rate. Within one tick the camera slides a full step and the skater
+# does not, then the skater jumps the whole step at once: a sawtooth in the
+# skater's SCREEN position, one tick of travel from end to end.
+#
+# Whether that sawtooth is visible is purely a sampling question. Rendered motion
+# is smooth only when every frame advances the sim by the same whole number of
+# ticks, which needs the frame rate to DIVIDE the tick rate — 120, 60, 40, 30
+# against a 120 Hz sim, where each frame samples the sawtooth at the same phase
+# and it aliases away entirely. Any other rate samples it mid-sweep. Note the
+# direction of that test: 240 fps is not a clean multiple but the worst case,
+# because half its frames advance no tick at all.
+#
+# This section reports the tick/frame pattern directly rather than inferring it
+# from the frame rate: vsync, frame pacing, and a busy tick all bend the pattern
+# away from what fps ÷ tick rate predicts.
+const _PHASE_WINDOW_SECONDS: float = 1.0
+const _PHASE_MAX_TICKS: int = 8
+# Double-buffered so the published window can be read while the next one fills,
+# with no per-frame allocation (the swap reuses both arrays forever).
+var _phase_hist: PackedInt32Array = PackedInt32Array()
+var _phase_pub: PackedInt32Array = PackedInt32Array()
+var _phase_frames: int = 0
+var _phase_pub_frames: int = 0
+var _phase_window: float = 0.0
+var _phase_last_physics_frame: int = 0
+var _phase_primed: bool = false
+var _local_skater: Skater = null
+
 # Built fresh each frame: collected metric lines + the worst health seen, which
 # rolls up into the header verdict.
 var _lines: PackedStringArray = []
@@ -141,6 +173,8 @@ func _ready() -> void:
 	_panel.add_child(_rt)
 	add_child(_panel)
 	_panel.hide()
+	_phase_hist.resize(_PHASE_MAX_TICKS)
+	_phase_pub.resize(_PHASE_MAX_TICKS)
 	_build_toast()
 	_build_diag_row()
 
@@ -202,6 +236,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		_showing = not _showing
 		_panel.visible = _showing
 		_set_measuring(_showing)
+		# The first sampled frame after opening spans however long the panel was
+		# closed, which is not a tick/frame ratio — discard it (see _sample_sim_phase).
+		_phase_primed = false
 	elif event.keycode == KEY_F4:
 		_log_felt_lag()
 	elif event.keycode == KEY_C and _showing:
@@ -298,6 +335,18 @@ func _copy_session_digest() -> void:
 			"nodes": int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)),
 			"physics_active_objects": int(Performance.get_monitor(Performance.PHYSICS_3D_ACTIVE_OBJECTS)),
 		},
+		# The fixed-timestep aliasing evidence (see _render_sim_phase). vsync_mode /
+		# fps_cap / refresh_hz above say what SHOULD divide evenly into the sim
+		# rate; this says what actually did, which frame pacing can bend away from
+		# the prediction. Keyed by ticks consumed, valued by frames that consumed
+		# that many, over the last sampled second.
+		"sim_phase": {
+			"sim_hz": Constants.PHYSICS_TICK,
+			"frames_sampled": _phase_pub_frames,
+			"ticks_per_frame": _phase_hist_dict(),
+			"local_speed_m_s": _local_skater_speed(),
+			"interpolation": bool(ProjectSettings.get_setting("physics/common/physics_interpolation", false)),
+		},
 		# Host-only, and empty on a client.
 		"host_ai_cost": _host_ai_cost_dict(),
 		"metrics": t.session.to_dict(),
@@ -324,6 +373,7 @@ func _process(delta: float) -> void:
 	# closed, because only the dot's verdict is needed and telemetry moves at 1 Hz.
 	if _showing:
 		_sample_frame_cost(delta)
+		_sample_sim_phase(delta)
 		_panel_timer -= delta
 		if _panel_timer <= 0.0:
 			_panel_timer = PANEL_REFRESH_SECONDS
@@ -372,6 +422,46 @@ func _sample_frame_cost(delta: float) -> void:
 	_peak_physics_ms = float(Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS)) * 1000.0
 
 
+# How many physics ticks this rendered frame consumed. Counted from the engine's
+# physics frame counter rather than a _physics_process tally so it cannot be
+# thrown off by this node's own process ordering.
+func _sample_sim_phase(delta: float) -> void:
+	var physics_frame: int = Engine.get_physics_frames()
+	var ticks: int = physics_frame - _phase_last_physics_frame
+	_phase_last_physics_frame = physics_frame
+	if not _phase_primed:
+		_phase_primed = true
+		return
+	_phase_hist[clampi(ticks, 0, _PHASE_MAX_TICKS - 1)] += 1
+	_phase_frames += 1
+	_phase_window += delta
+	if _phase_window < _PHASE_WINDOW_SECONDS:
+		return
+	var spare: PackedInt32Array = _phase_pub
+	_phase_pub = _phase_hist
+	_phase_pub_frames = _phase_frames
+	_phase_hist = spare
+	_phase_hist.fill(0)
+	_phase_frames = 0
+	_phase_window = 0.0
+
+
+# Horizontal speed of the local skater, or 0 when there isn't one (menus,
+# spectator, replay). Resolved lazily and cached — only ever called from the
+# throttled render path, so the group scan is not a per-frame cost.
+func _local_skater_speed() -> float:
+	if _local_skater == null or not is_instance_valid(_local_skater):
+		_local_skater = null
+		for node: Node in get_tree().get_nodes_in_group("skaters"):
+			var candidate: Skater = node as Skater
+			if candidate != null and candidate.is_local_skater:
+				_local_skater = candidate
+				break
+	if _local_skater == null:
+		return 0.0
+	return Vector3(_local_skater.velocity.x, 0.0, _local_skater.velocity.z).length()
+
+
 func _refresh() -> void:
 	_lines.clear()
 	_worst = Health.OK
@@ -404,6 +494,7 @@ func _refresh() -> void:
 	if _showing and _page == Page.PERF:
 		_lines.clear()
 		_render_frame_cost()
+		_render_sim_phase()
 
 	# Verdict is known once all lines are collected; drive the always-on dot.
 	# Hide it while the F3 panel is open — they share the top-right corner and the
@@ -667,6 +758,52 @@ func _render_host_ai_cost() -> void:
 # It is a lower bound, not an exact figure: when the frame rate is capped, the
 # idle wait is charged here too, which is why the verdict rules the cap out
 # before naming this.
+# The fixed-timestep aliasing check (see the _PHASE_* field doc-block). Verdict-
+# neutral throughout: an uneven tick/frame pattern is a local display and pacing
+# fact, not a network problem.
+func _render_sim_phase() -> void:
+	_section("Sim / render phase")
+	if _phase_pub_frames <= 0:
+		_info("Sampling", "…", "the first reading lands one second after this panel opens")
+		return
+	var fps: float = float(_phase_pub_frames) / _PHASE_WINDOW_SECONDS
+	# Dominant bucket = the tick count MOST frames consumed. Every other frame
+	# sampled the sawtooth at a different phase than its neighbours, which is
+	# exactly what makes the sawtooth visible instead of aliasing away.
+	var dominant: int = 0
+	for i: int in _PHASE_MAX_TICKS:
+		if _phase_pub[i] > _phase_pub[dominant]:
+			dominant = i
+	var uneven_frac: float = float(_phase_pub_frames - _phase_pub[dominant]) / float(_phase_pub_frames)
+	var pattern: String = ""
+	for i: int in _PHASE_MAX_TICKS:
+		if _phase_pub[i] > 0:
+			pattern += "%d×%d  " % [i, _phase_pub[i]]
+	var health: Health = _band(uneven_frac, 0.02, 0.10)
+	_info("Rates", "%d Hz sim · %.0f fps · %.2f ticks/frame" % [
+			Constants.PHYSICS_TICK, fps, float(Constants.PHYSICS_TICK) / maxf(fps, 0.001)],
+		"the frame rate has to DIVIDE the sim rate for every frame to advance it equally — 120 / 60 / 40 / 30 against a 120 Hz sim. Not the other way round: above the sim rate some frames must advance no tick at all, so 240 fps is the worst case here, not a clean multiple")
+	_context(health, "Ticks per frame", "%s (%.0f%% uneven)" % [pattern.strip_edges(), uneven_frac * 100.0],
+		"ticks×frames over the last second. One bucket = every frame sampled the motion at the same phase and it looks smooth. A second bucket IS the visible jitter, and its share is how much of each second you spend seeing it")
+	var speed: float = _local_skater_speed()
+	_context(health, "Sawtooth span", "%.1f cm @ %.1f m/s" % [
+			speed / float(Constants.PHYSICS_TICK) * 100.0, speed],
+		"one tick of travel — how far your skater drifts back across the frame while the sim is held, before snapping forward. Zero at rest and linear in speed, which is why this only shows on a fast rush")
+	_info("Interpolation",
+		"on" if bool(ProjectSettings.get_setting("physics/common/physics_interpolation", false)) else "off",
+		"the real fix. Off = rendered positions snap to tick boundaries, so the only way to hide the sawtooth is to sample it at one phase (cap fps at or below the sim rate). On = the renderer draws between ticks and the frame rate stops mattering")
+
+
+# Non-empty buckets of the last published window, for the copied digest. Keys are
+# stringified because JSON object keys are strings either way.
+func _phase_hist_dict() -> Dictionary:
+	var out: Dictionary = {}
+	for i: int in _PHASE_MAX_TICKS:
+		if _phase_pub[i] > 0:
+			out[str(i)] = _phase_pub[i]
+	return out
+
+
 func _main_thread_ms(frame_ms: float) -> float:
 	return maxf(frame_ms - maxf(_ema_gpu_ms, _ema_cpu_render_ms), 0.0)
 
