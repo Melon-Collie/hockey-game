@@ -223,6 +223,7 @@ void NativeSkaterGait::reset_state() {
 	pivot_engaged = false;
 	pivot_sense = 1.0;
 	pivot_blend = 0.0;
+	pivot_dwell = 0.0;
 	carve = 0.0;
 	carve_curve = 0.0;
 	turn_rate = 0.0;
@@ -610,8 +611,13 @@ int64_t NativeSkaterGait::apply(
 	}
 	double pivot_target_blend = 0.0;
 	if (pivot_engaged) {
+		pivot_dwell += delta;
 		pivot_target_blend = pivot_hold_depth(abs_psi, band_lo,
-				Math::deg_to_rad(cfg.pivot_depth_ramp_deg));
+				Math::deg_to_rad(cfg.pivot_depth_ramp_deg)) *
+				CLAMP(pivot_dwell / MAX(cfg.pivot_commit_time, 0.001), 0.0, 1.0) *
+				(1.0 - CLAMP(Math::abs(carve_curve), 0.0, 1.0));
+	} else {
+		pivot_dwell = 0.0;
 	}
 	pivot_blend = Math::lerp(pivot_blend, pivot_target_blend,
 			cfg.pivot_blend_speed * delta);

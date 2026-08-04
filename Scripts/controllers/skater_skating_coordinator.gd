@@ -133,6 +133,7 @@ var _psi_rate: float = 0.0
 var _pivot_engaged: bool = false
 var _pivot_sense: float = 1.0
 var _pivot_blend: float = 0.0
+var _pivot_dwell: float = 0.0
 # Pivot authority [0, 1], published for SkaterPoseCoordinator: while the hold
 # owns the lower-body channel, the generic facing-lag pump fades out of the
 # sum — two writers tracking the same rotation on different clocks is a
@@ -236,6 +237,13 @@ func native_reconfigure() -> void:
 		push_error("NativeSkaterGait disabled — controller exports missing: %s" % missing)
 		_native = null
 		return
+	# A pre-session extension build passes configure (all ITS exports still
+	# exist) but runs old gait math and lacks newer getters — which the
+	# republish would then error on EVERY FRAME. Loudly fall back instead.
+	if not _native.has_method(&"get_pivot_blend"):
+		push_error("NativeSkaterGait disabled — stale extension build (rebuild native/)")
+		_native = null
+		return
 	_native.set_leg_scale(leg_scale)
 
 # Snaps the gait back to a clean standstill and plants the legs at their rest
@@ -268,6 +276,7 @@ func reset_to_rest() -> void:
 	_pivot_engaged = false
 	_pivot_sense = 1.0
 	_pivot_blend = 0.0
+	_pivot_dwell = 0.0
 	pivot_hold = 0.0
 	_carve = 0.0
 	_carve_curve = 0.0
@@ -790,14 +799,26 @@ func apply(delta: float) -> void:
 			band_lo, band_hi, _controller.pivot_rate_min, _controller.pivot_min_speed):
 		_pivot_engaged = true
 		_pivot_sense = PivotRules.latch_sense(abs_psi, band_lo, band_hi)
-	# The blend eases toward depth-scaled authority, not a latched 1: a quick
-	# aim flick that clips the band's shallow edge gets only a light hip lag
-	# (which is what a real fast re-aim produces), while a genuine transit
-	# that carries ψ deep earns the full hold.
+	# The blend eases toward authority earned three ways, never a latched 1 —
+	# because this cursor also stickhandles and aims, and the blend gates the
+	# STRIDE (gait_scale + phase rate), so spurious authority reads as the
+	# legs stuttering mid-stride, not just a hip nudge:
+	# depth — a flick clipping the band's shallow edge gets only a light lag;
+	# dwell — a flick RETURNS inside ~150 ms while a pivot PARKS ψ across the
+	# body, so full authority needs pivot_commit_time of continuous residence
+	# (a real skater takes about that long to commit the hips anyway);
+	# no carve — leading the cursor through a hard turn can carry ψ deep, but
+	# blades committed to carving edges cannot pivot, so real path curvature
+	# vetoes (the same smoothed curvature signal the crossover cadence uses).
 	var pivot_target_blend: float = 0.0
 	if _pivot_engaged:
+		_pivot_dwell += delta
 		pivot_target_blend = PivotRules.hold_depth(abs_psi, band_lo,
-				deg_to_rad(_controller.pivot_depth_ramp_deg))
+				deg_to_rad(_controller.pivot_depth_ramp_deg)) \
+				* clampf(_pivot_dwell / maxf(_controller.pivot_commit_time, 0.001), 0.0, 1.0) \
+				* (1.0 - clampf(absf(_carve_curve), 0.0, 1.0))
+	else:
+		_pivot_dwell = 0.0
 	_pivot_blend = lerpf(_pivot_blend, pivot_target_blend,
 			_controller.pivot_blend_speed * delta)
 	pivot_hold = _pivot_blend

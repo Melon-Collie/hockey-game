@@ -503,6 +503,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var pivot_min_speed: float = 2.5      # m/s floor — pivoting is a gliding move; slow spins are steps
 @export var pivot_step_begin: float = 0.6     # transit fraction where the hips step around to the exit line
 @export var pivot_depth_ramp_deg: float = 50.0  # ψ depth past the band edge over which the hold earns full authority — the aim-flick guard
+@export var pivot_commit_time: float = 0.22   # seconds ψ must DWELL in the band before full authority — a flick returns sooner, a pivot parks
 @export var pivot_yaw_speed: float = 12.0     # hip tracking ease while pivoting (hip_align_speed is too lazy to hold ψ)
 @export var pivot_stride_fade: float = 0.85   # stride suppression while engaged — pivots glide, they don't stride
 @export var pivot_stance: float = 0.8         # stance floor — the step-around needs bent knees

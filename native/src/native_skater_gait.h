@@ -50,9 +50,9 @@ namespace mitts {
 	X(hockey_stop_stance) X(hockey_stop_trunk_roll_deg) X(intent_signal_speed) \
 	X(knockdown_getup_seconds) X(knockdown_pose_drop_m) X(max_speed) \
 	X(pivot_band_hi_deg) X(pivot_band_lo_deg) X(pivot_blend_speed) \
-	X(pivot_depth_ramp_deg) X(pivot_min_speed) X(pivot_rate_min) \
-	X(pivot_stance) X(pivot_step_begin) X(pivot_stride_fade) \
-	X(pivot_yaw_speed) \
+	X(pivot_commit_time) X(pivot_depth_ramp_deg) X(pivot_min_speed) \
+	X(pivot_rate_min) X(pivot_stance) X(pivot_step_begin) \
+	X(pivot_stride_fade) X(pivot_yaw_speed) \
 	X(reversal_lean_deg) X(reversal_min_speed) X(reversal_plant_deg) \
 	X(reversal_stance) X(reversal_start_opposition) X(reversal_stride_fade) \
 	X(shot_stride_fade) X(shuffle_cadence_rate) X(shuffle_fade_speed) \
@@ -149,6 +149,7 @@ private:
 	bool pivot_engaged = false;
 	double pivot_sense = 1.0;
 	double pivot_blend = 0.0;
+	double pivot_dwell = 0.0;
 	double carve = 0.0;
 	double carve_curve = 0.0;
 	double turn_rate = 0.0;
