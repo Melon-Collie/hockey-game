@@ -96,9 +96,12 @@ var _pending_directed_at_net: bool = false
 # geometry instead (ShotOnNetRules.is_release_in_own_half), which applies to
 # everyone equally.
 #
-# Gates the MISS resolution only; a pass that goes in is still a goal, and one
-# the goalie stops is still handled by on_goalie_touch. Armed true at release —
-# a missed note over-credits, matching the on-net/directed defaults.
+# Gates the two resolutions that can invent an attempt out of a pass — the MISS
+# and the BLOCK. A pass that goes in is still a goal (on_goal_confirmed credits
+# unconditionally), and one the goalie stops is still a save: on_goalie_touch
+# does not consult this, because a keeper who has to stop a puck has faced a shot
+# whatever it was thrown as. Armed true at release — a missed note over-credits,
+# matching the on-net/directed defaults.
 var _pending_is_shot: bool = true
 # The pending shot's expected-goals value (AIActionScoring.expected_goals),
 # evaluated by the caller at release from the real goalie geometry and carried on
@@ -326,6 +329,14 @@ func on_block(blocker_peer_id: int) -> bool:
 	# NHL: a blocked SHOT must have been directed on net — intercepting a wide
 	# cross-crease pass or an errant shot is a takeaway, not a blocked shot.
 	if not _pending_on_net:
+		return false
+	# ...and it must have been RELEASED as a shot. On-net geometry alone can't
+	# say: a feed at a teammate in the crease projects straight through the
+	# mouth, so a defender stepping into it read as blocking a shot rather than
+	# picking off a pass. Same intent read _resolve_pending_miss uses; returning
+	# false here drops through to on_deflection, which records the touch without
+	# crediting the block — exactly what an off-net pass deflection already did.
+	if not _pending_is_shot:
 		return false
 	var shooter_team: int = _registry.resolve_team_id_for_peer(_shooter_peer_id)
 	var blocker_team: int = _registry.resolve_team_id_for_peer(blocker_peer_id)

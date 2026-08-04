@@ -270,6 +270,24 @@ func test_block_of_off_net_release_is_not_credited() -> void:
 			"intercepting an off-net puck is a takeaway — pending shot untouched")
 
 
+func test_block_of_an_intended_pass_is_not_credited() -> void:
+	# A feed at a teammate in the crease projects straight through the mouth, so
+	# on-net geometry alone reads a defender stepping into it as blocking a shot.
+	# It's a picked-off pass: a takeaway for the defender, no blocked shot, no
+	# Corsi attempt for the passer.
+	_add_player(10, 0)
+	var blocker := _add_player(20, 1)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(true)           # genuinely on net
+	tracker.note_release_intent(false)      # but thrown as a pass
+	assert_false(tracker.on_block(20))
+	assert_eq(blocker.stats.shots_blocked, 0)
+	assert_signal_not_emitted(tracker, "shot_resolved")
+	assert_true(tracker.has_pending_shot(),
+			"a picked-off pass leaves the pending state for on_deflection")
+
+
 # ── Tip attribution (NHL: a saved teammate tip is the TIPPER's shot) ─────────
 
 func test_saved_teammate_tip_credits_tipper_not_shooter() -> void:
