@@ -2,6 +2,8 @@
 
 #include <godot_cpp/classes/ref_counted.hpp>
 
+#include <cmath>
+
 namespace mitts {
 
 // C++ port of Scripts/domain/rules/top_hand_ik.gd (TopHandIK). The GDScript
@@ -28,6 +30,7 @@ class NativeTopHandIK : public godot::RefCounted {
 	double rom_backhand_angle_max = 0.0;
 	double rom_forehand_reach_max = 0.0;
 	double rom_backhand_reach_max = 0.0;
+	double max_blade_reach = INFINITY;
 
 	godot::Vector3 hand;
 	godot::Vector3 blade;
@@ -67,6 +70,8 @@ public:
 	double get_rom_forehand_reach_max() const { return rom_forehand_reach_max; }
 	void set_rom_backhand_reach_max(double v) { rom_backhand_reach_max = v; }
 	double get_rom_backhand_reach_max() const { return rom_backhand_reach_max; }
+	void set_max_blade_reach(double v) { max_blade_reach = v; }
+	double get_max_blade_reach() const { return max_blade_reach; }
 };
 
 } // namespace mitts

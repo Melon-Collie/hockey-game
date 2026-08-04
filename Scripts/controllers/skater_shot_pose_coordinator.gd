@@ -213,18 +213,17 @@ func _apply_wrister_whip(t: float, aim_world: Vector3) -> void:
 			_controller.stick_length * _controller.stick_length - drop * drop, 0.0001))
 	var intended_target: Vector3 = hand_pos + local_dir * horiz
 	intended_target.y = blade_y
-	# Wall + net clamps (identical to the tracked path), hand kept rigid to the stick.
+	# Wall + net clamps, identical to the tracked path — including how the arm is
+	# rebuilt afterwards. A finish that runs the blade into the boards or around a
+	# post is where the stick is furthest from the body, so the clamp correction
+	# is at its largest, and translating the hand by it is what threw the arm
+	# across the net. The blade stays where the clamps put it; the stick chokes up.
 	var local_target: Vector3 = _skater.clamp_blade_to_walls(intended_target)
-	var clamp_delta_xz := Vector3(
-			local_target.x - intended_target.x, 0.0, local_target.z - intended_target.z)
-	if clamp_delta_xz.length_squared() > 0.0:
-		hand_pos.x += clamp_delta_xz.x
-		hand_pos.z += clamp_delta_xz.z
-	var net_world: Vector3 = _ik.clamp_blade_from_net(_skater.upper_body_to_global(local_target))
-	var net_local: Vector3 = _skater.upper_body_to_local(net_world)
-	hand_pos.x += net_local.x - local_target.x
-	hand_pos.z += net_local.z - local_target.z
-	local_target = net_local
+	local_target = _skater.upper_body_to_local(
+			_ik.clamp_blade_from_net(_skater.upper_body_to_global(local_target)))
+	if local_target != intended_target:
+		var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
+		hand_pos = _ik.hand_for_clamped_blade(local_target, blade_side_sign)
 	_skater.set_top_hand_position(hand_pos)
 	_skater.set_blade_position(local_target)
 

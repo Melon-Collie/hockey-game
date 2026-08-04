@@ -164,6 +164,48 @@ static func clamp_to_rink_inner(world_xz: Vector2, margin: float = 0.0) -> Vecto
 			return Vector2(world_xz.x, sign(world_xz.y) * half_l)
 	return world_xz
 
+# Distance from an interior point to the inner rink boundary along `dir_xz` (a
+# unit world-XZ direction) — how much room the point has before it runs into the
+# boards on that heading. Shares the boundary clamp_to_rink_inner projects onto,
+# so a reach limited by this result stops exactly where that clamp would have
+# caught it.
+#
+# Exact rather than iterative, which the 120 Hz blade IK needs. The straight
+# walls give an axis-aligned box exit; the true boundary in a corner quadrant is
+# the arc, which is always nearer than the box corner, so an exit landing there
+# is re-solved against that corner's circle. The ray is inside the disc wherever
+# it is inside the rink's corner region, so the disc's FAR root is the rink exit
+# whether or not the origin itself started inside that disc.
+#
+# Returns INF for a degenerate direction, and 0.0 for an origin already outside.
+static func ray_to_rink_inner(
+		origin_xz: Vector2, dir_xz: Vector2, margin: float = 0.0) -> float:
+	if dir_xz.length_squared() < 0.000001:
+		return INF
+	var half_w: float = INNER_HALF_WIDTH - margin
+	var half_l: float = INNER_HALF_LENGTH - margin
+	var corner_r: float = INNER_CORNER_RADIUS - margin
+	var t: float = INF
+	if absf(dir_xz.x) > 0.000001:
+		var wall_x: float = half_w if dir_xz.x > 0.0 else -half_w
+		t = (wall_x - origin_xz.x) / dir_xz.x
+	if absf(dir_xz.y) > 0.000001:
+		var wall_z: float = half_l if dir_xz.y > 0.0 else -half_l
+		t = minf(t, (wall_z - origin_xz.y) / dir_xz.y)
+	if is_inf(t):
+		return INF
+	var hit: Vector2 = origin_xz + dir_xz * t
+	if absf(hit.x) > CORNER_CENTER_X and absf(hit.y) > CORNER_CENTER_Z:
+		var center := Vector2(
+				signf(hit.x) * CORNER_CENTER_X, signf(hit.y) * CORNER_CENTER_Z)
+		var m: Vector2 = origin_xz - center
+		var b: float = m.dot(dir_xz)
+		var c: float = m.length_squared() - corner_r * corner_r
+		var disc: float = b * b - c
+		if disc > 0.0:
+			t = minf(t, -b + sqrt(disc))
+	return maxf(t, 0.0)
+
 # True if world_xz sits over a goal-net footprint — within the posts laterally
 # (widened to the trapezoid back + puck buffer) and between the goal line and the
 # back frame. Used to spot a puck stuck on the net frame.

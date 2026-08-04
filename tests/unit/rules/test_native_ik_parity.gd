@@ -41,6 +41,10 @@ func _random_top_cfg() -> TopHandIK.Config:
 	cfg.rom_backhand_angle_max = _rng.randf_range(0.1, 2.5)
 	cfg.rom_forehand_reach_max = _rng.randf_range(0.05, 0.5)
 	cfg.rom_backhand_reach_max = _rng.randf_range(0.05, 1.0)
+	# The boards' reach cap. Mostly unconstrained (open ice), but a third of the
+	# cases bind it across the CLOSE/FAR boundary so the capped regime split is
+	# fuzzed on both sides.
+	cfg.max_blade_reach = INF if _rng.randf() < 0.67 else _rng.randf_range(0.2, 2.0)
 	return cfg
 
 
@@ -54,6 +58,7 @@ func _native_top_from(cfg: TopHandIK.Config) -> RefCounted:
 	native.rom_backhand_angle_max = cfg.rom_backhand_angle_max
 	native.rom_forehand_reach_max = cfg.rom_forehand_reach_max
 	native.rom_backhand_reach_max = cfg.rom_backhand_reach_max
+	native.max_blade_reach = cfg.max_blade_reach
 	return native
 
 

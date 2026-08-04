@@ -15,8 +15,11 @@ Vector3 NativeTopHandIK::project_blade(
 
 	const Vector2 shoulder_xz(shoulder.x, shoulder.z);
 	const Vector2 delta = desired_blade_xz - shoulder_xz;
-	const double r = delta.length();
+	double r = delta.length();
 	Vector2 aim_dir = r > 0.0001 ? delta / (real_t)r : Vector2(0.0, -1.0);
+	// Obstacle cap (the boards) on the desired DISTANCE, before the regime split
+	// — see top_hand_ik.gd for why it lands here and not on the solved pose.
+	r = MIN(r, MAX(max_blade_reach, 0.0));
 
 	// CLOSE regime: see top_hand_ik.gd for why the aim is clamped to the same
 	// angular ROM the FAR regime enforces, and why hand_y_max is the inner
@@ -139,6 +142,10 @@ void NativeTopHandIK::_bind_methods() {
 			&NativeTopHandIK::set_rom_backhand_reach_max);
 	ClassDB::bind_method(D_METHOD("get_rom_backhand_reach_max"),
 			&NativeTopHandIK::get_rom_backhand_reach_max);
+	ClassDB::bind_method(D_METHOD("set_max_blade_reach", "v"),
+			&NativeTopHandIK::set_max_blade_reach);
+	ClassDB::bind_method(D_METHOD("get_max_blade_reach"),
+			&NativeTopHandIK::get_max_blade_reach);
 
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "stick_length"), "set_stick_length", "get_stick_length");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "blade_y"), "set_blade_y", "get_blade_y");
@@ -152,6 +159,8 @@ void NativeTopHandIK::_bind_methods() {
 			"set_rom_forehand_reach_max", "get_rom_forehand_reach_max");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "rom_backhand_reach_max"),
 			"set_rom_backhand_reach_max", "get_rom_backhand_reach_max");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "max_blade_reach"),
+			"set_max_blade_reach", "get_max_blade_reach");
 }
 
 } // namespace mitts

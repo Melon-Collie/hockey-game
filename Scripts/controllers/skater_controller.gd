@@ -264,6 +264,14 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # reach with a ramrod-straight arm; slightly under keeps a hint of elbow bend
 # at max extension so the rim pose stays organic.
 @export var rom_arm_extension: float = 0.97
+# Board shield (see BoardPlayRules): how close the boards must be before a
+# CARRIER's stance starts turning parallel to them, and how far it may turn. The
+# probe is roughly a stick-and-arm reach, so the shield engages exactly when the
+# wall starts eating the blade's reachable set rather than at some earlier
+# distance; the cap stops at "square along the boards" — the real pinned posture
+# — which is what the max is measuring toward, not a feel curve to taste.
+@export var board_shield_probe: float = 1.1
+@export var board_shield_max_deg: float = 55.0
 # Cap on how fast the aim target can move in world XZ per second. The IK consumes
 # the smoothed target, so the blade visibly inherits the cap. Originally a high
 # (60 m/s) smoothing cap that only bound on fast mouse wraps; now lowered into
