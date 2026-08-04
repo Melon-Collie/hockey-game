@@ -308,12 +308,18 @@ func apply_network_state(state: SkaterNetworkState, host_ts: float) -> void:
 	if not _state_buffer.is_empty() and host_ts < _state_buffer.back().timestamp:
 		NetworkTelemetry.record_ooo_drop()
 		return
-	var buffered := BufferedSkaterState.new()
+	# Recycle the evicted front entry as the new back one instead of allocating a
+	# fresh wrapper per packet (see PuckController.apply_state). Safe because the
+	# interpolation bracket is re-derived from the buffer every tick before use,
+	# so no consumer holds a wrapper across frames.
+	var buffered: BufferedSkaterState
+	if _state_buffer.size() >= 30:
+		buffered = _state_buffer.pop_front()
+	else:
+		buffered = BufferedSkaterState.new()
 	buffered.timestamp = host_ts
 	buffered.state = state
 	_state_buffer.append(buffered)
-	if _state_buffer.size() > 30:
-		_state_buffer.pop_front()
 
 
 # Where the HOST had this skater at host_time, from the interpolation buffer. The

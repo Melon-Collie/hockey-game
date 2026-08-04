@@ -592,6 +592,7 @@ func detach_online() -> void:
 	if multiplayer.multiplayer_peer != null and multiplayer.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED:
 		multiplayer.multiplayer_peer.close()
 	multiplayer.multiplayer_peer = null
+	_invalidate_peer_cache()
 	SteamManager.leave_lobby()
 	is_offline_mode = true
 	_session_start_ms = 0
@@ -609,6 +610,7 @@ func _on_steam_lobby_created(_lobby_id: int) -> void:
 		return
 	_disable_nagle(peer)
 	multiplayer.multiplayer_peer = peer
+	_invalidate_peer_cache()
 	is_offline_mode = false
 	host_lobby_ready.emit()
 
@@ -639,6 +641,7 @@ func _on_steam_lobby_joined(_lobby_id: int, owner_steam_id: int) -> void:
 		return
 	_disable_nagle(peer)
 	multiplayer.multiplayer_peer = peer
+	_invalidate_peer_cache()
 	# Arm the handshake timeout only now that the peer exists, so a slow lobby
 	# join can't false-trip it.
 	_connect_timer = 0.0
@@ -676,13 +679,35 @@ func local_peer_id() -> int:
 
 # Connected remote peer ids, safe to call when no multiplayer peer is assigned:
 # returns an empty array in offline mode.
+#
+# Cached: multiplayer.get_peers() builds a fresh PackedInt32Array per call, and
+# this is called from ~10 sites including per-broadcast loops and a per-frame
+# guard. The roster only changes on peer connect/disconnect or when the transport
+# itself is swapped, so those are the invalidation points (_invalidate_peer_cache).
+# Handing back the cache itself is safe: PackedInt32Array is copy-on-write, so a
+# caller that mutates its copy forks the buffer instead of writing through.
+var _peer_ids_cache := PackedInt32Array()
+var _peer_ids_cache_valid: bool = false
+
+
 func connected_peer_ids() -> PackedInt32Array:
 	if multiplayer.multiplayer_peer == null:
+		# Not cached: the null-peer answer is already allocation-free to state and
+		# leaving the cache invalid means attaching a transport needs no extra
+		# bookkeeping beyond the assignment sites.
 		return PackedInt32Array()
-	return multiplayer.get_peers()
+	if not _peer_ids_cache_valid:
+		_peer_ids_cache = multiplayer.get_peers()
+		_peer_ids_cache_valid = true
+	return _peer_ids_cache
+
+
+func _invalidate_peer_cache() -> void:
+	_peer_ids_cache_valid = false
 
 # ── Network Signals ───────────────────────────────────────────────────────────
 func _on_peer_connected(id: int) -> void:
+	_invalidate_peer_cache()
 	if is_host:
 		_pending_handshake[id] = local_time()
 		# Start the liveness clock at connect so the grace window covers the
@@ -690,6 +715,7 @@ func _on_peer_connected(id: int) -> void:
 		_peer_last_seen[id] = local_time()
 
 func _on_peer_disconnected(id: int) -> void:
+	_invalidate_peer_cache()
 	_pending_handshake.erase(id)
 	_peer_last_seen.erase(id)
 	_peer_handedness.erase(id)
@@ -832,6 +858,7 @@ func reset() -> void:
 	if SteamManager.lobby_join_failed.is_connected(_on_steam_lobby_join_failed):
 		SteamManager.lobby_join_failed.disconnect(_on_steam_lobby_join_failed)
 	multiplayer.multiplayer_peer = null
+	_invalidate_peer_cache()
 	is_host = false
 	game_initiated = false
 	pending_session_end_reason = ""
@@ -1032,6 +1059,8 @@ func _process(delta: float) -> void:
 			# from swinging the batch-size threshold.
 			packet_loss_pct = lerpf(packet_loss_pct, measured, 0.3)
 			NetworkTelemetry.record_packet_loss(packet_loss_pct)
+			# Folded here rather than per packet — see receive_world_state.
+			NetworkTelemetry.record_jitter_p95(get_jitter_p95() * 1000.0)
 			_ws_drop_window = 0
 			_ws_recv_window = 0
 			_ws_loss_window_timer = 0.0
@@ -1429,41 +1458,52 @@ func report_input_watermark(peer_id: int, host_timestamp: float) -> void:
 func receive_world_state(data: PackedByteArray) -> void:
 	if is_host:
 		return
-	NetworkSimManager.send(
-		func(s: PackedByteArray) -> void:
-			var now: float = local_time()
-			if _last_ws_arrival_time > 0.0:
-				var expected_interval: float = 1.0 / Constants.STATE_RATE
-				var gap: float = now - _last_ws_arrival_time
-				var jitter: float = absf(gap - expected_interval)
-				_jitter_samples.append(jitter)
-				if _jitter_samples.size() > 40:
-					_jitter_samples.pop_front()
-				NetworkTelemetry.record_jitter_p95(get_jitter_p95() * 1000.0)
-				# Raw inter-arrival gap histogram: distinguishes Steam Nagle
-				# clumping (bimodal — a cluster of near-0 gaps then a big one)
-				# from smooth path/relay jitter (spread around the 8.3ms interval).
-				NetworkTelemetry.record_ws_arrival_gap(gap * 1000.0)
-			_last_ws_arrival_time = now
-			# PDV delay vs the synced host clock (header host_capture_time at bytes
-			# 2..5, u32 0.1ms units). Clumping barely moves this, unlike the gap above.
-			if is_clock_ready() and s.size() >= 6:
-				_record_packet_delay(estimated_host_time() - float(s.decode_u32(2)) / Constants.TIME_WIRE_SCALE)
-			if s.size() >= 2:
-				_on_ws_sequence_received(s.decode_u16(0))
-			# Advance the shared interpolation delay once per packet, before the
-			# decode applies state to actors — so every interpolator this frame
-			# reads the same freshly-adapted value.
-			advance_interpolation_delay()
-			# Apply the snapshot's trailing carrier-event block BEFORE the
-			# world-state decode below, so a carrier change and the state it
-			# corresponds to land in the same frame (a stronger ordering
-			# guarantee than the reliable-RPC-vs-unreliable-snapshot race).
-			_event_log.apply_block(s, multiplayer.get_unique_id(), _snapshot_event_dispatch)
-			NetworkTelemetry.record_world_state()
-			NetworkTelemetry.record_bytes_received(s.size())
-			world_state_received.emit(s),
-		[data], false)
+	# Branch rather than build a closure per packet — same reasoning as
+	# receive_input_batch: with the sim disabled, send() just calls straight
+	# through, so the closure and its args Array were pure waste at 60 Hz.
+	if NetworkSimManager.enabled:
+		NetworkSimManager.send(_apply_world_state, [data], false)
+	else:
+		_apply_world_state(data)
+
+
+func _apply_world_state(s: PackedByteArray) -> void:
+	var now: float = local_time()
+	if _last_ws_arrival_time > 0.0:
+		var expected_interval: float = 1.0 / Constants.STATE_RATE
+		var gap: float = now - _last_ws_arrival_time
+		var jitter: float = absf(gap - expected_interval)
+		_jitter_samples.append(jitter)
+		if _jitter_samples.size() > 40:
+			_jitter_samples.pop_front()
+		# The p95 is NOT folded here: get_jitter_p95 duplicates + sorts the
+		# 40-sample buffer, and the value is only read at the 1 Hz telemetry
+		# fold, so computing it per packet threw away 59 of every 60 results.
+		# It is recorded from the same 1 Hz window as packet loss (_process).
+		#
+		# Raw inter-arrival gap histogram: distinguishes Steam Nagle
+		# clumping (bimodal — a cluster of near-0 gaps then a big one)
+		# from smooth path/relay jitter (spread around the 8.3ms interval).
+		NetworkTelemetry.record_ws_arrival_gap(gap * 1000.0)
+	_last_ws_arrival_time = now
+	# PDV delay vs the synced host clock (header host_capture_time at bytes
+	# 2..5, u32 0.1ms units). Clumping barely moves this, unlike the gap above.
+	if is_clock_ready() and s.size() >= 6:
+		_record_packet_delay(estimated_host_time() - float(s.decode_u32(2)) / Constants.TIME_WIRE_SCALE)
+	if s.size() >= 2:
+		_on_ws_sequence_received(s.decode_u16(0))
+	# Advance the shared interpolation delay once per packet, before the
+	# decode applies state to actors — so every interpolator this frame
+	# reads the same freshly-adapted value.
+	advance_interpolation_delay()
+	# Apply the snapshot's trailing carrier-event block BEFORE the
+	# world-state decode below, so a carrier change and the state it
+	# corresponds to land in the same frame (a stronger ordering
+	# guarantee than the reliable-RPC-vs-unreliable-snapshot race).
+	_event_log.apply_block(s, multiplayer.get_unique_id(), _snapshot_event_dispatch)
+	NetworkTelemetry.record_world_state()
+	NetworkTelemetry.record_bytes_received(s.size())
+	world_state_received.emit(s)
 
 # ── Clock Sync ────────────────────────────────────────────────────────────────
 @rpc("any_peer", "reliable")

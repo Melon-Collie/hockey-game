@@ -995,12 +995,19 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 	# so buffering during the seed is what makes the handover possible.
 	if not _state_buffer.is_empty() and host_ts < _state_buffer.back().timestamp:
 		return
-	var buffered := BufferedPuckState.new()
+	# Once the buffer is full, the evicted front entry becomes the new back one
+	# rather than being dropped for a fresh allocation — so the wrapper churn
+	# stops after the first 30 packets instead of running for the whole match.
+	# Safe because no consumer holds a wrapper across frames: the interpolation
+	# bracket is re-derived from the buffer every tick before it is read.
+	var buffered: BufferedPuckState
+	if _state_buffer.size() >= 30:
+		buffered = _state_buffer.pop_front()
+	else:
+		buffered = BufferedPuckState.new()
 	buffered.timestamp = host_ts
 	buffered.state = state
 	_state_buffer.append(buffered)
-	if _state_buffer.size() > 30:
-		_state_buffer.pop_front()
 
 # Coulomb ice friction: a puck on ice loses a fixed amount of speed per second
 # (mu*g = GameRules.PUCK_ICE_DECEL_M_S2), independent of speed — matching the host's

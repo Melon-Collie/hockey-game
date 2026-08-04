@@ -95,6 +95,9 @@ const TILT_RVH_DEG: float = 65.0
 # Yaw cap for active blade intent — how far the assembly may swing the blade
 # toward a threat before the rigidly-attached blocker pad comes off the body.
 const ACTIVE_YAW_CAP_DEG: float = 25.0
+# The yaw extremes standing_lateral_reach probes. A const rather than a literal
+# in the loop header, which would allocate an Array per call.
+const _REACH_PROBE_YAWS: Array[float] = [-ACTIVE_YAW_CAP_DEG, 0.0, ACTIVE_YAW_CAP_DEG]
 
 # Blocker wrist lateral offset in the READY stance (GoalieBodyConfigBuilder's
 # `c.blocker_pos.x`). READY rather than STANDING because a keeper set on a
@@ -153,9 +156,11 @@ static func blade_center_x(wrist_x: float, tilt_deg: float, yaw_deg: float) -> f
 # at 0.59-0.64 m; this returns ~0.64.
 static func standing_lateral_reach() -> float:
 	var best: float = -INF
+	# _REACH_PROBE_YAWS is a const, not an inline literal: an Array literal in a
+	# loop header is rebuilt on every call.
 	# The cap is the extreme, but which SIGN of yaw reaches furthest depends on
 	# the assembly offset's own lateral sign, so try both rather than assume.
-	for yaw: float in [-ACTIVE_YAW_CAP_DEG, 0.0, ACTIVE_YAW_CAP_DEG]:
+	for yaw: float in _REACH_PROBE_YAWS:
 		best = maxf(best, blade_center_x(READY_WRIST_X_M, TILT_READY_DEG, yaw))
 	return best + BLADE_WIDTH_M * 0.5
 

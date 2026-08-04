@@ -18,6 +18,8 @@ const AIR_MAX_SCALE: float = 2.2      # cap so a high pop doesn't balloon the bl
 const AIR_FADE_HEIGHT: float = 2.0    # puck height (m) at which the shadow is faintest
 const AIR_MIN_ALPHA: float = 0.12     # faintest alpha when high in the air
 const _TEX_SIZE: int = 64
+# Below this, a per-frame write is invisible and not worth pushing.
+const _WRITE_EPSILON: float = 0.001
 
 var _puck: Puck = null
 var _mat: StandardMaterial3D = null
@@ -63,9 +65,11 @@ func _process(_delta: float) -> void:
 	# Player-toggleable (Options → Video). Read the live pref each frame so the
 	# toggle applies instantly; the read is a single autoload property (no alloc).
 	if not PlayerPrefs.puck_shadow_enabled:
-		visible = false
+		if visible:
+			visible = false
 		return
-	visible = true
+	if not visible:
+		visible = true
 	var puck_pos: Vector3 = _puck.global_position
 	# Height of the puck above its resting height (0 when grounded).
 	var height: float = maxf(0.0, puck_pos.y - _puck.ice_height)
@@ -73,10 +77,18 @@ func _process(_delta: float) -> void:
 	# Pin to the ice plane directly below the puck. position is local to the puck;
 	# the puck only yaws (angular X/Z axis-locked), so local Y maps to world Y and
 	# local X/Z=0 keeps the blob on the puck's vertical axis.
-	position = Vector3(0.0, ICE_Y - puck_pos.y, 0.0)
+	# A grounded puck holds every value below constant, so the writes are guarded
+	# rather than re-pushed each rendered frame (scale and albedo go through to
+	# the servers; position dirties the transform).
+	var offset_y: float = ICE_Y - puck_pos.y
+	if absf(position.y - offset_y) > _WRITE_EPSILON:
+		position = Vector3(0.0, offset_y, 0.0)
 
 	# Grow + fade with height so it reads as a cast shadow.
 	var s: float = minf(1.0 + AIR_GROW_PER_M * height, AIR_MAX_SCALE)
-	scale = Vector3(s, s, 1.0)
+	if absf(scale.x - s) > _WRITE_EPSILON:
+		scale = Vector3(s, s, 1.0)
 	var fade: float = clampf(height / AIR_FADE_HEIGHT, 0.0, 1.0)
-	_mat.albedo_color.a = lerpf(BASE_ALPHA, AIR_MIN_ALPHA, fade)
+	var alpha: float = lerpf(BASE_ALPHA, AIR_MIN_ALPHA, fade)
+	if absf(_mat.albedo_color.a - alpha) > _WRITE_EPSILON:
+		_mat.albedo_color.a = alpha
