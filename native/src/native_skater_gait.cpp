@@ -18,10 +18,60 @@ static constexpr double SETTLE_SECONDS = 1.0;
 // Cap on the effort/carve finite-difference sampling interval — mirrors the
 // GDScript coordinator's _FD_WINDOW_MAX.
 static constexpr double FD_WINDOW_MAX = 0.1;
+// Pivot detector constants — mirror _PSI_RATE_EASE and PivotRules.RELEASE_MARGIN.
+static constexpr double PSI_RATE_EASE = 10.0;
+static constexpr double PIVOT_RELEASE_MARGIN = 8.0 * Math_PI / 180.0;
 
 // GDScript signf semantics: -1, 0, or +1.
 static inline double sgn(double v) {
 	return v > 0.0 ? 1.0 : (v < 0.0 ? -1.0 : 0.0);
+}
+
+// GDScript angle_difference (core math_funcs.h) — shortest signed angle.
+static inline double angle_diff(double p_from, double p_to) {
+	const double difference = fmod(p_to - p_from, Math_TAU);
+	return fmod(2.0 * difference, Math_TAU) - difference;
+}
+
+// PivotRules.should_engage
+static bool pivot_should_engage(double abs_psi, double abs_psi_rate, double ground_speed,
+		double band_lo, double band_hi, double rate_min, double min_speed) {
+	return ground_speed >= min_speed && abs_psi_rate >= rate_min &&
+			abs_psi > band_lo && abs_psi < band_hi;
+}
+
+// PivotRules.should_release
+static bool pivot_should_release(double abs_psi, double ground_speed,
+		double band_lo, double band_hi, double min_speed) {
+	return ground_speed < min_speed ||
+			abs_psi <= band_lo - PIVOT_RELEASE_MARGIN ||
+			abs_psi >= band_hi + PIVOT_RELEASE_MARGIN;
+}
+
+// PivotRules.latch_sense
+static double pivot_latch_sense(double abs_psi, double band_lo, double band_hi) {
+	return abs_psi < 0.5 * (band_lo + band_hi) ? 1.0 : -1.0;
+}
+
+// PivotRules.phase
+static double pivot_phase(double abs_psi, double sense, double band_lo, double band_hi) {
+	const double p = CLAMP((abs_psi - band_lo) / MAX(band_hi - band_lo, 0.001), 0.0, 1.0);
+	return sense > 0.0 ? p : 1.0 - p;
+}
+
+// PivotRules.pivot_yaw
+static double pivot_yaw_law(double psi, double sense, double p, double step_begin) {
+	const double along = -psi;
+	const double anti = -psi + Math_PI * sgn(psi);
+	double t = 0.0;
+	if (p > step_begin) {
+		t = (p - step_begin) / MAX(1.0 - step_begin, 0.001);
+		t = t * t * (3.0 - 2.0 * t);
+	}
+	if (sense > 0.0) {
+		return Math::lerp(along, anti, t);
+	}
+	return Math::lerp(anti, along, t);
 }
 
 // ── Ports of the pure domain helpers (see the GDScript files for reasoning) ──
@@ -159,6 +209,12 @@ void NativeSkaterGait::reset_state() {
 	stop_blend = 0.0;
 	travel_align_yaw = 0.0;
 	hip_align_yaw = 0.0;
+	prev_psi = 0.0;
+	have_prev_psi = false;
+	psi_rate = 0.0;
+	pivot_engaged = false;
+	pivot_sense = 1.0;
+	pivot_blend = 0.0;
 	carve = 0.0;
 	carve_curve = 0.0;
 	turn_rate = 0.0;
@@ -417,7 +473,8 @@ int64_t NativeSkaterGait::apply(
 	phase_rate = MAX(phase_rate, MAX(dig * cfg.dig_in_cadence_rate,
 			Math::abs(shuffle) * cfg.shuffle_cadence_rate));
 	stride_phase = Math::wrapf(stride_phase + phase_rate *
-			(1.0 - MAX(stop_blend, reversal * cfg.reversal_stride_fade)) * delta,
+			(1.0 - MAX(MAX(stop_blend, reversal * cfg.reversal_stride_fade),
+					pivot_blend * cfg.pivot_stride_fade)) * delta,
 			0.0, Math_TAU);
 
 	// ── Effort: glide vs. push ──
@@ -494,22 +551,55 @@ int64_t NativeSkaterGait::apply(
 	} else {
 		stop_yaw_offset = 0.0;
 	}
-	double gait_scale = 1.0 - MAX(stop_blend, reversal * cfg.reversal_stride_fade);
+	double gait_scale = 1.0 - MAX(MAX(stop_blend, reversal * cfg.reversal_stride_fade),
+			pivot_blend * cfg.pivot_stride_fade);
 	gait_scale *= 1.0 - shot_body * cfg.shot_stride_fade;
 	const double rev_amt = reversal * (1.0 - stop_blend);
 
 	// ── Hip-to-travel alignment ──
 	double align_target = 0.0;
+	double psi = prev_psi;
 	if (ground_speed > 0.1) {
-		const double travel_angle = Math::atan2(lat, fwd);
+		psi = Math::atan2(lat, fwd);
 		const double align_engage = CLAMP(
 				intensity / MAX(cfg.stance_full_speed_fraction, 0.01), 0.0, 1.0);
-		align_target = CLAMP(-travel_angle,
+		align_target = CLAMP(-psi,
 				-Math::deg_to_rad(cfg.hip_align_max_deg),
 				Math::deg_to_rad(cfg.hip_align_max_deg)) * align_engage;
 	}
 	align_target *= 1.0 - MAX(backpedal, Math::abs(shuffle));
-	hip_align_yaw = Math::lerp(hip_align_yaw, align_target, cfg.hip_align_speed * delta);
+	// ── Pivot: the facing↔travel swap (see the GDScript reference) ──
+	double psi_rate_raw = 0.0;
+	if (have_prev_psi) {
+		psi_rate_raw = angle_diff(prev_psi, psi) / delta;
+	}
+	prev_psi = psi;
+	have_prev_psi = true;
+	psi_rate = Math::lerp(psi_rate, psi_rate_raw, MIN(PSI_RATE_EASE * delta, 1.0));
+	const double abs_psi = Math::abs(psi);
+	const double band_lo = Math::deg_to_rad(cfg.pivot_band_lo_deg);
+	const double band_hi = Math::deg_to_rad(cfg.pivot_band_hi_deg);
+	if (pivot_engaged) {
+		if (pivot_should_release(abs_psi, ground_speed, band_lo, band_hi,
+				cfg.pivot_min_speed)) {
+			pivot_engaged = false;
+		}
+	} else if (pivot_should_engage(abs_psi, Math::abs(psi_rate), ground_speed,
+			band_lo, band_hi, cfg.pivot_rate_min, cfg.pivot_min_speed)) {
+		pivot_engaged = true;
+		pivot_sense = pivot_latch_sense(abs_psi, band_lo, band_hi);
+	}
+	pivot_blend = Math::lerp(pivot_blend, pivot_engaged ? 1.0 : 0.0,
+			cfg.pivot_blend_speed * delta);
+	double align_speed = cfg.hip_align_speed;
+	if (pivot_blend > 0.001) {
+		const double pivot_p = pivot_phase(abs_psi, pivot_sense, band_lo, band_hi);
+		const double pivot_target = pivot_yaw_law(psi, pivot_sense, pivot_p,
+				cfg.pivot_step_begin);
+		align_target = Math::lerp(align_target, pivot_target, pivot_blend);
+		align_speed = Math::lerp(align_speed, cfg.pivot_yaw_speed, pivot_blend);
+	}
+	hip_align_yaw = Math::lerp(hip_align_yaw, align_target, align_speed * delta);
 	travel_align_yaw = hip_align_yaw * (1.0 - stop_blend);
 	const double hip_cos = Math::cos(travel_align_yaw);
 	const double hip_sin = Math::sin(travel_align_yaw);
@@ -550,6 +640,7 @@ int64_t NativeSkaterGait::apply(
 	stance = MAX(stance, cfg.dig_in_stance * dig);
 	stance = MAX(stance, cfg.reversal_stance * rev_amt);
 	stance = MAX(stance, cfg.carve_stance * Math::abs(carve));
+	stance = MAX(stance, cfg.pivot_stance * pivot_blend);
 	stance = MAX(stance, cfg.wrister_load_stance * wrister_load);
 	stance = MAX(stance, cfg.slapper_load_stance * slap_load);
 	const double kick_stance = shot_kick_is_slap ? cfg.slapper_kick_stance

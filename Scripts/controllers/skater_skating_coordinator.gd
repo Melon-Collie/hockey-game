@@ -49,6 +49,11 @@ const _SETTLE_SECONDS: float = 1.0
 # targets feed) that the signals still read zero acceleration and decay.
 const _FD_WINDOW_MAX: float = 0.1
 
+# Smoothing rate of the ψ-rate signal the pivot detector thresholds. A trigger,
+# not a pose channel, so a plain smoothed per-frame FD suffices (high-fps
+# zero-tick frames average out through the ease instead of aliasing a pose).
+const _PSI_RATE_EASE: float = 10.0
+
 var _skater: Skater = null
 var _sm: SkaterStateMachine = null
 var _controller: SkaterController = null  # tunables live as @export on the controller
@@ -108,6 +113,16 @@ var _stop_blend: float = 0.0
 # coordinator's lower-body write, same contract as stop_yaw_offset.
 var travel_align_yaw: float = 0.0
 var _hip_align_yaw: float = 0.0
+# Pivot read (PivotRules; the pivot block in apply()). The ψ finite difference
+# mirrors the effort FD idiom; the engage/sense latches and blend mirror the
+# hockey stop. Published THROUGH travel_align_yaw — while engaged the pivot IS
+# the hip-alignment law, so it needs no lower-body channel of its own.
+var _prev_psi: float = 0.0
+var _have_prev_psi: bool = false
+var _psi_rate: float = 0.0
+var _pivot_engaged: bool = false
+var _pivot_sense: float = 1.0
+var _pivot_blend: float = 0.0
 # Smoothed signed carve engagement [−1, +1] (CarveRules): path curvature
 # drives the crossover gait. Sign = turn direction (+ = toward local +X).
 var _carve: float = 0.0
@@ -231,6 +246,12 @@ func reset_to_rest() -> void:
 	_stop_blend = 0.0
 	travel_align_yaw = 0.0
 	_hip_align_yaw = 0.0
+	_prev_psi = 0.0
+	_have_prev_psi = false
+	_psi_rate = 0.0
+	_pivot_engaged = false
+	_pivot_sense = 1.0
+	_pivot_blend = 0.0
 	_carve = 0.0
 	_carve_curve = 0.0
 	_turn_rate = 0.0
@@ -540,11 +561,13 @@ func apply(delta: float) -> void:
 	# to advance the phase on its own.
 	phase_rate = maxf(phase_rate, maxf(_dig * _controller.dig_in_cadence_rate,
 			absf(_shuffle) * _controller.shuffle_cadence_rate))
-	# The stop/reversal plant (previous frame's values — computed below, and
-	# the one-frame lag is invisible through the smoothing) freezes the
-	# stride: scraping and planted blades don't stride.
+	# The stop/reversal plant and the pivot's gliding transit (previous frame's
+	# values — computed below, and the one-frame lag is invisible through the
+	# smoothing) freeze the stride: scraping, planted, and open-hip blades
+	# don't stride.
 	stride_phase = wrapf(stride_phase + phase_rate
-			* (1.0 - maxf(_stop_blend, _reversal * _controller.reversal_stride_fade)) * delta,
+			* (1.0 - maxf(maxf(_stop_blend, _reversal * _controller.reversal_stride_fade),
+					_pivot_blend * _controller.pivot_stride_fade)) * delta,
 			0.0, TAU)
 
 	# ── Effort: glide vs. push ─────────────────────────────────────────────────
@@ -656,9 +679,12 @@ func apply(delta: float) -> void:
 				deg_to_rad(_controller.hockey_stop_max_yaw_deg)) * _stop_blend
 	else:
 		stop_yaw_offset = 0.0
-	# Stride suppression factor: 1 = normal gait, 0 = fully planted (stop pose
-	# or the reversal plant — fighting momentum is edges, not strides).
-	var gait_scale: float = 1.0 - maxf(_stop_blend, _reversal * _controller.reversal_stride_fade)
+	# Stride suppression factor: 1 = normal gait, 0 = fully planted (stop pose,
+	# the reversal plant, or the pivot's gliding transit — fighting momentum
+	# and swapping ends are edges, not strides).
+	var gait_scale: float = 1.0 - maxf(
+			maxf(_stop_blend, _reversal * _controller.reversal_stride_fade),
+			_pivot_blend * _controller.pivot_stride_fade)
 	# Shooting is a glide: while a shot load or the release kick is live the
 	# stride blends out — a shooter sets their feet, they don't keep striding
 	# through the shot.
@@ -681,13 +707,17 @@ func apply(delta: float) -> void:
 	# The hockey stop overrides alignment while blended in — perpendicular
 	# beats parallel on the same lower-body channel.
 	var align_target: float = 0.0
+	# ψ — the travel direction in the body frame. Zero speed leaves it at the
+	# previous sample: atan2 of a near-zero vector is noise, and the pivot
+	# below releases on the speed floor anyway.
+	var psi: float = _prev_psi
 	if ground_speed > 0.1:
-		var travel_angle: float = atan2(lat, fwd)
+		psi = atan2(lat, fwd)
 		var align_engage: float = clampf(
 				_intensity / maxf(_controller.stance_full_speed_fraction, 0.01), 0.0, 1.0)
 		# rotation.y positive turns the legs toward −X, i.e. toward NEGATIVE
 		# body-frame angles — hence the negation.
-		align_target = clampf(-travel_angle,
+		align_target = clampf(-psi,
 				-deg_to_rad(_controller.hip_align_max_deg),
 				deg_to_rad(_controller.hip_align_max_deg)) * align_engage
 	# A deliberate backpedal or sidestep is an AIM-LOCKED stance — the
@@ -695,7 +725,49 @@ func apply(delta: float) -> void:
 	# square to the chest, so intent suppresses the travel alignment and the
 	# body-frame backward / lateral gaits play in full.
 	align_target *= 1.0 - maxf(_backpedal, absf(_shuffle))
-	_hip_align_yaw = lerpf(_hip_align_yaw, align_target, _controller.hip_align_speed * delta)
+	# ── Pivot: the facing↔travel swap ──────────────────────────────────────────
+	# ψ transiting the lateral band at speed is a pivot — the one event the
+	# twin-stick scheme produces two ways (cursor swung across a held travel
+	# line, or travel swung under a held cursor) that are identical in the body
+	# frame, so one read covers both. The dψ/dt trigger separates it from a
+	# carve for free: ψ = travel heading − facing heading, and a coordinated
+	# carve rotates both together (ψ barely moves) while a pivot whips facing
+	# against travel. While engaged the hips get the one thing the alignment
+	# clamp forbids — tracking ψ fully — holding the entry orientation on the
+	# gliding blades, then stepping around to the exit orientation over the
+	# transit's tail (PivotRules.pivot_yaw). Phase derives from ψ's actual
+	# progress, not a timer: a snap pivot and a slow open-hip glide both read
+	# right, and an aborted swing unwinds back through the same poses.
+	var psi_rate_raw: float = 0.0
+	if _have_prev_psi:
+		psi_rate_raw = angle_difference(_prev_psi, psi) / delta
+	_prev_psi = psi
+	_have_prev_psi = true
+	_psi_rate = lerpf(_psi_rate, psi_rate_raw, minf(_PSI_RATE_EASE * delta, 1.0))
+	var abs_psi: float = absf(psi)
+	var band_lo: float = deg_to_rad(_controller.pivot_band_lo_deg)
+	var band_hi: float = deg_to_rad(_controller.pivot_band_hi_deg)
+	if _pivot_engaged:
+		if PivotRules.should_release(abs_psi, ground_speed, band_lo, band_hi,
+				_controller.pivot_min_speed):
+			_pivot_engaged = false
+	elif PivotRules.should_engage(abs_psi, absf(_psi_rate), ground_speed,
+			band_lo, band_hi, _controller.pivot_rate_min, _controller.pivot_min_speed):
+		_pivot_engaged = true
+		_pivot_sense = PivotRules.latch_sense(abs_psi, band_lo, band_hi)
+	_pivot_blend = lerpf(_pivot_blend, 1.0 if _pivot_engaged else 0.0,
+			_controller.pivot_blend_speed * delta)
+	var align_speed: float = _controller.hip_align_speed
+	if _pivot_blend > 0.001:
+		var pivot_p: float = PivotRules.phase(abs_psi, _pivot_sense, band_lo, band_hi)
+		var pivot_target: float = PivotRules.pivot_yaw(psi, _pivot_sense, pivot_p,
+				_controller.pivot_step_begin)
+		# The pivot target overrides the intent suppression above on purpose: a
+		# key held through the swing flips to a backpedal read mid-transit,
+		# which must not zero the hold.
+		align_target = lerpf(align_target, pivot_target, _pivot_blend)
+		align_speed = lerpf(align_speed, _controller.pivot_yaw_speed, _pivot_blend)
+	_hip_align_yaw = lerpf(_hip_align_yaw, align_target, align_speed * delta)
 	travel_align_yaw = _hip_align_yaw * (1.0 - _stop_blend)
 	# Velocity in the yawed hip frame: v_hip = RotY(−ψ) · v_local.
 	var hip_cos: float = cos(travel_align_yaw)
@@ -761,6 +833,9 @@ func apply(delta: float) -> void:
 	# A committed carve sits DOWN — the edges hold a fast arc only under bent
 	# knees, and the lowered center of mass is what lets the body bank into it.
 	stance = maxf(stance, _controller.carve_stance * absf(_carve))
+	# The pivot sits too: the open-hip glide and the step-around are both done
+	# on bent knees.
+	stance = maxf(stance, _controller.pivot_stance * _pivot_blend)
 	# Shot loads sit INTO the shot as the charge builds (the slapper wind-up
 	# deepest — the power position), and the release keeps the front leg seated
 	# through the drive (the back knee is pulled out of this flex by the kick

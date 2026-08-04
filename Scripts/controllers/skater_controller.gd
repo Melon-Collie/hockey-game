@@ -487,6 +487,24 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # the backward C-cut / crossover gaits on the residual, as designed.
 @export var hip_align_max_deg: float = 50.0  # cap on the hips' turn toward travel
 @export var hip_align_speed: float = 6.0     # how fast the hips settle onto the travel line
+# Pivot — the facing↔travel swap (PivotRules; the pivot block in
+# SkaterSkatingCoordinator). ψ = travel direction in the body frame; a pivot
+# is ψ transiting the lateral band at speed, driven by |dψ/dt| — facing
+# whipping against travel, which a coordinated carve (both rotating together)
+# never produces. While engaged the hips hold the entry orientation past the
+# alignment clamp, gliding the old line under the swinging torso, then step
+# around to the exit orientation over the transit's tail. Derived entirely
+# from replicated facing + velocity, so every machine reads the identical
+# pivot; phase comes from ψ itself, so an aborted swing unwinds cleanly.
+@export var pivot_band_lo_deg: float = 50.0   # ψ where the transit begins — matches hip_align_max_deg for a seamless handoff
+@export var pivot_band_hi_deg: float = 130.0  # ψ where the transit completes
+@export var pivot_rate_min: float = 2.5       # rad/s of |dψ/dt| that reads as a pivot, not a drifting cursor
+@export var pivot_min_speed: float = 2.5      # m/s floor — pivoting is a gliding move; slow spins are steps
+@export var pivot_step_begin: float = 0.6     # transit fraction where the hips step around to the exit line
+@export var pivot_yaw_speed: float = 12.0     # hip tracking ease while pivoting (hip_align_speed is too lazy to hold ψ)
+@export var pivot_stride_fade: float = 0.85   # stride suppression while engaged — pivots glide, they don't stride
+@export var pivot_stance: float = 0.8         # stance floor — the step-around needs bent knees
+@export var pivot_blend_speed: float = 8.0    # engage/release ease of the whole read
 # Input-intent gait reads (GaitIntentRules, v15 intent byte) — signals for
 # what the player is TRYING to do, layered over the velocity-derived gait.
 # All cosmetic; every signal derives from replicated state, so local, bot,
