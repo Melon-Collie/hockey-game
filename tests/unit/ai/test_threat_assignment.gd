@@ -265,6 +265,59 @@ func test_a_more_dangerous_man_still_beats_a_lower_peer_id() -> void:
 	assert_eq(out[1], 20, "danger decides; the id is only the tiebreak")
 
 
+# ── Matching ties ──────────────────────────────────────────────────────────
+
+# Two defenders mirrored about x=0 at the same depth, two men stacked on the
+# centreline (net-front + high slot). Every defender is EQUIDISTANT from both
+# men, so reward[1][m] == reward[2][m] for each man and the two matchings sum
+# the same pair of floats in opposite order — an exactly-equal total in IEEE754,
+# not a near-tie. Realistic: two D flanking a net-front man with a high-slot
+# man behind him.
+func _tied_2v2() -> Array:
+	var defenders: Array[int] = [1, 2]
+	var dpos: Dictionary = {1: Vector3(-3, 0, 20), 2: Vector3(3, 0, 20)}
+	var mpos: Dictionary = {10: Vector3(0, 0, 24), 20: Vector3(0, 0, 16)}
+	var mval: Dictionary = {10: 0.7, 20: 0.4}
+	return [defenders, dpos, mpos, mval]
+
+
+func test_matching_ties_do_not_depend_on_men_order() -> void:
+	# `men` follows the snapshot's insertion order (peer registration), not peer
+	# order, so without an explicit tiebreak a standing tie resolves by who
+	# joined the session first — and flips if a rejoin ever re-registers
+	# mid-session. HYSTERESIS_MARGIN_FRAC cannot damp that flip: both matchings
+	# score identically, so the retain branch holds and whichever arrived first
+	# simply sticks.
+	var f: Array = _tied_2v2()
+	var defenders: Array[int] = f[0]
+	var ascending: Array[int] = [10, 20]
+	var descending: Array[int] = [20, 10]
+	var a: Dictionary = AIThreatAssignment.assign(
+			defenders, f[1], _vel_zero(defenders), ascending, f[2], f[3], OUR_NET, {})
+	var b: Dictionary = AIThreatAssignment.assign(
+			defenders, f[1], _vel_zero(defenders), descending, f[2], f[3], OUR_NET, {})
+	assert_eq(a, b, "the tied matching is the same from both men orders")
+	# And the winner is the named one: the earliest defender takes the lower id.
+	assert_eq(a[1], 10, "the earliest defender takes the lower man peer id")
+	assert_eq(a[2], 20, "the other defender takes the remaining man")
+
+
+func test_a_better_matching_still_beats_the_peer_id_tiebreak() -> void:
+	# Guard: the id orders EQUAL-reward matchings, it never outranks reward.
+	# Same fixture, but defender 2 is parked on man 20 — pairing 1→10, 2→20 is
+	# now strictly the better total AND happens to be the tiebreak's answer, so
+	# push the far man's value up until crossing is strictly better instead.
+	var defenders: Array[int] = [1, 2]
+	var dpos: Dictionary = {1: Vector3(-3, 0, 20), 2: Vector3(3, 0, 20)}
+	var mpos: Dictionary = {10: Vector3(6, 0, 22), 20: Vector3(-6, 0, 22)}
+	var mval: Dictionary = {10: 0.5, 20: 0.5}
+	var men: Array[int] = [10, 20]
+	var out: Dictionary = AIThreatAssignment.assign(
+			defenders, dpos, _vel_zero(defenders), men, mpos, mval, OUR_NET, {})
+	assert_eq(out[1], 20, "defender 1 covers the man on its own side")
+	assert_eq(out[2], 10, "reward decides; the lower id does not pull man 10 over")
+
+
 # ── Cover anchor geometry ──────────────────────────────────────────────────
 
 func test_cover_anchor_is_goal_side_of_man() -> void:

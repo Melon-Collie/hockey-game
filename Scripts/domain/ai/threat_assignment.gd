@@ -263,13 +263,21 @@ static func cover_anchor(man: Vector3, our_net: Vector3) -> Vector3:
 # (adds 0) — so leaving a defender idle is allowed only when it can't improve
 # the total (more defenders than men, or no positive-reward man left).
 #
-# Two matchings of EXACTLY equal total resolve to whichever the recursion reaches
-# first, i.e. to `men` order — which is snapshot insertion order, not peer order.
-# Unlike the house pin above this is left as-is deliberately: the tie means the
-# two matchings are equally good by the reward model, so neither is wrong, and a
-# real tiebreak has to compare maps through the recursion rather than totals.
-# Sorting `men` at the caller would settle it in one line but also reorders this
-# enumeration, which can move live assignments — a behavior change, not a fix.
+# Matchings of EXACTLY equal total break to the lower man peer id at the earliest
+# defender they differ on, so the result is a function of the defender/man SETS
+# and not of `men` order — that order is snapshot insertion order (peer
+# registration), not peer order, so a symmetric geometry (two defenders and two
+# men mirrored about x=0, the faceoff net-front) would otherwise resolve by who
+# joined the session first, and a rejoin re-registering mid-session would flip a
+# standing tie. HYSTERESIS_MARGIN_FRAC can't damp that: both matchings score
+# identically, so the retain branch holds and whichever got there first sticks.
+#
+# The tiebreak is local at each level and still yields the lexicographically
+# smallest assignment overall: sub[1] is already lex-minimal among the
+# sub-problem's optima, so max-total-then-lowest-man at the earliest defender
+# composes. Sorting `men` at the caller would also settle it, but it reorders
+# this enumeration and so can move NEAR-tied live assignments too — a behavior
+# change rather than a fix.
 static func _best_matching(
 		idx: int, defenders: Array[int], men: Array[int],
 		used: Dictionary, reward: Dictionary) -> Array:
@@ -278,6 +286,7 @@ static func _best_matching(
 	var d: int = defenders[idx]
 	var best_total: float = -1.0
 	var best_map: Dictionary = {}
+	var best_man: int = -1
 	# Option A: this defender covers some unused man.
 	var row: Dictionary = reward[d]
 	for m: int in men:
@@ -287,12 +296,15 @@ static func _best_matching(
 		var sub: Array = _best_matching(idx + 1, defenders, men, used, reward)
 		used.erase(m)
 		var total: float = row[m] + sub[0]
-		if total > best_total:
+		if total > best_total or (total == best_total and m < best_man):
 			best_total = total
 			best_map = (sub[1] as Dictionary).duplicate()
 			best_map[d] = m
+			best_man = m
 	# Option B: this defender covers no one (idle). Only relevant when there's
-	# no unused man left, but cheap to always consider for correctness.
+	# no unused man left, but cheap to always consider for correctness. Strict
+	# `>` so an equal-total cover is kept over idling — a defender on a man is
+	# never worse than the same defender on nobody.
 	var sub_idle: Array = _best_matching(idx + 1, defenders, men, used, reward)
 	if sub_idle[0] > best_total:
 		best_total = sub_idle[0]

@@ -4355,14 +4355,9 @@ func _on_reaction_started(_impact_x: float, _impact_y: float, _is_elevated: bool
 	_reaction_drift_vx = _velocity_x
 
 # ── State Serialization ───────────────────────────────────────────────────────
-# Returns the typed network state object. Flattening to Array happens at the
-# RPC boundary (GameManager.get_world_state), not here.
-func get_state() -> GoalieNetworkState:
-	var s := GoalieNetworkState.new()
-	fill_state(s)
-	return s
-
-# Caller-owned-instance variant for the per-tick StateBufferManager capture.
+# Writes the current state into a caller-owned instance — the per-tick
+# StateBufferManager capture, so this path must not allocate. Flattening to
+# Array happens at the RPC boundary (GameManager.get_world_state), not here.
 func fill_state(s: GoalieNetworkState) -> void:
 	s.position_x = goalie.global_position.x
 	s.position_z = goalie.global_position.z

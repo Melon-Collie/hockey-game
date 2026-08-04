@@ -3670,6 +3670,13 @@ func _start_pending_shot_from_carrier() -> void:
 	if _possession_tracker != null:
 		_possession_tracker.on_deliberate_release(shooter_peer_id)
 	_shot_tracker.on_shot_started(shooter_peer_id)
+	# Release INTENT, which the trajectory read can't recover: a pass is a paced
+	# wrister in Mitts, so an errant one aimed up the middle projects at the far
+	# mouth and logs as a missed shot attempt from the passer's own end (#579).
+	# The controller latched it just before emitting puck_release_requested.
+	var shooter: PlayerRecord = _registry.get_record(shooter_peer_id)
+	if shooter != null and shooter.controller != null:
+		_shot_tracker.note_release_intent(shooter.controller.last_release_was_shot)
 
 
 # Re-reads the pending shot's on-net flag from the puck's live ballistic
@@ -3707,6 +3714,14 @@ func _note_shot_trajectory() -> void:
 		if shooter_team != -1 and goal.defending_team_id == shooter_team:
 			continue  # the shooter's own net — never an attempt for their team
 		var line_z: float = goal.goal_line_z()
+		# Nothing released from the shooter's own half is a shot event of any kind
+		# (see ShotOnNetRules.is_release_in_own_half for why the ballistic test
+		# can't refuse these itself). Skipped when the team won't resolve, like the
+		# own-net gate above — a drill has no half to be behind. Mid-flight
+		# deflection re-reads pass the LIVE position, so a breakout pass tipped at
+		# the blue line is judged from the tip rather than from the pass.
+		if shooter_team != -1 and ShotOnNetRules.is_release_in_own_half(pos.z, line_z):
+			continue
 		if ShotOnNetRules.is_on_net(pos, vel, line_z):
 			on_net = true
 			directed = true

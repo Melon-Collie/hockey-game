@@ -158,15 +158,15 @@ func test_servo_never_touches_the_ntp_offset() -> void:
 	# The invariant: lead adaptation is separate state; the offset stays pure
 	# ping/pong NTP. Feeding the servo must not move estimated_host_time's base.
 	var cs := _ready_clock()
-	var offset_before: float = cs.estimated_host_time() - cs.local_time() \
-			if cs.has_method("local_time") else 0.0
-	var t_before: float = cs.estimated_host_time()
+	var offset_before: float = cs._offset
 	for _i in range(100):
 		cs.record_ack_overdue(0.05)
-	# estimated_host_time is monotone wall-clock-based; compare stamp-vs-base
-	# spacing instead: the gap between stamp time and host time must equal the
-	# current lead exactly — no hidden offset drift folded in.
+	assert_eq(cs._offset, offset_before,
+			"100 overdue samples moved the NTP offset")
+	# Second, weaker check: nothing folded the offset into the stamp path either.
+	# Both terms read the wall clock, so the tolerance must clear the 1 ms
+	# granularity of Time.get_ticks_msec() — a millisecond boundary landing
+	# between the two reads shrinks the gap by exactly one tick.
 	var lead_gap: float = cs.estimated_input_stamp_time() - cs.estimated_host_time()
-	assert_almost_eq(lead_gap, cs.current_input_lead_s(), 1e-6,
-			"stamp lead is exactly base + extra; offset untouched")
-	assert_true(is_finite(offset_before) and is_finite(t_before))
+	assert_almost_eq(lead_gap, cs.current_input_lead_s(), 2e-3,
+			"stamp lead is base + extra, with no offset drift folded in")

@@ -225,7 +225,7 @@ func get_glove_world_position() -> Vector3:
 func get_blocker_world_position() -> Vector3:
 	return _block_arm.global_position
 
-# Pose accessors used by goalie_controller.get_state() to fill the
+# Pose accessors used by goalie_controller.fill_state() to fill the
 # authoritative socket transforms broadcast in the world snapshot. All values
 # returned in goalie-local space; rotations in radians.
 func get_left_pad_position() -> Vector3:
