@@ -811,6 +811,142 @@ func test_beaten_symmetric_for_minus_z_goal() -> void:
 			Vector3(0.0, 0, -25.3), Vector3(-0.9, 0, -25.5), -6.0,
 			Vector3(0, 0, -24.85), -26.6, 0.0, 1, 0.915, _beaten_cfg()))
 
+# ── tuck_race_depth_cap ───────────────────────────────────────────────────────
+# The anticipatory twin of is_beaten_wide: the deepest challenge radius from
+# which the skate-back-to-the-post race against the carrier's live lateral
+# drive stays winnable. INF = nothing binds; 0 = no radius wins (caller floors).
+# Goal at z=+26.6 → direction_sign −1, same frame as the beaten-wide suite.
+
+func _tuck_cfg() -> GoalieBehaviorRules.BeatenWideConfig:
+	var cfg: GoalieBehaviorRules.BeatenWideConfig = _beaten_cfg()
+	cfg.commit_confirm_s = 0.15
+	return cfg
+
+func test_hard_cross_drive_in_tight_caps_depth_hard() -> void:
+	# Carrier at 45° (2.0, 24.6) cutting across at 6 m/s, puck at (1.9, 24.7):
+	# 0.47 s to the far post, minus the confirm beat → ~0.70 m coverable + reach
+	# → cap ≈ 0.26. The doorstep cut pulls him nearly to his line.
+	var cap: float = GoalieBehaviorRules.tuck_race_depth_cap(
+			Vector3(2.0, 0, 24.6), Vector3(1.9, 0, 24.7), -6.0,
+			26.6, 0.0, -1, 0.915, _tuck_cfg())
+	assert_almost_eq(cap, 0.263, 0.02)
+
+func test_moderate_drive_binds_only_a_bit() -> void:
+	# The same geometry at 4 m/s: cap ≈ 1.25, a modest concession off the 1.75
+	# aggressive ceiling — and monotonic in drive speed.
+	var moderate: float = GoalieBehaviorRules.tuck_race_depth_cap(
+			Vector3(2.0, 0, 24.6), Vector3(1.9, 0, 24.7), -4.0,
+			26.6, 0.0, -1, 0.915, _tuck_cfg())
+	var hard: float = GoalieBehaviorRules.tuck_race_depth_cap(
+			Vector3(2.0, 0, 24.6), Vector3(1.9, 0, 24.7), -6.0,
+			26.6, 0.0, -1, 0.915, _tuck_cfg())
+	assert_almost_eq(moderate, 1.255, 0.02)
+	assert_lt(hard, moderate, "a faster drive caps depth tighter")
+
+func test_confirm_beat_tightens_the_cap() -> void:
+	# The quiet-eye confirmation is race time the goalie does not get to skate.
+	var no_confirm_cfg: GoalieBehaviorRules.BeatenWideConfig = _beaten_cfg()
+	var without: float = GoalieBehaviorRules.tuck_race_depth_cap(
+			Vector3(2.0, 0, 24.6), Vector3(1.9, 0, 24.7), -6.0,
+			26.6, 0.0, -1, 0.915, no_confirm_cfg)
+	var with_confirm: float = GoalieBehaviorRules.tuck_race_depth_cap(
+			Vector3(2.0, 0, 24.6), Vector3(1.9, 0, 24.7), -6.0,
+			26.6, 0.0, -1, 0.915, _tuck_cfg())
+	assert_lt(with_confirm, without)
+
+func test_no_tuck_cap_below_drive_speed() -> void:
+	# 2.0 m/s is a shuffle, not a drive — the anticipatory cap keeps the same
+	# floor as the sell-out so a dangle's body sway never sinks him.
+	assert_true(is_inf(GoalieBehaviorRules.tuck_race_depth_cap(
+			Vector3(2.0, 0, 24.6), Vector3(1.9, 0, 24.7), -2.0,
+			26.6, 0.0, -1, 0.915, _tuck_cfg())))
+
+func test_no_tuck_cap_far_from_goal() -> void:
+	# A winger flying across the top of the slot is not a tuck threat.
+	assert_true(is_inf(GoalieBehaviorRules.tuck_race_depth_cap(
+			Vector3(-4.0, 0, 22.5), Vector3(-3.2, 0, 22.6), 8.0,
+			26.6, 0.0, -1, 0.915, _tuck_cfg())))
+
+func test_no_tuck_cap_behind_goal_line() -> void:
+	assert_true(is_inf(GoalieBehaviorRules.tuck_race_depth_cap(
+			Vector3(1.5, 0, 27.0), Vector3(1.0, 0, 27.1), -6.0,
+			26.6, 0.0, -1, 0.915, _tuck_cfg())))
+
+func test_no_tuck_cap_for_puck_outside_post_heading_away() -> void:
+	# Puck already outside the drive-side post and moving wider: heading for the
+	# corner or behind the net, not the tuck point.
+	assert_true(is_inf(GoalieBehaviorRules.tuck_race_depth_cap(
+			Vector3(2.0, 0, 24.6), Vector3(1.9, 0, 24.7), 6.0,
+			26.6, 0.0, -1, 0.915, _tuck_cfg())))
+
+func test_short_side_burst_at_the_post_is_unwinnable() -> void:
+	# Puck 0.3 m from the near post at 6 m/s: the confirm beat alone eats the
+	# whole race, so no challenge radius wins → 0 (caller floors it).
+	assert_almost_eq(GoalieBehaviorRules.tuck_race_depth_cap(
+			Vector3(0.5, 0, 24.6), Vector3(0.6, 0, 24.7), 6.0,
+			26.6, 0.0, -1, 0.915, _tuck_cfg()), 0.0, 0.0001)
+
+func test_tuck_cap_symmetric_for_minus_z_goal() -> void:
+	var cap: float = GoalieBehaviorRules.tuck_race_depth_cap(
+			Vector3(-2.0, 0, -24.6), Vector3(-1.9, 0, -24.7), 6.0,
+			-26.6, 0.0, 1, 0.915, _tuck_cfg())
+	assert_almost_eq(cap, 0.263, 0.02)
+
+# ── desperation dive (slide_travel_distance / desperation_dive_is_hopeless) ───
+# The clearly-beaten effort check: the dive may only fire when even a committed
+# slide launched this tick still misses the shot at the goalie's own depth
+# plane by at least the clearance margin — pure effort, never a save mechanism.
+# Slide numbers mirror the controller exports (2.8 m/s push, 2.6 m/s² friction,
+# 0.12 s coil); reach 0.84 = pad_local_offset + butterfly_pad_half_width.
+
+func test_slide_travel_decays_under_friction() -> void:
+	assert_almost_eq(GoalieBehaviorRules.slide_travel_distance(2.8, 2.6, 0.2),
+			0.508, 0.001)
+
+func test_slide_travel_caps_at_rest() -> void:
+	# Past v0/f the slide has stopped: travel plateaus at v0²/2f.
+	assert_almost_eq(GoalieBehaviorRules.slide_travel_distance(2.8, 2.6, 5.0),
+			1.508, 0.001)
+
+func test_slide_travel_zero_time_and_zero_friction() -> void:
+	assert_eq(GoalieBehaviorRules.slide_travel_distance(2.8, 2.6, 0.0), 0.0)
+	assert_almost_eq(GoalieBehaviorRules.slide_travel_distance(2.8, 0.0, 0.5),
+			1.4, 0.0001)
+
+func test_fast_far_side_shot_past_a_pulled_goalie_is_hopeless() -> void:
+	# Goalie dragged to (0.5, 25.3) by a deke; shot from (−0.5, 21) crossing his
+	# plane at x ≈ −1.02 in 0.17 s. Gap beyond the diving pad ≈ 0.68 m, slide
+	# travel in the time left ≈ 0.14 m → clearly beaten, dive for show.
+	assert_true(GoalieBehaviorRules.desperation_dive_is_hopeless(
+			Vector3(-0.5, 0, 21.0), Vector3(-3.0, 0, 25.0), 0.5, 25.3,
+			0.84, 0.12, 2.8, 2.6, 0.15))
+
+func test_shot_at_the_body_is_not_hopeless() -> void:
+	# Straight at him: gap <= 0, the normal read owns the save.
+	assert_false(GoalieBehaviorRules.desperation_dive_is_hopeless(
+			Vector3(0.5, 0, 21.0), Vector3(0.0, 0, 25.0), 0.5, 25.3,
+			0.84, 0.12, 2.8, 2.6, 0.15))
+
+func test_slow_shot_the_dive_could_reach_is_not_hopeless() -> void:
+	# A 5 m/s trickler: 0.66 s to his plane leaves ~1.1 m of slide travel
+	# against a 0.32 m gap — a dive COULD touch it, so the verdict must refuse
+	# (firing here would turn effort into saves — the buff the gate forbids).
+	assert_false(GoalieBehaviorRules.desperation_dive_is_hopeless(
+			Vector3(0.0, 0, 22.0), Vector3(-1.0, 0, 5.0), 0.5, 25.3,
+			0.84, 0.12, 2.8, 2.6, 0.15))
+
+func test_puck_already_past_the_plane_is_not_hopeless() -> void:
+	assert_false(GoalieBehaviorRules.desperation_dive_is_hopeless(
+			Vector3(0.0, 0, 25.5), Vector3(-3.0, 0, 25.0), 0.5, 25.3,
+			0.84, 0.12, 2.8, 2.6, 0.15))
+
+func test_clearance_margin_refuses_near_misses() -> void:
+	# Same beaten geometry as the hopeless case, but a margin wider than the
+	# miss distance: anything the pad might brush keeps the existing read.
+	assert_false(GoalieBehaviorRules.desperation_dive_is_hopeless(
+			Vector3(-0.5, 0, 21.0), Vector3(-3.0, 0, 25.0), 0.5, 25.3,
+			0.84, 0.12, 2.8, 2.6, 0.7))
+
 # ── backdoor_depth_cap ────────────────────────────────────────────────────────
 # Anticipatory depth: with a one-timer threat on the weak side, cap the
 # challenge radius so the goalie can re-square to the new shot line within

@@ -746,6 +746,10 @@ class BeatenWideConfig:
 	var reach_half_width: float = 0.0      # m — standing pad coverage half-extent
 	var min_lateral_speed: float = 0.0     # m/s — carrier must be genuinely driving
 	var max_threat_distance: float = 0.0   # m — Euclidean threat→goal in-tight gate
+	# s — quiet-eye confirmation the goalie pays before answering a drive.
+	# Consumed only by tuck_race_depth_cap (is_beaten_wide's caller charges the
+	# same beat itself, via the confirm timer).
+	var commit_confirm_s: float = 0.0
 
 static func is_beaten_wide(
 		threat_position: Vector3,
@@ -783,6 +787,126 @@ static func is_beaten_wide(
 		return false  # pad already covers the tuck point
 	return needed > reachable_lateral_distance(
 			cfg.goalie_lateral_speed, cfg.goalie_lateral_accel, t_arrive)
+
+
+# ── Tuck-race depth cap (the anticipatory backside answer) ───────────────────
+# The same tuck race as is_beaten_wide, run BEFORE the point of no return:
+# how far out can the goalie stand and still win the skate back to the tuck
+# point if the carrier's current lateral drive carries the puck there?
+# is_beaten_wide detects the race already lost from where he is standing — by
+# then the only answer left is the pads-first sell-out. A real goalie reads the
+# drive starting and gives depth first, so the race never becomes unwinnable.
+# Same reactive/anticipatory pairing as cross_crease_race_lost /
+# backdoor_depth_cap.
+#
+# Race: the puck reaches the tuck point (the post on the drive side) in
+# t = lateral gap / drive speed. The goalie pays the quiet-eye confirmation
+# (cfg.commit_confirm_s — the beat his own commit doctrine charges before
+# believing a drive) and covers reachable_lateral_distance in what remains,
+# plus his standing reach. Squared to the threat at radius r he stands at
+# r·(a, b) in the goal frame (a = lateral unit component toward the threat
+# side, b perpendicular), so the cap is the largest r whose distance to the
+# post (p, 0) fits inside that cover — a quadratic in r since a² + b² = 1:
+#   r² − 2·r·a·p + p² = cover²
+#
+# Sitting deeper opens the carrier's direct-shot angle, so respecting the
+# backside is a genuine trade rather than a buff — the sell-out race itself is
+# unchanged and still runs from wherever he actually stands.
+#
+# Gates mirror is_beaten_wide (front of the line, in tight, a genuine drive)
+# MINUS the puck-past-seal-edge commit gate: that gate protects the pads-first
+# sell-out from cut-backs, but a depth concession un-commits freely, so it may
+# lead the drive. Additionally requires the puck to still be INSIDE the tuck
+# post laterally — a puck already outside the post driving away is heading
+# wide or behind (RVH's job), not at the tuck point.
+#
+# Returns INF when nothing binds; 0 when no radius wins the race (callers
+# floor the result).
+static func tuck_race_depth_cap(
+		threat_position: Vector3,
+		puck_position: Vector3,
+		threat_velocity_x: float,
+		goal_line_z: float,
+		goal_center_x: float,
+		direction_sign: int,
+		net_half_width: float,
+		cfg: BeatenWideConfig) -> float:
+	if (threat_position.z - goal_line_z) * direction_sign <= 0.0:
+		return INF
+	var threat_dist: float = threat_distance_to_goal(
+			threat_position, goal_line_z, goal_center_x)
+	if threat_dist > cfg.max_threat_distance or threat_dist < 0.001:
+		return INF
+	if absf(threat_velocity_x) < cfg.min_lateral_speed:
+		return INF
+	var drive_sign: float = signf(threat_velocity_x)
+	var post_x: float = goal_center_x + drive_sign * net_half_width
+	if (post_x - puck_position.x) * drive_sign <= 0.0:
+		return INF
+	var t_arrive: float = (post_x - puck_position.x) / threat_velocity_x
+	var push_t: float = maxf(t_arrive - cfg.commit_confirm_s, 0.0)
+	var cover: float = cfg.reach_half_width + reachable_lateral_distance(
+			cfg.goalie_lateral_speed, cfg.goalie_lateral_accel, push_t)
+	var a: float = (threat_position.x - goal_center_x) / threat_dist
+	var p: float = drive_sign * net_half_width
+	var disc: float = cover * cover - p * p * (1.0 - a * a)
+	if disc <= 0.0:
+		return 0.0
+	return maxf(a * p + sqrt(disc), 0.0)
+
+
+# ── Desperation dive (the clearly-beaten effort check) ───────────────────────
+# Distance a committed butterfly slide travels in `t` seconds after push-off:
+# `initial_speed` decaying under `friction`, floored at rest. (The min-speed
+# snap in GoalieSlideBehavior fires ~1 s into a slide — long after any shot
+# this feeds has arrived — so the pure decay is the honest short-horizon model.)
+static func slide_travel_distance(initial_speed: float, friction: float, t: float) -> float:
+	if t <= 0.0 or initial_speed <= 0.0:
+		return 0.0
+	if friction <= 0.0:
+		return initial_speed * t
+	var tt: float = minf(t, initial_speed / friction)
+	return initial_speed * tt - 0.5 * friction * tt * tt
+
+
+# True when even a committed slide, launched THIS tick, cannot get a pad on
+# this shot — the "clearly beaten" verdict behind the desperation dive. The
+# dive is effort the player should SEE, not a save mechanism, so the gate must
+# guarantee the diving pad never touches a puck the normal read would have
+# conceded (beatable realism: additions may open windows, never buff).
+#
+# Measured at the GOALIE'S OWN DEPTH PLANE, not the goal line: contact, if
+# any, happens where the puck crosses HIS z, and a shot diverging from a
+# near-center release is closer to him there than its goal-line impact — the
+# goal-line gap overstates the miss and would let the dive brush pucks it was
+# told it can't reach.
+#
+# `clearance_margin` covers what the race math doesn't model: the puck's own
+# radius and the small coil-phase body swing before push-off. The shot must
+# clear the diving pad's predicted edge by at least that much, or the goalie
+# keeps his existing (non-diving) read.
+static func desperation_dive_is_hopeless(
+		puck_position: Vector3,
+		puck_velocity: Vector3,
+		goalie_x: float,
+		goalie_z: float,
+		reach_half_width: float,
+		coil_duration: float,
+		slide_initial_speed: float,
+		slide_friction: float,
+		clearance_margin: float) -> bool:
+	if absf(puck_velocity.z) < 0.001:
+		return false
+	var t_plane: float = (goalie_z - puck_position.z) / puck_velocity.z
+	if t_plane <= 0.0:
+		return false
+	var x_at_plane: float = puck_position.x + puck_velocity.x * t_plane
+	var gap: float = absf(x_at_plane - goalie_x) - reach_half_width
+	if gap <= 0.0:
+		return false  # his body can still play it — the normal read owns it
+	var travel: float = slide_travel_distance(
+			slide_initial_speed, slide_friction, t_plane - coil_duration)
+	return gap > travel + clearance_margin
 
 
 # ── Rush retreat (speed-matched backflow) ────────────────────────────────────

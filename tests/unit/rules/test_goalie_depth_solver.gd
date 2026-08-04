@@ -42,6 +42,24 @@ func test_tightest_cap_wins_regardless_of_which_one() -> void:
 			"the tightest cap decides; which constraint supplies it must not matter")
 
 
+func test_tuck_cap_composes_like_any_other_cap() -> void:
+	# The backside answer is one more field: tightest-wins and the floor apply to
+	# it exactly as to the caps that predate it.
+	var c := _cfg()
+	c.lateral_cap = 1.00
+	c.tuck_cap = 0.60
+	var settled: float = 1.75
+	for _i: int in 600:
+		settled = GoalieDepthSolver.solve(settled, DT, c)
+	assert_almost_eq(settled, 0.60, 0.01,
+			"a binding tuck race caps the challenge below the other constraints")
+	var c2 := _cfg()
+	c2.tuck_cap = -1.0
+	assert_almost_eq(GoalieDepthSolver.solve(c2.floor_radius, DT, c2),
+			c2.floor_radius, 0.0001,
+			"an unwinnable tuck race (cap 0) floors instead of burying him")
+
+
 func test_caps_are_floored() -> void:
 	# An absurd cap (an unwinnable re-square race returns ~0) must not bury him.
 	var c := _cfg()

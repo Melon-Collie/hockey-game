@@ -480,6 +480,18 @@ extends Node
 # commits stay instant by design — a puck in flight cannot cut back, so the
 # cross-crease one-timer seal keeps its zero-hesitation commit.
 @export var lateral_commit_confirm_s: float = 0.15
+# ── Desperation dive (clearly-beaten effort) ─────────────────────────────────
+# A goalie who has read a shot he cannot reach — even pads-first — should still
+# SELL OUT toward it rather than watch it in from a set butterfly: the committed
+# slide launched at the shot line is the "trying and failing" a beaten real
+# goalie shows. Gated by GoalieBehaviorRules.desperation_dive_is_hopeless so it
+# is pure effort, never a save mechanism: it fires only when the race math says
+# the diving pad STILL arrives late at the goalie's own depth plane, with this
+# margin of clearance on top (beatable realism — additions may open windows,
+# never buff). The margin covers what the race doesn't model: the puck's radius
+# (0.065, GameRules.PUCK_COLLISION_RADIUS) plus the small coil-phase body swing
+# before push-off (~0.04 m at slide_max_rotation_deg) and pose slop.
+@export var desperation_dive_margin: float = 0.15
 
 # "An opposing stick is on this puck" — a poke-range radius, used by the cover
 # read to tell a loose puck he can safely sweep from one he has to smother.
@@ -1521,6 +1533,7 @@ func _build_rule_configs() -> void:
 	_beaten_wide_cfg.reach_half_width = pad_local_offset
 	_beaten_wide_cfg.min_lateral_speed = beaten_wide_min_lateral_speed
 	_beaten_wide_cfg.max_threat_distance = beaten_wide_max_threat_distance
+	_beaten_wide_cfg.commit_confirm_s = lateral_commit_confirm_s
 	_backdoor_cfg = GoalieBehaviorRules.BackdoorThreatConfig.new()
 	_backdoor_cfg.pass_speed = backdoor_assumed_pass_speed
 	_backdoor_cfg.release_time = backdoor_release_time
@@ -1817,19 +1830,51 @@ func _update_shot_timer(delta: float) -> void:
 				_screen_block_drop_timer = -1.0
 				if _sm.is_upright():
 					_enter_butterfly()
-	if not _reaction.low_drop_ready(_sm.is_upright()):
+	if _reaction.low_drop_ready(_sm.is_upright()):
+		# Leg drop is reflexive once the shot's read, but only commit to butterfly
+		# when the puck is actually closing on the net. Passes fire puck_released
+		# like any quick-shot, so without this a pass/clear up the ice reads as a
+		# low shot from across the rink and drops the goalie before the play
+		# arrives. The reaction freeze + arm tracking still begin at release (in
+		# _on_puck_released); only the leg drop waits for the puck to close within
+		# drop_max_time_to_impact. `low_drop_ready` is a level signal, so the drop
+		# fires on whichever tick the puck first becomes imminent.
+		var ttg: float = _puck_time_to_goal_line()
+		if ttg >= 0.0 and ttg <= drop_max_time_to_impact:
+			_enter_butterfly()
+	# Same tick continues into the dive check: a drop that lands already beaten
+	# (shot line past even the slide's reach) becomes one drop-and-dive motion.
+	_try_desperation_dive()
+
+
+# Desperation dive — the clearly-beaten effort (see the export doc-block). Runs
+# from BUTTERFLY only: the upright path enters butterfly on the same tick the
+# leg read fires (above), and a goalie already down (rebound scramble, read
+# while sealed) qualifies directly. Elevated reads keep the arm reach as their
+# effort — a pads-first dive under a high shot is the wrong motion.
+#
+# Deliberately bypasses can_commit_slide(): the post-release event lockout
+# exists so the goalie doesn't re-read a NEW lateral threat while processing a
+# shot, but the dive IS the answer to the shot being processed. The commit uses
+# his BELIEVED impact line (read staleness applies — a deceived goalie dives to
+# where he thinks the puck is going), while the hopeless verdict runs on the
+# true trajectory so the no-contact guarantee holds regardless of belief.
+func _try_desperation_dive() -> void:
+	if _sm.current != State.BUTTERFLY:
 		return
-	# Leg drop is reflexive once the shot's read, but only commit to butterfly
-	# when the puck is actually closing on the net. Passes fire puck_released
-	# like any quick-shot, so without this a pass/clear up the ice reads as a
-	# low shot from across the rink and drops the goalie before the play
-	# arrives. The reaction freeze + arm tracking still begin at release (in
-	# _on_puck_released); only the leg drop waits for the puck to close within
-	# drop_max_time_to_impact. `low_drop_ready` is a level signal, so the drop
-	# fires on whichever tick the puck first becomes imminent.
-	var ttg: float = _puck_time_to_goal_line()
-	if ttg >= 0.0 and ttg <= drop_max_time_to_impact:
-		_enter_butterfly()
+	if not _reaction.reacting or _reaction.shot_timer > 0.0 or _reaction.is_elevated:
+		return
+	# Only dive at a shot he believes is ON net — watching a wide one go by is
+	# the correct non-reaction.
+	if absf(_reaction.impact_x - _goal_center_x) > net_half_width:
+		return
+	if not GoalieBehaviorRules.desperation_dive_is_hopeless(
+			puck.global_position, _loose_puck_velocity(), _current_x,
+			goalie.global_position.z, pad_local_offset + butterfly_pad_half_width,
+			slide_coil_duration, slide_initial_speed, slide_friction,
+			desperation_dive_margin):
+		return
+	_commit_slide_toward(_reaction.impact_x)
 
 # Seconds until the puck crosses this goalie's goal line on its current heading,
 # or -1 if it isn't approaching (moving parallel or away). Host-side only — uses
@@ -2974,6 +3019,11 @@ func _update_depth(delta: float) -> void:
 	# side, don't challenge farther out than the cross-crease re-square race
 	# allows. INF when no threat binds.
 	c.backdoor_cap = _backdoor_depth_cap()
+	# Tuck-race cap (anticipatory backside answer): against an in-tight carrier
+	# genuinely driving across, no deeper than the skate-back-to-the-post race
+	# stays winnable — give depth as the drive starts instead of standing tall
+	# at challenge depth until is_beaten_wide forces the pads-first sell-out.
+	c.tuck_cap = _tuck_race_depth_cap()
 	_fill_rush_constraint(c)
 	_current_depth = GoalieDepthSolver.solve(_current_depth, delta, c)
 
@@ -3057,6 +3107,23 @@ func _backdoor_depth_cap() -> float:
 				pos, _goal_line_z, _goal_center_x,
 				_direction_sign, _backdoor_cfg))
 	return cap
+
+# Anticipatory backside (tuck-race) depth cap — race math in
+# GoalieBehaviorRules.tuck_race_depth_cap; this gathers the scene inputs. Same
+# reads as _is_beaten_wide (carrier body velocity + raw carried-puck position —
+# the smoothed threat lags exactly when the drive is fastest), sharing its
+# config so the two races can't drift apart.
+func _tuck_race_depth_cap() -> float:
+	var carrier: Skater = puck.get_carrier()
+	if carrier == null:
+		return INF
+	if team_id != -1 and carrier.get_team_id() == team_id:
+		return INF
+	return GoalieBehaviorRules.tuck_race_depth_cap(
+			carrier.global_position, puck.global_position, carrier.velocity.x,
+			_goal_line_z, _goal_center_x, _direction_sign, net_half_width,
+			_beaten_wide_cfg)
+
 
 # ── Position ──────────────────────────────────────────────────────────────────
 # STANDING uses true 2D arc tracing: target is (arc_x, arc_z) from the threat,
