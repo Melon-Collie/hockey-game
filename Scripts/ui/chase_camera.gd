@@ -25,6 +25,8 @@ func setup(target_getter: Callable) -> void:
 	# this cam re-reads it every frame so we don't cache stale references.
 	_target_getter = target_getter
 	fov = PlayerPrefs.fov
+	# Driven at render rate, so it is already continuous — see GameCamera._ready.
+	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 
 
 func activate() -> void:

@@ -307,6 +307,11 @@ static func _smooth_t(speed: float, delta: float) -> float:
 
 func _ready() -> void:
 	make_current()
+	# Framing is computed fresh every rendered frame below, so this transform is
+	# already continuous — handing it to the interpolator would lerp it toward a
+	# tick-old pose and give the camera a frame of lag it does not need. Every
+	# player-perspective cam opts out for the same reason.
+	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	# Framing runs in _process (render rate), and LocalInputGatherer's
 	# screen→world cursor read consumes this camera's transform from its own
 	# _process. Negative priority pins the camera ahead of every default-priority

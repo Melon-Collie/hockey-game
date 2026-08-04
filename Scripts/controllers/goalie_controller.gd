@@ -1249,6 +1249,9 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 	# on tick 1, which players see as "spawning at center ice then moving."
 	goalie.set_goalie_position(_current_x, _goal_line_z + _direction_sign * _current_depth)
 	goalie.set_goalie_rotation_y(PI if _direction_sign == 1 else 0.0)
+	# Same reason one line up, for the interpolator: without this the first frames
+	# render a slide out of the scene-default origin (see SkaterController.teleport_to).
+	goalie.reset_physics_interpolation()
 	if is_server:
 		puck.puck_released.connect(_on_puck_released)
 		puck.puck_touched_goalie.connect(_on_puck_contact)
@@ -1595,6 +1598,9 @@ func reset_to_crease() -> void:
 	goalie.set_stick_collision_enabled(true)
 	goalie.set_goalie_position(_current_x, _goal_line_z + _direction_sign * _current_depth)
 	goalie.set_goalie_rotation_y(PI if _direction_sign == 1 else 0.0)
+	# Snapping back to the crease is a jump, not a slide — drop the interpolation
+	# history so it is not drawn as one (see SkaterController.teleport_to).
+	goalie.reset_physics_interpolation()
 
 # ── Process ───────────────────────────────────────────────────────────────────
 func _physics_process(delta: float) -> void:

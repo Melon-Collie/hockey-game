@@ -31,6 +31,8 @@ var _pad_device: int = -1
 
 
 func _ready() -> void:
+	# Driven at render rate, so it is already continuous — see GameCamera._ready.
+	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	Input.joy_connection_changed.connect(func(_d: int, _c: bool) -> void: _refresh_pad_device())
 	_refresh_pad_device()
 
