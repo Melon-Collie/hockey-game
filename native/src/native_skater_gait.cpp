@@ -15,6 +15,9 @@ static constexpr double THIGH_LEN = 0.31;
 static constexpr double SHIN_LEN = 0.45;
 static constexpr double FOOT_FWD = 0.10;
 static constexpr double SETTLE_SECONDS = 1.0;
+// Cap on the effort/carve finite-difference sampling interval — mirrors the
+// GDScript coordinator's _FD_WINDOW_MAX.
+static constexpr double FD_WINDOW_MAX = 0.1;
 
 // GDScript signf semantics: -1, 0, or +1.
 static inline double sgn(double v) {
@@ -147,6 +150,10 @@ void NativeSkaterGait::reset_state() {
 	trunk_roll_add = 0.0;
 	prev_velocity = Vector3();
 	have_prev_velocity = false;
+	fd_time = 0.0;
+	fd_effort_target = 0.0;
+	fd_turn = 0.0;
+	fd_carve = 0.0;
 	stop_yaw_offset = 0.0;
 	stop_engaged = false;
 	stop_blend = 0.0;
@@ -414,25 +421,34 @@ int64_t NativeSkaterGait::apply(
 			0.0, Math_TAU);
 
 	// ── Effort: glide vs. push ──
-	double effort_target = 0.0;
-	double carve_target = 0.0;
-	double raw_turn = 0.0;
-	if (have_prev_velocity) {
-		const Vector3 accel = (vel - prev_velocity) / (real_t)delta;
+	// Sampled over the interval since the velocity LAST CHANGED (with a forced
+	// re-sample at FD_WINDOW_MAX), not per render frame — see the aliasing note
+	// in the GDScript reference.
+	fd_time += delta;
+	if (!have_prev_velocity) {
+		prev_velocity = vel;
+		have_prev_velocity = true;
+		fd_time = 0.0;
+	} else if (vel != prev_velocity || fd_time >= FD_WINDOW_MAX) {
+		const Vector3 accel = (vel - prev_velocity) / (real_t)fd_time;
 		const Vector2 travel(vel.x, vel.z);
+		fd_effort_target = 0.0;
 		if ((double)travel.length() > 0.1) {
 			const double tangential = (double)Vector2(accel.x, accel.z).dot(travel.normalized());
-			effort_target = CLAMP(
+			fd_effort_target = CLAMP(
 					tangential / MAX(cfg.stride_effort_ref_accel, 0.001), -1.0, 1.0);
 		}
-		raw_turn = rules_turn_rate(
+		fd_turn = rules_turn_rate(
 				Vector2(prev_velocity.x, prev_velocity.z),
-				Vector2(vel.x, vel.z), delta, cfg.carve_min_speed);
-		carve_target = rules_carve_target(raw_turn,
+				Vector2(vel.x, vel.z), fd_time, cfg.carve_min_speed);
+		fd_carve = rules_carve_target(fd_turn,
 				ground_speed, cfg.carve_ref_turn_rate, cfg.carve_min_speed);
+		prev_velocity = vel;
+		fd_time = 0.0;
 	}
-	prev_velocity = vel;
-	have_prev_velocity = true;
+	const double effort_target = fd_effort_target;
+	double carve_target = fd_carve;
+	const double raw_turn = fd_turn;
 	const double curve_only = carve_target;
 	const double intent_carve = rules_intent_carve(
 			Vector2(vel.x, vel.z), mi, ground_speed, cfg.carve_min_speed);
@@ -732,10 +748,12 @@ int64_t NativeSkaterGait::apply(
 	// Body bob.
 	drop += cfg.stride_bob_m * intensity * (1.0 - s * s) * gait_scale;
 
-	// Trunk texture.
+	// Trunk texture. Roll channels ride the stride FUNDAMENTAL, not the skewed
+	// stroke `s` — see the GDScript reference.
+	const double s_fund = Math::sin(stride_phase);
 	trunk_pitch_add = -Math::deg_to_rad(cfg.stride_dig_lean_deg) * effort;
-	trunk_roll_add = Math::deg_to_rad(cfg.stride_sway_deg) * intensity * fb_w * s * gait_scale;
-	const double shift_target = fb_w * s * intensity * gait_scale;
+	trunk_roll_add = Math::deg_to_rad(cfg.stride_sway_deg) * intensity * fb_w * s_fund * gait_scale;
+	const double shift_target = fb_w * s_fund * intensity * gait_scale;
 	const double shift_accel = cfg.weight_spring_stiffness * (shift_target - weight_shift) -
 			cfg.weight_spring_damping * weight_shift_vel;
 	weight_shift_vel += shift_accel * delta;

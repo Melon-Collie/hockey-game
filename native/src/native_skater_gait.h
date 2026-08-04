@@ -124,6 +124,10 @@ private:
 	double effort = 0.0;
 	godot::Vector3 prev_velocity;
 	bool have_prev_velocity = false;
+	double fd_time = 0.0;
+	double fd_effort_target = 0.0;
+	double fd_turn = 0.0;
+	double fd_carve = 0.0;
 	double faceoff_blend = 0.0;
 	double stop_yaw_offset = 0.0;
 	bool stop_engaged = false;

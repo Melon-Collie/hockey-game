@@ -2342,8 +2342,20 @@ func set_upper_surface_material(surface: int, mat: Material) -> void:
 # so this keeps the invariant documented in SkaterPoseCoordinator._apply_lean.
 # The arms stay anchored to the (deterministic) hands and stick on purpose.
 var _trunk_texture := Basis.IDENTITY
+var _trunk_texture_head := Basis.IDENTITY
 var _trunk_texture_pitch: float = 0.0
 var _trunk_texture_roll: float = 0.0
+
+# Head stabilization: the helmet rides only a fraction of the trunk texture.
+# Real players hold the head steady while the shoulders work under it (the
+# vestibulocollic "eyes level" reflex) — with full coupling every per-stride
+# trunk roll was also a head wobble, the most visible motion on the rig. Roll
+# (the oscillating weight-shift channel) is damped hard; pitch follows nearly
+# fully because its big components are sustained postures (the effort dig, the
+# sprint lean) the head genuinely leans with — a low follow there detaches the
+# helmet from the torso top at deep folds. 1.0 / 1.0 restores rigid coupling.
+@export var helmet_pitch_follow: float = 0.85
+@export var helmet_roll_follow: float = 0.4
 
 
 func set_trunk_texture(pitch_add: float, roll_add: float) -> void:
@@ -2353,6 +2365,8 @@ func set_trunk_texture(pitch_add: float, roll_add: float) -> void:
 	_trunk_texture_pitch = pitch_add
 	_trunk_texture_roll = roll_add
 	_trunk_texture = Basis.from_euler(Vector3(pitch_add, 0.0, roll_add))
+	_trunk_texture_head = Basis.from_euler(Vector3(
+			pitch_add * helmet_pitch_follow, 0.0, roll_add * helmet_roll_follow))
 	_repose_upper_bone(SkaterMeshBuilder.UpperBone.TORSO)
 	_repose_upper_bone(SkaterMeshBuilder.UpperBone.HELMET)
 	_repose_upper_bone(SkaterMeshBuilder.UpperBone.SHOULDER_L)
@@ -2364,12 +2378,14 @@ func _repose_upper_bone(bone: int) -> void:
 			_upper_basis[bone].scaled_local(_upper_scale[bone]), _upper_pos[bone])
 	# The trunk texture rotates the upper-body SHELL about the trunk pivot (the
 	# skeleton lives in upper-body space, so a zero-origin premultiply is that
-	# pivot). Arm bones are excluded — they follow the hands.
+	# pivot). Arm bones are excluded — they follow the hands; the helmet takes
+	# the stabilized head share instead of the full texture.
 	if bone == SkaterMeshBuilder.UpperBone.TORSO \
-			or bone == SkaterMeshBuilder.UpperBone.HELMET \
 			or bone == SkaterMeshBuilder.UpperBone.SHOULDER_L \
 			or bone == SkaterMeshBuilder.UpperBone.SHOULDER_R:
 		pose = Transform3D(_trunk_texture, Vector3.ZERO) * pose
+	elif bone == SkaterMeshBuilder.UpperBone.HELMET:
+		pose = Transform3D(_trunk_texture_head, Vector3.ZERO) * pose
 	_arm_skeleton.set_bone_pose(bone, pose)
 
 

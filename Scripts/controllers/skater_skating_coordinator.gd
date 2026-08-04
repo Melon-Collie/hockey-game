@@ -42,6 +42,13 @@ const _FOOT_FWD: float = 0.10
 # one second leaves residuals under e⁻⁵ ≈ 0.7% of amplitude).
 const _SETTLE_SECONDS: float = 1.0
 
+# Cap on the effort/carve finite-difference sampling interval (see the aliasing
+# note in apply()). A bit-identical velocity — true rest, or a cruise pinned
+# exactly at the speed cap — never trips the changed-velocity sample, so the
+# window forces a re-sample often enough (10 Hz, well above the ~5/s eases the
+# targets feed) that the signals still read zero acceleration and decay.
+const _FD_WINDOW_MAX: float = 0.1
+
 var _skater: Skater = null
 var _sm: SkaterStateMachine = null
 var _controller: SkaterController = null  # tunables live as @export on the controller
@@ -75,10 +82,17 @@ var _intensity: float = 0.0
 # Smoothed effort signal in [-1, +1]: +1 driving hard (deep push), -1
 # coasting/braking (settle into a glide). Derived from tangential acceleration —
 # see apply(). Previous velocity backs the finite-difference; the flag suppresses
-# the spurious spike on the very first frame (no prior sample yet).
+# the spurious spike on the very first frame (no prior sample yet). The _fd_*
+# fields hold the last sampled targets between velocity changes — the FD is
+# sampled over the accumulated interval since the velocity last stepped (see
+# the aliasing note in apply()), not per render frame.
 var _effort: float = 0.0
 var _prev_velocity: Vector3 = Vector3.ZERO
 var _have_prev_velocity: bool = false
+var _fd_time: float = 0.0
+var _fd_effort_target: float = 0.0
+var _fd_turn: float = 0.0
+var _fd_carve: float = 0.0
 # Smoothed faceoff ready-stance engagement, so the crouch eases in over the
 # countdown and releases into the draw instead of popping on the phase flip.
 var _faceoff_blend: float = 0.0
@@ -208,6 +222,10 @@ func reset_to_rest() -> void:
 	trunk_roll_add = 0.0
 	_prev_velocity = Vector3.ZERO
 	_have_prev_velocity = false
+	_fd_time = 0.0
+	_fd_effort_target = 0.0
+	_fd_turn = 0.0
+	_fd_carve = 0.0
 	stop_yaw_offset = 0.0
 	_stop_engaged = false
 	_stop_blend = 0.0
@@ -538,26 +556,39 @@ func apply(delta: float) -> void:
 	# only "is the player pushing?" signal available without new network state — it
 	# falls out of the velocity remotes and replays already have — so they inherit
 	# the glide/push texture for free, exactly like the rest of the gait.
-	var effort_target: float = 0.0
-	var carve_target: float = 0.0
-	var raw_turn: float = 0.0
-	if _have_prev_velocity:
-		var accel: Vector3 = (vel - _prev_velocity) / delta
+	# The FD is sampled over the time since the velocity LAST CHANGED, not per
+	# render frame: velocity only steps on 120 Hz physics ticks, so above 120 fps
+	# a per-frame difference alternates between zero (no tick this frame) and
+	# ~double the true acceleration — a beat-frequency shimmer on every
+	# effort-driven channel (trunk dig pitch, stride amplitude, stance depth).
+	# Holding the last sample through no-tick frames and dividing by the
+	# accumulated interval reads the true acceleration at any frame rate.
+	_fd_time += delta
+	if not _have_prev_velocity:
+		_prev_velocity = vel
+		_have_prev_velocity = true
+		_fd_time = 0.0
+	elif vel != _prev_velocity or _fd_time >= _FD_WINDOW_MAX:
+		var accel: Vector3 = (vel - _prev_velocity) / _fd_time
 		var travel: Vector2 = Vector2(vel.x, vel.z)
+		_fd_effort_target = 0.0
 		if travel.length() > 0.1:
 			var tangential: float = Vector2(accel.x, accel.z).dot(travel.normalized())
-			effort_target = clampf(
+			_fd_effort_target = clampf(
 					tangential / maxf(_controller.stride_effort_ref_accel, 0.001), -1.0, 1.0)
 		# Path curvature off the same velocity history — the carve/crossover
 		# trigger (see CarveRules and the carve block below). The raw turn
 		# rate is kept for the crossover cadence law above.
-		raw_turn = CarveRules.turn_rate(
+		_fd_turn = CarveRules.turn_rate(
 				Vector2(_prev_velocity.x, _prev_velocity.z),
-				Vector2(vel.x, vel.z), delta, _controller.carve_min_speed)
-		carve_target = CarveRules.carve_target(raw_turn,
+				Vector2(vel.x, vel.z), _fd_time, _controller.carve_min_speed)
+		_fd_carve = CarveRules.carve_target(_fd_turn,
 				ground_speed, _controller.carve_ref_turn_rate, _controller.carve_min_speed)
-	_prev_velocity = vel
-	_have_prev_velocity = true
+		_prev_velocity = vel
+		_fd_time = 0.0
+	var effort_target: float = _fd_effort_target
+	var carve_target: float = _fd_carve
+	var raw_turn: float = _fd_turn
 	# Curvature-only engagement for the cadence law, smoothed BEFORE intent is
 	# folded in — anticipation poses the legs, only a real arc re-times them.
 	var curve_only: float = carve_target
@@ -1049,15 +1080,22 @@ func apply(delta: float) -> void:
 	# Trunk texture, consumed by SkaterPoseCoordinator's next lean application:
 	# effort digs the shoulders forward when driving (and tips them back on a
 	# hard brake), and the torso rolls over the loaded leg with the weight shift.
+	# Both roll channels sample the stride FUNDAMENTAL (the unwarped sine), not
+	# the skewed stroke waveform `s`: stride_skew models the leg's fast-release
+	# snap, but the trunk is the body's most massive segment and its weight
+	# transfers over the gliding leg smoothly — riding `s` put the stroke's snap
+	# harmonics on the torso, which read as trunk jitter at cruise (where the
+	# glide_hold_skew warp is deepest). The legs keep the skew.
+	var s_fund: float = sin(stride_phase)
 	trunk_pitch_add = -deg_to_rad(_controller.stride_dig_lean_deg) * _effort
-	trunk_roll_add = deg_to_rad(_controller.stride_sway_deg) * _intensity * fb_w * s * gait_scale
+	trunk_roll_add = deg_to_rad(_controller.stride_sway_deg) * _intensity * fb_w * s_fund * gait_scale
 	# Spring weight transfer (Rosen-style secondary motion): a damped spring lags
 	# the lateral weight shift behind the stride so the body settles OVER the
 	# loaded leg with follow-through instead of the roll tracking the leg rigidly.
 	# Semi-implicit Euler (update velocity, then position) for stability; local
 	# integrator state, advanced only on real ticks like the rest of the gait.
 	# weight_shift_deg 0 restores the prior gait.
-	var shift_target: float = fb_w * s * _intensity * gait_scale
+	var shift_target: float = fb_w * s_fund * _intensity * gait_scale
 	var shift_accel: float = _controller.weight_spring_stiffness * (shift_target - _weight_shift) \
 			- _controller.weight_spring_damping * _weight_shift_vel
 	_weight_shift_vel += shift_accel * delta
