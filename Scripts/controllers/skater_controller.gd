@@ -412,6 +412,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # hard the arc actually is instead of a fixed lean. The legs' carve lean
 # carries part of the physical angle; the gain sets the trunk's share.
 @export var carve_bank_gain: float = 0.5       # fraction of the physical bank angle the trunk shows
+@export var carve_bank_knee_accel: float = 2.0 # m/s² of lateral accel at half bank authority — the steering-noise gate
 @export var carve_bank_max_deg: float = 16.0   # trunk bank cap for the tightest whips
 @export var carve_stance: float = 0.75         # stance floor at full carve — sit low to hold the edges
 # Gliding — releasing all movement keys settles the legs to rest (the stride

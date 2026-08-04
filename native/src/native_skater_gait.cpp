@@ -18,8 +18,10 @@ static constexpr double SETTLE_SECONDS = 1.0;
 // Cap on the effort/carve finite-difference sampling interval — mirrors the
 // GDScript coordinator's _FD_WINDOW_MAX.
 static constexpr double FD_WINDOW_MAX = 0.1;
-// Pivot detector constants — mirror _PSI_RATE_EASE and PivotRules.RELEASE_MARGIN.
+// Pivot detector constants — mirror _PSI_RATE_EASE, _PSI_SMOOTH_EASE and
+// PivotRules.RELEASE_MARGIN.
 static constexpr double PSI_RATE_EASE = 10.0;
+static constexpr double PSI_SMOOTH_EASE = 15.0;
 static constexpr double PIVOT_RELEASE_MARGIN = 8.0 * Math_PI / 180.0;
 
 // GDScript signf semantics: -1, 0, or +1.
@@ -216,6 +218,7 @@ void NativeSkaterGait::reset_state() {
 	hip_align_yaw = 0.0;
 	prev_psi = 0.0;
 	have_prev_psi = false;
+	psi_smooth = 0.0;
 	psi_rate = 0.0;
 	pivot_engaged = false;
 	pivot_sense = 1.0;
@@ -572,7 +575,14 @@ int64_t NativeSkaterGait::apply(
 				-Math::deg_to_rad(cfg.hip_align_max_deg),
 				Math::deg_to_rad(cfg.hip_align_max_deg)) * align_engage;
 	}
-	const double abs_psi = Math::abs(psi);
+	if (!have_prev_psi) {
+		psi_smooth = psi;
+	} else {
+		psi_smooth = Math::wrapf(psi_smooth +
+				angle_diff(psi_smooth, psi) * MIN(PSI_SMOOTH_EASE * delta, 1.0),
+				-Math_PI, Math_PI);
+	}
+	const double abs_psi = Math::abs(psi_smooth);
 	const double band_lo = Math::deg_to_rad(cfg.pivot_band_lo_deg);
 	const double band_hi = Math::deg_to_rad(cfg.pivot_band_hi_deg);
 	align_target *= 1.0 - MAX(backpedal, Math::abs(shuffle));
@@ -608,7 +618,7 @@ int64_t NativeSkaterGait::apply(
 	double align_speed = cfg.hip_align_speed;
 	if (pivot_blend > 0.001) {
 		const double pivot_p = pivot_phase(abs_psi, pivot_sense, band_lo, band_hi);
-		const double pivot_target = pivot_yaw_law(psi, pivot_sense, pivot_p,
+		const double pivot_target = pivot_yaw_law(psi_smooth, pivot_sense, pivot_p,
 				cfg.pivot_step_begin);
 		align_target = Math::lerp(align_target, pivot_target, pivot_blend);
 		align_speed = Math::lerp(align_speed, cfg.pivot_yaw_speed, pivot_blend);
@@ -894,9 +904,12 @@ int64_t NativeSkaterGait::apply(
 	}
 	// Centripetal bank — see the GDScript reference.
 	if (ground_speed > 0.1) {
+		const double a_lat = ground_speed * Math::abs(turn_rate);
+		const double knee = MAX(cfg.carve_bank_knee_accel, 0.001);
+		const double bank_engage = a_lat * a_lat / (a_lat * a_lat + knee * knee);
 		const double bank_mag = MIN(
-				Math::atan2(ground_speed * Math::abs(turn_rate), 9.8) * cfg.carve_bank_gain,
-				Math::deg_to_rad(cfg.carve_bank_max_deg)) * (1.0 - stop_blend);
+				Math::atan2(a_lat, 9.8) * cfg.carve_bank_gain,
+				Math::deg_to_rad(cfg.carve_bank_max_deg)) * bank_engage * (1.0 - stop_blend);
 		const double centri_x = sgn(turn_rate) * -(double)local_vel.z / ground_speed;
 		const double centri_z = sgn(turn_rate) * (double)local_vel.x / ground_speed;
 		trunk_pitch_add += bank_mag * centri_z;
@@ -1016,6 +1029,7 @@ void NativeSkaterGait::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_crouch_drop"), &NativeSkaterGait::get_crouch_drop);
 	ClassDB::bind_method(D_METHOD("get_trunk_pitch_add"), &NativeSkaterGait::get_trunk_pitch_add);
 	ClassDB::bind_method(D_METHOD("get_trunk_roll_add"), &NativeSkaterGait::get_trunk_roll_add);
+	ClassDB::bind_method(D_METHOD("get_pivot_blend"), &NativeSkaterGait::get_pivot_blend);
 	ClassDB::bind_method(D_METHOD("get_stop_yaw_offset"), &NativeSkaterGait::get_stop_yaw_offset);
 	ClassDB::bind_method(D_METHOD("get_travel_align_yaw"), &NativeSkaterGait::get_travel_align_yaw);
 	ClassDB::bind_method(D_METHOD("get_shot_hip_yaw"), &NativeSkaterGait::get_shot_hip_yaw);

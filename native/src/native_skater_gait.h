@@ -30,7 +30,8 @@ namespace mitts {
 	X(backpedal_pitch_fade) X(backpedal_start) X(backpedal_tuck_fade) \
 	X(block_extend_knee_deg) X(block_kneel_hip_deg) X(block_kneel_shin_deg) \
 	X(block_pose_blend_speed) X(cadence_cruise_falloff) X(cadence_glide_stance_gain) \
-	X(carve_bank_gain) X(carve_bank_max_deg) X(carve_base_lean_deg) \
+	X(carve_bank_gain) X(carve_bank_knee_accel) X(carve_bank_max_deg) \
+	X(carve_base_lean_deg) \
 	X(carve_clearance_knee_deg) X(carve_engage_speed) X(carve_forward_ramp) \
 	X(carve_min_speed) X(carve_over_pitch_deg) X(carve_over_roll_deg) \
 	X(carve_ref_turn_rate) X(carve_rock_fade) X(carve_stance) \
@@ -143,6 +144,7 @@ private:
 	double hip_align_yaw = 0.0;
 	double prev_psi = 0.0;
 	bool have_prev_psi = false;
+	double psi_smooth = 0.0;
 	double psi_rate = 0.0;
 	bool pivot_engaged = false;
 	double pivot_sense = 1.0;
@@ -225,6 +227,7 @@ public:
 	double get_stop_yaw_offset() const { return stop_yaw_offset; }
 	double get_travel_align_yaw() const { return travel_align_yaw; }
 	double get_shot_hip_yaw() const { return shot_hip_yaw; }
+	double get_pivot_blend() const { return pivot_blend; }
 	double get_stride_phase() const { return stride_phase; }
 	bool is_settled() const { return settled; }
 };

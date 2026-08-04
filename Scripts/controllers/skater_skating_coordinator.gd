@@ -54,6 +54,15 @@ const _FD_WINDOW_MAX: float = 0.1
 # zero-tick frames average out through the ease instead of aliasing a pose).
 const _PSI_RATE_EASE: float = 10.0
 
+# Low-pass rate of the ψ every POSE-side consumer reads (the hemisphere fade
+# and the whole pivot read). Raw ψ carries high-frequency content the pose must
+# not: per-tick velocity-direction noise, and the facing tracker's
+# freeze/unfreeze stutter at its unreachable-wedge gate — and the pivot
+# consumes ψ multiplicatively (authority × phase × anchors), so every wiggle
+# hits the hips three ways. One angle-aware filter upstream quiets all of them;
+# the rate detector keeps reading raw ψ.
+const _PSI_SMOOTH_EASE: float = 15.0
+
 var _skater: Skater = null
 var _sm: SkaterStateMachine = null
 var _controller: SkaterController = null  # tunables live as @export on the controller
@@ -119,10 +128,16 @@ var _hip_align_yaw: float = 0.0
 # the hip-alignment law, so it needs no lower-body channel of its own.
 var _prev_psi: float = 0.0
 var _have_prev_psi: bool = false
+var _psi_smooth: float = 0.0
 var _psi_rate: float = 0.0
 var _pivot_engaged: bool = false
 var _pivot_sense: float = 1.0
 var _pivot_blend: float = 0.0
+# Pivot authority [0, 1], published for SkaterPoseCoordinator: while the hold
+# owns the lower-body channel, the generic facing-lag pump fades out of the
+# sum — two writers tracking the same rotation on different clocks is a
+# wobble, not a pose.
+var pivot_hold: float = 0.0
 # Smoothed signed carve engagement [−1, +1] (CarveRules): path curvature
 # drives the crossover gait. Sign = turn direction (+ = toward local +X).
 var _carve: float = 0.0
@@ -248,10 +263,12 @@ func reset_to_rest() -> void:
 	_hip_align_yaw = 0.0
 	_prev_psi = 0.0
 	_have_prev_psi = false
+	_psi_smooth = 0.0
 	_psi_rate = 0.0
 	_pivot_engaged = false
 	_pivot_sense = 1.0
 	_pivot_blend = 0.0
+	pivot_hold = 0.0
 	_carve = 0.0
 	_carve_curve = 0.0
 	_turn_rate = 0.0
@@ -720,7 +737,16 @@ func apply(delta: float) -> void:
 		align_target = clampf(-psi,
 				-deg_to_rad(_controller.hip_align_max_deg),
 				deg_to_rad(_controller.hip_align_max_deg)) * align_engage
-	var abs_psi: float = absf(psi)
+	# ψ low-passed for every pose-side consumer (see _PSI_SMOOTH_EASE). Snapped
+	# on the first sample so a mid-motion spawn doesn't sweep the filter
+	# through the band from zero.
+	if not _have_prev_psi:
+		_psi_smooth = psi
+	else:
+		_psi_smooth = wrapf(_psi_smooth
+				+ angle_difference(_psi_smooth, psi) * minf(_PSI_SMOOTH_EASE * delta, 1.0),
+				-PI, PI)
+	var abs_psi: float = absf(_psi_smooth)
 	var band_lo: float = deg_to_rad(_controller.pivot_band_lo_deg)
 	var band_hi: float = deg_to_rad(_controller.pivot_band_hi_deg)
 	# A deliberate backpedal or sidestep is an AIM-LOCKED stance — the
@@ -774,10 +800,11 @@ func apply(delta: float) -> void:
 				deg_to_rad(_controller.pivot_depth_ramp_deg))
 	_pivot_blend = lerpf(_pivot_blend, pivot_target_blend,
 			_controller.pivot_blend_speed * delta)
+	pivot_hold = _pivot_blend
 	var align_speed: float = _controller.hip_align_speed
 	if _pivot_blend > 0.001:
 		var pivot_p: float = PivotRules.phase(abs_psi, _pivot_sense, band_lo, band_hi)
-		var pivot_target: float = PivotRules.pivot_yaw(psi, _pivot_sense, pivot_p,
+		var pivot_target: float = PivotRules.pivot_yaw(_psi_smooth, _pivot_sense, pivot_p,
 				_controller.pivot_step_begin)
 		# The pivot target overrides the intent suppression above on purpose: a
 		# key held through the swing flips to a backpedal read mid-transit,
@@ -1257,9 +1284,19 @@ func apply(delta: float) -> void:
 	# The gain leaves the rest of the physical angle to the legs' carve lean;
 	# the stop fade hands the channel to the hockey stop's authored bank.
 	if ground_speed > 0.1:
+		var a_lat: float = ground_speed * absf(_turn_rate)
+		# Soft knee on the centripetal accel: the balancing bank's slope near
+		# zero is v/g rad per rad/s — steep enough that residual turn-rate
+		# noise from ordinary steering corrections read back as a trunk
+		# shimmer while cruising. A real trunk ignores micro-curvature (the
+		# transient is absorbed at the hips and ankles — the leg roll) and
+		# banks only for a sustained arc, so gate by a rational sigmoid in
+		# a_lat: dead at noise level, full by a genuine turn's several m/s².
+		var knee: float = maxf(_controller.carve_bank_knee_accel, 0.001)
+		var bank_engage: float = a_lat * a_lat / (a_lat * a_lat + knee * knee)
 		var bank_mag: float = minf(
-				atan2(ground_speed * absf(_turn_rate), 9.8) * _controller.carve_bank_gain,
-				deg_to_rad(_controller.carve_bank_max_deg)) * (1.0 - _stop_blend)
+				atan2(a_lat, 9.8) * _controller.carve_bank_gain,
+				deg_to_rad(_controller.carve_bank_max_deg)) * bank_engage * (1.0 - _stop_blend)
 		var centri_x: float = signf(_turn_rate) * -local_vel.z / ground_speed
 		var centri_z: float = signf(_turn_rate) * local_vel.x / ground_speed
 		trunk_pitch_add += bank_mag * centri_z
@@ -1413,6 +1450,7 @@ func _apply_native(delta: float) -> void:
 		stop_yaw_offset = 0.0
 		travel_align_yaw = 0.0
 		shot_hip_yaw = 0.0
+		pivot_hold = 0.0
 		return
 	if code != 0:
 		return
@@ -1430,4 +1468,5 @@ func _apply_native(delta: float) -> void:
 	stop_yaw_offset = _native.get_stop_yaw_offset()
 	travel_align_yaw = _native.get_travel_align_yaw()
 	shot_hip_yaw = _native.get_shot_hip_yaw()
+	pivot_hold = _native.get_pivot_blend()
 	_skater.set_trunk_texture(trunk_pitch_add, trunk_roll_add)
