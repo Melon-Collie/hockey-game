@@ -1363,13 +1363,19 @@ var _leg_base_pos: PackedVector3Array = PackedVector3Array()
 # x, write it back" — the shin's authored Y/Z survived. `_leg_shin_base_euler`
 # holds those so the composed basis says the same thing.
 func set_leg_swing(left_pitch: float, left_roll: float, left_knee: float,
-		right_pitch: float, right_roll: float, right_knee: float) -> void:
+		right_pitch: float, right_roll: float, right_knee: float,
+		left_yaw: float = 0.0, right_yaw: float = 0.0) -> void:
 	var base_l: Vector3 = _leg_shin_base_euler[0]
 	var base_r: Vector3 = _leg_shin_base_euler[1]
-	_pose_leg_pivot(SkaterMeshBuilder.LegBone.LEG_L, Vector3(left_pitch, 0.0, left_roll))
+	# Yaw rides the hip pivot's free Y slot: YXZ euler order puts it outermost,
+	# so the leg externally rotates about vertical and the shin + boot carry it
+	# — the mohawk open hip. Defaults keep the pre-yaw callers unchanged.
+	_pose_leg_pivot(SkaterMeshBuilder.LegBone.LEG_L,
+			Vector3(left_pitch, left_yaw, left_roll))
 	_pose_leg_pivot(SkaterMeshBuilder.LegBone.SHIN_L,
 			Vector3(left_knee, base_l.y, base_l.z))
-	_pose_leg_pivot(SkaterMeshBuilder.LegBone.LEG_R, Vector3(right_pitch, 0.0, right_roll))
+	_pose_leg_pivot(SkaterMeshBuilder.LegBone.LEG_R,
+			Vector3(right_pitch, right_yaw, right_roll))
 	_pose_leg_pivot(SkaterMeshBuilder.LegBone.SHIN_R,
 			Vector3(right_knee, base_r.y, base_r.z))
 

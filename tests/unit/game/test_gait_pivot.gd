@@ -44,6 +44,15 @@ func test_cursor_swing_holds_hips_past_the_clamp_then_settles() -> void:
 	assert_gt(absf(_coord.travel_align_yaw), clamp_rad + deg_to_rad(20.0),
 			"the transit should hold the hips on the old travel line, well past "
 			+ "the alignment clamp (held %.1f°)" % rad_to_deg(absf(_coord.travel_align_yaw)))
+	# Mid-transit the mohawk V should be open: exactly one hip pivot carries an
+	# external-rotation yaw (the lead skate), the other holds the old line.
+	var yaw_l: float = _skater.leg_bone_euler(SkaterMeshBuilder.LegBone.LEG_L).y
+	var yaw_r: float = _skater.leg_bone_euler(SkaterMeshBuilder.LegBone.LEG_R).y
+	assert_gt(maxf(absf(yaw_l), absf(yaw_r)), deg_to_rad(15.0),
+			"the lead skate should open the mohawk V mid-transit (L %.1f° R %.1f°)"
+			% [rad_to_deg(yaw_l), rad_to_deg(yaw_r)])
+	assert_lt(minf(absf(yaw_l), absf(yaw_r)), deg_to_rad(2.0),
+			"the trail skate should hold the old line, not mirror the V")
 	# Complete the swing to ψ = 180° — the step-around — and let it settle.
 	for i: int in 36:
 		var a: float = deg_to_rad(100.0 + 80.0 * float(i + 1) / 36.0)
@@ -54,6 +63,10 @@ func test_cursor_swing_holds_hips_past_the_clamp_then_settles() -> void:
 	assert_lt(absf(_coord.travel_align_yaw), deg_to_rad(15.0),
 			"after the step-around the hips should settle square under the torso "
 			+ "(%.1f°)" % rad_to_deg(absf(_coord.travel_align_yaw)))
+	assert_lt(maxf(
+			absf(_skater.leg_bone_euler(SkaterMeshBuilder.LegBone.LEG_L).y),
+			absf(_skater.leg_bone_euler(SkaterMeshBuilder.LegBone.LEG_R).y)),
+			deg_to_rad(2.0), "the V should close with the completed transit")
 
 
 func test_aim_flick_gets_hip_lag_not_a_full_pivot() -> void:

@@ -241,10 +241,11 @@ func native_reconfigure() -> void:
 		push_error("NativeSkaterGait disabled — controller exports missing: %s" % missing)
 		_native = null
 		return
-	# A pre-session extension build passes configure (all ITS exports still
-	# exist) but runs old gait math and lacks newer getters — which the
-	# republish would then error on EVERY FRAME. Loudly fall back instead.
-	if not _native.has_method(&"get_pivot_blend"):
+	# A stale extension build can pass configure (all ITS exports still exist)
+	# while running old gait math and lacking newer getters — which the
+	# republish would then error on EVERY FRAME. Probe the NEWEST getter this
+	# coordinator calls and loudly fall back instead.
+	if not _native.has_method(&"get_l_yaw"):
 		push_error("NativeSkaterGait disabled — stale extension build (rebuild native/)")
 		_native = null
 		return
@@ -829,10 +830,26 @@ func apply(delta: float) -> void:
 			_controller.pivot_blend_speed * delta)
 	pivot_hold = _pivot_blend
 	var align_speed: float = _controller.hip_align_speed
+	var pivot_yaw_l: float = 0.0
+	var pivot_yaw_r: float = 0.0
 	if _pivot_blend > 0.001:
 		var pivot_p: float = PivotRules.phase(abs_psi, _pivot_sense, band_lo, band_hi)
 		var pivot_target: float = PivotRules.pivot_yaw(_psi_smooth, _pivot_sense, pivot_p,
 				_controller.pivot_step_begin)
+		# Mohawk V — the replay-camera read: the LEAD skate externally rotates
+		# toward the step direction while the trail skate holds the old line,
+		# heel-to-heel through the middle of the transit. A half-sine of the
+		# phase opens the V out of the entry and closes it into the step; the
+		# yaw lands on the hip pivot so the shin and boot carry it. The lead
+		# is the leg on the side the hips will rotate toward (positive
+		# lower-body yaw turns the legs toward −X → left leads).
+		var v_open: float = deg_to_rad(_controller.pivot_mohawk_deg) * _pivot_blend \
+				* sin(PI * pivot_p)
+		var step_sign: float = signf(_psi_smooth) * _pivot_sense
+		if step_sign > 0.0:
+			pivot_yaw_l = v_open
+		elif step_sign < 0.0:
+			pivot_yaw_r = -v_open
 		# The pivot target overrides the intent suppression above on purpose: a
 		# key held through the swing flips to a backpedal read mid-transit,
 		# which must not zero the hold.
@@ -1442,7 +1459,9 @@ func apply(delta: float) -> void:
 		trunk_roll_add += deg_to_rad(_controller.hit_commit_shoulder_deg) * commit_t * signf(vel_local.x)
 		drop += _controller.hit_commit_crouch_m * commit_t
 
-	_skater.set_leg_swing(l_pitch, l_roll, l_knee, r_pitch, r_roll, r_knee)
+	# The mohawk yaw fades with the crumple like every other leg channel.
+	_skater.set_leg_swing(l_pitch, l_roll, l_knee, r_pitch, r_roll, r_knee,
+			pivot_yaw_l * (1.0 - kd_t), pivot_yaw_r * (1.0 - kd_t))
 	_skater.set_foot_eversion(foot_evert_l, foot_evert_r)
 	_skater.set_skating_crouch_drop(drop)
 	# Trunk inertia: filter the summed texture, then layer the stumble wobble
@@ -1501,7 +1520,8 @@ func _apply_native(delta: float) -> void:
 	stride_phase = _native.get_stride_phase()
 	_skater.set_leg_swing(
 			_native.get_l_pitch(), _native.get_l_roll(), _native.get_l_knee(),
-			_native.get_r_pitch(), _native.get_r_roll(), _native.get_r_knee())
+			_native.get_r_pitch(), _native.get_r_roll(), _native.get_r_knee(),
+			_native.get_l_yaw(), _native.get_r_yaw())
 	_skater.set_foot_eversion(_native.get_foot_evert_l(), _native.get_foot_evert_r())
 	_skater.set_skating_crouch_drop(_native.get_crouch_drop())
 	trunk_pitch_add = _native.get_trunk_pitch_add()

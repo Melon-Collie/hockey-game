@@ -256,6 +256,8 @@ void NativeSkaterGait::reset_state() {
 	out_r_pitch = 0.0;
 	out_r_roll = 0.0;
 	out_r_knee = 0.0;
+	out_l_yaw = 0.0;
+	out_r_yaw = 0.0;
 	out_foot_evert_l = 0.0;
 	out_foot_evert_r = 0.0;
 	out_drop = 0.0;
@@ -624,10 +626,21 @@ int64_t NativeSkaterGait::apply(
 	pivot_blend = Math::lerp(pivot_blend, pivot_target_blend,
 			cfg.pivot_blend_speed * delta);
 	double align_speed = cfg.hip_align_speed;
+	double pivot_yaw_l = 0.0;
+	double pivot_yaw_r = 0.0;
 	if (pivot_blend > 0.001) {
 		const double pivot_p = pivot_phase(abs_psi, pivot_sense, band_lo, band_hi);
 		const double pivot_target = pivot_yaw_law(psi_smooth, pivot_sense, pivot_p,
 				cfg.pivot_step_begin);
+		// Mohawk V — see the GDScript reference.
+		const double v_open = Math::deg_to_rad(cfg.pivot_mohawk_deg) * pivot_blend *
+				Math::sin(Math_PI * pivot_p);
+		const double step_sign = sgn(psi_smooth) * pivot_sense;
+		if (step_sign > 0.0) {
+			pivot_yaw_l = v_open;
+		} else if (step_sign < 0.0) {
+			pivot_yaw_r = -v_open;
+		}
 		align_target = Math::lerp(align_target, pivot_target, pivot_blend);
 		align_speed = Math::lerp(align_speed, cfg.pivot_yaw_speed, pivot_blend);
 	}
@@ -1015,6 +1028,8 @@ int64_t NativeSkaterGait::apply(
 	out_r_pitch = r_pitch;
 	out_r_roll = r_roll;
 	out_r_knee = r_knee;
+	out_l_yaw = pivot_yaw_l * (1.0 - kd_t);
+	out_r_yaw = pivot_yaw_r * (1.0 - kd_t);
 	out_foot_evert_l = foot_evert_l;
 	out_foot_evert_r = foot_evert_r;
 	out_drop = drop;
@@ -1051,6 +1066,8 @@ void NativeSkaterGait::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_trunk_pitch_add"), &NativeSkaterGait::get_trunk_pitch_add);
 	ClassDB::bind_method(D_METHOD("get_trunk_roll_add"), &NativeSkaterGait::get_trunk_roll_add);
 	ClassDB::bind_method(D_METHOD("get_pivot_blend"), &NativeSkaterGait::get_pivot_blend);
+	ClassDB::bind_method(D_METHOD("get_l_yaw"), &NativeSkaterGait::get_l_yaw);
+	ClassDB::bind_method(D_METHOD("get_r_yaw"), &NativeSkaterGait::get_r_yaw);
 	ClassDB::bind_method(D_METHOD("get_stop_yaw_offset"), &NativeSkaterGait::get_stop_yaw_offset);
 	ClassDB::bind_method(D_METHOD("get_travel_align_yaw"), &NativeSkaterGait::get_travel_align_yaw);
 	ClassDB::bind_method(D_METHOD("get_shot_hip_yaw"), &NativeSkaterGait::get_shot_hip_yaw);

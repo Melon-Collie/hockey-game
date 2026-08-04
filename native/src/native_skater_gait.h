@@ -51,8 +51,8 @@ namespace mitts {
 	X(knockdown_getup_seconds) X(knockdown_pose_drop_m) X(max_speed) \
 	X(pivot_band_hi_deg) X(pivot_band_lo_deg) X(pivot_blend_speed) \
 	X(pivot_commit_time) X(pivot_depth_ramp_deg) X(pivot_min_speed) \
-	X(pivot_rate_min) X(pivot_stance) X(pivot_step_begin) \
-	X(pivot_stride_fade) X(pivot_yaw_speed) \
+	X(pivot_mohawk_deg) X(pivot_rate_min) X(pivot_stance) \
+	X(pivot_step_begin) X(pivot_stride_fade) X(pivot_yaw_speed) \
 	X(reversal_lean_deg) X(reversal_min_speed) X(reversal_plant_deg) \
 	X(reversal_stance) X(reversal_start_opposition) X(reversal_stride_fade) \
 	X(shot_stride_fade) X(shuffle_cadence_rate) X(shuffle_fade_speed) \
@@ -181,6 +181,7 @@ private:
 	// Pose outputs of the last APPLY_ACTIVE pass.
 	double out_l_pitch = 0.0, out_l_roll = 0.0, out_l_knee = 0.0;
 	double out_r_pitch = 0.0, out_r_roll = 0.0, out_r_knee = 0.0;
+	double out_l_yaw = 0.0, out_r_yaw = 0.0;
 	double out_foot_evert_l = 0.0, out_foot_evert_r = 0.0;
 	double out_drop = 0.0;
 
@@ -223,6 +224,8 @@ public:
 	double get_r_pitch() const { return out_r_pitch; }
 	double get_r_roll() const { return out_r_roll; }
 	double get_r_knee() const { return out_r_knee; }
+	double get_l_yaw() const { return out_l_yaw; }
+	double get_r_yaw() const { return out_r_yaw; }
 	double get_foot_evert_l() const { return out_foot_evert_l; }
 	double get_foot_evert_r() const { return out_foot_evert_r; }
 	double get_crouch_drop() const { return out_drop; }

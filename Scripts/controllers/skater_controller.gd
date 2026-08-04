@@ -513,6 +513,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var pivot_yaw_speed: float = 12.0     # hip tracking ease while pivoting (hip_align_speed is too lazy to hold ψ)
 @export var pivot_stride_fade: float = 0.85   # stride suppression while engaged — pivots glide, they don't stride
 @export var pivot_stance: float = 0.8         # stance floor — the step-around needs bent knees
+@export var pivot_mohawk_deg: float = 50.0    # lead-skate external rotation at the transit's middle (heel-to-heel V); negative mirrors the lead choice
 @export var pivot_blend_speed: float = 8.0    # engage/release ease of the whole read
 # Input-intent gait reads (GaitIntentRules, v15 intent byte) — signals for
 # what the player is TRYING to do, layered over the velocity-derived gait.

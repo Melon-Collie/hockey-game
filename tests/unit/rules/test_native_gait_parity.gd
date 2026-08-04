@@ -26,18 +26,21 @@ const F_FACEOFF: int = 32
 
 
 class CaptureSkater extends Skater:
-	var cap_leg: PackedFloat64Array = PackedFloat64Array([0, 0, 0, 0, 0, 0])
+	var cap_leg: PackedFloat64Array = PackedFloat64Array([0, 0, 0, 0, 0, 0, 0, 0])
 	var cap_evert: PackedFloat64Array = PackedFloat64Array([0, 0])
 	var cap_crouch: float = 0.0
 
 	func set_leg_swing(left_pitch: float, left_roll: float, left_knee: float,
-			right_pitch: float, right_roll: float, right_knee: float) -> void:
+			right_pitch: float, right_roll: float, right_knee: float,
+			left_yaw: float = 0.0, right_yaw: float = 0.0) -> void:
 		cap_leg[0] = left_pitch
 		cap_leg[1] = left_roll
 		cap_leg[2] = left_knee
 		cap_leg[3] = right_pitch
 		cap_leg[4] = right_roll
 		cap_leg[5] = right_knee
+		cap_leg[6] = left_yaw
+		cap_leg[7] = right_yaw
 
 	func set_foot_eversion(left_roll: float, right_roll: float) -> void:
 		cap_evert[0] = left_roll
@@ -173,6 +176,8 @@ func _step(delta: float, label: String) -> bool:
 		["r_pitch", _skater.cap_leg[3], _native.get_r_pitch()],
 		["r_roll", _skater.cap_leg[4], _native.get_r_roll()],
 		["r_knee", _skater.cap_leg[5], _native.get_r_knee()],
+		["l_yaw", _skater.cap_leg[6], _native.get_l_yaw()],
+		["r_yaw", _skater.cap_leg[7], _native.get_r_yaw()],
 		["evert_l", _skater.cap_evert[0], _native.get_foot_evert_l()],
 		["evert_r", _skater.cap_evert[1], _native.get_foot_evert_r()],
 		["crouch", _skater.cap_crouch, _native.get_crouch_drop()],
