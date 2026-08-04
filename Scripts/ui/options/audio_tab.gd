@@ -4,6 +4,7 @@ extends OptionsTab
 # Audio tab — volume mix plus the two mute toggles.
 
 var _volume_slider: HSlider = null
+var _music_slider: HSlider = null
 var _sfx_slider: HSlider = null
 var _ui_slider: HSlider = null
 var _arena_slider: HSlider = null
@@ -17,6 +18,11 @@ func _build_content() -> void:
 	var master_val := _value_label("%d%%" % int(PlayerPrefs.master_volume * 100))
 	_volume_slider.value_changed.connect(func(v: float) -> void: master_val.text = "%d%%" % int(v * 100))
 	add_child(_slider_row("Master", _volume_slider, master_val))
+
+	_music_slider = _make_volume_slider(PlayerPrefs.music_volume)
+	var music_val := _value_label("%d%%" % int(PlayerPrefs.music_volume * 100))
+	_music_slider.value_changed.connect(func(v: float) -> void: music_val.text = "%d%%" % int(v * 100))
+	add_child(_slider_row("Music", _music_slider, music_val))
 
 	_sfx_slider = _make_volume_slider(PlayerPrefs.sfx_volume)
 	var sfx_val := _value_label("%d%%" % int(PlayerPrefs.sfx_volume * 100))
@@ -60,6 +66,7 @@ func _make_volume_slider(initial: float) -> HSlider:
 func read_controls() -> Dictionary:
 	return {
 		"master_volume": _volume_slider.value,
+		"music_volume": _music_slider.value,
 		"sfx_volume": _sfx_slider.value,
 		"ui_volume": _ui_slider.value,
 		"arena_volume": _arena_slider.value,
@@ -69,6 +76,7 @@ func read_controls() -> Dictionary:
 
 func apply_values(v: Dictionary) -> void:
 	_volume_slider.value = v.master_volume
+	_music_slider.value = v.music_volume
 	_sfx_slider.value = v.sfx_volume
 	_ui_slider.value = v.ui_volume
 	_arena_slider.value = v.arena_volume

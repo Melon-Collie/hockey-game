@@ -114,7 +114,9 @@ func _ready() -> void:
 
 
 func _ensure_buses() -> void:
-	for bus_name: String in ["SFX", "UI", "Arena"]:
+	# Music is created here rather than in MusicManager so one place owns bus
+	# setup and PlayerPrefs.apply_audio() below finds every bus already present.
+	for bus_name: String in ["SFX", "UI", "Arena", "Music"]:
 		if AudioServer.get_bus_index(bus_name) == -1:
 			var idx: int = AudioServer.bus_count
 			AudioServer.add_bus(idx)

@@ -103,6 +103,7 @@ func _snapshot() -> Dictionary:
 		"scaling_3d_mode": PlayerPrefs.scaling_3d_mode,
 		"anti_aliasing_mode": PlayerPrefs.anti_aliasing_mode,
 		"master_volume": PlayerPrefs.master_volume,
+		"music_volume": PlayerPrefs.music_volume,
 		"sfx_volume": PlayerPrefs.sfx_volume,
 		"ui_volume": PlayerPrefs.ui_volume,
 		"arena_volume": PlayerPrefs.arena_volume,
@@ -287,6 +288,7 @@ func _on_apply_pressed() -> void:
 	PlayerPrefs.scaling_3d_mode = c.scaling_3d_mode
 	PlayerPrefs.anti_aliasing_mode = c.anti_aliasing_mode
 	PlayerPrefs.master_volume = c.master_volume
+	PlayerPrefs.music_volume = c.music_volume
 	PlayerPrefs.sfx_volume = c.sfx_volume
 	PlayerPrefs.ui_volume = c.ui_volume
 	PlayerPrefs.arena_volume = c.arena_volume
@@ -391,6 +393,7 @@ func _defaults() -> Dictionary:
 		"scaling_3d_mode": PlayerPrefs.SCALING_3D_BILINEAR,
 		"anti_aliasing_mode": PlayerPrefs.AA_MSAA_2X,
 		"master_volume": 0.5,
+		"music_volume": 0.6,
 		"sfx_volume": 1.0,
 		"ui_volume": 1.0,
 		"arena_volume": 1.0,

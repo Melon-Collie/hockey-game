@@ -10,6 +10,12 @@ extends Control
 
 const _HOCKEY_SCENE_PATH := "res://Scenes/Hockey.tscn"
 
+# Title-track fades. MusicManager is an autoload, so the track would otherwise
+# play straight over the rink — the fade-out is what ends it, and it runs to
+# completion after the scene change because the autoload outlives this node.
+const _MUSIC_FADE_IN_S: float = 2.0
+const _MUSIC_FADE_OUT_S: float = 1.2
+
 var _button_column: Control = null
 var _loading_label: Label = null
 var _settings_container: Control = null
@@ -29,6 +35,9 @@ func _ready() -> void:
 	# the user has read the menu the load is almost always done.
 	ResourceLoader.load_threaded_request(_HOCKEY_SCENE_PATH)
 	_build_ui()
+	# Fades up under the logo. A no-op until a title track exists on disk, so
+	# this is safe to leave wired while the music is still being chosen.
+	MusicManager.play(MusicManager.Track.TITLE, _MUSIC_FADE_IN_S)
 
 
 func _build_ui() -> void:
@@ -277,6 +286,7 @@ func _bootstrap_free_play_and_change(scene: PackedScene) -> void:
 	if _transitioned:
 		return
 	_transitioned = true
+	MusicManager.stop(_MUSIC_FADE_OUT_S)
 	# Players who have never engaged the tutorial course land in its first
 	# part (Movement) after the splash instead of dropping straight into free
 	# play. ANY touch dismisses this for good: finishing a part and hitting
