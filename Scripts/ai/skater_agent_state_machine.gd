@@ -3964,13 +3964,6 @@ func _state_pass_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: V
 		_set_state(_post_puck_lost_state(snapshot))
 		return
 
-	# Tag every release out of this state as a pass, both the quick one-tick path
-	# and the charged wrister below — a feed or a dump is not a shot attempt, and
-	# the controller cannot tell the charged pass from a shot at the release
-	# (they are the same wrister). Set every tick so it is live on whichever tick
-	# fires; ShotOnGoalTracker reads it through SkaterController.
-	input.bot_release_is_pass = true
-
 	# Dump override: a last-resort fling at a LOCATION, not a receiver. Force the
 	# one-tick quick release (fixed quick-pass pace) and lift it by kind: HIGH to
 	# chip the DZ clear over sticks into the neutral zone, LOW to flip a dump-in

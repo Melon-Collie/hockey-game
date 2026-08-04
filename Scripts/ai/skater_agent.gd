@@ -155,7 +155,3 @@ func _zero_input(input: InputState, delta: float, host_timestamp: float) -> void
 	# SHOOT press state sets the scored release offset, and a latched value would
 	# pin an ordinary carry tick's puck off to the stale scored spot.
 	input.bot_wrister_origin_offset = Vector3.ZERO
-	# Release intent defaults to "shot" every tick: only PASS_PRESSED sets it, and
-	# a latched true would tag the next SHOOT release as a pass and drop a real
-	# attempt out of the Corsi count.
-	input.bot_release_is_pass = false

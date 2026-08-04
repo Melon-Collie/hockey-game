@@ -82,16 +82,23 @@ var _pending_on_net: bool = false
 # current by note_directed_at_net, and forced true on a post (a post is a directed
 # miss). A puck NOT directed at net that clears is a pass/clear, not a Corsi miss.
 var _pending_directed_at_net: bool = false
-# Whether the release was INTENDED as a shot (vs. a pass, a dump, or a forced
-# knock-loose off the net clamp). A pass in Mitts is a paced wrister, so the
-# geometry alone cannot separate them: an errant pass nobody receives fails both
-# of _resolve_pending_miss's other outs — no teammate collected it, and a stretch
-# pass up the middle genuinely projects at the far mouth — and logged as a missed
-# shot attempt from the passer's own end. Gates the MISS resolution only; a pass
-# that goes in is still a goal, and a pass the goalie stops is still handled by
-# on_goalie_touch. Armed true at release (a missed note over-credits, matching
-# the on-net/directed defaults) and set from the shooter's controller via
-# note_release_intent.
+# Whether the release was INTENDED as a shot, read from the BUTTON the shooter
+# pressed (SkaterController.last_release_was_shot). A pass in Mitts is a paced
+# wrister, so geometry alone can't separate the two: an errant feed nobody
+# receives fails both of _resolve_pending_miss's other outs — no teammate
+# collected it, and a feed at a man in the crease genuinely projects through the
+# mouth — and logged as a missed shot attempt.
+#
+# What it actually catches is the quick-pass button and the net-clamp
+# knock-loose. It deliberately does NOT catch the charged-wrister pass, which a
+# bot could report and a human could not: exempting one and not the other would
+# break the only thing a Corsi column is for. Own-half releases are refused by
+# geometry instead (ShotOnNetRules.is_release_in_own_half), which applies to
+# everyone equally.
+#
+# Gates the MISS resolution only; a pass that goes in is still a goal, and one
+# the goalie stops is still handled by on_goalie_touch. Armed true at release —
+# a missed note over-credits, matching the on-net/directed defaults.
 var _pending_is_shot: bool = true
 # The pending shot's expected-goals value (AIActionScoring.expected_goals),
 # evaluated by the caller at release from the real goalie geometry and carried on
