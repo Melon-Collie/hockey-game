@@ -44,6 +44,8 @@ var _prev_state: Dictionary[int, Array] = {}
 # Reusable scratch for stale-key sweep — cleared (capacity kept) each frame so
 # the per-frame cleanup allocates nothing in steady state (see _process).
 var _stale_ids: Array[int] = []
+# Live Skater list, refreshed only when the roster moves (see _live_skaters).
+var _skaters_cache: Array = []
 
 func _init() -> void:
 	# Instantiate the SubViewport up front so get_texture() is safe to call
@@ -103,7 +105,7 @@ func _process(_delta: float) -> void:
 		_painter.queue_redraw()
 		return
 
-	var skaters: Array = get_tree().get_nodes_in_group("skaters")
+	var skaters: Array = _live_skaters()
 	var px_x: float = float(_viewport.size.x) / rink_width
 	var px_z: float = float(_viewport.size.y) / rink_length
 	var half_w: float = rink_width * 0.5
@@ -208,3 +210,24 @@ func _on_painter_draw() -> void:
 							col, width_px, true)
 		i += 2
 	_pending_segments.clear()
+
+
+# The live Skater list, rebuilt only when the roster actually changes — the
+# per-frame get_nodes_in_group() built a fresh Array every rendered frame.
+#
+# Deliberately the GROUP and not PlayerRegistry.skaters(): the standalone replay
+# viewer spawns its skaters straight through ActorSpawner, outside the registry,
+# and (unlike the goal-replay cinematic) never sets replay mode — so a
+# registry-backed list would leave replay playback with no ice scratches.
+# Equal counts can still hide a same-frame despawn+spawn, which shows up as a
+# freed entry, so the cache is validated as well as counted.
+func _live_skaters() -> Array:
+	var tree: SceneTree = get_tree()
+	if tree.get_node_count_in_group("skaters") != _skaters_cache.size():
+		_skaters_cache = tree.get_nodes_in_group("skaters")
+		return _skaters_cache
+	for n: Node in _skaters_cache:
+		if not is_instance_valid(n):
+			_skaters_cache = tree.get_nodes_in_group("skaters")
+			break
+	return _skaters_cache

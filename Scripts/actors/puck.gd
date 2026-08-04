@@ -280,6 +280,8 @@ var _goalie_provider: Callable = Callable()  # returns Array of live Goalie node
 # Caller-owned scratch so the per-tick drive allocates nothing.
 var _frame_result: PuckGeometryCollision.Result = null
 var _goalie_contact: GoalieContactDetector.Contact = null
+# The "VFX" child, resolved once in _ready (see there).
+var _vfx: PuckVFX = null
 var _goalie_scratch: SweptDiscOBB.Result = null
 var _save_result: GoalieSaveRules.ContactResult = null
 var _tick_result: PuckAuthorityRules.TickResult = null
@@ -370,6 +372,9 @@ func _ready() -> void:
 	var vfx := PuckVFX.new()
 	vfx.name = "VFX"
 	add_child(vfx)
+	# Cached here rather than re-resolved by name on every contact event — the
+	# child is created once and lives as long as the puck.
+	_vfx = vfx
 
 	# Ice-pinned tracking shadow so the small disc stays readable and airborne
 	# pucks show their landing spot. Cosmetic; renders on every peer.
@@ -741,21 +746,18 @@ func settle_to_ice() -> void:
 # One-shot spark burst at the puck for a stick-lift strip. Delegated to PuckVFX
 # (child "VFX"); the burst anchors to the puck, which sits at the dislodge point.
 func fire_stick_lift_vfx() -> void:
-	var vfx := get_node_or_null("VFX") as PuckVFX
-	if vfx != null:
-		vfx.fire_stick_lift_burst()
+	if _vfx != null:
+		_vfx.fire_stick_lift_burst()
 
 # Ice-chip puff for a board hit; PuckVFX gates on speed and coalesces grinds.
 func fire_board_impact_vfx(speed: float) -> void:
-	var vfx := get_node_or_null("VFX") as PuckVFX
-	if vfx != null:
-		vfx.fire_board_impact_burst(speed)
+	if _vfx != null:
+		_vfx.fire_board_impact_burst(speed)
 
 # Spark snap for a shot off the post; PuckVFX skips soft touches.
 func fire_post_ping_vfx(speed: float) -> void:
-	var vfx := get_node_or_null("VFX") as PuckVFX
-	if vfx != null:
-		vfx.fire_post_ping_burst(speed)
+	if _vfx != null:
+		_vfx.fire_post_ping_burst(speed)
 
 # Host-only analytic drive for one tick of the LOOSE puck — the one and only
 # puck simulation. Position + velocity are written directly on the Node3D.

@@ -54,6 +54,12 @@ var _board_puff: CPUParticles3D = null
 var _post_ping: CPUParticles3D = null
 var _last_board_puff_ms: int = 0
 var _prev_pos: Vector3 = Vector3.ZERO
+# Last trail-colour lerp factor pushed to the material. The trail colour is
+# constant below TRAIL_SPEED_MIN and above TRAIL_SPEED_MAX, so a resting or
+# steady puck re-pushed the identical colour every rendered frame.
+var _trail_color_t: float = -1.0
+# Below this, a per-frame write is invisible and not worth the servers-side push.
+const _WRITE_EPSILON: float = 0.001
 
 func _ready() -> void:
 	_puck = get_parent() as Puck
@@ -118,12 +124,19 @@ func _process(delta: float) -> void:
 	# When grounded, pin the emitter to ice level so trail dots scrape the ice surface.
 	# When airborne, follow the puck's actual Y so the trail goes with it.
 	var target_y: float = curr_pos.y if _puck.is_airborne() else ICE_Y
-	_trail_emitter.position.y = target_y - curr_pos.y  # local offset relative to PuckVFX parent
+	var offset_y: float = target_y - curr_pos.y  # local offset relative to PuckVFX parent
+	if absf(_trail_emitter.position.y - offset_y) > _WRITE_EPSILON:
+		_trail_emitter.position.y = offset_y
 
 	# Speed-reactive color: lerp from cream (slow) to hot orange (fast).
 	var flat_speed: float = Vector3(vel.x, 0.0, vel.z).length()
 	var t: float = clampf((flat_speed - TRAIL_SPEED_MIN) / (TRAIL_SPEED_MAX - TRAIL_SPEED_MIN), 0.0, 1.0)
-	_trail_mat.color = TRAIL_COLOR_SLOW.lerp(TRAIL_COLOR_FAST, t)
+	# Guarded on `t` rather than the resulting Color: below TRAIL_SPEED_MIN it
+	# pins at 0 (a resting or slow puck writes nothing at all), and a material
+	# write is a servers-side push, not a field assignment.
+	if absf(t - _trail_color_t) > _WRITE_EPSILON:
+		_trail_color_t = t
+		_trail_mat.color = TRAIL_COLOR_SLOW.lerp(TRAIL_COLOR_FAST, t)
 
 # Puck-centred visibility box, generous enough that it always overlaps the frustum
 # whenever a live trail dot could be on-screen — so the world-space trail is never

@@ -1671,7 +1671,9 @@ func _update_tracking(delta: float) -> void:
 	# positions and commit slides to where the rebound *was*, sliding away
 	# from where it actually is.
 	var target_threat: Vector3 = _compute_threat_position()
-	if puck.get_carrier() != null and not _reaction.reacting:
+	# `carrier` above is still current: _compute_threat_position only reads the
+	# puck, so nothing between there and here can have changed the carrier.
+	if carrier != null and not _reaction.reacting:
 		# Quiet-eye smoothing: the tracking lerp slows with carrier distance so
 		# far-range stickhandle wiggle is low-passed instead of chased — the
 		# temporal replacement for the old chest-weighted squaring target
@@ -4406,12 +4408,18 @@ func apply_state(network_state: GoalieNetworkState, host_ts: float) -> void:
 	if not _state_buffer.is_empty() and host_ts <= _state_buffer.back().timestamp:
 		NetworkTelemetry.record_ooo_drop()
 		return
-	var entry := BufferedGoalieState.new()
+	# Recycle the evicted front entry as the new back one instead of allocating a
+	# fresh wrapper per packet (see PuckController.apply_state). Safe because the
+	# bracket search below re-reads the buffer every render, so no consumer holds
+	# a wrapper across frames.
+	var entry: BufferedGoalieState
+	if _state_buffer.size() >= 30:
+		entry = _state_buffer.pop_front()
+	else:
+		entry = BufferedGoalieState.new()
 	entry.timestamp = host_ts
 	entry.state = network_state
 	_state_buffer.append(entry)
-	if _state_buffer.size() > 30:
-		_state_buffer.pop_front()
 
 # Renders the goalie at `now - interpolation_delay` from the buffered host
 # snapshots. Lerps root + every socket transform between bracketing entries;

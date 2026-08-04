@@ -492,6 +492,9 @@ var elevation_level: int = 0
 # Eased 0→1 toward elevation_level/3 (a third per rung, full at HIGH); drives
 # the extra blade toe-lift (see _update_blade_elevation / _apply_blade_tilt).
 var _blade_elevation_blend: float = 0.0
+# Set when an elevation blend step changes the blade tilt, consumed by the
+# render-rate rig pass in _process. See _update_blade_elevation.
+var _blade_tilt_dirty: bool = false
 # True when the blade is lifted off the ice — own stick-lift (Q held while not
 # carrying) or a forced pop from an opponent hooking under this stick. Set each
 # tick by the controller; read host-side by PuckController's interaction gate
@@ -695,7 +698,12 @@ func _process(delta: float) -> void:
 		# (facing, upper-body twist, blade IK) already ran in the physics tick.
 		if render_pose_update.is_valid():
 			render_pose_update.call(delta)
-		if _rig_pose_changed():
+		# _blade_tilt_dirty is ORed in because an elevation blend step changes the
+		# blade tilt without moving any marker, so _rig_pose_changed can't see it
+		# (see _update_blade_elevation). Left set while hidden so the pose is
+		# rebuilt on the first visible frame.
+		if _rig_pose_changed() or _blade_tilt_dirty:
+			_blade_tilt_dirty = false
 			update_stick_mesh()
 			update_arm_mesh()
 			update_bottom_arm_mesh()
@@ -1216,18 +1224,23 @@ func apply_blade_pattern(curve_gear: int) -> void:
 	_rebuild_blade_mesh()
 
 
-# Eases the elevation blend toward the loft level each tick and re-tilts the
-# blade only while transitioning (move_toward lands exactly on the target, after
-# which the early-out stops the per-tick basis churn). Called from _physics_process.
-# Runs the full stick pass, not just the tilt — the tilt moves the hosel tip
-# the shaft is aimed at, so the shaft must follow or the joint opens.
+# Eases the elevation blend toward the loft level each tick (move_toward lands
+# exactly on the target, after which the early-out stops the per-tick churn).
+# Called from _physics_process because the blend is physics-timed.
+#
+# The stick REBUILD it triggers is cosmetic, so it is deferred to the render-rate
+# rig pass in _process via this flag rather than run here. The marker dirty-flag
+# there cannot see a blend change on its own — the tilt moves the hosel tip the
+# shaft is aimed at without moving any marker — which is why the rebuild used to
+# live in the physics tick. (The rebuild must be the FULL stick pass, not just
+# the tilt: if the shaft doesn't follow the hosel, the joint opens.)
 func _update_blade_elevation(delta: float) -> void:
 	var target: float = float(elevation_level) / float(ShotMechanics.ELEVATION_HIGH)
 	if is_equal_approx(_blade_elevation_blend, target):
 		return
 	_blade_elevation_blend = move_toward(
 			_blade_elevation_blend, target, _BLADE_ELEVATION_BLEND_SPEED * delta)
-	update_stick_mesh()
+	_blade_tilt_dirty = true
 
 
 # Blend units/sec for the blade-lift ease (~0.08 s for a full lift). Snappier

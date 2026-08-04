@@ -13,6 +13,9 @@ func shot_power_sensitivity() -> float:
 @export var position_smooth_time: float = 0.05
 
 var _input_queue: Array[InputState] = []
+# Stamp set for the input dedupe, hoisted out of receive_input_batch (120 batches/s
+# per client). Built lazily — see there — and never escapes the call.
+var _input_dedupe_scratch: Dictionary = {}
 var _fallback_input: InputState = InputState.new()
 var _state_buffer: Array[BufferedSkaterState] = []
 var is_extrapolating: bool = false
@@ -116,7 +119,16 @@ func _render_pose_update(delta: float) -> void:
 		_ik.update_bottom_hand()
 
 
-func receive_input_batch(batch: Array[InputState]) -> void:
+static func _input_ts_less(a: InputState, b: InputState) -> bool:
+	return a.host_timestamp < b.host_timestamp
+
+
+# Returns this queue's DEDUPE WATERMARK: the newest stamp already known here,
+# whether processed or still queued. The host's decoder skips records at or below
+# it, so it never pays InputState.from_bytes for the ~119-in-120 redundant frames
+# a batch carries for loss resilience. Reported by the caller, which owns the
+# peer id (GameManager._on_input_batch_received).
+func receive_input_batch(batch: Array[InputState]) -> float:
 	# Reject inputs whose timestamps fall outside a plausible window around the
 	# host clock. Legitimate timestamps land in [now - RTT, now + INPUT_LEAD_SEC];
 	# anything wildly outside is either a malicious peer or a desynced clock and
@@ -125,23 +137,49 @@ func receive_input_batch(batch: Array[InputState]) -> void:
 	const FUTURE_SLACK_S: float = 0.1   # INPUT_LEAD_SEC (~25ms) + slack for jitter / clock convergence
 	const PAST_SLACK_S: float = 2.0     # generous: queue cap is ~0.5 s, this is 4x
 	var now: float = NetworkManager.estimated_host_time()
-	var existing_timestamps: Dictionary = {}
-	for queued: InputState in _input_queue:
-		existing_timestamps[queued.host_timestamp] = true
+	# The queue is kept sorted below, so its last entry is the newest stamp in it.
+	# A record strictly newer than that cannot be a duplicate — which, behind the
+	# host-side skip, is every record of a healthy batch — so the dedupe set is
+	# built only if some record lands at or below the newest queued stamp.
+	var newest_queued: float = -INF
+	if not _input_queue.is_empty():
+		newest_queued = _input_queue.back().host_timestamp
+	var seen: Dictionary = _input_dedupe_scratch
+	var seen_built: bool = false
+	var out_of_order: bool = false
 	for state: InputState in batch:
 		if state.host_timestamp <= last_processed_host_timestamp:
 			continue
-		if existing_timestamps.has(state.host_timestamp):
-			continue
+		if state.host_timestamp <= newest_queued:
+			if not seen_built:
+				seen_built = true
+				seen.clear()
+				for queued: InputState in _input_queue:
+					seen[queued.host_timestamp] = true
+			if seen.has(state.host_timestamp):
+				continue
+			# A gap fill: this lands before the queue's newest entry, so the
+			# append below breaks the sort order and has to be repaired.
+			out_of_order = true
 		if state.host_timestamp < now - PAST_SLACK_S or state.host_timestamp > now + FUTURE_SLACK_S:
 			continue
 		_input_queue.append(state)
-		existing_timestamps[state.host_timestamp] = true
-	_input_queue.sort_custom(func(a: InputState, b: InputState) -> bool:
-		return a.host_timestamp < b.host_timestamp)
+		if seen_built:
+			seen[state.host_timestamp] = true
+		if state.host_timestamp > newest_queued:
+			newest_queued = state.host_timestamp
+	# Batches are chronological and the queue only grows at its newest end, so the
+	# ordering is normally preserved by construction — sort only when a gap fill
+	# actually broke it, rather than paying O(n log n) plus a fresh comparator
+	# lambda on every batch.
+	if out_of_order:
+		_input_queue.sort_custom(_input_ts_less)
 	var MAX_QUEUE_DEPTH: int = Constants.PHYSICS_TICK / 2  # ~0.5 s
 	while _input_queue.size() > MAX_QUEUE_DEPTH:
 		_input_queue.pop_front()
+	if _input_queue.is_empty():
+		return last_processed_host_timestamp
+	return maxf(last_processed_host_timestamp, _input_queue.back().host_timestamp)
 
 # Backlog drain thresholds. Consumption is one input per tick and production is
 # one per tick, so the queue can never catch up on its own: an upstream jitter
@@ -270,12 +308,18 @@ func apply_network_state(state: SkaterNetworkState, host_ts: float) -> void:
 	if not _state_buffer.is_empty() and host_ts < _state_buffer.back().timestamp:
 		NetworkTelemetry.record_ooo_drop()
 		return
-	var buffered := BufferedSkaterState.new()
+	# Recycle the evicted front entry as the new back one instead of allocating a
+	# fresh wrapper per packet (see PuckController.apply_state). Safe because the
+	# interpolation bracket is re-derived from the buffer every tick before use,
+	# so no consumer holds a wrapper across frames.
+	var buffered: BufferedSkaterState
+	if _state_buffer.size() >= 30:
+		buffered = _state_buffer.pop_front()
+	else:
+		buffered = BufferedSkaterState.new()
 	buffered.timestamp = host_ts
 	buffered.state = state
 	_state_buffer.append(buffered)
-	if _state_buffer.size() > 30:
-		_state_buffer.pop_front()
 
 
 # Where the HOST had this skater at host_time, from the interpolation buffer. The

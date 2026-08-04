@@ -105,6 +105,10 @@ func setup(
 # Also the carrier index space — carrier_idx is a position in THIS list. Safe to
 # reuse because it never leaves the codec (unlike the packet — see below).
 var _peers_scratch: Array[int] = []
+# The decode-side twin of _peers_scratch: packet-order peer ids, which are the
+# index space carrier_idx resolves against. Same reuse argument — it is consumed
+# entirely within decode_world_state and never escapes.
+var _decoded_peers_scratch: Array[int] = []
 
 
 # The packet is sized ONCE and written at offsets, instead of the old
@@ -202,20 +206,22 @@ func decode_world_state(data: PackedByteArray) -> void:
 	# Skip actor application; still walk the byte cursor so the trailing
 	# game-state block lands at the right offset.
 	var skip_actors: bool = NetworkManager.is_replay_mode()
-	# Skaters — collect peer_ids in packet order so we can resolve the puck carrier index below.
-	var decoded_peers: Array[int] = []
+	# Skaters — collect peer_ids in packet order so we can resolve the puck carrier
+	# index below. The roster scratch is cleared and refilled per packet (60 Hz).
+	var decoded_peers: Array[int] = _decoded_peers_scratch
+	decoded_peers.clear()
 	for _i: int in num_skaters:
 		# decode_s32 to match the encoder; negative ids are AI bots.
 		var peer_id: int = data.decode_s32(o); o += 4
 		decoded_peers.append(peer_id)
-		var skater_bytes: PackedByteArray = data.slice(o, o + SKATER_STATE_BYTES); o += SKATER_STATE_BYTES
+		var skater_off: int = o; o += SKATER_STATE_BYTES
 		var depth: int = data.decode_u8(o); o += 1
 		if skip_actors:
 			continue
 		var record: PlayerRecord = _registry.get_record(peer_id)
 		if record == null:
 			continue
-		var skater_state := _decode_skater_quantized(skater_bytes)
+		var skater_state := _decode_skater_quantized(data, skater_off)
 		if record.is_local and not NetworkManager.is_replay_mode():
 			# Adaptive input lead: this snapshot's freshly-advanced ack reveals
 			# how overdue the popped input was (host_ts − stamp) — the servo's
@@ -228,7 +234,7 @@ func decode_world_state(data: PackedByteArray) -> void:
 	# Puck: 12B pos+vel + 1B carrier index. 0xFF is the "no carrier"
 	# sentinel — checked explicitly so a future bump of MAX_CONNECTIONS
 	# past 255 doesn't silently alias the sentinel onto a real index.
-	var puck_state := _decode_puck_quantized(data.slice(o, o + 12)); o += 12
+	var puck_state := _decode_puck_quantized(data, o); o += 12
 	var carrier_idx: int = data.decode_u8(o); o += 1
 	puck_state.carrier_peer_id = -1 if carrier_idx == 0xFF or carrier_idx >= decoded_peers.size() else decoded_peers[carrier_idx]
 	if not skip_actors:
@@ -242,7 +248,7 @@ func decode_world_state(data: PackedByteArray) -> void:
 			push_warning("WorldStateCodec: truncated goalie block %d" % gi)
 			return
 		if not skip_actors:
-			goalie_controllers[gi].apply_state(_decode_goalie_quantized(data.slice(o, o + GOALIE_BLOCK_SIZE)), host_ts)
+			goalie_controllers[gi].apply_state(_decode_goalie_quantized(data, o), host_ts)
 		o += GOALIE_BLOCK_SIZE
 	o += maxi(0, num_goalies - goalie_controllers.size()) * GOALIE_BLOCK_SIZE
 	# Game state
@@ -312,11 +318,11 @@ func decode_for_replay(data: PackedByteArray) -> Dictionary:
 	for _i: int in num_skaters:
 		var peer_id: int = data.decode_s32(o); o += 4
 		decoded_peers.append(peer_id)
-		var skater_bytes: PackedByteArray = data.slice(o, o + SKATER_STATE_BYTES); o += SKATER_STATE_BYTES
+		var skater_off: int = o; o += SKATER_STATE_BYTES
 		o += 1  # queue_depth (not needed for replay)
-		skaters[peer_id] = _decode_skater_quantized(skater_bytes)
+		skaters[peer_id] = _decode_skater_quantized(data, skater_off)
 
-	var puck_state := _decode_puck_quantized(data.slice(o, o + 12)); o += 12
+	var puck_state := _decode_puck_quantized(data, o); o += 12
 	var carrier_idx: int = data.decode_u8(o); o += 1
 	# 0xFF is the encoder's "no carrier" sentinel — see decode_world_state.
 	var carrier_peer_id: int = -1 if carrier_idx == 0xFF or carrier_idx >= decoded_peers.size() else decoded_peers[carrier_idx]
@@ -330,7 +336,7 @@ func decode_for_replay(data: PackedByteArray) -> Dictionary:
 		return {}
 	var goalies: Array[GoalieNetworkState] = []
 	for _gi: int in num_goalies:
-		goalies.append(_decode_goalie_quantized(data.slice(o, o + GOALIE_BLOCK_SIZE)))
+		goalies.append(_decode_goalie_quantized(data, o))
 		o += GOALIE_BLOCK_SIZE
 
 	# Game state block follows the goalies. The viewer needs score / phase /
@@ -511,12 +517,15 @@ static func quantize_move_intent(v: Vector2) -> Vector2:
 	return Vector2(sin(a), cos(a))
 
 
-static func _decode_skater_quantized(b: PackedByteArray) -> SkaterNetworkState:
-	if b.size() < SKATER_STATE_BYTES:
-		push_warning("WorldStateCodec: truncated skater block (%d bytes)" % b.size())
+# `offset` mirrors _write_skater_quantized: the packet decodes in place at a
+# cursor rather than being sliced into a per-actor copy first (~600 throwaway
+# PackedByteArrays/s across skaters, puck and goalies at the 60 Hz packet rate).
+static func _decode_skater_quantized(b: PackedByteArray, offset: int = 0) -> SkaterNetworkState:
+	if b.size() < offset + SKATER_STATE_BYTES:
+		push_warning("WorldStateCodec: truncated skater block (%d bytes)" % (b.size() - offset))
 		return SkaterNetworkState.new()
 	var s := SkaterNetworkState.new()
-	var o: int = 0
+	var o: int = offset
 	s.position.x = b.decode_s16(o) / 100.0; o += 2
 	s.position.y = b.decode_s8(o) / 100.0; o += 1
 	s.position.z = b.decode_s16(o) / 100.0; o += 2
@@ -581,12 +590,12 @@ static func _encode_puck_quantized(s: PuckNetworkState) -> PackedByteArray:
 	return b
 
 
-static func _decode_puck_quantized(b: PackedByteArray) -> PuckNetworkState:
-	if b.size() < 12:
-		push_warning("WorldStateCodec: truncated puck block (%d bytes)" % b.size())
+static func _decode_puck_quantized(b: PackedByteArray, offset: int = 0) -> PuckNetworkState:
+	if b.size() < offset + 12:
+		push_warning("WorldStateCodec: truncated puck block (%d bytes)" % (b.size() - offset))
 		return PuckNetworkState.new()
 	var s := PuckNetworkState.new()
-	var o: int = 0
+	var o: int = offset
 	s.position.x = b.decode_s16(o) / 100.0; o += 2
 	s.position.y = b.decode_s16(o) / 100.0; o += 2
 	s.position.z = b.decode_s16(o) / 100.0; o += 2
@@ -654,12 +663,12 @@ static func _encode_goalie_quantized(s: GoalieNetworkState) -> PackedByteArray:
 	return b
 
 
-static func _decode_goalie_quantized(b: PackedByteArray) -> GoalieNetworkState:
-	if b.size() < GOALIE_BLOCK_SIZE:
-		push_warning("WorldStateCodec: truncated goalie block (%d bytes)" % b.size())
+static func _decode_goalie_quantized(b: PackedByteArray, offset: int = 0) -> GoalieNetworkState:
+	if b.size() < offset + GOALIE_BLOCK_SIZE:
+		push_warning("WorldStateCodec: truncated goalie block (%d bytes)" % (b.size() - offset))
 		return GoalieNetworkState.new()
 	var s := GoalieNetworkState.new()
-	var o: int = 0
+	var o: int = offset
 	s.position_x = b.decode_s16(o) / 100.0; o += 2
 	s.position_z = b.decode_s16(o) / 100.0; o += 2
 	s.rotation_y = b.decode_s16(o) / 32767.0 * PI; o += 2

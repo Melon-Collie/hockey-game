@@ -67,6 +67,9 @@ var _next_bots: Array[AIController] = []
 # reused buffers below at kick time so the worker never reads them mid-mutation.
 var _worker_snapshot: WorldSnapshot = WorldSnapshot.new()
 var _worker_puck: PuckNetworkState = PuckNetworkState.new()
+# Worker-owned per-team roster Arrays (see _copy_teammate_ids). Reused across
+# kicks; keyed by team_id, which turns over only at match setup.
+var _worker_team_ids_pool: Dictionary = {}
 
 # The live TeamBrains the worker ticks. Assigned (not copied) at kick time while
 # the worker is idle. GameManager only ever replaces the whole team_brains array
@@ -329,29 +332,32 @@ func _publish_brain_mirrors(brains: Array[TeamBrain]) -> void:
 		_coverage_downgraded_by_team[i] = brain.coverage_downgraded
 
 
-# Fill _worker_snapshot with a race-safe view of this frame's snapshot. Three
+# Fill _worker_snapshot with a race-safe view of this frame's snapshot. Two
 # different safety arguments, one per field class — don't collapse them:
 #
-#  1. Genuinely fresh each frame: the teammate caches (GameManager._enrich_snapshot_for_ai
-#     clears + refills dicts that belong to that frame's own WorldSnapshot) and the
-#     scalars. Sharing by reference is safe — next frame builds a new object.
-#  2. Reused ring slots: skater_states / goalie_states entries. StateBufferManager
-#     hands back the LIVE ring slot by reference on its no-interpolation path
-#     (_interpolate_skater's `t < 0.0` branch), and capture() overwrites ring slots
-#     in place. These are safe only because the ring is BUFFER_SIZE = 3 s deep and
-#     capture advances one slot per frame, so the host cannot wrap back onto the
-#     worker's slot until the worker is ~360 frames behind. That margin — NOT object
-#     freshness — is what makes the by-reference share sound. Shrinking BUFFER_SIZE,
-#     or pointing the AI query at a delayed timestamp, would narrow it.
-#  3. Mutated in place every frame: the accel-tracker dicts shared onto the snapshot
-#     and the reused carrier-debounce puck scratch. No margin at all, so these are
-#     copied into reused buffers below.
+#  1. CONTAINERS are always copied, never aliased. `src` is GameManager's reused
+#     per-tick AI snapshot: its Dictionaries are cleared and refilled on the next
+#     host tick, and the per-team roster Arrays it publishes are pooled and
+#     refilled too. The worker reads its snapshot for the whole batch — which
+#     outlives that tick — so sharing any container by reference would have the
+#     host clearing a Dictionary mid-iteration on the worker. Copying runs here,
+#     in the one window `dispatch` has proven the worker idle.
+#  2. ENTRIES may be shared: skater_states / goalie_states values are LIVE ring
+#     slots (StateBufferManager hands them back by reference on its
+#     no-interpolation path — _interpolate_skater's `t < 0.0` branch) which
+#     capture() overwrites in place. Safe only because the ring is
+#     BUFFER_SIZE = 3 s deep and advances one slot per frame, so the host cannot
+#     wrap back onto the worker's slot until the worker is ~360 frames behind.
+#     That margin — NOT object freshness — is what makes the share sound.
+#     Shrinking BUFFER_SIZE, or pointing the AI query at a delayed timestamp,
+#     would narrow it. The puck state has no such margin (it is a reused
+#     carrier-debounce scratch), so it is copied by value.
 func _stabilize_snapshot(src: WorldSnapshot) -> void:
 	var ws: WorldSnapshot = _worker_snapshot
-	ws.skater_states = src.skater_states
-	ws.goalie_states = src.goalie_states
-	ws.teammate_ids_by_team = src.teammate_ids_by_team
-	ws.closest_to_puck_by_team = src.closest_to_puck_by_team
+	_copy_skater_states(src.skater_states, ws.skater_states)
+	_copy_goalie_states(src.goalie_states, ws.goalie_states)
+	_copy_teammate_ids(src.teammate_ids_by_team, ws.teammate_ids_by_team)
+	_copy_closest(src.closest_to_puck_by_team, ws.closest_to_puck_by_team)
 	ws.real_puck_carrier_peer_id = src.real_puck_carrier_peer_id
 	ws.host_timestamp = src.host_timestamp
 	if src.puck_state != null:
@@ -361,6 +367,41 @@ func _stabilize_snapshot(src: WorldSnapshot) -> void:
 		ws.puck_state = null
 	_copy_accel(src.accel_by_peer, ws.accel_by_peer)
 	_copy_omega(src.heading_omega_by_peer, ws.heading_omega_by_peer)
+
+
+func _copy_skater_states(src: Dictionary, dst: Dictionary[int, SkaterNetworkState]) -> void:
+	dst.clear()
+	for k: int in src:
+		dst[k] = src[k]
+
+
+func _copy_goalie_states(src: Dictionary, dst: Dictionary[int, GoalieNetworkState]) -> void:
+	dst.clear()
+	for k: int in src:
+		dst[k] = src[k]
+
+
+# Deep by one level: the per-team Arrays themselves are the host's pooled
+# scratch, so the worker needs its own. Those live in a pool beside `dst` so the
+# key set stays an exact copy of `src` (a team absent from the snapshot must stay
+# absent, not appear as an empty roster) while the Arrays are still reused.
+func _copy_teammate_ids(src: Dictionary, dst: Dictionary[int, Array]) -> void:
+	dst.clear()
+	for k: int in src:
+		if not _worker_team_ids_pool.has(k):
+			_worker_team_ids_pool[k] = []
+		var out: Array = _worker_team_ids_pool[k]
+		out.clear()
+		var ids: Array = src[k]
+		for pid: int in ids:
+			out.append(pid)
+		dst[k] = out
+
+
+func _copy_closest(src: Dictionary, dst: Dictionary[int, int]) -> void:
+	dst.clear()
+	for k: int in src:
+		dst[k] = src[k]
 
 
 func _copy_accel(src: Dictionary, dst: Dictionary[int, Vector3]) -> void:

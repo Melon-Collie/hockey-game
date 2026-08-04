@@ -136,9 +136,17 @@ func set_camera_force_locked(locked: bool) -> void:
 func get_current_input() -> InputState:
 	return _current_input
 
-func get_input_batch(frames: int = 12) -> Array[InputState]:
-	var start: int = maxi(_input_history.size() - frames, 0)
-	return _input_history.slice(start)
+# Fills `out` with the newest `frames` inputs, oldest first — the redundant
+# trailing window the batch send ships for loss resilience. Fills a caller-owned
+# Array rather than returning `_input_history.slice(start)`: this runs 120x/s and
+# the slice was a fresh Array every batch.
+func fill_input_batch(out: Array[InputState], frames: int = 12) -> void:
+	out.clear()
+	var n: int = _input_history.size()
+	var i: int = maxi(n - frames, 0)
+	while i < n:
+		out.append(_input_history[i])
+		i += 1
 
 # Used by WorldStateCodec during goal replay to reposition the local skater the
 # same way RemoteController does, bypassing reconcile which is a no-op during

@@ -48,6 +48,8 @@ var _colors: PackedVector4Array = PackedVector4Array()
 # shader stacks the rest itself, so a skater at HIGH loft — three marks, one per
 # rung above flat — is still one entry.
 var _chevrons: PackedVector4Array = PackedVector4Array()
+# Live Skater list, refreshed only when the roster moves (see _live_skaters).
+var _skaters_cache: Array = []
 
 
 func _init() -> void:
@@ -111,7 +113,7 @@ func _process(_delta: float) -> void:
 	var slapper_seen: bool = false
 	# Self-only for the same reason as the slapper indicator.
 	var stamina_seen: bool = false
-	for node: Node in get_tree().get_nodes_in_group("skaters"):
+	for node: Node in _live_skaters():
 		var skater: Skater = node as Skater
 		if skater == null:
 			continue
@@ -160,3 +162,24 @@ func _process(_delta: float) -> void:
 	# painted on the ice for the rest of the period.
 	_material.set_shader_parameter(&"slapper_active", slapper_seen)
 	_material.set_shader_parameter(&"stamina_active", stamina_seen)
+
+
+# The live Skater list, rebuilt only when the roster actually changes — the
+# per-frame get_nodes_in_group() built a fresh Array every rendered frame.
+#
+# Deliberately the GROUP and not PlayerRegistry.skaters(): the standalone replay
+# viewer spawns its skaters straight through ActorSpawner, outside the registry,
+# and (unlike the goal-replay cinematic) never sets replay mode — so a
+# registry-backed list would leave replay playback with no on-ice rings.
+# Equal counts can still hide a same-frame despawn+spawn, which shows up as a
+# freed entry, so the cache is validated as well as counted.
+func _live_skaters() -> Array:
+	var tree: SceneTree = get_tree()
+	if tree.get_node_count_in_group("skaters") != _skaters_cache.size():
+		_skaters_cache = tree.get_nodes_in_group("skaters")
+		return _skaters_cache
+	for n: Node in _skaters_cache:
+		if not is_instance_valid(n):
+			_skaters_cache = tree.get_nodes_in_group("skaters")
+			break
+	return _skaters_cache

@@ -264,8 +264,28 @@ func _arm_goal_cinematic(scoring_team: Team, scorer_name: String) -> void:
 		return  # nothing to frame — the shake carries the moment alone
 	_goal_cine_left = _GOAL_CINE_DURATION
 
+# Frame-rate-independent factor for an exponential smoother, replacing a raw
+# `speed * delta`. The raw form converges at a rate that depends on how often it
+# is stepped: harmless while this ran on the fixed 120 Hz tick, but once framing
+# moved to the render rate it would have made the camera feel measurably
+# different at 60 fps than at 144. This form depends only on elapsed time, so the
+# two match. It also can't overshoot — `speed * delta` exceeds 1 on a long frame
+# hitch, which made lerpf jump PAST the target.
+#
+# Matches the old 120 Hz behaviour to within ~1% at the smoothing speeds here
+# (speed*delta ≈ 0.03, where 1-exp(-x) ≈ x), so this is not a retune.
+static func _smooth_t(speed: float, delta: float) -> float:
+	return 1.0 - exp(-speed * delta)
+
+
 func _ready() -> void:
 	make_current()
+	# Framing runs in _process (render rate), and LocalInputGatherer's
+	# screen→world cursor read consumes this camera's transform from its own
+	# _process. Negative priority pins the camera ahead of every default-priority
+	# node so the cursor is unprojected through THIS frame's camera rather than
+	# last frame's — otherwise a fast pan drifts the aim point behind the view.
+	process_priority = -1
 	# The jumbotron hangs over center ice, directly between this top-down
 	# camera and the play — it is spectator/lobby set dressing only, never
 	# rendered in gameplay framing (see Jumbotron's class doc).
@@ -300,7 +320,14 @@ func impact_kick(direction: Vector3, intensity: float) -> void:
 	_impact_kick_vel += dir.normalized() * _KICK_IMPULSE_MAX * clampf(intensity, 0.0, 1.0)
 
 
-func _physics_process(delta: float) -> void:
+# Render rate, NOT the physics tick: every line below is framing (zoom fit, zone
+# bias, shake, impact kick, goal push-in, intro sweep) and nothing gameplay-side
+# reads it per tick. At 120 Hz this also CAPPED camera motion on higher-refresh
+# displays — the move is a visual improvement there, not just a saving.
+#
+# Every time-evolving term here is delta-scaled, and the exponential smoothers go
+# through _smooth_t so the feel no longer depends on the frame rate (see there).
+func _process(delta: float) -> void:
 	if not skater:
 		return
 
@@ -400,7 +427,7 @@ func _physics_process(delta: float) -> void:
 	var effective_min: float = min_height * dist_mult
 	var effective_max: float = max_height * dist_mult
 	var target_height: float = clampf(maxf(needed_x, needed_z), effective_min, effective_max)
-	_current_height = lerpf(_current_height, target_height, zoom_speed * delta)
+	_current_height = lerpf(_current_height, target_height, _smooth_t(zoom_speed, delta))
 
 	var visible_half_x: float = tan_half_fov * aspect * _current_height
 	var visible_half_z: float = tan_half_fov * _current_height
@@ -411,7 +438,7 @@ func _physics_process(delta: float) -> void:
 	if not locked:
 		# ── Step 3: Attacking zone bias ───────────────────────────────────────
 		# Lerp the attack direction so possession changes ease in rather than snap.
-		_smoothed_attack_dir = lerpf(_smoothed_attack_dir, float(attack_dir_now), bias_smooth_speed * delta)
+		_smoothed_attack_dir = lerpf(_smoothed_attack_dir, float(attack_dir_now), _smooth_t(bias_smooth_speed, delta))
 
 		if not is_zero_approx(_smoothed_attack_dir):
 			# Scale bias by how much the player is moving toward the attacking zone.
@@ -423,7 +450,7 @@ func _physics_process(delta: float) -> void:
 				var vel_dir: Vector3 = vel_xz.normalized()
 				var dot: float = vel_dir.z * float(attack_dir_now)
 				raw_direction_factor = clampf((dot + 1.0) * 0.5, 0.0, 1.0)
-			_smoothed_direction_factor = lerpf(_smoothed_direction_factor, raw_direction_factor, bias_smooth_speed * delta)
+			_smoothed_direction_factor = lerpf(_smoothed_direction_factor, raw_direction_factor, _smooth_t(bias_smooth_speed, delta))
 			var direction_factor: float = _smoothed_direction_factor
 
 			# Slack = how far we can shift before the trailing subject hits the frame edge.
@@ -515,7 +542,7 @@ func _physics_process(delta: float) -> void:
 	var tilt_z_offset: float = raw_offset * flip_sign
 	var target_pos: Vector3 = Vector3(
 			render_center.x, render_height, render_center.z + tilt_z_offset)
-	global_position = global_position.lerp(target_pos, smooth_speed * delta)
+	global_position = global_position.lerp(target_pos, _smooth_t(smooth_speed, delta))
 
 	# ── Step 5b: Apply pitch + attack-up yaw flip. Always tilted perspective. ──
 	if projection != PROJECTION_PERSPECTIVE:

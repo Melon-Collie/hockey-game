@@ -91,6 +91,11 @@ var _static_goal_count: int = -1
 var _static_team_near: int = -1
 var _static_team_far: int = -1
 var _static_valid: bool = false
+# Goalie/net jersey tints, cached per team against the colour slot they were
+# built from (-1 = not yet built). See _team_color.
+const _NEUTRAL_TINT := Color(0.6, 0.6, 0.6)
+var _tint_slots := PackedInt32Array([-1, -1])
+var _tint_cache := PackedColorArray([_NEUTRAL_TINT, _NEUTRAL_TINT])
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -368,9 +373,19 @@ func _goalie_team_color(goalie_z: float) -> Color:
 # `primary` — that ignores home/away, tinting the away goalie a saturated color
 # while its skaters draw in the away kit's white. Grey fallback before teams
 # are wired.
+#
+# Cached against the team's colour slot: TeamColorRegistry.get_colors builds a
+# ~15-key Dictionary (and the nested kit lookups behind it) per call, and this is
+# called per goalie per rendered frame. The slot is the only input that can
+# change the answer, so comparing it is a complete invalidation check.
 func _team_color(team_id: int) -> Color:
-	if team_id >= 0 and team_id < GameManager.teams.size():
-		var colors: Dictionary = TeamColorRegistry.get_colors(
-				GameManager.teams[team_id].color_slot, team_id)
-		return colors.jersey
-	return Color(0.6, 0.6, 0.6)
+	if team_id < 0 or team_id >= GameManager.teams.size():
+		return _NEUTRAL_TINT
+	if team_id >= _tint_slots.size():
+		return _NEUTRAL_TINT
+	var slot: int = GameManager.teams[team_id].color_slot
+	if _tint_slots[team_id] != slot:
+		var colors: Dictionary = TeamColorRegistry.get_colors(slot, team_id)
+		_tint_slots[team_id] = slot
+		_tint_cache[team_id] = colors.jersey
+	return _tint_cache[team_id]

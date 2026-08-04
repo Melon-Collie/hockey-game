@@ -118,6 +118,19 @@ var _last_ghost_state: Dictionary = {}  # peer_id -> bool, host only
 # checks (host only). The domain calls read it synchronously and never retain
 # it; each call site clears + refills before use.
 var _positions_scratch: Dictionary = {}
+# The ghost-state result half of the same pair — _apply_ghost_state consumes the
+# map in the same call it is filled and never retains it.
+var _ghosts_scratch: Dictionary = {}
+# The AI path's per-tick WorldSnapshot (host only). Refilled in place each tick
+# instead of allocating a fresh snapshot + its five Dictionaries; safe because
+# AICoordinator._stabilize_snapshot copies out of it rather than aliasing it.
+var _ai_snapshot := WorldSnapshot.new()
+# Per-team roster Arrays the AI enrichment publishes onto the snapshot, plus the
+# two election-eligibility lists it builds per team. Pooled and refilled each
+# tick (~6 Arrays/tick otherwise); see _enrich_snapshot_for_ai.
+var _teammate_ids_pool: Dictionary = {}   # team_id -> Array[int]
+var _human_ids_scratch: Array = []
+var _camped_ids_scratch: Array = []
 var _input_blocked: bool = false
 var _puck_oob_timer: float = 0.0
 var _puck_net_stuck_timer: float = 0.0
@@ -582,7 +595,7 @@ func _physics_process(delta: float) -> void:
 		# one). The ONLY thing softened at lower difficulties is the discrete
 		# carrier signal, debounced below after enrichment so the delayed
 		# carrier reaches both the team brains and the agents.
-		current_snapshot = get_state_delayed(0.0)
+		current_snapshot = get_state_delayed(0.0, _ai_snapshot)
 		if current_snapshot != null:
 			_enrich_snapshot_for_ai(current_snapshot)
 			# Shared dead-reckoning: advance the global accel estimate once and
@@ -961,7 +974,7 @@ func _apply_ghost_state(delta: float) -> void:
 		if puck.carrier != null and record.skater == puck.carrier:
 			carrier_peer_id = peer_id
 	var ghosts: Dictionary = _state_machine.compute_ghost_state(
-			positions, carrier_peer_id, puck.global_position, delta)
+			positions, carrier_peer_id, puck.global_position, delta, _ghosts_scratch)
 	_state_machine.update_delayed_offside(positions, puck.global_position, carrier_peer_id)
 	for peer_id in ghosts:
 		var r: PlayerRecord = _registry.get_record(peer_id)
@@ -2804,7 +2817,7 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 			# at a sub-stagger bump up to full by a knockdown. The old 5.0/11 floor
 			# predated the inelastic-resolver rewrite (Δv shrank ~2×) and never fired.
 			local_player_impact.emit(impulse, clampf((impulse.length() - 0.6) / 1.5, 0.0, 1.0)))
-		NetworkManager.set_input_batch_provider(local_ctrl.get_input_batch)
+		NetworkManager.set_input_batch_provider(local_ctrl.fill_input_batch)
 		# Historical positions of the OTHER skaters for the reconcile replay's
 		# body-check re-resolution (Slice C) — sampled from each remote's
 		# interpolation buffer at the replayed input's host timestamp.
@@ -2879,6 +2892,10 @@ func _on_registry_player_added(record: PlayerRecord) -> void:
 # re-partitioning `snapshot.skater_states` and re-scanning for the closest
 # teammate every tick. Called once per host physics frame; lag-comp rewind
 # snapshots are NOT enriched (they don't feed AI).
+#
+# The per-team roster Arrays it publishes are pooled and refilled in place, so
+# they are live for one tick only — AICoordinator._stabilize_snapshot copies
+# their contents for the worker rather than sharing the Array.
 func _enrich_snapshot_for_ai(snap: WorldSnapshot) -> void:
 	snap.teammate_ids_by_team.clear()
 	snap.closest_to_puck_by_team.clear()
@@ -2890,7 +2907,7 @@ func _enrich_snapshot_for_ai(snap: WorldSnapshot) -> void:
 		if team_id == -1:
 			continue
 		if not snap.teammate_ids_by_team.has(team_id):
-			snap.teammate_ids_by_team[team_id] = []
+			snap.teammate_ids_by_team[team_id] = _pooled_team_ids(team_id)
 		var ids: Array = snap.teammate_ids_by_team[team_id]
 		ids.append(pid)
 	if snap.puck_state == null:
@@ -2911,8 +2928,12 @@ func _enrich_snapshot_for_ai(snap: WorldSnapshot) -> void:
 		# while demonstrably playing the puck), and a one-timer camper has
 		# opted out of loose-puck work (its camp veto would refuse the
 		# chase while nobody else was elected — the frozen-team pickup).
-		var human_ids: Array = []
-		var camped_ids: Array = []
+		# Cleared per team rather than allocated: elect() reads both inline and
+		# retains neither, and neither reaches the snapshot the worker sees.
+		var human_ids: Array = _human_ids_scratch
+		human_ids.clear()
+		var camped_ids: Array = _camped_ids_scratch
+		camped_ids.clear()
 		var brain: TeamBrain = team_brains[team_id] \
 				if team_id >= 0 and team_id < team_brains.size() else null
 		for pid: int in ids:
@@ -2941,6 +2962,16 @@ func _enrich_snapshot_for_ai(snap: WorldSnapshot) -> void:
 				best_pid = pinged_chaser
 		_prev_chase_by_team[team_id] = best_pid
 		snap.closest_to_puck_by_team[team_id] = best_pid
+
+
+# This team's pooled roster Array, emptied for a fresh fill. Allocates only the
+# first time a team_id is seen.
+func _pooled_team_ids(team_id: int) -> Array:
+	if not _teammate_ids_pool.has(team_id):
+		_teammate_ids_pool[team_id] = []
+	var ids: Array = _teammate_ids_pool[team_id]
+	ids.clear()
+	return ids
 
 
 # ── Puck / Puck controller signal handlers ───────────────────────────────────
@@ -3874,7 +3905,10 @@ func _on_input_batch_received(peer_id: int, inputs: Array[InputState]) -> void:
 	var remote: RemoteController = record.controller as RemoteController
 	if remote == null:
 		return
-	remote.receive_input_batch(inputs)
+	# Feed the queue's dedupe watermark back so the decoder can skip this peer's
+	# redundant records before paying for them. Reported only on the path that
+	# actually consumed the batch — a dropped batch must not advance it.
+	NetworkManager.report_input_watermark(peer_id, remote.receive_input_batch(inputs))
 
 
 # ── World state & stats RPC forwarding ───────────────────────────────────────
@@ -5024,11 +5058,13 @@ func _slot_already_taken(team_id: int, team_slot: int) -> bool:
 # base as world-state broadcast headers and client claim RPCs, so callers
 # can mix host-internal and client-supplied timestamps freely. Pass 0 for
 # the freshest captured state.
-func get_state_delayed(delay_seconds: float) -> WorldSnapshot:
+# `out`, when supplied, is refilled in place instead of a fresh snapshot being
+# allocated — for the per-tick AI query only, whose caller owns the snapshot.
+func get_state_delayed(delay_seconds: float, out: WorldSnapshot = null) -> WorldSnapshot:
 	if _state_buffer_manager == null:
 		return null
 	var ts: float = NetworkManager.local_time() - delay_seconds
-	return _state_buffer_manager.get_state_at(ts)
+	return _state_buffer_manager.get_state_at(ts, out)
 
 
 # Historical {skater, position, velocity, hit, ghost} for every skater EXCEPT
