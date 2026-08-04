@@ -892,60 +892,27 @@ func test_tuck_cap_symmetric_for_minus_z_goal() -> void:
 			-26.6, 0.0, 1, 0.915, _tuck_cfg())
 	assert_almost_eq(cap, 0.263, 0.02)
 
-# ── desperation dive (slide_travel_distance / desperation_dive_is_hopeless) ───
-# The clearly-beaten effort check: the dive may only fire when even a committed
-# slide launched this tick still misses the shot at the goalie's own depth
-# plane by at least the clearance margin — pure effort, never a save mechanism.
-# Slide numbers mirror the controller exports (2.8 m/s push, 2.6 m/s² friction,
-# 0.12 s coil); reach 0.84 = pad_local_offset + butterfly_pad_half_width.
+# ── desperation dive (dive_is_only_answer) ────────────────────────────────────
+# Save selection once set coverage is beaten: the dive fires when the believed
+# shot line clears the set body's reach plus the anti-jitter buffer, and the
+# slide physics — not the trigger — decide whether it arrives. Reach 0.84 =
+# pad_local_offset + butterfly_pad_half_width; buffer 0.10 mirrors
+# slide_coverage_buffer.
 
-func test_slide_travel_decays_under_friction() -> void:
-	assert_almost_eq(GoalieBehaviorRules.slide_travel_distance(2.8, 2.6, 0.2),
-			0.508, 0.001)
+func test_line_past_the_pad_edge_calls_for_the_dive() -> void:
+	# Goalie dragged to x = 0.5 by a deke, believed impact at the far post
+	# (−0.8): 1.3 m of line against 0.84 m of set reach — staying put is no
+	# longer an answer.
+	assert_true(GoalieBehaviorRules.dive_is_only_answer(-0.8, 0.5, 0.84, 0.10))
 
-func test_slide_travel_caps_at_rest() -> void:
-	# Past v0/f the slide has stopped: travel plateaus at v0²/2f.
-	assert_almost_eq(GoalieBehaviorRules.slide_travel_distance(2.8, 2.6, 5.0),
-			1.508, 0.001)
+func test_line_at_the_body_keeps_the_set_read() -> void:
+	assert_false(GoalieBehaviorRules.dive_is_only_answer(0.4, 0.5, 0.84, 0.10))
 
-func test_slide_travel_zero_time_and_zero_friction() -> void:
-	assert_eq(GoalieBehaviorRules.slide_travel_distance(2.8, 2.6, 0.0), 0.0)
-	assert_almost_eq(GoalieBehaviorRules.slide_travel_distance(2.8, 0.0, 0.5),
-			1.4, 0.0001)
-
-func test_fast_far_side_shot_past_a_pulled_goalie_is_hopeless() -> void:
-	# Goalie dragged to (0.5, 25.3) by a deke; shot from (−0.5, 21) crossing his
-	# plane at x ≈ −1.02 in 0.17 s. Gap beyond the diving pad ≈ 0.68 m, slide
-	# travel in the time left ≈ 0.14 m → clearly beaten, dive for show.
-	assert_true(GoalieBehaviorRules.desperation_dive_is_hopeless(
-			Vector3(-0.5, 0, 21.0), Vector3(-3.0, 0, 25.0), 0.5, 25.3,
-			0.84, 0.12, 2.8, 2.6, 0.15))
-
-func test_shot_at_the_body_is_not_hopeless() -> void:
-	# Straight at him: gap <= 0, the normal read owns the save.
-	assert_false(GoalieBehaviorRules.desperation_dive_is_hopeless(
-			Vector3(0.5, 0, 21.0), Vector3(0.0, 0, 25.0), 0.5, 25.3,
-			0.84, 0.12, 2.8, 2.6, 0.15))
-
-func test_slow_shot_the_dive_could_reach_is_not_hopeless() -> void:
-	# A 5 m/s trickler: 0.66 s to his plane leaves ~1.1 m of slide travel
-	# against a 0.32 m gap — a dive COULD touch it, so the verdict must refuse
-	# (firing here would turn effort into saves — the buff the gate forbids).
-	assert_false(GoalieBehaviorRules.desperation_dive_is_hopeless(
-			Vector3(0.0, 0, 22.0), Vector3(-1.0, 0, 5.0), 0.5, 25.3,
-			0.84, 0.12, 2.8, 2.6, 0.15))
-
-func test_puck_already_past_the_plane_is_not_hopeless() -> void:
-	assert_false(GoalieBehaviorRules.desperation_dive_is_hopeless(
-			Vector3(0.0, 0, 25.5), Vector3(-3.0, 0, 25.0), 0.5, 25.3,
-			0.84, 0.12, 2.8, 2.6, 0.15))
-
-func test_clearance_margin_refuses_near_misses() -> void:
-	# Same beaten geometry as the hopeless case, but a margin wider than the
-	# miss distance: anything the pad might brush keeps the existing read.
-	assert_false(GoalieBehaviorRules.desperation_dive_is_hopeless(
-			Vector3(-0.5, 0, 21.0), Vector3(-3.0, 0, 25.0), 0.5, 25.3,
-			0.84, 0.12, 2.8, 2.6, 0.7))
+func test_line_grazing_the_pad_edge_is_a_save_in_progress() -> void:
+	# Inside reach + buffer: the set pads own it; diving would abandon a save
+	# already made.
+	assert_false(GoalieBehaviorRules.dive_is_only_answer(-0.4, 0.5, 0.84, 0.10))
+	assert_true(GoalieBehaviorRules.dive_is_only_answer(-0.45, 0.5, 0.84, 0.10))
 
 # ── backdoor_depth_cap ────────────────────────────────────────────────────────
 # Anticipatory depth: with a one-timer threat on the weak side, cap the

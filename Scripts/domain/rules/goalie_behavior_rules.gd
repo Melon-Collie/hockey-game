@@ -855,58 +855,31 @@ static func tuck_race_depth_cap(
 	return maxf(a * p + sqrt(disc), 0.0)
 
 
-# ── Desperation dive (the clearly-beaten effort check) ───────────────────────
-# Distance a committed butterfly slide travels in `t` seconds after push-off:
-# `initial_speed` decaying under `friction`, floored at rest. (The min-speed
-# snap in GoalieSlideBehavior fires ~1 s into a slide — long after any shot
-# this feeds has arrived — so the pure decay is the honest short-horizon model.)
-static func slide_travel_distance(initial_speed: float, friction: float, t: float) -> float:
-	if t <= 0.0 or initial_speed <= 0.0:
-		return 0.0
-	if friction <= 0.0:
-		return initial_speed * t
-	var tt: float = minf(t, initial_speed / friction)
-	return initial_speed * tt - 0.5 * friction * tt * tt
-
-
-# True when even a committed slide, launched THIS tick, cannot get a pad on
-# this shot — the "clearly beaten" verdict behind the desperation dive. The
-# dive is effort the player should SEE, not a save mechanism, so the gate must
-# guarantee the diving pad never touches a puck the normal read would have
-# conceded (beatable realism: additions may open windows, never buff).
+# ── Desperation dive (save selection once set coverage is beaten) ────────────
+# True when the goalie's believed shot line is beyond what his set body covers
+# — the point where staying put stops being an answer and the committed slide
+# is the only save selection left. Honest by construction rather than
+# outcome-gated: whether the dive ARRIVES is decided by the same slide physics
+# every other commit runs, so a clearly-beaten goalie visibly sells out and a
+# barely-beaten one occasionally gets a pad there — paying the committed
+# slide's real costs (mid-slide cannot correct, the recovery window, the
+# rebound left behind). An earlier version fired only when the race math
+# guaranteed the pad arrived late; that outcome-conditioning produced the
+# incoherent seam of MORE effort for a hopeless shot than a nearly-reachable
+# one, and the honest trigger needs no such guarantee because the protections
+# are structural — the caller fires it only AFTER the leg read (never a
+# pre-commit), and the decision runs on BELIEF (the impact he read, staleness
+# and all), which is what keeps deception paying: a sold corner sends the dive
+# the wrong way and vacates the true line.
 #
-# Measured at the GOALIE'S OWN DEPTH PLANE, not the goal line: contact, if
-# any, happens where the puck crosses HIS z, and a shot diverging from a
-# near-center release is closer to him there than its goal-line impact — the
-# goal-line gap overstates the miss and would let the dive brush pucks it was
-# told it can't reach.
-#
-# `clearance_margin` covers what the race math doesn't model: the puck's own
-# radius and the small coil-phase body swing before push-off. The shot must
-# clear the diving pad's predicted edge by at least that much, or the goalie
-# keeps his existing (non-diving) read.
-static func desperation_dive_is_hopeless(
-		puck_position: Vector3,
-		puck_velocity: Vector3,
+# `coverage_buffer` is the same anti-jitter allowance the pad-coverage slide
+# trigger uses — a line grazing the pad edge is a save in progress, not a beat.
+static func dive_is_only_answer(
+		believed_impact_x: float,
 		goalie_x: float,
-		goalie_z: float,
 		reach_half_width: float,
-		coil_duration: float,
-		slide_initial_speed: float,
-		slide_friction: float,
-		clearance_margin: float) -> bool:
-	if absf(puck_velocity.z) < 0.001:
-		return false
-	var t_plane: float = (goalie_z - puck_position.z) / puck_velocity.z
-	if t_plane <= 0.0:
-		return false
-	var x_at_plane: float = puck_position.x + puck_velocity.x * t_plane
-	var gap: float = absf(x_at_plane - goalie_x) - reach_half_width
-	if gap <= 0.0:
-		return false  # his body can still play it — the normal read owns it
-	var travel: float = slide_travel_distance(
-			slide_initial_speed, slide_friction, t_plane - coil_duration)
-	return gap > travel + clearance_margin
+		coverage_buffer: float) -> bool:
+	return absf(believed_impact_x - goalie_x) - reach_half_width > coverage_buffer
 
 
 # ── Rush retreat (speed-matched backflow) ────────────────────────────────────

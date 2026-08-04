@@ -480,18 +480,6 @@ extends Node
 # commits stay instant by design — a puck in flight cannot cut back, so the
 # cross-crease one-timer seal keeps its zero-hesitation commit.
 @export var lateral_commit_confirm_s: float = 0.15
-# ── Desperation dive (clearly-beaten effort) ─────────────────────────────────
-# A goalie who has read a shot he cannot reach — even pads-first — should still
-# SELL OUT toward it rather than watch it in from a set butterfly: the committed
-# slide launched at the shot line is the "trying and failing" a beaten real
-# goalie shows. Gated by GoalieBehaviorRules.desperation_dive_is_hopeless so it
-# is pure effort, never a save mechanism: it fires only when the race math says
-# the diving pad STILL arrives late at the goalie's own depth plane, with this
-# margin of clearance on top (beatable realism — additions may open windows,
-# never buff). The margin covers what the race doesn't model: the puck's radius
-# (0.065, GameRules.PUCK_COLLISION_RADIUS) plus the small coil-phase body swing
-# before push-off (~0.04 m at slide_max_rotation_deg) and pose slop.
-@export var desperation_dive_margin: float = 0.15
 
 # "An opposing stick is on this puck" — a poke-range radius, used by the cover
 # read to tell a loose puck he can safely sweep from one he has to smother.
@@ -1847,18 +1835,24 @@ func _update_shot_timer(delta: float) -> void:
 	_try_desperation_dive()
 
 
-# Desperation dive — the clearly-beaten effort (see the export doc-block). Runs
-# from BUTTERFLY only: the upright path enters butterfly on the same tick the
-# leg read fires (above), and a goalie already down (rebound scramble, read
-# while sealed) qualifies directly. Elevated reads keep the arm reach as their
-# effort — a pads-first dive under a high shot is the wrong motion.
+# Desperation dive — the save selection once set coverage is beaten
+# (GoalieBehaviorRules.dive_is_only_answer). Runs from BUTTERFLY only: the
+# upright path enters butterfly on the same tick the leg read fires (above),
+# and a goalie already down (rebound scramble, read while sealed) qualifies
+# directly. Elevated reads keep the arm reach as their effort — a pads-first
+# dive under a high shot is the wrong motion.
+#
+# Never a pre-commit: it fires only after `shot_timer` (the leg read) has
+# elapsed, on his BELIEVED impact line — read staleness applies, so a deceived
+# goalie dives to where he thinks the puck is going and vacates the true line.
+# Whether the dive arrives in time is the slide physics' verdict, not the
+# trigger's; in tight the read delay plus the coil already outlast the flight,
+# so the committed-slide costs (no mid-slide correction, recovery window) are
+# the honest price of the attempt.
 #
 # Deliberately bypasses can_commit_slide(): the post-release event lockout
 # exists so the goalie doesn't re-read a NEW lateral threat while processing a
-# shot, but the dive IS the answer to the shot being processed. The commit uses
-# his BELIEVED impact line (read staleness applies — a deceived goalie dives to
-# where he thinks the puck is going), while the hopeless verdict runs on the
-# true trajectory so the no-contact guarantee holds regardless of belief.
+# shot, but the dive IS the answer to the shot being processed.
 func _try_desperation_dive() -> void:
 	if _sm.current != State.BUTTERFLY:
 		return
@@ -1868,11 +1862,13 @@ func _try_desperation_dive() -> void:
 	# the correct non-reaction.
 	if absf(_reaction.impact_x - _goal_center_x) > net_half_width:
 		return
-	if not GoalieBehaviorRules.desperation_dive_is_hopeless(
-			puck.global_position, _loose_puck_velocity(), _current_x,
-			goalie.global_position.z, pad_local_offset + butterfly_pad_half_width,
-			slide_coil_duration, slide_initial_speed, slide_friction,
-			desperation_dive_margin):
+	# A puck already goal-side of him is decided — a dive behind the play is
+	# noise, not effort.
+	if _puck_past_save_plane():
+		return
+	if not GoalieBehaviorRules.dive_is_only_answer(
+			_reaction.impact_x, _current_x,
+			pad_local_offset + butterfly_pad_half_width, slide_coverage_buffer):
 		return
 	_commit_slide_toward(_reaction.impact_x)
 
