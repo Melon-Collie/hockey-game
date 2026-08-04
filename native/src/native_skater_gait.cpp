@@ -53,6 +53,11 @@ static double pivot_latch_sense(double abs_psi, double band_lo, double band_hi) 
 	return abs_psi < 0.5 * (band_lo + band_hi) ? 1.0 : -1.0;
 }
 
+// PivotRules.hold_depth
+static double pivot_hold_depth(double abs_psi, double band_lo, double ramp) {
+	return CLAMP((abs_psi - band_lo) / MAX(ramp, 0.001), 0.0, 1.0);
+}
+
 // PivotRules.phase
 static double pivot_phase(double abs_psi, double sense, double band_lo, double band_hi) {
 	const double p = CLAMP((abs_psi - band_lo) / MAX(band_hi - band_lo, 0.001), 0.0, 1.0);
@@ -567,7 +572,14 @@ int64_t NativeSkaterGait::apply(
 				-Math::deg_to_rad(cfg.hip_align_max_deg),
 				Math::deg_to_rad(cfg.hip_align_max_deg)) * align_engage;
 	}
+	const double abs_psi = Math::abs(psi);
+	const double band_lo = Math::deg_to_rad(cfg.pivot_band_lo_deg);
+	const double band_hi = Math::deg_to_rad(cfg.pivot_band_hi_deg);
 	align_target *= 1.0 - MAX(backpedal, Math::abs(shuffle));
+	// Backward-hemisphere fade of the toward-travel pull — see the GDScript
+	// reference.
+	align_target *= 1.0 - CLAMP(
+			(abs_psi - Math_PI * 0.5) / MAX(band_hi - Math_PI * 0.5, 0.001), 0.0, 1.0);
 	// ── Pivot: the facing↔travel swap (see the GDScript reference) ──
 	double psi_rate_raw = 0.0;
 	if (have_prev_psi) {
@@ -576,9 +588,6 @@ int64_t NativeSkaterGait::apply(
 	prev_psi = psi;
 	have_prev_psi = true;
 	psi_rate = Math::lerp(psi_rate, psi_rate_raw, MIN(PSI_RATE_EASE * delta, 1.0));
-	const double abs_psi = Math::abs(psi);
-	const double band_lo = Math::deg_to_rad(cfg.pivot_band_lo_deg);
-	const double band_hi = Math::deg_to_rad(cfg.pivot_band_hi_deg);
 	if (pivot_engaged) {
 		if (pivot_should_release(abs_psi, ground_speed, band_lo, band_hi,
 				cfg.pivot_min_speed)) {
@@ -589,7 +598,12 @@ int64_t NativeSkaterGait::apply(
 		pivot_engaged = true;
 		pivot_sense = pivot_latch_sense(abs_psi, band_lo, band_hi);
 	}
-	pivot_blend = Math::lerp(pivot_blend, pivot_engaged ? 1.0 : 0.0,
+	double pivot_target_blend = 0.0;
+	if (pivot_engaged) {
+		pivot_target_blend = pivot_hold_depth(abs_psi, band_lo,
+				Math::deg_to_rad(cfg.pivot_depth_ramp_deg));
+	}
+	pivot_blend = Math::lerp(pivot_blend, pivot_target_blend,
 			cfg.pivot_blend_speed * delta);
 	double align_speed = cfg.hip_align_speed;
 	if (pivot_blend > 0.001) {

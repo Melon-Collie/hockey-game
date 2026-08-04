@@ -37,6 +37,15 @@ static func latch_sense(abs_psi: float, band_lo: float, band_hi: float) -> float
 	return 1.0 if abs_psi < 0.5 * (band_lo + band_hi) else -1.0
 
 
+# Authority of the hold, ramping with how deep ψ sits in the band. The guard
+# for a control scheme where the same cursor also stickhandles and aims: a
+# quick flick that clips the band's shallow edge reads as a light hip lag —
+# which is what a real quick re-aim produces — while a genuine transit that
+# carries ψ deep earns the full hold.
+static func hold_depth(abs_psi: float, band_lo: float, ramp: float) -> float:
+	return clampf((abs_psi - band_lo) / maxf(ramp, 0.001), 0.0, 1.0)
+
+
 # Progress through the transit in [0, 1], derived from ψ itself — not a timer —
 # so a snap pivot and a slow open-hip glide read the same poses, and an aborted
 # swing unwinds back through them.

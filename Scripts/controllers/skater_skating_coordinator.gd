@@ -720,11 +720,23 @@ func apply(delta: float) -> void:
 		align_target = clampf(-psi,
 				-deg_to_rad(_controller.hip_align_max_deg),
 				deg_to_rad(_controller.hip_align_max_deg)) * align_engage
+	var abs_psi: float = absf(psi)
+	var band_lo: float = deg_to_rad(_controller.pivot_band_lo_deg)
+	var band_hi: float = deg_to_rad(_controller.pivot_band_hi_deg)
 	# A deliberate backpedal or sidestep is an AIM-LOCKED stance — the
 	# defender back-skates and the net-front shuffler side-steps with hips
 	# square to the chest, so intent suppresses the travel alignment and the
 	# body-frame backward / lateral gaits play in full.
 	align_target *= 1.0 - maxf(_backpedal, absf(_shuffle))
+	# Hips align TOWARD travel only while travel is broadly ahead: past 90° the
+	# sensible anchor flips to hips-square (the backward C-cut stance), so the
+	# clamp's ±hip_align_max pull fades out geometrically across the band's
+	# back half. The intent suppression above covers the deliberate backpedal;
+	# this covers the same geometry when no intent is held — most visibly the
+	# pivot's release tail, which previously handed the hips from the
+	# step-around straight to a ±50° yank toward a behind-the-back travel line.
+	align_target *= 1.0 - clampf(
+			(abs_psi - PI * 0.5) / maxf(band_hi - PI * 0.5, 0.001), 0.0, 1.0)
 	# ── Pivot: the facing↔travel swap ──────────────────────────────────────────
 	# ψ transiting the lateral band at speed is a pivot — the one event the
 	# twin-stick scheme produces two ways (cursor swung across a held travel
@@ -744,9 +756,6 @@ func apply(delta: float) -> void:
 	_prev_psi = psi
 	_have_prev_psi = true
 	_psi_rate = lerpf(_psi_rate, psi_rate_raw, minf(_PSI_RATE_EASE * delta, 1.0))
-	var abs_psi: float = absf(psi)
-	var band_lo: float = deg_to_rad(_controller.pivot_band_lo_deg)
-	var band_hi: float = deg_to_rad(_controller.pivot_band_hi_deg)
 	if _pivot_engaged:
 		if PivotRules.should_release(abs_psi, ground_speed, band_lo, band_hi,
 				_controller.pivot_min_speed):
@@ -755,7 +764,15 @@ func apply(delta: float) -> void:
 			band_lo, band_hi, _controller.pivot_rate_min, _controller.pivot_min_speed):
 		_pivot_engaged = true
 		_pivot_sense = PivotRules.latch_sense(abs_psi, band_lo, band_hi)
-	_pivot_blend = lerpf(_pivot_blend, 1.0 if _pivot_engaged else 0.0,
+	# The blend eases toward depth-scaled authority, not a latched 1: a quick
+	# aim flick that clips the band's shallow edge gets only a light hip lag
+	# (which is what a real fast re-aim produces), while a genuine transit
+	# that carries ψ deep earns the full hold.
+	var pivot_target_blend: float = 0.0
+	if _pivot_engaged:
+		pivot_target_blend = PivotRules.hold_depth(abs_psi, band_lo,
+				deg_to_rad(_controller.pivot_depth_ramp_deg))
+	_pivot_blend = lerpf(_pivot_blend, pivot_target_blend,
 			_controller.pivot_blend_speed * delta)
 	var align_speed: float = _controller.hip_align_speed
 	if _pivot_blend > 0.001:

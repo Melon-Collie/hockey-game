@@ -36,6 +36,15 @@ func test_sense_latch() -> void:
 	assert_eq(PivotRules.latch_sense(deg_to_rad(120.0), LO, HI), -1.0)
 
 
+func test_hold_depth_ramps_with_band_penetration() -> void:
+	var ramp: float = deg_to_rad(50.0)
+	assert_almost_eq(PivotRules.hold_depth(LO, LO, ramp), 0.0, 0.001,
+			"clipping the band edge earns no authority")
+	assert_almost_eq(PivotRules.hold_depth(LO + ramp * 0.5, LO, ramp), 0.5, 0.001)
+	assert_almost_eq(PivotRules.hold_depth(deg_to_rad(170.0), LO, ramp), 1.0, 0.001,
+			"a deep transit earns the full hold")
+
+
 func test_phase_tracks_transit_direction() -> void:
 	assert_almost_eq(PivotRules.phase(LO, 1.0, LO, HI), 0.0, 0.001)
 	assert_almost_eq(PivotRules.phase(HI, 1.0, LO, HI), 1.0, 0.001)

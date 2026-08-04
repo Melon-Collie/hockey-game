@@ -56,6 +56,32 @@ func test_cursor_swing_holds_hips_past_the_clamp_then_settles() -> void:
 			+ "(%.1f°)" % rad_to_deg(absf(_coord.travel_align_yaw)))
 
 
+func test_aim_flick_gets_hip_lag_not_a_full_pivot() -> void:
+	for _i: int in 30:
+		_coord.apply(DT)
+	# A stickhandling-style flick: out to 75° and back inside 0.3 s. The same
+	# cursor drives aiming, so this must read as a light hip lag — bounded well
+	# under the deep transit's hold — and settle back out.
+	var peak: float = 0.0
+	for i: int in 18:
+		var a: float = deg_to_rad(75.0) * float(i + 1) / 18.0
+		_skater.set_facing(Vector2(sin(a), -cos(a)).normalized())
+		_coord.apply(DT)
+		peak = maxf(peak, absf(_coord.travel_align_yaw))
+	for i: int in 18:
+		var a: float = deg_to_rad(75.0) * float(17 - i) / 18.0
+		_skater.set_facing(Vector2(sin(a), -cos(a)).normalized())
+		_coord.apply(DT)
+		peak = maxf(peak, absf(_coord.travel_align_yaw))
+	assert_lt(peak, deg_to_rad(35.0),
+			"an aim flick must not whip the hips into a full pivot hold "
+			+ "(peak %.1f°)" % rad_to_deg(peak))
+	for _i: int in 90:
+		_coord.apply(DT)
+	assert_lt(absf(_coord.travel_align_yaw), deg_to_rad(8.0),
+			"the flick's hip lag should settle back out")
+
+
 func test_coordinated_carve_does_not_trip_the_pivot() -> void:
 	for _i: int in 30:
 		_coord.apply(DT)
