@@ -15,6 +15,17 @@ static func make_configured() -> RefCounted:
 	if not ClassDB.class_exists(&"NativePuckStep"):
 		return null
 	var native: RefCounted = ClassDB.instantiate(&"NativePuckStep")
+	# Stale-binary guard. set_net_geometry's ARITY grew with the mouth-corner
+	# bends, and a binary predating them still exports the class and the method —
+	# so the configure call below would fail at runtime rather than degrade. Unlike
+	# NativeTopHandIK's property write (which quietly no-ops), that breaks the puck
+	# outright, so probe for a method the old binary cannot have and fall back to
+	# the GDScript step instead. NativeKernels' class census cannot see this: the
+	# class is present, it is the shape that moved.
+	if not native.has_method(&"resolve_crossbar_bends"):
+		push_warning("NativePuckStep predates the mouth-corner bends — "
+				+ "using the GDScript puck step. Rebuild native/ (bash native/build.sh).")
+		return null
 	native.set_rink_geometry(
 			GameRules.INNER_HALF_WIDTH, GameRules.INNER_HALF_LENGTH,
 			GameRules.INNER_CORNER_RADIUS,
