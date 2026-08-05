@@ -80,6 +80,13 @@ static func resolve(
 		result.pipe_normal = Vector3(post.y, 0.0, post.z)
 		result.offset = result.pipe_normal * post.x
 		return true
+	# The mouth-corner bends, so the blade sees the same three-piece frame the puck
+	# does. Sampled at the blade's closest approach to the bend's centre rather
+	# than swept along it: unlike the post — which a stick sweeps ACROSS at ice
+	# level, the case that decides wraparounds — the bend is only reachable by a
+	# raised stick already near the crown, where a point sample is honest.
+	if _resolve_bend(heel, toe, end_z, half_thickness, result):
+		return true
 
 	# ── Twine: compliant, and two-sided like the mesh it models ──────────────
 	# The surface the blade stops at is the twine pushed back by `mesh_give`, so
@@ -98,6 +105,36 @@ static func resolve(
 	if offset == Vector3.ZERO:
 		return false
 	result.offset = offset
+	return true
+
+
+# Blade vs a mouth-corner bend. Samples the blade at its closest approach to the
+# bend's centre, then does the same sphere-vs-centre-line test the puck does.
+# Fills `result` and returns true on contact.
+static func _resolve_bend(
+		heel: Vector3, toe: Vector3, end_z: float, half_thickness: float,
+		result: Result) -> bool:
+	var lo: float = NetGeometry.post_top_y() - half_thickness
+	var hi: float = GameRules.NET_HEIGHT + half_thickness
+	if (heel.y < lo and toe.y < lo) or (heel.y > hi and toe.y > hi):
+		return false
+	# The bend the blade is nearest, then the point on the blade nearest IT.
+	var side: float = 1.0 if (heel.x + toe.x) >= 0.0 else -1.0
+	var centre := Vector3(
+			side * GameRules.NET_CROWN_HALF_WIDTH, NetGeometry.post_top_y(), end_z)
+	var span: Vector3 = toe - heel
+	var len_sq: float = span.length_squared()
+	var sample: Vector3 = heel
+	if len_sq > 0.000001:
+		sample = heel + span * clampf((centre - heel).dot(span) / len_sq, 0.0, 1.0)
+	var axis: Vector3 = NetGeometry.closest_point_on_bend(sample, end_z)
+	var offset: Vector3 = sample - axis
+	var d: float = offset.length()
+	var reach: float = GameRules.NET_POST_RADIUS + half_thickness
+	if d >= reach or d < 0.000001:
+		return false
+	result.pipe_normal = offset / d
+	result.offset = result.pipe_normal * (reach - d)
 	return true
 
 

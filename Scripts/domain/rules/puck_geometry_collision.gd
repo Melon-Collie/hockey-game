@@ -57,9 +57,13 @@ static func resolve_posts(pos: Vector3, vel: Vector3, puck_radius: float, result
 	# Cheap early-out: the puck is nowhere near this end's goal line.
 	if absf(pos.z - end_z) > 1.0 + puck_radius + GameRules.NET_POST_RADIUS:
 		return false
-	# The pipes end at the crossbar — above it there is no post to hit (an airborne
-	# puck over the bar is crossbar / top-net territory, not a phantom pipe ping).
-	if pos.y > GameRules.NET_HEIGHT + puck_radius:
+	# The straight pipe ends where the mouth-corner bend begins; above that the
+	# frame curves inward and resolve_crossbar_bends owns it. Modelling the post
+	# all the way to the crossbar stood a straight pipe where the real frame has
+	# already swept in — over-blocking below the crown and, because the circle at
+	# NET_HALF_WIDTH cannot reach the crossbar's end at NET_CROWN_HALF_WIDTH, still
+	# leaving a seam a top-corner shot flew through (issue #598).
+	if pos.y > NetGeometry.post_top_y() + puck_radius:
 		return false
 	# Nearer post first (per-tick path: two explicit checks, no per-call array).
 	var first_x: float = GameRules.NET_HALF_WIDTH if pos.x >= 0.0 else -GameRules.NET_HALF_WIDTH
@@ -113,6 +117,45 @@ static func resolve_crossbar(pos: Vector3, vel: Vector3, puck_radius: float, res
 	var ejected: Vector2 = Vector2(GameRules.NET_HEIGHT, end_z) + n * combined_r
 	result.position = Vector3(pos.x, ejected.x, ejected.y)
 	result.velocity = reflect_3d(vel, Vector3(0.0, n.x, n.y), POST_RESTITUTION)
+	result.hit = true
+	return true
+
+
+# Resolve a puck against the two MOUTH-CORNER BENDS — the quarter-torus elbows
+# joining each post top to its end of the crossbar. Together with resolve_posts
+# (below the bend) and resolve_crossbar (inside the crown) these tile the frame
+# continuously, so a puck leaving one surface is picked up by the next.
+#
+# The test is sphere-vs-torus reduced to a point test: find the nearest point on
+# the bend's centre-line (NetGeometry.closest_point_on_bend) and treat the pipe as
+# that point's tube radius. Reflects at POST_RESTITUTION like the rest of the
+# iron, through the true 3D normal — a corner ping deflects up and sideways, which
+# a horizontal-only deflect could not express.
+static func resolve_crossbar_bends(
+		pos: Vector3, vel: Vector3, puck_radius: float, result: Result) -> bool:
+	result.hit = false
+	result.position = pos
+	result.velocity = vel
+	# Only the corner band, laterally and vertically — cheap rejects first.
+	var ax: float = absf(pos.x)
+	if ax < GameRules.NET_CROWN_HALF_WIDTH - puck_radius \
+			or ax > GameRules.NET_HALF_WIDTH + puck_radius:
+		return false
+	if pos.y < NetGeometry.post_top_y() - puck_radius \
+			or pos.y > GameRules.NET_HEIGHT + puck_radius:
+		return false
+	var end_z: float = NetGeometry.near_end_z(pos.z)
+	if absf(pos.z - end_z) > puck_radius + GameRules.NET_POST_RADIUS:
+		return false
+	var axis: Vector3 = NetGeometry.closest_point_on_bend(pos, end_z)
+	var offset: Vector3 = pos - axis
+	var d: float = offset.length()
+	var combined_r: float = puck_radius + GameRules.NET_POST_RADIUS
+	if d >= combined_r or d < 1e-6:
+		return false
+	var n: Vector3 = offset / d
+	result.position = axis + n * combined_r
+	result.velocity = reflect_3d(vel, n, POST_RESTITUTION)
 	result.hit = true
 	return true
 

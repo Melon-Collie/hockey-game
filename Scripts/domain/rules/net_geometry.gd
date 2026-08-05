@@ -73,6 +73,133 @@ static func interior_or_mouth(p: Vector3) -> bool:
 		return false
 	return absf(p.x) < cavity_half_width()
 
+# Height the straight post reaches before the mouth-corner bend takes over. Above
+# this the frame is the bend, not the pipe — modelling the post as a full-height
+# cylinder to the crossbar both over-blocked (a straight pipe standing where the
+# real frame has already curved inward) and left a seam near the crown, which is
+# what let top-corner shots through the visible frame (issue #598).
+static func post_top_y() -> float:
+	return GameRules.NET_HEIGHT - GameRules.NET_MOUTH_CORNER_RADIUS
+
+# Nearest point on the centre-line of the mouth-corner bend at this end, on the
+# side `p` is on. The bend is a quarter circle in the plane z = `end_z`, centred
+# above the crossbar end at (±NET_CROWN_HALF_WIDTH, post_top_y) and sweeping from
+# the post top (offset +x) round to the crossbar end (offset +y), matching how
+# HockeyGoal builds it.
+#
+# Consumers do their own sphere-vs-point test against the result with their own
+# clearance, so the pipe's tube radius lives with the response, not here.
+static func closest_point_on_bend(p: Vector3, end_z: float) -> Vector3:
+	var side: float = 1.0 if p.x >= 0.0 else -1.0
+	var cx: float = side * GameRules.NET_CROWN_HALF_WIDTH
+	var cy: float = post_top_y()
+	var r: float = GameRules.NET_MOUTH_CORNER_RADIUS
+	# Local quarter-plane coords: u toward the post, v toward the crossbar. Both
+	# clamped non-negative BEFORE normalising, which projects onto the quarter arc
+	# and handles the two endpoints without a separate case.
+	var u: float = maxf((p.x - cx) * side, 0.0)
+	var v: float = maxf(p.y - cy, 0.0)
+	if u <= 0.0 and v <= 0.0:
+		# Inside the corner, equidistant-ish: bias to the post end, the surface a
+		# body arriving from below meets first.
+		u = 1.0
+	var inv: float = r / sqrt(u * u + v * v)
+	return Vector3(cx + side * u * inv, cy + v * inv, end_z)
+
+# Distance from `origin_xz` along unit `dir_xz` to the first SOLID face of the
+# near net at height `y`, or INF when the ray never meets one. Feeds the blade's
+# reach limit, so a stick simply cannot be aimed through the mesh — the same
+# treatment the boards get, applied to the other obstacle on the ice.
+#
+# The mouth is not a face. A ray entering through the opening (crossing the
+# goal-line plane between the post inner faces, travelling inward) returns INF:
+# reaching into the net from the front is the whole point of net-front play, and
+# the limit must not be what stops a wraparound. Every other approach — from a
+# side, from behind, across the back mesh — meets twine and stops there.
+#
+# Slab method against the cavity, using the back depth at `y` (blades work near
+# the ice, where that is nearly the full NET_DEPTH). An origin already inside the
+# cavity returns INF: the reach limit is for keeping the stick out, and a body
+# already in there is the collision's problem, not the limit's.
+static func ray_to_solid_face(origin_xz: Vector2, dir_xz: Vector2, y: float) -> float:
+	if dir_xz.length_squared() < 0.000001:
+		return INF
+	# Canonical frame: `u` runs from the goal line into the cage at the near end,
+	# so both ends share one set of comparisons.
+	var s: float = signf(near_end_z(origin_xz.y))
+	var u: float = origin_xz.y * s
+	var du: float = dir_xz.y * s
+	var hw: float = cavity_half_width()
+	var u_lo: float = GameRules.GOAL_LINE_Z
+	var u_hi: float = GameRules.GOAL_LINE_Z + back_depth_at_height(y)
+
+	var tx_lo: float = -INF
+	var tx_hi: float = INF
+	if absf(dir_xz.x) < 0.000001:
+		if absf(origin_xz.x) > hw:
+			return INF  # parallel to the side planes and outside them
+	else:
+		var a: float = (-hw - origin_xz.x) / dir_xz.x
+		var b: float = (hw - origin_xz.x) / dir_xz.x
+		tx_lo = minf(a, b)
+		tx_hi = maxf(a, b)
+
+	var tu_lo: float = -INF
+	var tu_hi: float = INF
+	if absf(du) < 0.000001:
+		if u < u_lo or u > u_hi:
+			return INF
+	else:
+		var a2: float = (u_lo - u) / du
+		var b2: float = (u_hi - u) / du
+		tu_lo = minf(a2, b2)
+		tu_hi = maxf(a2, b2)
+
+	var t_enter: float = maxf(tx_lo, tu_lo)
+	var t_exit: float = minf(tx_hi, tu_hi)
+	if t_enter > t_exit or t_exit < 0.0 or t_enter < 0.0:
+		return INF
+	# Entry through the OPEN mouth: the limiting slab is the depth one, entered at
+	# its near plane while travelling inward, within the clear span between the
+	# posts. Nothing solid there, so the panels do not bound the reach — but the
+	# PIPES still can, and at the mouth they are exactly what a wraparound is
+	# threading, so they are tested either way below.
+	if tu_lo >= tx_lo and du > 0.0:
+		var entry_x: float = origin_xz.x + dir_xz.x * t_enter
+		if absf(entry_x) < hw - GameRules.NET_POST_RADIUS:
+			return INF
+	return t_enter
+
+
+# Distance along the ray to the nearer post pipe, or INF. Separate from the panel
+# slab above because a ray can miss the cavity entirely and still meet iron — a
+# stick crossing the goal-line plane AT a post passes outside the side plane, so
+# the slab declines it while the pipe is squarely in the way.
+static func ray_to_post(origin_xz: Vector2, dir_xz: Vector2, clearance: float) -> float:
+	var end_z: float = near_end_z(origin_xz.y)
+	var r: float = GameRules.NET_POST_RADIUS + clearance
+	var best: float = INF
+	for side: float in [-1.0, 1.0]:
+		var m: Vector2 = origin_xz - Vector2(side * GameRules.NET_HALF_WIDTH, end_z)
+		var b: float = m.dot(dir_xz)
+		var c: float = m.length_squared() - r * r
+		if c < 0.0:
+			return 0.0  # already touching this pipe
+		var disc: float = b * b - c
+		if disc < 0.0:
+			continue
+		var t: float = -b - sqrt(disc)
+		if t >= 0.0:
+			best = minf(best, t)
+	return best
+
+
+# The nearer of the two: whichever part of the net the aim line meets first.
+static func ray_to_net(origin_xz: Vector2, dir_xz: Vector2, y: float, clearance: float) -> float:
+	return minf(
+			ray_to_solid_face(origin_xz, dir_xz, y),
+			ray_to_post(origin_xz, dir_xz, clearance))
+
 # Closest approach between the XZ segment `a`→`b` and the vertical post pipe at
 # (`post_x`, `end_z`), as (overlap, normal.x, normal.z) packed into a Vector3 —
 # overlap > 0 means contact, and the normal points from the pipe axis out toward

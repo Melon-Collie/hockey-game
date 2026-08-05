@@ -59,10 +59,26 @@ func _make_native() -> RefCounted:
 
 
 # Random puck state, biased toward the goal frame where the branchy geometry
-# lives (~60% near a net, ~40% open ice), with a healthy airborne share.
+# lives (~15% right at a mouth corner, ~45% elsewhere near a net, ~40% open ice),
+# with a healthy airborne share. The corner bucket is explicit because the bend
+# band is only ~10 cm on a side — the general near-net bias reaches it, but too
+# rarely to fuzz a branch that decides top-corner goals.
 func _random_state() -> Array:
 	var pos: Vector3
-	if _rng.randf() < 0.6:
+	var roll: float = _rng.randf()
+	if roll < 0.15:
+		var corner_end: float = 1.0 if _rng.randf() < 0.5 else -1.0
+		var corner_side: float = 1.0 if _rng.randf() < 0.5 else -1.0
+		pos = Vector3(
+				corner_side * _rng.randf_range(
+						GameRules.NET_CROWN_HALF_WIDTH - 0.15,
+						GameRules.NET_HALF_WIDTH + 0.15),
+				_rng.randf_range(
+						GameRules.NET_HEIGHT - GameRules.NET_MOUTH_CORNER_RADIUS - 0.15,
+						GameRules.NET_HEIGHT + 0.15),
+				corner_end * _rng.randf_range(
+						GameRules.GOAL_LINE_Z - 0.3, GameRules.GOAL_LINE_Z + 0.3))
+	elif roll < 0.6:
 		var end_sign: float = 1.0 if _rng.randf() < 0.5 else -1.0
 		pos = Vector3(
 				_rng.randf_range(-2.5, 2.5),

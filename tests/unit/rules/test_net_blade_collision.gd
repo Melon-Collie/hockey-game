@@ -188,3 +188,63 @@ func test_result_is_reset_between_resolves() -> void:
 	var res: NetBladeCollision.Result = _resolve(clear, clear, _flat_toe(clear))
 	assert_false(res.hit(), "clear of everything")
 	assert_eq(res.pipe_normal, Vector3.ZERO, "and the stale strip signal is gone")
+
+# ── Reach limit: the net bounds the aim, like the boards ──────────────────────
+# The stick is stopped BEFORE it is aimed through the mesh, rather than solved to
+# full reach and clamped back. The mouth is exempt — the limit must never be what
+# stops a wraparound.
+
+func _cast(from: Vector2, toward: Vector2) -> float:
+	return NetGeometry.ray_to_net(from, (toward - from).normalized(), ICE, THICK)
+
+
+func test_reaching_at_the_side_mesh_from_beside_the_cage_is_bounded() -> void:
+	var from := Vector2(1.9, GL + 0.45)
+	var t: float = _cast(from, Vector2(0.0, GL + 0.45))
+	assert_lt(t, INF, "the side twine bounds the reach")
+	var hit_x: float = from.x - t
+	assert_almost_eq(hit_x, HW, 0.01, "stopped at the side twine, not inside it")
+
+
+func test_reaching_at_the_back_mesh_from_behind_is_bounded() -> void:
+	var from := Vector2(0.0, GL + 2.2)
+	var t: float = _cast(from, Vector2(0.0, GL + 0.2))
+	assert_lt(t, INF, "the back twine bounds the reach")
+	assert_almost_eq(from.y - t, GL + NetGeometry.back_depth_at_height(ICE), 0.01,
+			"stopped on the back twine at blade height")
+
+
+func test_reaching_in_through_the_mouth_is_never_bounded() -> void:
+	# Net-front play, wraparounds and jams all live here. If this ever bounds,
+	# the limit has become the thing that stops a legal tuck.
+	var from := Vector2(0.0, GL - 1.2)
+	assert_true(is_inf(_cast(from, Vector2(0.0, GL + 0.5))), "straight in through the mouth")
+	assert_true(is_inf(_cast(Vector2(0.5, GL - 0.8), Vector2(-0.2, GL + 0.4))),
+			"angled in through the mouth")
+
+
+func test_crossing_the_goal_line_at_the_post_is_bounded() -> void:
+	# Just outside the clear span between the post inner faces: that is frame and
+	# side netting, not opening, so the reach stops.
+	var from := Vector2(HW + 0.02, GL - 0.6)
+	var t: float = _cast(from, Vector2(HW + 0.02, GL + 0.6))
+	assert_lt(t, INF, "a reach crossing the line at the post meets iron")
+	# The panel slab alone declines this ray — at |x| > NET_HALF_WIDTH it never
+	# enters the cavity — so it is the PIPE that bounds it, which is why the cast
+	# tests both.
+	assert_true(is_inf(NetGeometry.ray_to_solid_face(from, Vector2(0.0, 1.0), ICE)),
+			"panels alone do not see it")
+	assert_almost_eq(from.y + t, GL - GameRules.NET_POST_RADIUS - THICK, 0.02,
+			"stopped on the near face of the pipe")
+
+
+func test_open_ice_is_unbounded_by_the_net() -> void:
+	assert_true(is_inf(_cast(Vector2(4.0, GL - 6.0), Vector2(6.0, GL - 6.0))),
+			"nowhere near the cage")
+
+
+func test_limit_holds_for_the_other_end() -> void:
+	var from := Vector2(1.9, -GL - 0.45)
+	assert_lt(_cast(from, Vector2(0.0, -GL - 0.45)), INF, "-Z end bounds the same way")
+	assert_true(is_inf(_cast(Vector2(0.0, -GL + 1.2), Vector2(0.0, -GL - 0.5))),
+			"-Z mouth is open the same way")

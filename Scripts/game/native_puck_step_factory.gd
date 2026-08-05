@@ -27,7 +27,8 @@ static func make_configured() -> RefCounted:
 			GameRules.GOAL_LINE_Z, GameRules.NET_HALF_WIDTH,
 			GameRules.NET_POST_RADIUS, GameRules.NET_DEPTH,
 			GameRules.NET_BACK_HALF_WIDTH, GameRules.NET_HEIGHT,
-			GameRules.NET_CROWN_HALF_WIDTH, GameRules.NET_TOP_DEPTH,
+			GameRules.NET_CROWN_HALF_WIDTH, GameRules.NET_MOUTH_CORNER_RADIUS,
+			GameRules.NET_TOP_DEPTH,
 			GameRules.PUCK_COLLISION_HALF_HEIGHT,
 			PuckGeometryCollision.POST_RESTITUTION,
 			PuckGeometryCollision.NET_RESTITUTION)

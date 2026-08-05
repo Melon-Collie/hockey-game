@@ -82,7 +82,10 @@ static func step_frame_substep(pos: Vector3, vel: Vector3, sub_dt: float,
 	var stepped: Transform3D = advance_loose_puck(pos, vel, sub_dt, max_speed, ice_height, max_height)
 	var p: Vector3 = stepped.origin
 	var v: Vector3 = stepped.basis.x
+	# The frame in three pieces — post, corner bend, crossbar — which tile
+	# continuously (see NetGeometry.post_top_y). All three count as touching iron.
 	if PuckGeometryCollision.resolve_posts(p, v, puck_radius, frame_scratch) \
+			or PuckGeometryCollision.resolve_crossbar_bends(p, v, puck_radius, frame_scratch) \
 			or PuckGeometryCollision.resolve_crossbar(p, v, puck_radius, frame_scratch):
 		p = frame_scratch.position
 		v = frame_scratch.velocity

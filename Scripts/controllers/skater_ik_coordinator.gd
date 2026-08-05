@@ -464,8 +464,18 @@ func _board_reach_limit(target_blade_xz: Vector2, shoulder_world: Vector3) -> fl
 	var dir := Vector2(aim_world.x, aim_world.z)
 	if dir.length_squared() < 0.000001:
 		return INF
-	return GameRules.ray_to_rink_inner(
-			Vector2(shoulder_world.x, shoulder_world.z), dir.normalized())
+	var origin := Vector2(shoulder_world.x, shoulder_world.z)
+	var unit: Vector2 = dir.normalized()
+	# The net is the second obstacle on this aim line, and it earns the same
+	# treatment as the boards: bound the REACH so the stick is never aimed through
+	# the mesh, instead of letting it solve full reach and clamping the pose back.
+	# NetGeometry.ray_to_solid_face leaves the open mouth unlimited, so reaching in
+	# from the front — the whole of net-front play — is untouched.
+	return minf(
+			GameRules.ray_to_rink_inner(origin, unit),
+			NetGeometry.ray_to_net(
+					origin, unit, _controller.blade_height,
+					_controller.net_blade_half_thickness))
 
 # While carrying, offset the IK target perpendicular to the shoulder→target
 # direction so the blade marker (and therefore the visible blade + stick

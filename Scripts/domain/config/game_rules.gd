@@ -92,6 +92,13 @@ const NET_DEPTH: float = 1.02            # goal depth from goal line to back fra
 const NET_BACK_HALF_WIDTH: float = 1.02  # half-width at back of net (trapezoid wider end)
 const NET_HEIGHT: float = 1.22           # crossbar height (pipe centerline) — must match HockeyGoal.NET_HEIGHT
 const NET_CROWN_HALF_WIDTH: float = 0.815  # half-span of the crossbar / top net panel — must match HockeyGoal.CROWN_HALF_WIDTH
+# Radius of the post-to-crossbar bend — must match HockeyGoal.MOUTH_CORNER_RADIUS.
+# The frame is continuous by construction: the post stands to
+# NET_HEIGHT − this, the bend sweeps a quarter circle from there to the crossbar
+# end, and NET_CROWN_HALF_WIDTH is NET_HALF_WIDTH − this (which is how HockeyGoal
+# derives it). NetGeometry relies on that tiling — a puck leaving one surface
+# must be picked up by the next with no seam.
+const NET_MOUTH_CORNER_RADIUS: float = 0.10
 const NET_TOP_DEPTH: float = 0.559       # depth of the top net panel from the goal line — must match HockeyGoal.TOP_DEPTH
 # Coarse padding for the "is this over/near the net" footprint query below. NOT a
 # collision surface: the blade and the puck both collide with the real cage

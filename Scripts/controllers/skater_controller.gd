@@ -880,14 +880,12 @@ var show_one_timer_indicator: bool = false
 # radius so the blade stops on the outside of the iron rather than centre-on.
 @export var net_blade_half_thickness: float = 0.012
 # How deep the twine lets the blade sink before stopping it. The mesh is
-# compliant and a real stick does bury itself in it; this is what replaces the
-# old flat exclusion box's hard invisible wall. Wants to read as "buried in the
-# mesh" while staying well short of reaching a puck on the far side.
-@export var net_mesh_give: float = 0.12
-# How far the net may push a CARRIED puck off its pin before the carry breaks.
-# Same physical story as wall_squeeze_threshold on the boards — you press, the
-# surface gives, and past a point you can't hold it any more.
-@export var carry_net_squeeze_threshold: float = 0.06
+# compliant and a real stick does bury itself in it, but only just — reach is
+# bounded before the blade ever gets here (SkaterIKCoordinator._board_reach_limit
+# casts the net as well as the boards), so this only has to soften the residual
+# contact. Deep values read as the stick passing THROUGH the net, which is worse
+# than the hard wall it replaced.
+@export var net_mesh_give: float = 0.04
 
 # ── Goalie Body Block ─────────────────────────────────────────────────────────
 # XZ cylinder radius used to push the blade (and carried puck) away from a
@@ -1844,57 +1842,71 @@ func _do_release(direction: Vector3, power: float) -> void:
 
 
 # Net COLLISION for the carried puck. The puck rides a pin off the blade
-# (get_carry_target_global), so it is a body in its own right and gets the same
-# net every other body gets — pipes hard, twine compliant. This is the only place
-# a net contact can cost you the puck; the blade's own collision
+# (get_carry_target_raw), so it is a body in its own right and gets the same net
+# every other body gets — pipes hard, twine solid but non-punitive. This is the
+# only place a net contact can cost you the puck; the blade's own collision
 # (SkaterIKCoordinator.resolve_blade_against_net) is pose-only.
+#
+# Two things this must do, and the goal bug came from doing only the first:
+#
+# 1. RESOLVE the pin, not merely test it. Puck._physics_process places the puck
+#    at get_carry_target_global() every tick, so a correction that is computed
+#    and discarded leaves the puck sitting wherever the blade put it — inside the
+#    mesh included.
+# 2. Remember the RESOLVED pin as the next sweep's start. The twine is two-sided
+#    and NetGeometry.interior_or_mouth classifies from the segment start, so a
+#    `prev` that was allowed inside the cavity flips the next tick's faces from
+#    "push out" to "hold in". Feeding the raw pin back let one tick of
+#    penetration latch: a stick swiped laterally behind the goal line walked the
+#    puck through the side mesh and across the line. `prev` is therefore always a
+#    position the net has already vouched for — the same inductive contract the
+#    old clamp kept.
 #
 # There is no legality test here and none anywhere else. A puck ends up in the
 # cage only by going through the mouth, because the mouth is the only opening and
-# every other face is now solid to both the puck and the stick. That is what lets
-# GoalDetectionRules trust a carried puck the same way it already trusts a loose
-# one — see docs/net-play-plan.md §3.
-#
-# One pin or the other is live (is_slapshot_pinning dispatches on the PIN, not on
-# a state name, so any state adopting the wind-up pin is covered the day it does).
-# They no longer differ in RULE — a wind-up pin and a carry pin collide
-# identically — only in where the pin sits.
+# every other face is solid to both the puck and the stick — see
+# docs/net-play-plan.md §3.
 func _collide_pinned_puck_with_net() -> void:
 	if not has_puck:
 		_has_prev_carry_pin = false
+		skater.carry_pin_correction = Vector3.ZERO
 		return
-	var pin: Vector3 = skater.get_carry_target_global()
+	var raw: Vector3 = skater.get_carry_target_raw()
 	# Seed the sweep from the pin itself on the first carry tick: with no prior
 	# sample there is no segment, and a stationary point classifies off its own
 	# position exactly as the loose puck's first sub-step does.
-	var prev: Vector3 = _prev_carry_pin if _has_prev_carry_pin else pin
-	_prev_carry_pin = pin
-	_has_prev_carry_pin = true
+	var prev: Vector3 = _prev_carry_pin if _has_prev_carry_pin else raw
 
 	# IRON — a wraparound that clangs the post loses the puck, and it leaves along
 	# the pipe's OWN reflection rather than a generic shove, so the rebound is the
 	# collision the puck would have had if it had never been carried. Live at
-	# POST_RESTITUTION, so a ring makes a scramble in a dangerous area.
+	# POST_RESTITUTION, so a ring makes a scramble in a dangerous area. The frame's
+	# three tiling pieces all count (NetGeometry.post_top_y).
 	if PuckGeometryCollision.resolve_posts(
-			pin, skater.velocity, GameRules.PUCK_COLLISION_RADIUS, _net_pin_result):
+			raw, skater.velocity, GameRules.PUCK_COLLISION_RADIUS, _net_pin_result) \
+			or PuckGeometryCollision.resolve_crossbar_bends(
+					raw, skater.velocity, GameRules.PUCK_COLLISION_RADIUS, _net_pin_result):
 		var ring: Vector3 = _net_pin_result.velocity
 		if ring.length() > 0.001:
 			_has_prev_carry_pin = false
+			skater.carry_pin_correction = Vector3.ZERO
 			last_release_was_shot = false  # forced dispossession, not an attempt
 			_do_release(ring.normalized(), ring.length())
 			return
 
-	# TWINE — compliant. Pressing the puck into the mesh is legal and holds; past
-	# carry_net_squeeze_threshold the carry breaks, the same shape as a board pin.
-	if not PuckGeometryCollision.resolve_net_panels(
-			prev, pin, skater.velocity, GameRules.PUCK_COLLISION_RADIUS, _net_pin_result):
-		return
-	var push: Vector3 = _net_pin_result.position - pin
-	if push.length() <= carry_net_squeeze_threshold:
-		return
-	_has_prev_carry_pin = false
-	last_release_was_shot = false
-	_do_release(push.normalized(), goalie_strip_power)
+	# TWINE — solid, and it does NOT strip. Pressing the puck into the mesh holds
+	# it at the surface for as long as you like; the mesh is something you cannot
+	# reach through, not something that confiscates. (Losing the puck for brushing
+	# the back of the net was the single most irritating thing about the old
+	# clamp, and there is no physical reading of a net that justifies it. Reach is
+	# bounded before this instead — see SkaterIKCoordinator._net_reach_limit.)
+	var resolved: Vector3 = raw
+	if PuckGeometryCollision.resolve_net_panels(
+			prev, raw, skater.velocity, GameRules.PUCK_COLLISION_RADIUS, _net_pin_result):
+		resolved = _net_pin_result.position
+	skater.carry_pin_correction = resolved - raw
+	_prev_carry_pin = resolved
+	_has_prev_carry_pin = true
 
 
 # Nudge: the carrier taps the puck off the blade as a soft self-pass. The

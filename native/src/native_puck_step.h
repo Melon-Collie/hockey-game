@@ -51,6 +51,7 @@ class NativePuckStep : public godot::RefCounted {
 	double net_back_half_width = 0.0;
 	double net_height = 0.0;
 	double net_crown_half_width = 0.0;
+	double net_mouth_corner_radius = 0.0;
 	double net_top_depth = 0.0;
 	double puck_half_height = 0.0;
 	double post_restitution = 0.0;
@@ -88,6 +89,9 @@ class NativePuckStep : public godot::RefCounted {
 			double post_x, double end_z) const;
 	bool resolve_posts(godot::Vector3 &p, godot::Vector3 &v, double puck_radius) const;
 	bool resolve_crossbar(godot::Vector3 &p, godot::Vector3 &v, double puck_radius) const;
+	bool resolve_crossbar_bends(godot::Vector3 &p, godot::Vector3 &v, double puck_radius) const;
+	double post_top_y() const;
+	godot::Vector3 closest_point_on_bend(const godot::Vector3 &p, double end_z) const;
 	bool resolve_top_net(const godot::Vector3 &prev, godot::Vector3 &p, godot::Vector3 &v) const;
 	double back_plane_distance(const godot::Vector3 &p) const;
 	double back_plane_norm() const;
@@ -108,7 +112,8 @@ public:
 			double p_ice_decel, double p_gravity, double p_rest_height);
 	void set_net_geometry(double p_goal_line_z, double p_net_half_width,
 			double p_net_post_radius, double p_net_depth, double p_net_back_half_width,
-			double p_net_height, double p_net_crown_half_width, double p_net_top_depth,
+			double p_net_height, double p_net_crown_half_width,
+			double p_net_mouth_corner_radius, double p_net_top_depth,
 			double p_puck_half_height, double p_post_restitution, double p_net_restitution);
 	void set_substep_params(double p_range_z, double p_substep_m, int64_t p_max_substeps);
 

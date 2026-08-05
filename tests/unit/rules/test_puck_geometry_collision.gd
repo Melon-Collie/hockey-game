@@ -401,3 +401,167 @@ func test_high_drive_into_the_back_dies_on_the_visible_twine() -> void:
 	assert_gt(res.velocity.z, 0.0, "absorbed back away from the cage")
 	assert_almost_eq(res.velocity.y, 0.0, 0.001,
 			"and is not launched up the slope by the rebound")
+
+# ── Mouth-corner bends (issue #598) ───────────────────────────────────────────
+# The frame is three tiling pieces: the post to NetGeometry.post_top_y(), a
+# quarter-torus bend, then the crossbar inside NET_CROWN_HALF_WIDTH. Modelling
+# the post as a full-height cylinder both over-blocked (a straight pipe standing
+# where the real frame had already curved inward) and left a seam just outside
+# the crown that top-corner shots flew through.
+
+const BEND_R: float = GameRules.NET_MOUTH_CORNER_RADIUS
+const POST_TOP: float = GameRules.NET_HEIGHT - GameRules.NET_MOUTH_CORNER_RADIUS
+
+
+func _bend(pos: Vector3, vel: Vector3) -> PuckGeometryCollision.Result:
+	var res := PuckGeometryCollision.Result.new()
+	PuckGeometryCollision.resolve_crossbar_bends(pos, vel, R, res)
+	return res
+
+
+func test_the_seam_outside_the_crown_is_closed() -> void:
+	# The reported hole: just wide of the crossbar's end at bar height. The
+	# crossbar rejects |x| > NET_CROWN_HALF_WIDTH and the post circle at
+	# NET_HALF_WIDTH cannot reach back this far, so nothing caught it.
+	var pos := Vector3(GameRules.NET_CROWN_HALF_WIDTH + 0.005,
+			GameRules.NET_HEIGHT, GameRules.GOAL_LINE_Z)
+	assert_true(_bend(pos, Vector3(0.0, 0.0, 5.0)).hit,
+			"a puck on the corner pipe is stopped")
+
+
+func test_bend_endpoints_meet_the_post_and_the_crossbar() -> void:
+	# Continuity is the whole invariant — a puck leaving one piece has to be
+	# picked up by the next, with no gap and no double-cover to argue about.
+	var post_top := Vector3(GameRules.NET_HALF_WIDTH, POST_TOP, GameRules.GOAL_LINE_Z)
+	var axis_a: Vector3 = NetGeometry.closest_point_on_bend(post_top, GameRules.GOAL_LINE_Z)
+	assert_almost_eq(axis_a.x, GameRules.NET_HALF_WIDTH, 1e-4, "bend starts at the post top (x)")
+	assert_almost_eq(axis_a.y, POST_TOP, 1e-4, "bend starts at the post top (y)")
+	var bar_end := Vector3(GameRules.NET_CROWN_HALF_WIDTH,
+			GameRules.NET_HEIGHT, GameRules.GOAL_LINE_Z)
+	var axis_b: Vector3 = NetGeometry.closest_point_on_bend(bar_end, GameRules.GOAL_LINE_Z)
+	assert_almost_eq(axis_b.x, GameRules.NET_CROWN_HALF_WIDTH, 1e-4, "bend ends at the bar (x)")
+	assert_almost_eq(axis_b.y, GameRules.NET_HEIGHT, 1e-4, "bend ends at the bar (y)")
+
+
+func test_bend_centre_line_holds_its_radius_through_the_sweep() -> void:
+	var centre := Vector2(GameRules.NET_CROWN_HALF_WIDTH, POST_TOP)
+	for deg: int in range(0, 91, 10):
+		var rad: float = deg_to_rad(float(deg))
+		# Probe well outside the arc so the projection is unambiguous.
+		var probe := Vector3(
+				centre.x + cos(rad) * 0.5, centre.y + sin(rad) * 0.5, GameRules.GOAL_LINE_Z)
+		var axis: Vector3 = NetGeometry.closest_point_on_bend(probe, GameRules.GOAL_LINE_Z)
+		assert_almost_eq(Vector2(axis.x, axis.y).distance_to(centre), BEND_R, 1e-4,
+				"centre-line sits on the bend radius at %d°" % deg)
+
+
+func test_no_gap_anywhere_along_the_corner() -> void:
+	# Sweep the whole quarter and confirm a puck sitting on the pipe is caught by
+	# SOME piece of the frame — post, bend, or crossbar. This is the regression
+	# guard: a seam reappearing shows up here rather than in a playtest.
+	var centre := Vector2(GameRules.NET_CROWN_HALF_WIDTH, POST_TOP)
+	for deg: int in range(0, 91, 5):
+		var rad: float = deg_to_rad(float(deg))
+		# Offset in front of the pipe's plane rather than exactly on its
+		# centre-line: a body ON the axis has no defined surface normal, and every
+		# resolver rightly declines it. This is where a puck arriving at the corner
+		# actually sits.
+		var on_pipe := Vector3(
+				centre.x + cos(rad) * BEND_R, centre.y + sin(rad) * BEND_R,
+				GameRules.GOAL_LINE_Z - 0.02)
+		var res := PuckGeometryCollision.Result.new()
+		var caught: bool = PuckGeometryCollision.resolve_posts(on_pipe, Vector3(0.0, 0.0, 5.0), R, res) \
+				or PuckGeometryCollision.resolve_crossbar_bends(on_pipe, Vector3(0.0, 0.0, 5.0), R, res) \
+				or PuckGeometryCollision.resolve_crossbar(on_pipe, Vector3(0.0, 0.0, 5.0), R, res)
+		assert_true(caught, "frame is solid at %d° round the corner" % deg)
+
+
+func test_bend_ejects_flush_and_rings() -> void:
+	# Mid-arc, approaching the corner from in front of the goal line so the
+	# contact normal actually opposes the shot.
+	var rad: float = deg_to_rad(45.0)
+	var pos := Vector3(
+			GameRules.NET_CROWN_HALF_WIDTH + cos(rad) * BEND_R,
+			POST_TOP + sin(rad) * BEND_R,
+			GameRules.GOAL_LINE_Z - 0.05)
+	var res: PuckGeometryCollision.Result = _bend(pos, Vector3(0.0, 0.0, 12.0))
+	assert_true(res.hit, "on the corner pipe")
+	var axis: Vector3 = NetGeometry.closest_point_on_bend(res.position, GameRules.GOAL_LINE_Z)
+	assert_almost_eq(res.position.distance_to(axis), R + GameRules.NET_POST_RADIUS, 1e-4,
+			"ejected flush against the pipe")
+	assert_lt(res.velocity.z, 0.0, "iron sends it back out — a ring, not a pass-through")
+
+
+func test_post_no_longer_stands_above_its_own_top() -> void:
+	# The over-block half of the fix: at bar height the real frame has swept
+	# inward to the crown, so a straight pipe must not still be standing at
+	# NET_HALF_WIDTH there.
+	var res := PuckGeometryCollision.Result.new()
+	var above := Vector3(GameRules.NET_HALF_WIDTH, GameRules.NET_HEIGHT, GameRules.GOAL_LINE_Z)
+	assert_false(PuckGeometryCollision.resolve_posts(above, Vector3(0.0, 0.0, 5.0), R, res),
+			"no straight post at crossbar height")
+	# ...and the bend is what covers that spot instead.
+	assert_true(PuckGeometryCollision.resolve_crossbar_bends(above, Vector3(0.0, 0.0, 5.0), R, res),
+			"the corner bend covers it")
+
+
+func test_clean_top_corner_still_goes_in() -> void:
+	# The bend must not become a lid: inside the crown and under the bar is open
+	# net, and the elevation ladder relies on it.
+	var res := PuckGeometryCollision.Result.new()
+	var inside := Vector3(0.70, GameRules.NET_HEIGHT - 0.12, GameRules.GOAL_LINE_Z)
+	assert_false(PuckGeometryCollision.resolve_crossbar_bends(inside, Vector3(0.0, 0.0, 20.0), R, res),
+			"top-shelf inside the crown is untouched by the bends")
+
+
+func test_bends_exist_on_both_sides_and_both_ends() -> void:
+	for x_sign: float in [1.0, -1.0]:
+		for z_sign: float in [1.0, -1.0]:
+			var pos := Vector3(
+					x_sign * (GameRules.NET_CROWN_HALF_WIDTH + 0.005),
+					GameRules.NET_HEIGHT,
+					z_sign * GameRules.GOAL_LINE_Z)
+			assert_true(_bend(pos, Vector3(0.0, 0.0, -5.0 * z_sign)).hit,
+					"corner solid at x_sign %.0f, z_sign %.0f" % [x_sign, z_sign])
+
+# ── The behind-the-net swipe (regression) ─────────────────────────────────────
+# Standing behind the goal line and swiping the stick laterally used to walk the
+# carried puck straight through the side mesh and across the line. The rule below
+# was never wrong — the CALLER was, by feeding back the raw pin instead of the
+# resolved one. The twine is two-sided and NetGeometry.interior_or_mouth reads the
+# segment START, so a `prev` allowed inside the cavity flips the next tick's faces
+# from "push out" to "hold in", and one tick of penetration latches.
+#
+# This pins the contract SkaterController._collide_pinned_puck_with_net must keep:
+# `prev` is always a position the net has already vouched for.
+
+func _swipe_across_the_side_mesh(feed_resolved_prev: bool) -> Vector3:
+	var res := PuckGeometryCollision.Result.new()
+	var prev := Vector3(1.30, 0.03, GameRules.GOAL_LINE_Z + 0.45)
+	var pos: Vector3 = prev
+	var x: float = 1.30
+	while x > -0.20:
+		var raw := Vector3(x, 0.03, GameRules.GOAL_LINE_Z + 0.45)
+		pos = raw
+		if PuckGeometryCollision.resolve_net_panels(prev, raw, Vector3(-4.0, 0.0, 0.0), R, res):
+			pos = res.position
+		prev = pos if feed_resolved_prev else raw
+		x -= 0.04
+	return pos
+
+
+func test_swiping_behind_the_net_never_gets_the_puck_inside() -> void:
+	var final_pos: Vector3 = _swipe_across_the_side_mesh(true)
+	assert_almost_eq(final_pos.x, NetGeometry.cavity_half_width() + R, 1e-3,
+			"the pin is held against the outside of the side twine, not dragged through")
+	assert_gt(absf(final_pos.x), NetGeometry.cavity_half_width(),
+			"and is never inside the cavity laterally")
+
+
+func test_feeding_back_an_unresolved_prev_is_what_broke_it() -> void:
+	# Documents the failure mode so the contract above reads as load-bearing
+	# rather than incidental. If this ever stops reproducing, the two-sided
+	# classification changed and the caller's contract should be re-derived.
+	var final_pos: Vector3 = _swipe_across_the_side_mesh(false)
+	assert_lt(absf(final_pos.x), NetGeometry.cavity_half_width(),
+			"raw prev walks the puck into the cage — the bug this guards")
