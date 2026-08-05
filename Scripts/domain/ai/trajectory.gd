@@ -455,14 +455,9 @@ static func puck_launch_speed_for_runout(distance_m: float) -> float:
 # a value type on the compete path; t = INF when the ray leaves no board within
 # `max_t`. Mirrors clamp_to_rink_inner's straight-wall + corner-arc geometry.
 #
-# NOT inset by the puck's radius, unlike the stepped sim (_step's board_margin).
-# That is a known inconsistency, deliberately left: this closed form feeds the
-# bots' dump/rim VALUATION, and insetting it re-prices clears materially rather
-# than by the 6.5 cm it moves — in the pinned wall-lane scene
-# (test_role_carrier.test_a_camped_wall_lane_makes_the_clear_worth_less) the open
-# clear goes 0.00 -> -0.25 and stops distinguishing a camped lane at all. Worth
-# doing, but as its own change with its own playtest, not folded into a physics
-# fix. See the note in ARCHITECTURE.md -> Known Issues.
+# NOT inset by the puck's radius, unlike the stepped sim (_step's board_margin),
+# so this prices a rim against a puck that ends a radius deeper into the boards
+# than the one the sim produces. Issue #650.
 static func _first_board_hit(p: Vector2, dir: Vector2, max_t: float) -> Vector3:
 	var best_t: float = INF
 	var best_n := Vector2.ZERO
