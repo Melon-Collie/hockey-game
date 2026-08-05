@@ -85,6 +85,11 @@ var _local_team_id: int = -1
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
 var _current_height: float = 15.0
+# Smoothed framing position, kept separate from global_position so shake and the
+# impact kick stay per-frame offsets instead of leaking into the smoother (see
+# Step 6c). Seeded from the scene transform in _ready so the first frame eases
+# from where the camera was authored, not from the origin.
+var _framing_position: Vector3 = Vector3.ZERO
 var _smoothed_attack_dir: float = 0.0    # lerps between -1, 0, +1 on possession change
 var _smoothed_direction_factor: float = 1.0  # lerps movement-direction bias to avoid snapping
 var _in_ozone: bool = false              # latched, see _update_in_ozone
@@ -312,6 +317,7 @@ func _ready() -> void:
 	# tick-old pose and give the camera a frame of lag it does not need. Every
 	# player-perspective cam opts out for the same reason.
 	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	_framing_position = global_position
 	# Framing runs in _process (render rate), and LocalInputGatherer's
 	# screen→world cursor read consumes this camera's transform from its own
 	# _process. Negative priority pins the camera ahead of every default-priority
@@ -588,7 +594,11 @@ func _process(delta: float) -> void:
 	var tilt_z_offset: float = raw_offset * flip_sign
 	var target_pos: Vector3 = Vector3(
 			render_center.x, render_height, render_center.z + tilt_z_offset)
-	global_position = global_position.lerp(target_pos, _smooth_t(smooth_speed, delta))
+	# Smoothed in its OWN state, not in global_position. The smoother is seeded
+	# with its previous output, so anything added to global_position downstream
+	# would be fed back in and decay at the smoothing rate instead of clearing —
+	# see the transient composition at Step 6c.
+	_framing_position = _framing_position.lerp(target_pos, _smooth_t(smooth_speed, delta))
 
 	# ── Step 5b: Apply pitch + attack-up yaw flip. Always tilted perspective. ──
 	if projection != PROJECTION_PERSPECTIVE:
@@ -597,25 +607,35 @@ func _process(delta: float) -> void:
 	rotation_degrees = Vector3(pitch, flip_y, 0.0)
 
 	# ── Step 6: Shake ─────────────────────────────────────────────────────────
+	# Accumulated into a per-frame offset rather than written onto the camera, so
+	# that this frame's noise is gone next frame (see Step 6c).
+	var transient: Vector3 = Vector3.ZERO
 	if _shake_trauma > 0.0:
 		_shake_trauma = maxf(0.0, _shake_trauma - _SHAKE_DECAY * delta)
-		global_position += Vector3(
+		transient += Vector3(
 			randf_range(-1.0, 1.0) * _shake_trauma * _SHAKE_MAG,
 			0.0,
 			randf_range(-1.0, 1.0) * _shake_trauma * _SHAKE_MAG)
 
 	# ── Step 6b: Impact kick ──────────────────────────────────────────────────
 	# Under-damped spring toward rest; the injected velocity swings the offset out
-	# and back. Added as a per-frame offset (global_position is re-derived from the
-	# framing each tick, so it never compounds).
+	# and back.
 	if _impact_kick.length_squared() > 1e-7 or _impact_kick_vel.length_squared() > 1e-7:
 		var accel: Vector3 = -_KICK_STIFFNESS * _impact_kick - _KICK_DAMPING * _impact_kick_vel
 		_impact_kick_vel += accel * delta
 		_impact_kick += _impact_kick_vel * delta
-		global_position += _impact_kick
+		transient += _impact_kick
 	else:
 		_impact_kick = Vector3.ZERO
 		_impact_kick_vel = Vector3.ZERO
+
+	# ── Step 6c: Compose ──────────────────────────────────────────────────────
+	# The one write of the framing position. Transients are added HERE rather than
+	# onto the smoother's state, which is what makes them genuinely per-frame: the
+	# shake is independent noise each frame (not a random walk that wanders off
+	# center and unwinds over the smoothing time constant), and the kick leaves
+	# nothing behind once its spring returns to rest.
+	global_position = _framing_position + transient
 
 	# ── Step 6c: Period-break wide hold ───────────────────────────────────────
 	# Ease from the live framing up to the captured wide transform and sit there
