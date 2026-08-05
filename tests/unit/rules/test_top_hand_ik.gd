@@ -457,3 +457,98 @@ func test_stick_length_yields_not_arm_length_when_blade_is_pinned() -> void:
 	var rendered: float = (Vector3(blade_xz.x, BLADE_Y, blade_xz.y) - hand).length()
 	assert_lte(rendered, STICK_LENGTH + 0.0005,
 			"rendered shaft never exceeds the real stick — it chokes up, not stretches")
+
+# ── enforce_rigid_stick ───────────────────────────────────────────────────
+# The correction the AUTHORED poses run through (shot finishes, wind-up, block).
+# Those place hand and blade from tunables rather than solving one against the
+# other, so nothing in the placement keeps them a stick apart — the slapper
+# finish drew 2.00 m of a 1.30 m stick — and any obstacle clamp then adds its
+# whole correction on top. Order: the hand slides down the shaft as far as the
+# arm allows, and only what is left comes off the blade.
+
+func _rigid(shoulder: Vector3, hand: Vector3, blade: Vector3,
+		sign_i: float = -1.0) -> TopHandIK.Result:
+	var out := TopHandIK.Result.new()
+	TopHandIK.enforce_rigid_stick(shoulder, hand, blade, sign_i, _cfg(), out)
+	return out
+
+
+func test_a_pose_within_a_stick_length_is_left_alone() -> void:
+	# Inert on everything authored honestly — including a shaft reading SHORT,
+	# which is the legitimate choke-up and must not be pushed back out.
+	var shoulder: Vector3 = _lefty_shoulder()
+	var hand := Vector3(shoulder.x, HAND_REST_Y, shoulder.z)
+	for dist: float in [0.4, 0.9, STICK_HORIZ_AT_REST]:
+		var blade := Vector3(shoulder.x, BLADE_Y, shoulder.z - dist)
+		var res: TopHandIK.Result = _rigid(shoulder, hand, blade)
+		assert_eq(res.hand, hand, "hand untouched at %.2f m" % dist)
+		assert_eq(res.blade, blade, "blade untouched at %.2f m" % dist)
+
+
+func test_an_over_long_pose_comes_back_to_exactly_one_stick() -> void:
+	var shoulder: Vector3 = _lefty_shoulder()
+	var hand := Vector3(shoulder.x, HAND_REST_Y, shoulder.z - 0.30)
+	for over: float in [0.05, 0.3, 0.7, 2.0]:
+		var blade: Vector3 = _blade_at_span(hand, STICK_LENGTH + over)
+		var res: TopHandIK.Result = _rigid(shoulder, hand, blade)
+		assert_almost_eq(res.hand.distance_to(res.blade), STICK_LENGTH, 0.0005,
+				"rigid at %.2f m over" % over)
+
+
+# A blade straight in front of `hand` at exactly `span` from it in 3D, sitting at
+# BLADE_Y. The drop is most of a metre, so laying the span out along z alone (the
+# obvious way to write these) makes it something else entirely.
+func _blade_at_span(hand: Vector3, span: float) -> Vector3:
+	var drop: float = hand.y - BLADE_Y
+	return Vector3(hand.x, BLADE_Y, hand.z - sqrt(maxf(span * span - drop * drop, 0.0)))
+
+
+func test_the_hand_pays_first_and_the_blade_only_for_the_rest() -> void:
+	# A small overrun the arm can absorb: the blade must not move at all, because
+	# the blade is where the pose (or a clamp) wanted it.
+	var shoulder: Vector3 = _lefty_shoulder()
+	var hand := Vector3(shoulder.x, HAND_REST_Y, shoulder.z)
+	var blade: Vector3 = _blade_at_span(hand, STICK_LENGTH + 0.05)
+	var res: TopHandIK.Result = _rigid(shoulder, hand, blade)
+	assert_eq(res.blade, blade, "the arm covered it, so the blade stayed")
+	assert_almost_eq(res.hand.distance_to(hand), 0.05, 0.0005,
+			"the hand slid the whole overrun down the shaft")
+
+
+func test_the_hand_never_slides_past_the_arm() -> void:
+	# The reach the finish poses were quietly buying: past ROM the arm stops and
+	# the blade gives up the rest of the reach instead.
+	var shoulder: Vector3 = _lefty_shoulder()
+	var hand := Vector3(shoulder.x, HAND_REST_Y, shoulder.z)
+	var blade := Vector3(shoulder.x, BLADE_Y, shoulder.z - (STICK_LENGTH + 1.5))
+	var res: TopHandIK.Result = _rigid(shoulder, hand, blade)
+	var reach: float = Vector2(res.hand.x - shoulder.x, res.hand.z - shoulder.z).length()
+	assert_lte(reach, BACK_REACH + 0.0005, "hand stopped at the arm's own limit")
+	assert_gt(blade.distance_to(res.blade), 0.5, "so the finish fell short instead")
+	assert_almost_eq(res.hand.distance_to(res.blade), STICK_LENGTH, 0.0005,
+			"and the stick is still exactly a stick")
+
+
+func test_the_blade_falls_short_along_the_shaft_it_was_on() -> void:
+	# Direction is preserved — a finish that cannot reach all the way still
+	# points where it was swinging.
+	var shoulder: Vector3 = _lefty_shoulder()
+	var hand := Vector3(shoulder.x, HAND_REST_Y, shoulder.z)
+	var blade := Vector3(shoulder.x + 1.4, BLADE_Y, shoulder.z - 1.4)
+	var res: TopHandIK.Result = _rigid(shoulder, hand, blade)
+	var was: Vector3 = (blade - hand).normalized()
+	var now: Vector3 = (res.blade - res.hand).normalized()
+	assert_almost_eq(was.dot(now), 1.0, 0.0005, "still on the same line")
+
+
+func test_a_raised_hand_keeps_its_height() -> void:
+	# Why the finishes use this rather than the reconstruction: their hand is
+	# deliberately high and carried, and hand_for_clamped_blade would put it back
+	# at rest height — dropping the arm mid-follow-through.
+	var shoulder: Vector3 = _lefty_shoulder()
+	var hand := Vector3(shoulder.x, HAND_Y_MAX, shoulder.z - 0.20)
+	var blade := Vector3(shoulder.x, BLADE_Y + 0.5, shoulder.z - 2.2)
+	var res: TopHandIK.Result = _rigid(shoulder, hand, blade)
+	assert_gt(res.hand.y, HAND_REST_Y + 0.1, "the finish's raised hand survives")
+	assert_lte(res.hand.y, HAND_Y_MAX + 0.0005, "and stays under the ceiling")
+	assert_almost_eq(res.hand.distance_to(res.blade), STICK_LENGTH, 0.0005, "rigid")

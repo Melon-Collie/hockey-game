@@ -124,7 +124,7 @@ static func project_blade(
 	angle_to_forehand = clampf(
 			angle_to_forehand, -cfg.rom_backhand_angle_max, cfg.rom_forehand_angle_max)
 
-	radius = clampf(radius, 0.0, _max_reach_for_angle(angle_to_forehand, cfg))
+	radius = clampf(radius, 0.0, max_reach_for_angle(angle_to_forehand, cfg))
 
 	# Back to Cartesian. world_angle undoes the forehand-sign flip. Using the
 	# clamped world_angle (not hand_to_target) keeps the blade at the ROM limit
@@ -215,14 +215,88 @@ static func hand_for_clamped_blade(
 			atan2(dir.x, -dir.y) * blade_side_sign,
 			-cfg.rom_backhand_angle_max, cfg.rom_forehand_angle_max)
 	var reach: float = minf(
-			d - stick_horiz_at_rest, _max_reach_for_angle(angle_to_forehand, cfg))
+			d - stick_horiz_at_rest, max_reach_for_angle(angle_to_forehand, cfg))
 	var hand_xz: Vector2 = shoulder_xz + dir * reach
 	return Vector3(hand_xz.x, cfg.hand_rest_y, hand_xz.y)
+
+# Enforce the one thing in the chain that has no give: the stick's LENGTH. Takes
+# a pose whose hand and blade have drifted more than a stick apart — an authored
+# shot finish that reaches past the arm, or a blade an obstacle clamp has just
+# moved — and closes the gap along the shaft, filling `out`.
+#
+# Same anatomical priority the rest of this file keeps, with the stick moved to
+# the bottom of it where a rigid object belongs. The HAND yields first: it slides
+# down the shaft toward the blade, bounded by the arm's own reach (and by
+# hand_y_max on the way up), because a player reaching through a finish extends
+# the arm before anything else. Only what the arm cannot cover comes off the
+# BLADE, which falls short along the same line — the finish simply doesn't get
+# there, exactly as it wouldn't with a real stick.
+#
+# A pose already within a stick-length is returned untouched, so this is inert on
+# every pose that was authored honestly, and never lengthens a shaft that reads
+# short (the choke-up is legitimate and stays).
+static func enforce_rigid_stick(
+		shoulder: Vector3,
+		hand: Vector3,
+		blade: Vector3,
+		blade_side_sign: float,
+		cfg: Config,
+		out: Result) -> void:
+	out.hand = hand
+	out.blade = blade
+	var to_blade: Vector3 = blade - hand
+	var span: float = to_blade.length()
+	var over: float = span - cfg.stick_length
+	if over <= 0.0 or span < 0.000001:
+		return
+	var dir: Vector3 = to_blade / span
+	# How far the hand may slide before it leaves the arm. ROM is a HORIZONTAL
+	# displacement from the shoulder, so the limit is where the sliding hand's
+	# ground track leaves that disc — a ray/circle hit, with a purely vertical
+	# slide (a near-upright shaft) unconstrained by it.
+	var shoulder_xz := Vector2(shoulder.x, shoulder.z)
+	var hand_xz := Vector2(hand.x, hand.z)
+	var dir_xz := Vector2(dir.x, dir.z)
+	var arm_xz: Vector2 = hand_xz - shoulder_xz
+	var reach_max: float = max_reach_for_angle(
+			_arm_angle_to_forehand(arm_xz, Vector2(blade.x, blade.z) - shoulder_xz,
+					blade_side_sign),
+			cfg)
+	var slide: float = over
+	var a: float = dir_xz.length_squared()
+	if a > 0.000001:
+		var b: float = 2.0 * arm_xz.dot(dir_xz)
+		var c: float = arm_xz.length_squared() - reach_max * reach_max
+		var disc: float = b * b - 4.0 * a * c
+		# From inside the disc there is always a root, so no real root means the
+		# arm is ALREADY at or past its reach — which is exactly what the finish
+		# poses author — and sliding further along the shaft only takes it further
+		# out. The hand cannot help there, so it stays and the blade pays it all.
+		var limit: float = ((-b + sqrt(disc)) / (2.0 * a)) if disc > 0.0 else 0.0
+		slide = clampf(minf(slide, limit), 0.0, over)
+	if dir.y > 0.000001:
+		# Sliding up the shaft toward a raised blade: the same ceiling the CLOSE
+		# regime uses stops the hand from climbing out of the body.
+		slide = minf(slide, maxf((cfg.hand_y_max - hand.y) / dir.y, 0.0))
+	out.hand = hand + dir * slide
+	out.blade = blade - dir * (over - slide)
+
+
+# Forehand-signed arm angle for the ROM lookup, taken from the hand's own bearing
+# off the shoulder and falling back to the blade's when the hand sits on top of it
+# (the CLOSE poses, where the arm has no bearing of its own).
+static func _arm_angle_to_forehand(
+		arm_xz: Vector2, blade_from_shoulder: Vector2, blade_side_sign: float) -> float:
+	var bearing: Vector2 = arm_xz if arm_xz.length_squared() > 0.000001 else blade_from_shoulder
+	if bearing.length_squared() < 0.000001:
+		return 0.0
+	return atan2(bearing.x, -bearing.y) * blade_side_sign
+
 
 # Max hand displacement from the shoulder at a forehand-signed arm angle.
 # Cross-body forehand reach is limited by anatomy, same-side backhand reach
 # allows full extension; a small linear blend across zero avoids a seam.
-static func _max_reach_for_angle(angle_to_forehand: float, cfg: Config) -> float:
+static func max_reach_for_angle(angle_to_forehand: float, cfg: Config) -> float:
 	var blend_band: float = deg_to_rad(5.0)
 	if angle_to_forehand >= blend_band:
 		return cfg.rom_forehand_reach_max

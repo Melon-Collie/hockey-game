@@ -11,18 +11,10 @@ extends GutTest
 # off it and the shaft drew ten times its own length. The posed shot states then
 # had a second copy of the same fault — they clamped the blade and left the hand.
 #
-# The bound is the SAME run out in open ice rather than stick_length, because the
-# slapper finish is authored longer than the stick on purpose
-# (slapper_follow_through_hand_follow only limits how much — it draws 2.00 m of a
-# 1.30 m stick at its peak). What must not happen is an obstacle adding to it.
-#
-# Scope is the BOARDS, and the tolerance admits one known residual: a follow-
-# through's authored hand is raised and carried, while the reconstruction that
-# every clamp path rebuilds through assumes rest height and ROM, so any clamp at
-# all flips the pose between the two and the shaft picks up the difference
-# (issue #656). That is a pose disagreement worth ~0.2 m, not a pin; the fault
-# this file exists for was worth ten metres. Drop the tolerance to ~0 when #656
-# lands, and add the goal-mouth spot back.
+# Two claims, because the posed states and the tracked one earn it differently:
+# nothing is ever drawn longer than the stick, and no obstacle adds to what the
+# same run draws in open ice. The second catches a clamp buying its correction in
+# stick length even where the authored pose has room to absorb it.
 
 const SKATER_SCENE: PackedScene = preload("res://Scenes/Skater.tscn")
 const PUCK_SCENE: PackedScene = preload("res://Scenes/Puck.tscn")
@@ -30,10 +22,9 @@ const DT: float = 1.0 / 120.0
 const TICKS: int = 120
 # Open ice, far from every board and both nets — the control run's start.
 const OPEN_ICE := Vector3(0.0, 0.0, 0.0)
-# What an obstacle may add: the lean difference between a run that hits the boards
-# and one that doesn't (millimetres), plus the finish-pose reconstruction gap of
-# issue #656 (~0.19 m, measured). The fault this pins added ten metres.
-const SLOP: float = 0.25
+# The lean differs slightly between a run that hits the boards and one that
+# doesn't, so the pose does too. Millimetres; the fault this pins added metres.
+const SLOP: float = 0.02
 
 
 class GameStateStub:
@@ -99,11 +90,41 @@ func _worst_shaft(c: SkaterController, start: Vector3, move: Vector2,
 	return worst
 
 
+# The end zone's board perimeter over the z band where the net's own faces are
+# also in reach of the stick — which is what turned a board pin into a net pin —
+# plus the two spots where the cage itself is what the stick runs into: the goal
+# mouth, and alongside the side twine.
+const SPOTS: Array[Vector3] = [
+	Vector3(12.0, 0.0, 20.0), Vector3(11.0, 0.0, 25.0), Vector3(9.0, 0.0, 28.0),
+	Vector3(0.0, 0.0, 29.0), Vector3(0.0, 0.0, 26.65), Vector3(1.5, 0.0, 27.5)]
+const MODES: Array[String] = ["skate", "wrister", "slapper", "block"]
+
+
+func test_no_pose_ever_draws_a_shaft_longer_than_the_stick() -> void:
+	var c := _make_controller()
+	var worst: float = 0.0
+	var where: String = ""
+	for mode: String in MODES:
+		for approach_deg: int in range(0, 360, 90):
+			var move := Vector2(
+					cos(deg_to_rad(approach_deg)), sin(deg_to_rad(approach_deg)))
+			for cursor_deg: int in [0, 180]:
+				for spot: Vector3 in SPOTS:
+					var drawn: float = _worst_shaft(
+							c, spot, move, float(cursor_deg), mode)
+					if drawn > worst:
+						worst = drawn
+						where = "%s at %s approach=%d cursor=%d" % [
+								mode, str(spot), approach_deg, cursor_deg]
+	assert_lte(worst, c.stick_length + SLOP,
+			"drew %.2f m of a %.2f m stick — %s" % [worst, c.stick_length, where])
+
+
 func test_no_obstacle_ever_lengthens_the_drawn_stick() -> void:
 	var c := _make_controller()
 	var worst_excess: float = 0.0
 	var where: String = ""
-	for mode: String in ["skate", "wrister", "slapper", "block"]:
+	for mode: String in MODES:
 		for approach_deg: int in range(0, 360, 90):
 			var move := Vector2(
 					cos(deg_to_rad(approach_deg)), sin(deg_to_rad(approach_deg)))
@@ -111,13 +132,7 @@ func test_no_obstacle_ever_lengthens_the_drawn_stick() -> void:
 				# What this pose sequence draws with nothing in the way.
 				var free: float = _worst_shaft(
 						c, OPEN_ICE, move, float(cursor_deg), mode)
-				# The end zone's board perimeter, over the z band where the net's
-				# own faces are also in reach of the stick — which is what made a
-				# board pin turn into a net pin. Side boards up-zone and at
-				# goal-line depth, the corner, the end boards behind the net.
-				for spot: Vector3 in [
-						Vector3(12.0, 0.0, 20.0), Vector3(11.0, 0.0, 25.0),
-						Vector3(9.0, 0.0, 28.0), Vector3(0.0, 0.0, 29.0)]:
+				for spot: Vector3 in SPOTS:
 					var excess: float = _worst_shaft(
 							c, spot, move, float(cursor_deg), mode) - free
 					if excess > worst_excess:

@@ -64,6 +64,7 @@ var _cached_top_cfg: TopHandIK.Config = null
 var _cached_bottom_cfg: BottomHandIK.Config = null
 var _ik_result := TopHandIK.Result.new()
 var _net_result := NetBladeCollision.Result.new()
+var _rigid_result := TopHandIK.Result.new()
 # Native IK solvers (null = extension absent, GDScript fallback). Config
 # properties sync inside the cached-config builders — the same rebuild moment —
 # so invalidate_configs() covers both representations.
@@ -436,6 +437,17 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 				wall_clamped.y,
 				blade_side_sign,
 				_ik_config(blade_y_local()))
+		# The rebuild bounds the ARM but leaves stick length free, so a clamp that
+		# puts the blade past arm + stick has nowhere to put the difference except
+		# the shaft — which is a stretched stick, the one thing a rigid object
+		# cannot do. Reaching in through the open mouth is where that bites here:
+		# the reach limit deliberately leaves the mouth unbounded (net-front play
+		# depends on it), so the twine is free to move the blade a long way. Inert
+		# whenever the blade is reachable, which is every ordinary tick.
+		var rigid: TopHandIK.Result = rigid_stick(
+				hand_local, wall_clamped, blade_side_sign)
+		hand_local = rigid.hand
+		wall_clamped = rigid.blade
 
 	_skater.set_top_hand_position(hand_local)
 	_skater.set_blade_position(wall_clamped)
@@ -552,17 +564,21 @@ func update_bottom_hand() -> void:
 				cfg)
 	_skater.set_bottom_hand_position(bh)
 
-# Arm pose for a blade the obstacle clamps have already placed — this skater's
-# shoulder and cached config wrapped around the pure rule. Shared with
-# SkaterShotPoseCoordinator so the follow-through reconstructs the arm the same
-# way the tracked path does.
-func hand_for_clamped_blade(blade_local: Vector3, blade_side_sign: float) -> Vector3:
-	return TopHandIK.hand_for_clamped_blade(
-			_skater.shoulder.position,
-			Vector2(blade_local.x, blade_local.z),
-			blade_local.y,
-			blade_side_sign,
-			_ik_config(blade_y_local()))
+# Rigid-stick correction for a POSED hand/blade pair — this skater's shoulder and
+# cached config wrapped around the pure rule (TopHandIK.enforce_rigid_stick).
+# Shared with SkaterShotPoseCoordinator, which runs every pose it authors through
+# this and runs it again once the obstacle clamps have had their say, so no shot
+# pose can draw a shaft longer than the stick. The returned Result is shared and
+# overwritten by the next call: consume it before correcting again.
+#
+# The tracked path does not need it — it authors its pose through TopHandIK, which
+# is rigid by construction, and rebuilds through the exact inverse.
+func rigid_stick(hand_local: Vector3, blade_local: Vector3,
+		blade_side_sign: float) -> TopHandIK.Result:
+	TopHandIK.enforce_rigid_stick(
+			_skater.shoulder.position, hand_local, blade_local, blade_side_sign,
+			_ik_config(blade_local.y), _rigid_result)
+	return _rigid_result
 
 # ── Net Collision ─────────────────────────────────────────────────────────────
 # Resolves the blade SEGMENT (heel → toe) against the net for a proposed heel,
