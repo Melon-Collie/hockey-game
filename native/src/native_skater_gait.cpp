@@ -15,10 +15,70 @@ static constexpr double THIGH_LEN = 0.31;
 static constexpr double SHIN_LEN = 0.45;
 static constexpr double FOOT_FWD = 0.10;
 static constexpr double SETTLE_SECONDS = 1.0;
+// Cap on the effort/carve finite-difference sampling interval — mirrors the
+// GDScript coordinator's _FD_WINDOW_MAX.
+static constexpr double FD_WINDOW_MAX = 0.1;
+// Pivot detector constants — mirror _PSI_RATE_EASE, _PSI_SMOOTH_EASE and
+// PivotRules.RELEASE_MARGIN.
+static constexpr double PSI_RATE_EASE = 10.0;
+static constexpr double PSI_SMOOTH_EASE = 15.0;
+static constexpr double PIVOT_RELEASE_MARGIN = 8.0 * Math_PI / 180.0;
 
 // GDScript signf semantics: -1, 0, or +1.
 static inline double sgn(double v) {
 	return v > 0.0 ? 1.0 : (v < 0.0 ? -1.0 : 0.0);
+}
+
+// GDScript angle_difference (core math_funcs.h) — shortest signed angle.
+static inline double angle_diff(double p_from, double p_to) {
+	const double difference = fmod(p_to - p_from, Math_TAU);
+	return fmod(2.0 * difference, Math_TAU) - difference;
+}
+
+// PivotRules.should_engage
+static bool pivot_should_engage(double abs_psi, double abs_psi_rate, double ground_speed,
+		double band_lo, double band_hi, double rate_min, double min_speed) {
+	return ground_speed >= min_speed && abs_psi_rate >= rate_min &&
+			abs_psi > band_lo && abs_psi < band_hi;
+}
+
+// PivotRules.should_release
+static bool pivot_should_release(double abs_psi, double ground_speed,
+		double band_lo, double band_hi, double min_speed) {
+	return ground_speed < min_speed ||
+			abs_psi <= band_lo - PIVOT_RELEASE_MARGIN ||
+			abs_psi >= band_hi + PIVOT_RELEASE_MARGIN;
+}
+
+// PivotRules.latch_sense
+static double pivot_latch_sense(double abs_psi, double band_lo, double band_hi) {
+	return abs_psi < 0.5 * (band_lo + band_hi) ? 1.0 : -1.0;
+}
+
+// PivotRules.hold_depth
+static double pivot_hold_depth(double abs_psi, double band_lo, double ramp) {
+	return CLAMP((abs_psi - band_lo) / MAX(ramp, 0.001), 0.0, 1.0);
+}
+
+// PivotRules.phase
+static double pivot_phase(double abs_psi, double sense, double band_lo, double band_hi) {
+	const double p = CLAMP((abs_psi - band_lo) / MAX(band_hi - band_lo, 0.001), 0.0, 1.0);
+	return sense > 0.0 ? p : 1.0 - p;
+}
+
+// PivotRules.pivot_yaw
+static double pivot_yaw_law(double psi, double sense, double p, double step_begin) {
+	const double along = -psi;
+	const double anti = -psi + Math_PI * sgn(psi);
+	double t = 0.0;
+	if (p > step_begin) {
+		t = (p - step_begin) / MAX(1.0 - step_begin, 0.001);
+		t = t * t * (3.0 - 2.0 * t);
+	}
+	if (sense > 0.0) {
+		return Math::lerp(along, anti, t);
+	}
+	return Math::lerp(anti, along, t);
 }
 
 // ── Ports of the pure domain helpers (see the GDScript files for reasoning) ──
@@ -145,13 +205,27 @@ void NativeSkaterGait::reset_state() {
 	faceoff_blend = 0.0;
 	trunk_pitch_add = 0.0;
 	trunk_roll_add = 0.0;
+	trunk_pitch_s = 0.0;
+	trunk_roll_s = 0.0;
 	prev_velocity = Vector3();
 	have_prev_velocity = false;
+	fd_time = 0.0;
+	fd_effort_target = 0.0;
+	fd_turn = 0.0;
+	fd_carve = 0.0;
 	stop_yaw_offset = 0.0;
 	stop_engaged = false;
 	stop_blend = 0.0;
 	travel_align_yaw = 0.0;
 	hip_align_yaw = 0.0;
+	prev_psi = 0.0;
+	have_prev_psi = false;
+	psi_smooth = 0.0;
+	psi_rate = 0.0;
+	pivot_engaged = false;
+	pivot_sense = 1.0;
+	pivot_blend = 0.0;
+	pivot_dwell = 0.0;
 	carve = 0.0;
 	carve_curve = 0.0;
 	turn_rate = 0.0;
@@ -182,8 +256,12 @@ void NativeSkaterGait::reset_state() {
 	out_r_pitch = 0.0;
 	out_r_roll = 0.0;
 	out_r_knee = 0.0;
+	out_l_yaw = 0.0;
+	out_r_yaw = 0.0;
 	out_foot_evert_l = 0.0;
 	out_foot_evert_r = 0.0;
+	out_edge_load_l = 0.0;
+	out_edge_load_r = 0.0;
 	out_drop = 0.0;
 }
 
@@ -410,29 +488,39 @@ int64_t NativeSkaterGait::apply(
 	phase_rate = MAX(phase_rate, MAX(dig * cfg.dig_in_cadence_rate,
 			Math::abs(shuffle) * cfg.shuffle_cadence_rate));
 	stride_phase = Math::wrapf(stride_phase + phase_rate *
-			(1.0 - MAX(stop_blend, reversal * cfg.reversal_stride_fade)) * delta,
+			(1.0 - MAX(MAX(stop_blend, reversal * cfg.reversal_stride_fade),
+					pivot_blend * cfg.pivot_stride_fade)) * delta,
 			0.0, Math_TAU);
 
 	// ── Effort: glide vs. push ──
-	double effort_target = 0.0;
-	double carve_target = 0.0;
-	double raw_turn = 0.0;
-	if (have_prev_velocity) {
-		const Vector3 accel = (vel - prev_velocity) / (real_t)delta;
+	// Sampled over the interval since the velocity LAST CHANGED (with a forced
+	// re-sample at FD_WINDOW_MAX), not per render frame — see the aliasing note
+	// in the GDScript reference.
+	fd_time += delta;
+	if (!have_prev_velocity) {
+		prev_velocity = vel;
+		have_prev_velocity = true;
+		fd_time = 0.0;
+	} else if (vel != prev_velocity || fd_time >= FD_WINDOW_MAX) {
+		const Vector3 accel = (vel - prev_velocity) / (real_t)fd_time;
 		const Vector2 travel(vel.x, vel.z);
+		fd_effort_target = 0.0;
 		if ((double)travel.length() > 0.1) {
 			const double tangential = (double)Vector2(accel.x, accel.z).dot(travel.normalized());
-			effort_target = CLAMP(
+			fd_effort_target = CLAMP(
 					tangential / MAX(cfg.stride_effort_ref_accel, 0.001), -1.0, 1.0);
 		}
-		raw_turn = rules_turn_rate(
+		fd_turn = rules_turn_rate(
 				Vector2(prev_velocity.x, prev_velocity.z),
-				Vector2(vel.x, vel.z), delta, cfg.carve_min_speed);
-		carve_target = rules_carve_target(raw_turn,
+				Vector2(vel.x, vel.z), fd_time, cfg.carve_min_speed);
+		fd_carve = rules_carve_target(fd_turn,
 				ground_speed, cfg.carve_ref_turn_rate, cfg.carve_min_speed);
+		prev_velocity = vel;
+		fd_time = 0.0;
 	}
-	prev_velocity = vel;
-	have_prev_velocity = true;
+	const double effort_target = fd_effort_target;
+	double carve_target = fd_carve;
+	const double raw_turn = fd_turn;
 	const double curve_only = carve_target;
 	const double intent_carve = rules_intent_carve(
 			Vector2(vel.x, vel.z), mi, ground_speed, cfg.carve_min_speed);
@@ -478,22 +566,87 @@ int64_t NativeSkaterGait::apply(
 	} else {
 		stop_yaw_offset = 0.0;
 	}
-	double gait_scale = 1.0 - MAX(stop_blend, reversal * cfg.reversal_stride_fade);
+	double gait_scale = 1.0 - MAX(MAX(stop_blend, reversal * cfg.reversal_stride_fade),
+			pivot_blend * cfg.pivot_stride_fade);
 	gait_scale *= 1.0 - shot_body * cfg.shot_stride_fade;
 	const double rev_amt = reversal * (1.0 - stop_blend);
 
 	// ── Hip-to-travel alignment ──
 	double align_target = 0.0;
+	double psi = prev_psi;
 	if (ground_speed > 0.1) {
-		const double travel_angle = Math::atan2(lat, fwd);
+		psi = Math::atan2(lat, fwd);
 		const double align_engage = CLAMP(
 				intensity / MAX(cfg.stance_full_speed_fraction, 0.01), 0.0, 1.0);
-		align_target = CLAMP(-travel_angle,
+		align_target = CLAMP(-psi,
 				-Math::deg_to_rad(cfg.hip_align_max_deg),
 				Math::deg_to_rad(cfg.hip_align_max_deg)) * align_engage;
 	}
+	if (!have_prev_psi) {
+		psi_smooth = psi;
+	} else {
+		psi_smooth = Math::wrapf(psi_smooth +
+				angle_diff(psi_smooth, psi) * MIN(PSI_SMOOTH_EASE * delta, 1.0),
+				-Math_PI, Math_PI);
+	}
+	const double abs_psi = Math::abs(psi_smooth);
+	const double band_lo = Math::deg_to_rad(cfg.pivot_band_lo_deg);
+	const double band_hi = Math::deg_to_rad(cfg.pivot_band_hi_deg);
 	align_target *= 1.0 - MAX(backpedal, Math::abs(shuffle));
-	hip_align_yaw = Math::lerp(hip_align_yaw, align_target, cfg.hip_align_speed * delta);
+	// Backward-hemisphere fade of the toward-travel pull — see the GDScript
+	// reference.
+	align_target *= 1.0 - CLAMP(
+			(abs_psi - Math_PI * 0.5) / MAX(band_hi - Math_PI * 0.5, 0.001), 0.0, 1.0);
+	// ── Pivot: the facing↔travel swap (see the GDScript reference) ──
+	double psi_rate_raw = 0.0;
+	if (have_prev_psi) {
+		psi_rate_raw = angle_diff(prev_psi, psi) / delta;
+	}
+	prev_psi = psi;
+	have_prev_psi = true;
+	psi_rate = Math::lerp(psi_rate, psi_rate_raw, MIN(PSI_RATE_EASE * delta, 1.0));
+	if (pivot_engaged) {
+		if (pivot_should_release(abs_psi, ground_speed, band_lo, band_hi,
+				cfg.pivot_min_speed)) {
+			pivot_engaged = false;
+		}
+	} else if (pivot_should_engage(abs_psi, Math::abs(psi_rate), ground_speed,
+			band_lo, band_hi, cfg.pivot_rate_min, cfg.pivot_min_speed)) {
+		pivot_engaged = true;
+		pivot_sense = pivot_latch_sense(abs_psi, band_lo, band_hi);
+	}
+	double pivot_target_blend = 0.0;
+	if (pivot_engaged) {
+		pivot_dwell += delta;
+		pivot_target_blend = pivot_hold_depth(abs_psi, band_lo,
+				Math::deg_to_rad(cfg.pivot_depth_ramp_deg)) *
+				CLAMP(pivot_dwell / MAX(cfg.pivot_commit_time, 0.001), 0.0, 1.0) *
+				(1.0 - CLAMP(Math::abs(carve_curve), 0.0, 1.0));
+	} else {
+		pivot_dwell = 0.0;
+	}
+	pivot_blend = Math::lerp(pivot_blend, pivot_target_blend,
+			cfg.pivot_blend_speed * delta);
+	double align_speed = cfg.hip_align_speed;
+	double pivot_yaw_l = 0.0;
+	double pivot_yaw_r = 0.0;
+	if (pivot_blend > 0.001) {
+		const double pivot_p = pivot_phase(abs_psi, pivot_sense, band_lo, band_hi);
+		const double pivot_target = pivot_yaw_law(psi_smooth, pivot_sense, pivot_p,
+				cfg.pivot_step_begin);
+		// Mohawk V — see the GDScript reference.
+		const double v_open = Math::deg_to_rad(cfg.pivot_mohawk_deg) * pivot_blend *
+				Math::sin(Math_PI * pivot_p);
+		const double step_sign = sgn(psi_smooth) * pivot_sense;
+		if (step_sign > 0.0) {
+			pivot_yaw_l = v_open;
+		} else if (step_sign < 0.0) {
+			pivot_yaw_r = -v_open;
+		}
+		align_target = Math::lerp(align_target, pivot_target, pivot_blend);
+		align_speed = Math::lerp(align_speed, cfg.pivot_yaw_speed, pivot_blend);
+	}
+	hip_align_yaw = Math::lerp(hip_align_yaw, align_target, align_speed * delta);
 	travel_align_yaw = hip_align_yaw * (1.0 - stop_blend);
 	const double hip_cos = Math::cos(travel_align_yaw);
 	const double hip_sin = Math::sin(travel_align_yaw);
@@ -533,6 +686,8 @@ int64_t NativeSkaterGait::apply(
 	}
 	stance = MAX(stance, cfg.dig_in_stance * dig);
 	stance = MAX(stance, cfg.reversal_stance * rev_amt);
+	stance = MAX(stance, cfg.carve_stance * Math::abs(carve));
+	stance = MAX(stance, cfg.pivot_stance * pivot_blend);
 	stance = MAX(stance, cfg.wrister_load_stance * wrister_load);
 	stance = MAX(stance, cfg.slapper_load_stance * slap_load);
 	const double kick_stance = shot_kick_is_slap ? cfg.slapper_kick_stance
@@ -634,7 +789,8 @@ int64_t NativeSkaterGait::apply(
 	const double push_amp = Math::deg_to_rad(push_deg) * intensity * push_dir * push_scale *
 			gait_scale *
 			(1.0 - Math::abs(carve) * cfg.carve_stride_fade) *
-			(1.0 - dig * cfg.dig_in_chop);
+			(1.0 - dig * cfg.dig_in_chop) *
+			(1.0 - ccut * cfg.backpedal_pitch_fade);
 	const double bias = cfg.stride_rear_bias;
 	l_pitch += fb_w * (s - bias) * push_amp;
 	r_pitch += fb_w * (s_opp - bias) * push_amp;
@@ -645,7 +801,8 @@ int64_t NativeSkaterGait::apply(
 	// Abduction (V-flare on the push half).
 	double l_ext = MAX(-s, 0.0);
 	double r_ext = MAX(-s_opp, 0.0);
-	const double abduct_amp = Math::deg_to_rad(cfg.stride_abduction_deg) * intensity *
+	const double abduct_amp = Math::deg_to_rad(cfg.stride_abduction_deg +
+			cfg.backpedal_ccut_sweep_deg * ccut) * intensity *
 			push_scale * gait_scale;
 	l_roll -= fb_w * abduct_amp * l_ext * rock_fade;
 	r_roll += fb_w * abduct_amp * r_ext * rock_fade;
@@ -707,7 +864,7 @@ int64_t NativeSkaterGait::apply(
 
 	// Knee flex — stance base, push extension, recovery tuck.
 	const double tuck_amp = Math::deg_to_rad(cfg.stride_knee_deg) * intensity *
-			push_scale * gait_scale;
+			push_scale * gait_scale * (1.0 - cfg.backpedal_tuck_fade * ccut);
 	const double release = cfg.stance_knee_release * intensity * gait_scale;
 	double l_knee = -(stance_knee * (1.0 - release * l_ext) + tuck_amp * MAX(c, 0.0) + l_tuck_extra);
 	double r_knee = -(stance_knee * (1.0 - release * r_ext) + tuck_amp * MAX(c_opp, 0.0) + r_tuck_extra);
@@ -732,10 +889,12 @@ int64_t NativeSkaterGait::apply(
 	// Body bob.
 	drop += cfg.stride_bob_m * intensity * (1.0 - s * s) * gait_scale;
 
-	// Trunk texture.
+	// Trunk texture. Roll channels ride the stride FUNDAMENTAL, not the skewed
+	// stroke `s` — see the GDScript reference.
+	const double s_fund = Math::sin(stride_phase);
 	trunk_pitch_add = -Math::deg_to_rad(cfg.stride_dig_lean_deg) * effort;
-	trunk_roll_add = Math::deg_to_rad(cfg.stride_sway_deg) * intensity * fb_w * s * gait_scale;
-	const double shift_target = fb_w * s * intensity * gait_scale;
+	trunk_roll_add = Math::deg_to_rad(cfg.stride_sway_deg) * intensity * fb_w * s_fund * gait_scale;
+	const double shift_target = fb_w * s_fund * intensity * gait_scale;
 	const double shift_accel = cfg.weight_spring_stiffness * (shift_target - weight_shift) -
 			cfg.weight_spring_damping * weight_shift_vel;
 	weight_shift_vel += shift_accel * delta;
@@ -766,17 +925,32 @@ int64_t NativeSkaterGait::apply(
 		trunk_roll_add += Math::deg_to_rad(cfg.hockey_stop_trunk_roll_deg) *
 				stop_blend * stop_side;
 	}
+	// Centripetal bank — see the GDScript reference.
+	if (ground_speed > 0.1) {
+		const double a_lat = ground_speed * Math::abs(turn_rate);
+		const double knee = MAX(cfg.carve_bank_knee_accel, 0.001);
+		const double bank_engage = a_lat * a_lat / (a_lat * a_lat + knee * knee);
+		const double bank_mag = MIN(
+				Math::atan2(a_lat, 9.8) * cfg.carve_bank_gain,
+				Math::deg_to_rad(cfg.carve_bank_max_deg)) * bank_engage * (1.0 - stop_blend);
+		const double centri_x = sgn(turn_rate) * -(double)local_vel.z / ground_speed;
+		const double centri_z = sgn(turn_rate) * (double)local_vel.x / ground_speed;
+		trunk_pitch_add += bank_mag * centri_z;
+		trunk_roll_add += -bank_mag * centri_x;
+	}
 
 	// Stagger stumble / knockdown factor.
 	const double kd_t = CLAMP(
 			knockdown_timer / MAX(cfg.knockdown_getup_seconds, 0.001), 0.0, 1.0);
 	const double stagger_t = CLAMP(
 			stagger_timer / MAX(cfg.stagger_max_seconds, 0.001), 0.0, 1.0);
+	double stagger_pitch = 0.0;
+	double stagger_roll = 0.0;
 	if (stagger_t > 0.0) {
 		const double wobble_amp = Math::deg_to_rad(cfg.stagger_wobble_deg) * stagger_t * (1.0 - kd_t);
 		const double wobble_phase = stagger_timer * Math_TAU * cfg.stagger_wobble_hz;
-		trunk_pitch_add += wobble_amp * Math::sin(wobble_phase);
-		trunk_roll_add += wobble_amp * 0.7 * Math::sin(wobble_phase * 1.31);
+		stagger_pitch = wobble_amp * Math::sin(wobble_phase);
+		stagger_roll = wobble_amp * 0.7 * Math::sin(wobble_phase * 1.31);
 	}
 
 	double foot_evert_l = 0.0;
@@ -839,14 +1013,29 @@ int64_t NativeSkaterGait::apply(
 		drop += cfg.hit_commit_crouch_m * commit_t;
 	}
 
+	// Trunk inertia filter + post-filter stumble wobble — see the GDScript
+	// reference's publish tail.
+	double tex_ease = 1.0;
+	if (cfg.trunk_texture_smooth_rate > 0.0) {
+		tex_ease = MIN(cfg.trunk_texture_smooth_rate * delta, 1.0);
+	}
+	trunk_pitch_s = Math::lerp(trunk_pitch_s, trunk_pitch_add, tex_ease);
+	trunk_roll_s = Math::lerp(trunk_roll_s, trunk_roll_add, tex_ease);
+	trunk_pitch_add = trunk_pitch_s + stagger_pitch;
+	trunk_roll_add = trunk_roll_s + stagger_roll;
+
 	out_l_pitch = l_pitch;
 	out_l_roll = l_roll;
 	out_l_knee = l_knee;
 	out_r_pitch = r_pitch;
 	out_r_roll = r_roll;
 	out_r_knee = r_knee;
+	out_l_yaw = pivot_yaw_l * (1.0 - kd_t);
+	out_r_yaw = pivot_yaw_r * (1.0 - kd_t);
 	out_foot_evert_l = foot_evert_l;
 	out_foot_evert_r = foot_evert_r;
+	out_edge_load_l = CLAMP(MAX(l_ext * intensity, stop_blend), 0.0, 1.0) * (1.0 - kd_t);
+	out_edge_load_r = CLAMP(MAX(r_ext * intensity, stop_blend), 0.0, 1.0) * (1.0 - kd_t);
 	out_drop = drop;
 	return APPLY_ACTIVE;
 }
@@ -880,6 +1069,11 @@ void NativeSkaterGait::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_crouch_drop"), &NativeSkaterGait::get_crouch_drop);
 	ClassDB::bind_method(D_METHOD("get_trunk_pitch_add"), &NativeSkaterGait::get_trunk_pitch_add);
 	ClassDB::bind_method(D_METHOD("get_trunk_roll_add"), &NativeSkaterGait::get_trunk_roll_add);
+	ClassDB::bind_method(D_METHOD("get_pivot_blend"), &NativeSkaterGait::get_pivot_blend);
+	ClassDB::bind_method(D_METHOD("get_l_yaw"), &NativeSkaterGait::get_l_yaw);
+	ClassDB::bind_method(D_METHOD("get_r_yaw"), &NativeSkaterGait::get_r_yaw);
+	ClassDB::bind_method(D_METHOD("get_edge_load_l"), &NativeSkaterGait::get_edge_load_l);
+	ClassDB::bind_method(D_METHOD("get_edge_load_r"), &NativeSkaterGait::get_edge_load_r);
 	ClassDB::bind_method(D_METHOD("get_stop_yaw_offset"), &NativeSkaterGait::get_stop_yaw_offset);
 	ClassDB::bind_method(D_METHOD("get_travel_align_yaw"), &NativeSkaterGait::get_travel_align_yaw);
 	ClassDB::bind_method(D_METHOD("get_shot_hip_yaw"), &NativeSkaterGait::get_shot_hip_yaw);

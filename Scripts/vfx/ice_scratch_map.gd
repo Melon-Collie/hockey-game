@@ -14,7 +14,14 @@ extends Node3D
 # react to the same situations.
 const TRAIL_MIN_SPEED: float = 0.5
 const TELEPORT_THRESHOLD: float = 1.0
-const BLADE_X_OFFSET: float = 0.12
+# A blade this far above the lower of the two boots is airborne (the recovery
+# swing, the crossover clearance step) and leaves no mark. Relative to the
+# other boot rather than an absolute ice height, so crouch depth and body drop
+# never bias the read.
+const LIFT_EPS_M: float = 0.03
+# Fraction of blade_intensity a zero-load (gliding) blade still paints — a
+# glide whispers, a loaded edge (push, under-push, scrape) bites to full.
+const GLIDE_ALPHA_FRAC: float = 0.35
 
 @export var rink_width: float = 26.0
 @export var rink_length: float = 60.0
@@ -32,8 +39,10 @@ const BLADE_X_OFFSET: float = 0.12
 
 var _viewport: SubViewport
 var _painter: Node2D
-# Pending line segments flattened as [from0, to0, from1, to1, ...].
+# Pending line segments flattened as [from0, to0, from1, to1, ...], with one
+# alpha per segment alongside.
 var _pending_segments: PackedVector2Array = PackedVector2Array()
+var _pending_alpha: PackedFloat32Array = PackedFloat32Array()
 # Per-skater previous state: value is [center_world: Vector3, left_blade_px:
 # Vector2, right_blade_px: Vector2], used to draw a continuous stroke between
 # frames. Keyed by Skater.get_instance_id() rather than the Skater node — a
@@ -77,6 +86,7 @@ func get_texture() -> ViewportTexture:
 func clear() -> void:
 	_viewport.render_target_clear_mode = SubViewport.CLEAR_MODE_ONCE
 	_pending_segments.clear()
+	_pending_alpha.clear()
 	_prev_state.clear()
 
 # Toggled from PlayerPrefs.apply_video(). When disabled, the viewport stops
@@ -101,6 +111,7 @@ func _process(_delta: float) -> void:
 	# a pre-replay position to wherever the skater resumes.
 	if NetworkManager.is_replay_mode():
 		_pending_segments.clear()
+		_pending_alpha.clear()
 		_prev_state.clear()
 		_painter.queue_redraw()
 		return
@@ -131,17 +142,15 @@ func _process(_delta: float) -> void:
 		var skater: Skater = node as Skater
 		if skater == null:
 			continue
-		# Interpolation-correct read, so the marks land on the RENDERED pose.
-		# Physics interpolation is off project-wide (nothing sets
-		# physics/common/physics_interpolation or a per-node mode), so today this
-		# returns exactly what global_transform would. It stays because turning
-		# interpolation on would otherwise offset every stroke by up to one
-		# physics step — the post-tick pose leads the visual by that much.
-		var t: Transform3D = skater.get_global_transform_interpolated()
-		var pos: Vector3 = t.origin
-		var right: Vector3 = t.basis.x
-		var left_world: Vector3 = pos + right * (-BLADE_X_OFFSET)
-		var right_world: Vector3 = pos + right * BLADE_X_OFFSET
+		# Marks follow the SKATES, not the torso: the FOOT bones compose
+		# everything the gait wrote (stride pitch, hip yaw through crossovers /
+		# stops / pivots, the mohawk V), so crossovers scratch crossing arcs
+		# and C-cuts scratch lobes instead of two parallel rails under the
+		# body. The bone read reflects the rendered pose directly — the gait
+		# itself runs at render rate.
+		var pos: Vector3 = skater.global_position
+		var left_world: Vector3 = skater.blade_mark_position(true)
+		var right_world: Vector3 = skater.blade_mark_position(false)
 		# World (x, z) -> viewport pixel. Godot's PlaneMesh places UV (0,0) at
 		# world (-size.x/2, -size.y/2), so UV.y (and therefore pixel-Y when
 		# this texture is sampled) increases with world Z. The existing rink
@@ -188,10 +197,21 @@ func _process(_delta: float) -> void:
 		var flat_vel: Vector3 = Vector3(skater.velocity.x, 0.0, skater.velocity.z)
 		if flat_vel.length() < TRAIL_MIN_SPEED:
 			continue
-		_pending_segments.push_back(prev_left)
-		_pending_segments.push_back(left_px)
-		_pending_segments.push_back(prev_right)
-		_pending_segments.push_back(right_px)
+		# Per blade: an airborne skate (recovery swing, clearance step) leaves
+		# no mark, and a grounded one paints at an alpha scaled by its edge
+		# load — the stride reads as alternating bitten push strokes with gaps,
+		# not two continuous rails.
+		var base_y: float = minf(left_world.y, right_world.y)
+		if left_world.y - base_y < LIFT_EPS_M:
+			_pending_segments.push_back(prev_left)
+			_pending_segments.push_back(left_px)
+			_pending_alpha.push_back(blade_intensity * (GLIDE_ALPHA_FRAC
+					+ (1.0 - GLIDE_ALPHA_FRAC) * skater.edge_load(true)))
+		if right_world.y - base_y < LIFT_EPS_M:
+			_pending_segments.push_back(prev_right)
+			_pending_segments.push_back(right_px)
+			_pending_alpha.push_back(blade_intensity * (GLIDE_ALPHA_FRAC
+					+ (1.0 - GLIDE_ALPHA_FRAC) * skater.edge_load(false)))
 
 	# Always queue a redraw — with CLEAR_MODE_NEVER, the SubViewport re-executes
 	# each canvas item's cached command list every frame, which would re-apply
@@ -203,13 +223,15 @@ func _process(_delta: float) -> void:
 
 func _on_painter_draw() -> void:
 	var width_px: float = blade_width_m * (float(_viewport.size.x) / rink_width)
-	var col: Color = Color(1.0, 1.0, 1.0, blade_intensity)
 	var i: int = 0
+	var seg: int = 0
 	while i < _pending_segments.size():
 		_painter.draw_line(_pending_segments[i], _pending_segments[i + 1],
-							col, width_px, true)
+							Color(1.0, 1.0, 1.0, _pending_alpha[seg]), width_px, true)
 		i += 2
+		seg += 1
 	_pending_segments.clear()
+	_pending_alpha.clear()
 
 
 # The live Skater list, rebuilt only when the roster actually changes — the
