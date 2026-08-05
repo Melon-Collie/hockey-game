@@ -441,6 +441,42 @@ func test_the_bots_predict_the_same_boundary_the_puck_uses() -> void:
 				"predicted puck respects the same inset boundary")
 
 
+func test_the_closed_form_caroms_on_the_same_edge_as_the_walk() -> void:
+	# The stepped walk above and AITrajectory.puck_release_landing's closed form
+	# are two solvers for one puck, and the dump eval compares their answers
+	# (it ranks releases with the closed form, everything else walks the sim).
+	# The closed form kept the un-inset boundary when _step gained its margin,
+	# so it modelled a puck resting a radius deeper into the boards, compounding
+	# per contact on a multi-bounce rim (#650).
+	for deg: int in range(0, 360, 20):
+		var rad: float = deg_to_rad(float(deg))
+		var vel := Vector3(cos(rad), 0.0, sin(rad)) * 14.0
+		var landing: Vector3 = AITrajectory.puck_release_landing(
+				Vector3(3.0, 0.0, 6.0), vel, 0.0).origin
+		var xz := Vector2(landing.x, landing.z)
+		assert_almost_eq(GameRules.clamp_to_rink_inner(xz, _PR).distance_to(xz), 0.0, 1e-2,
+				"closed-form landing keeps the puck's edge out of the boards (%d°)" % deg)
+
+
+func test_a_lofted_release_lands_on_the_ice_it_flew_over() -> void:
+	# A release whose AIRBORNE leg ends past the boards resumes its slide from
+	# the clamp — and the clamp has to leave it strictly INSIDE the boundary the
+	# leg loop then searches. clamp_to_rink_inner returns a Vector2, whose
+	# float32 components round the exact boundary to either side; landing a
+	# rounding-width outside made every board solve report no contact, and the
+	# puck ran its whole ~200 m runout clean through the wall (#650). Only
+	# LOFTED releases reach that clamp, which is why the flat sweep above missed it.
+	var hang: float = AIActionScoring.dump_loft_hang_s(ShotMechanics.ELEVATION_HIGH)
+	for deg: int in range(0, 360, 15):
+		var rad: float = deg_to_rad(float(deg))
+		var vel := Vector3(cos(rad), 0.0, sin(rad)) * 14.0
+		var landing: Vector3 = AITrajectory.puck_release_landing(
+				Vector3(10.5, 0.0, 24.0), vel, hang).origin
+		var xz := Vector2(landing.x, landing.z)
+		assert_almost_eq(GameRules.clamp_to_rink_inner(xz, _PR).distance_to(xz), 0.0, 1e-2,
+				"a lofted release settles on the playing surface (%d°)" % deg)
+
+
 func test_skater_approximations_are_unchanged() -> void:
 	# _step's default margin is 0, so the no-bounce skater path still clamps the
 	# body centre exactly as before.

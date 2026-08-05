@@ -410,10 +410,13 @@ static func is_puck_airborne(pos: Vector3, vel: Vector3,
 # _RELEASE_MAX_LEGS of them.
 #
 # Board geometry mirrors GameRules.clamp_to_rink_inner exactly — straight side
-# and end walls plus the four corner ARCS. The arcs are not optional detail
-# here: a rim fired into a corner is the delivery the whole model exists to
-# price, and treating the corner as a square would put its contact metres away
-# at the wrong incidence.
+# and end walls plus the four corner ARCS, every extent inset by the puck's own
+# radius exactly as the stepped sim's board_margin insets it. The arcs are not
+# optional detail here: a rim fired into a corner is the delivery the whole model
+# exists to price, and treating the corner as a square would put its contact
+# metres away at the wrong incidence. The inset is not optional either: this
+# solver's answers are compared against the stepped walk's, and a radius per
+# contact compounds down a multi-bounce rim.
 
 # A release stops resolving after this many board contacts, then finishes as a
 # straight slide clamped to the surface. The cap is generous because a CORNER
@@ -455,10 +458,16 @@ static func puck_launch_speed_for_runout(distance_m: float) -> float:
 # a value type on the compete path; t = INF when the ray leaves no board within
 # `max_t`. Mirrors clamp_to_rink_inner's straight-wall + corner-arc geometry.
 #
-# NOT inset by the puck's radius, unlike the stepped sim (_step's board_margin),
-# so this prices a rim against a puck that ends a radius deeper into the boards
-# than the one the sim produces. Issue #650.
-static func _first_board_hit(p: Vector2, dir: Vector2, max_t: float) -> Vector3:
+# `margin` insets every extent by the body's own half-extent, exactly as
+# clamp_to_rink_inner does: the puck caroms on its EDGE, so its centre stops a
+# radius short of the kickplate. The corner CENTRES are invariant under the
+# inset (only the arc radius shrinks), which is why the straight-span tests below
+# still read CORNER_CENTER_*.
+static func _first_board_hit(p: Vector2, dir: Vector2, max_t: float,
+		margin: float = 0.0) -> Vector3:
+	var half_w: float = GameRules.INNER_HALF_WIDTH - margin
+	var half_l: float = GameRules.INNER_HALF_LENGTH - margin
+	var corner_r: float = GameRules.INNER_CORNER_RADIUS - margin
 	var best_t: float = INF
 	var best_n := Vector2.ZERO
 	# Straight walls. Each is only a real contact where the crossing point is
@@ -467,7 +476,7 @@ static func _first_board_hit(p: Vector2, dir: Vector2, max_t: float) -> Vector3:
 	for sx: float in [-1.0, 1.0]:
 		if dir.x * sx <= 0.0:
 			continue
-		var t: float = (sx * GameRules.INNER_HALF_WIDTH - p.x) / dir.x
+		var t: float = (sx * half_w - p.x) / dir.x
 		if t >= 0.0 and t < best_t and t <= max_t \
 				and absf(p.y + dir.y * t) <= GameRules.CORNER_CENTER_Z:
 			best_t = t
@@ -475,7 +484,7 @@ static func _first_board_hit(p: Vector2, dir: Vector2, max_t: float) -> Vector3:
 	for sz: float in [-1.0, 1.0]:
 		if dir.y * sz <= 0.0:
 			continue
-		var t: float = (sz * GameRules.INNER_HALF_LENGTH - p.y) / dir.y
+		var t: float = (sz * half_l - p.y) / dir.y
 		if t >= 0.0 and t < best_t and t <= max_t \
 				and absf(p.x + dir.x * t) <= GameRules.CORNER_CENTER_X:
 			best_t = t
@@ -487,8 +496,7 @@ static func _first_board_hit(p: Vector2, dir: Vector2, max_t: float) -> Vector3:
 			var c := Vector2(cx * GameRules.CORNER_CENTER_X, cz * GameRules.CORNER_CENTER_Z)
 			var m: Vector2 = p - c
 			var b: float = m.dot(dir)
-			var disc: float = b * b - (m.length_squared()
-					- GameRules.INNER_CORNER_RADIUS * GameRules.INNER_CORNER_RADIUS)
+			var disc: float = b * b - (m.length_squared() - corner_r * corner_r)
 			if disc < 0.0:
 				continue
 			var t: float = -b + sqrt(disc)
@@ -558,7 +566,16 @@ static func puck_release_landing(origin: Vector3, vel: Vector3, hang_s: float,
 			var f: float = _segment_line_fraction(p, air_end, ice_line_z, ice_line_dir)
 			if f >= 0.0:
 				cross_t = elapsed + hang_s * f
-		p = GameRules.clamp_to_rink_inner(air_end)
+		# Landed a hair INSIDE the boundary the leg loop searches, for the same
+		# reason the bounce below pushes off the board — and here it is not an
+		# efficiency guard but a correctness one. clamp_to_rink_inner returns a
+		# Vector2, whose float32 components round the exact boundary to EITHER
+		# side; land a rounding-width outside it and every straight-wall solve in
+		# _first_board_hit yields a negative t while every corner root falls
+		# behind the origin, so the search reports NO BOARD AT ALL and the puck
+		# slides its whole runout — ~200 m at pass pace — clean through the wall.
+		p = GameRules.clamp_to_rink_inner(air_end,
+				GameRules.PUCK_COLLISION_RADIUS + _RELEASE_BOARD_EPS_M)
 		elapsed += hang_s
 	for _leg: int in _RELEASE_MAX_LEGS:
 		var speed: float = v.length()
@@ -566,7 +583,8 @@ static func puck_release_landing(origin: Vector3, vel: Vector3, hang_s: float,
 			break
 		var dir: Vector2 = v / speed
 		var runout: float = puck_runout_m(speed)
-		var hit: Vector3 = _first_board_hit(p, dir, runout)
+		var hit: Vector3 = _first_board_hit(p, dir, runout,
+				GameRules.PUCK_COLLISION_RADIUS)
 		var leg_len: float = runout if is_inf(hit.x) else hit.x
 		var leg_end: Vector2 = p + dir * leg_len
 		# Time to slide leg_len under constant decel: the root of
@@ -598,7 +616,7 @@ static func puck_release_landing(origin: Vector3, vel: Vector3, hang_s: float,
 			if f >= 0.0:
 				cross_t = elapsed + _slide_time(tail_speed, p.distance_to(tail) * f)
 		elapsed += tail_speed / GameRules.PUCK_ICE_DECEL_M_S2
-		p = GameRules.clamp_to_rink_inner(tail)
+		p = GameRules.clamp_to_rink_inner(tail, GameRules.PUCK_COLLISION_RADIUS)
 	return Transform3D(
 			Basis(Vector3(0.0 if is_inf(cross_t) else 1.0,
 					0.0 if is_inf(cross_t) else cross_t, elapsed),
