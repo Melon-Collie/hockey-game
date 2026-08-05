@@ -82,6 +82,8 @@ var _smoothing_initialized: bool = false
 func setup(target_getter: Callable) -> void:
 	_target_getter = target_getter
 	fov = replay_fov
+	# Driven at render rate, so it is already continuous — see GameCamera._ready.
+	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 
 
 func activate() -> void:

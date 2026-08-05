@@ -706,6 +706,23 @@ func _process(delta: float) -> void:
 	# Stick flex is time/state-driven — it runs every frame regardless (it has
 	# its own shader-write guard) so a mid-shot whip never freezes on an
 	# otherwise-static pose.
+	#
+	# Physics interpolation is on project-wide, and it snapshots node transforms
+	# at tick boundaries, so the two halves of this pass pay for it differently.
+	# The marker-driven meshes lose nothing: their markers only move on the tick
+	# anyway, so a tick-boundary snapshot captures every pose they ever hold.
+	# render_pose_update's pose — gait, head tracking, off-hand IK — is genuinely
+	# time-driven here, so interpolation resamples it at the tick rate and draws
+	# it a tick late. That is a real cost against the reason this pass moved to
+	# render rate, and it is accepted: the gait is a few-Hz oscillation, so tick
+	# sampling still oversamples it heavily, and a tick of latency on a cosmetic
+	# pose is invisible.
+	#
+	# What is NOT an option is opting these nodes out to win that fidelity back.
+	# An opted-out child renders against the body's un-interpolated (post-tick)
+	# position while the body renders interpolated, which separates the two by up
+	# to a tick of travel — the stick would visibly leave the hands at speed.
+	# Staying attached to the body beats sampling the pose more often.
 	if is_visible_in_tree():
 		# Cosmetic pose (leg gait / head / off-hand IK) at render rate, before the
 		# marker-driven mesh rebuild that consumes it. Skipped entirely when hidden
@@ -1405,12 +1422,22 @@ func _pose_leg_pivot(bone: int, euler: Vector3) -> void:
 # lower-body yaw (alignment / pivot / stop), stride pitch, the mohawk yaw — so
 # ice marks made from here follow the SKATES, not the torso. Falls back to the
 # old body-center offset until the rig is built.
+#
+# The transform half is read INTERPOLATED, the bone pose half as-is: physics
+# interpolation renders the body between tick poses, while the bone pose is
+# whatever the render-rate gait wrote this frame. Composing the two gives the
+# drawn body position carrying the drawn foot pose — which is the same layering
+# the rest of the rig gets, just spelled out here because this seam is consumed
+# by a system that draws into world space. A plain global_transform read would
+# be the post-tick body, laying every stroke up to a tick of travel ahead of the
+# skate that cut it.
 func blade_mark_position(left: bool) -> Vector3:
 	if _leg_skeleton == null:
-		return global_position + global_transform.basis.x * (-0.12 if left else 0.12)
+		var t: Transform3D = get_global_transform_interpolated()
+		return t.origin + t.basis.x * (-0.12 if left else 0.12)
 	var bone: int = SkaterMeshBuilder.LegBone.FOOT_L if left \
 			else SkaterMeshBuilder.LegBone.FOOT_R
-	return (_leg_skeleton.global_transform
+	return (_leg_skeleton.get_global_transform_interpolated()
 			* _leg_skeleton.get_bone_global_pose(bone)).origin
 
 

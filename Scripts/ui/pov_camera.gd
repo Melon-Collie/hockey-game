@@ -36,6 +36,8 @@ func _ready() -> void:
 	# The jumbotron hangs over center ice, directly between any top-down
 	# camera and the play — mask it out exactly like the gameplay camera does.
 	cull_mask &= ~Jumbotron.RENDER_LAYER_MASK
+	# Driven at render rate, so it is already continuous — see GameCamera._ready.
+	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 
 
 # target_getter returns the tracked Skater (or null); puck_pos_getter returns
