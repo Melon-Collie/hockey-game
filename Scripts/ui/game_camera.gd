@@ -363,17 +363,20 @@ func impact_kick(direction: Vector3, intensity: float) -> void:
 # reads it per tick. At 120 Hz this also CAPPED camera motion on higher-refresh
 # displays.
 #
-# That uncapping has a cost worth knowing before touching anything here. Actors
-# move only on the physics tick and nothing interpolates them to the render rate,
-# so above the tick rate the camera slides between ticks while the skater is
-# held: the skater's SCREEN position sawtooths by one tick of travel, growing
-# with speed. At or below 120 fps every frame advances the same whole number of
-# ticks and it aliases away; at 240 it is visible on every second frame. So this
-# is a real improvement for the world (the rink no longer steps at 120 Hz) and a
-# real regression for the actors, and the actor half is only fixable by
-# interpolating THEM — running framing back on the tick would just move the
-# stutter onto the rink. The F3 perf page measures the sawtooth directly
-# (NetworkDebugOverlay._render_sim_phase).
+# Uncapping framing came with a cost that had to be paid elsewhere before it was
+# a win. Actors move only on the physics tick, so a camera sliding between ticks
+# past a held skater sawtoothed the skater's SCREEN position by one tick of
+# travel, growing with speed — invisible at or below 120 fps (every frame
+# advances the same whole number of ticks), visible on every second frame at 240.
+# Running framing back on the tick would only have moved the stutter onto the
+# rink; the fix was interpolating the actors, which is now on project-wide
+# (physics/common/physics_interpolation). The F3 perf page still measures the
+# sawtooth directly (NetworkDebugOverlay._render_sim_phase).
+#
+# The framing target below is deliberately the RAW tick pose, not the rendered
+# one: it is the input to an exponential smoother that attenuates a one-tick
+# oscillation to well under a millimetre. Anything that has to sit ON an actor
+# reads the rendered pose instead (see Skater.render_transform).
 #
 # Every time-evolving term here is delta-scaled, and the exponential smoothers go
 # through _smooth_t so the feel no longer depends on the frame rate (see there).

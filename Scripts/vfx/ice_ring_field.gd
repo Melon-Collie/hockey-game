@@ -127,9 +127,9 @@ func _process(_delta: float) -> void:
 					skater.slapper_field_arrow_visible())
 		if not stamina_seen and skater.stamina_field_visible():
 			stamina_seen = true
-			var body: Vector3 = skater.global_position
+			var body: Vector2 = skater.stamina_field_center()
 			_material.set_shader_parameter(&"stamina_zone", Vector4(
-					body.x, body.z, skater.stamina_field_fill(), 0.0))
+					body.x, body.y, skater.stamina_field_fill(), 0.0))
 			_material.set_shader_parameter(&"stamina_up", skater.stamina_field_up())
 			_material.set_shader_parameter(&"stamina_fill_col",
 					_linear_hud_rgba(skater.stamina_field_color()))
@@ -144,8 +144,10 @@ func _process(_delta: float) -> void:
 		# Interpolation-correct read, so the ring tracks the RENDERED skater
 		# rather than the post-tick physics pose — the same reason IceScratchMap
 		# uses it. As a child node the ring inherited this for free; driving it
-		# from a uniform makes the choice explicit.
-		var pos: Vector3 = skater.get_global_transform_interpolated().origin
+		# from a uniform makes the choice explicit. Every other accessor read
+		# here goes through the same seam, so the whole on-ice rig — ring,
+		# chevrons, gauge, reticle — moves as one body.
+		var pos: Vector3 = skater.render_transform().origin
 		_positions[count] = Vector4(pos.x, pos.z,
 				SkaterHUDCoordinator.RING_OUTER_R, SkaterHUDCoordinator.RING_INNER_R)
 		_colors[count] = _linear_rgba(skater.ring_field_color())

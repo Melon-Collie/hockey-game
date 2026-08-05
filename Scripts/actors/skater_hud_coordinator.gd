@@ -27,10 +27,16 @@ const _STAMINA_LOCKED_FLASH_HZ: float = 2.5
 const _STAMINA_LOW_COLOR := Color(0.95, 0.65, 0.20, 1.0)  # amber when running low
 const STAMINA_TRACK_COLOR := Color(0.06, 0.08, 0.11, 0.55)  # read by IceRingField
 
-# Player-name placement — the world point PlayerNameOverlay projects to screen.
-# It was a billboarded Label3D sitting just outside the slot ring; the anchor
-# outlived the node (see name_plate_anchor).
+# Player-name placement — a billboarded Label3D sitting just outside the slot
+# ring, on the screen-down side. WORLD-sized (pixel_size, not fixed_size), so a
+# name is the same size on the ice whatever the camera is doing, and grows and
+# shrinks with zoom like everything else out there. Drawing it in the 2D pass
+# instead saved a node per skater but could only pick an integer font size, so
+# the text stepped between sizes as the camera breathed.
 const _NAME_RADIUS: float   = RING_OUTER_R + 0.10
+const _NAME_FONT_SIZE: int  = 40
+const _NAME_PIXEL_SIZE: float = 0.005
+const _NAME_ICE_Y: float    = 0.05
 const _CHEVRON_RADIUS: float = RING_OUTER_R + 0.10
 const _CHEVRON_OFFSET_DEG: float = 60.0
 # Screen-up gap between the stacked chevrons — one per loft rung above flat:
@@ -62,7 +68,7 @@ const _BEACON_PULSE_MAX_SCALE: float = 1.10
 # Smart-ping chat bubble. A billboarded Label3D that floats above the PINGER's
 # head for a beat, showing the resolved team message ("Pass to me!", "Cover
 # him!", ...). Built lazily on the first ping (most skaters never ping), holds
-# fully visible then fades out; position is rewritten each tick like the
+# fully visible then fades out; position is rewritten each frame like the
 # beacon. Sits above the self-beacon apex so the two never overlap on the
 # local player's own skater.
 const _PING_BUBBLE_HOVER_OFFSET: float = 1.62
@@ -109,6 +115,13 @@ var _stamina_visible: bool = false
 var _stamina_fill: float = 1.0
 var _stamina_color: Color = Color.WHITE
 
+# Player name. Billboarded Label3D, top_level so the plate keeps its screen-down
+# placement while the body spins under it, and opted OUT of physics
+# interpolation: this whole coordinator runs at render rate and writes the
+# skater's INTERPOLATED pose, so handing the result to the interpolator as well
+# would lag it a tick behind the body it is labelling.
+var _name_label: Label3D = null
+
 # Overhead self-beacon. LAZY — null until the ring-relation resolver reports
 # SELF, and freed again if it stops (see _apply_self_beacon_relation), so exactly
 # one exists in the scene rather than one per skater. It was built eagerly in
@@ -118,8 +131,8 @@ var _stamina_color: Color = Color.WHITE
 # the flat-on-ice chrome into the shader — this one just cannot go there, because
 # it floats above the head.
 #
-# `_self_beacon` is top_level (world transform rewritten
-# each tick, like the name label) and parents an outline + fill MeshInstance.
+# `_self_beacon` is top_level (world transform rewritten each frame, like the
+# name label) and parents an outline + fill MeshInstance.
 # `_self_beacon_active` latches whether the resolver currently reports SELF;
 # actual visibility also gates on ghost/replay/spectator state.
 var _self_beacon: Node3D = null
@@ -158,10 +171,9 @@ var _slapper_current_ring_scale: float = 1.0
 var _force_world_hud_hidden: bool = false
 
 
-# Per-tick caches. `update()` runs every physics tick across every skater, so anything
-# derived from infrequently-changing inputs (camera orientation, skater Y,
+# Per-frame caches. `update()` runs every rendered frame across every skater, so
+# anything derived from infrequently-changing inputs (camera orientation,
 # shader-param values) is recomputed only on change.
-var _last_skater_y: float = INF
 var _cached_cam_basis_y: Vector3 = Vector3.ZERO
 var _cached_screen_down: Vector2 = Vector2(0.0, 1.0)
 var _cached_arc_base_angle: float = 0.0
@@ -175,19 +187,13 @@ var _cached_chevron_dir: Vector3 = Vector3(0.0, 0.0, 1.0)
 const _RING_RECOLOR_INTERVAL: float = 0.25
 var _ring_relation_resolver: Callable = Callable()
 # Whether the ring should be drawn at all — replaces the mesh's `visible` flag
-# now that IceRingField reads state instead of the tree. Starts false: the field
-# only includes a skater once update() has run and established a relation, so a
-# freshly spawned skater cannot flash an UNKNOWN-coloured ring for a frame.
-# TRUE by default, and that matters: these replaced a MeshInstance3D and a
-# Label3D, both of which are born `visible = true`. Only the replay/spectator
-# latch and the ghost pass ever set them, and neither runs on an ordinary
-# skater — so defaulting them false left the ring and the name plate hidden
-# from spawn until the first goal replay restored them.
+# now that IceRingField reads state instead of the tree. TRUE by default, and
+# that matters: it replaced a MeshInstance3D, which is born `visible = true`.
+# Only the replay/spectator latch and the ghost pass ever write it, and neither
+# runs on an ordinary skater — so defaulting it false left the ring hidden from
+# spawn until the first goal replay restored it. (An UNKNOWN-relation ring still
+# cannot flash: ring_visible() also gates on a resolved relation.)
 var _ring_visible: bool = true
-# Mirrors what the name Label3D's `visible` flag used to hold, now that
-# PlayerNameOverlay reads state instead of walking the tree.
-var _name_visible: bool = true
-var _player_name: String = ""
 var _ring_relation_cached: int = -2
 var _ring_color_cached: Color = Color(0, 0, 0, 0)  # unreachable sentinel; forces first refresh
 var _ring_recolor_accum: float = _RING_RECOLOR_INTERVAL
@@ -201,18 +207,35 @@ var _hidden_for_replay: bool = false
 
 func setup(skater: Skater) -> void:
 	_skater = skater
+	_name_label = Label3D.new()
+	_name_label.name = "PlayerNameLabel"
+	_name_label.top_level = true
+	_name_label.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	_name_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	# Reads through a scrum: the plate exists to be read, and on a top-down
+	# camera it is bodies, not scenery, that would occlude it.
+	_name_label.no_depth_test = true
+	_name_label.fixed_size = false
+	_name_label.font_size = _NAME_FONT_SIZE
+	_name_label.outline_size = 0
+	_name_label.modulate = Color(MenuStyle.HUD_ICE.r, MenuStyle.HUD_ICE.g,
+			MenuStyle.HUD_ICE.b, MenuStyle.HUD_OPACITY)
+	_name_label.pixel_size = _NAME_PIXEL_SIZE
+	_name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_skater.add_child(_name_label)
 
 
-
-
-
+# Places every piece of on-ice chrome, at RENDER rate — so each placement reads
+# the skater's rendered pose (see Skater.render_transform), never
+# global_position. Mixing the two clocks is what makes a plate or a marker crawl
+# against the body it belongs to on a high-refresh display.
 func update(delta: float) -> void:
 	if _force_world_hud_hidden or NetworkManager.is_replay_mode() or GameManager.is_local_spectator():
 		if not _hidden_for_replay:
 			_hidden_for_replay = true
 			_ring_visible = false
 			_stamina_visible = false
-			_name_visible = false
+			_name_label.visible = false
 			if _self_beacon != null: _self_beacon.visible = false
 			if _ping_label != null:
 				_ping_label.visible = false
@@ -224,11 +247,17 @@ func update(delta: float) -> void:
 		# indicator and the beacon are gated by their own show logic (driven from
 		# skater / stamina state) and re-enable themselves as needed.
 		_ring_visible = true
-		_name_visible = true
+		_name_label.visible = true
 		_update_beacon_visibility()
 
-	_refresh_height_anchors_if_skater_moved()
 	_refresh_screen_down_cache_if_camera_changed()
+
+	var render_pos: Vector3 = _skater.render_transform().origin
+	if _name_label.visible:
+		_name_label.global_position = Vector3(
+				render_pos.x + _cached_screen_down.x * _NAME_RADIUS,
+				_NAME_ICE_Y,
+				render_pos.z + _cached_screen_down.y * _NAME_RADIUS)
 
 	_ring_recolor_accum += delta
 	if _ring_recolor_accum >= _RING_RECOLOR_INTERVAL:
@@ -244,9 +273,9 @@ func update(delta: float) -> void:
 		var now: float = Time.get_ticks_msec() * 0.001
 		var bob: float = sin(now * TAU * _BEACON_BOB_HZ) * _BEACON_BOB_AMPLITUDE
 		_self_beacon.global_position = Vector3(
-				_skater.global_position.x,
-				_skater.global_position.y + _BEACON_HOVER_OFFSET + bob,
-				_skater.global_position.z)
+				render_pos.x,
+				render_pos.y + _BEACON_HOVER_OFFSET + bob,
+				render_pos.z)
 		var pulse_t: float = 0.5 + 0.5 * sin(now * TAU * _BEACON_PULSE_HZ)
 		var s: float = lerpf(_BEACON_PULSE_MIN_SCALE, _BEACON_PULSE_MAX_SCALE, pulse_t)
 		_self_beacon.scale = Vector3(s, s, s)
@@ -259,9 +288,9 @@ func update(delta: float) -> void:
 			_ping_label.visible = false
 		else:
 			_ping_label.global_position = Vector3(
-					_skater.global_position.x,
-					_skater.global_position.y + _PING_BUBBLE_HOVER_OFFSET,
-					_skater.global_position.z)
+					render_pos.x,
+					render_pos.y + _PING_BUBBLE_HOVER_OFFSET,
+					render_pos.z)
 			var bubble_a: float = clampf(
 					_ping_bubble_time_left / _PING_BUBBLE_FADE_S, 0.0, 1.0)
 			_ping_label.modulate.a = bubble_a
@@ -331,18 +360,11 @@ func stamina_gauge_up() -> Vector2:
 	return -_cached_screen_down
 
 
-# Y-anchor write only when skater's vertical position changes. Skater Y is
-# effectively constant on the ice; the original per-tick global_position.y
-# writes were defensive — change-detection preserves that defence at near-zero
-# cost when nothing's moved.
-func _refresh_height_anchors_if_skater_moved() -> void:
-	var y: float = _skater.global_position.y
-	if is_equal_approx(y, _last_skater_y):
-		return
-	_last_skater_y = y
-	# Nothing to re-anchor any more — the ice shader draws the slot ring and the
-	# slapper indicator at the ice surface by construction, which is what this
-	# was re-pinning them to.
+# Concentric with the slot ring, so it reads the same rendered pose the ring
+# does — a raw read here would slide the gauge out of its own ring at speed.
+func stamina_gauge_center() -> Vector2:
+	var pos: Vector3 = _skater.render_transform().origin
+	return Vector2(pos.x, pos.z)
 
 
 # Screen-down + chevron direction depend only on the local camera's orientation.
@@ -369,7 +391,7 @@ func _refresh_screen_down_cache_if_camera_changed() -> void:
 
 
 func set_player_name(p_name: String) -> void:
-	_player_name = p_name
+	_name_label.text = p_name
 
 
 # Shows the smart-ping chat bubble above this skater's head. Called (via the
@@ -383,6 +405,7 @@ func show_ping_bubble(text: String) -> void:
 		_ping_label = Label3D.new()
 		_ping_label.name = "PingBubble"
 		_ping_label.top_level = true
+		_ping_label.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		_ping_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		# Reads through a scrum — a team call-out must never hide behind bodies.
 		_ping_label.no_depth_test = true
@@ -396,10 +419,11 @@ func show_ping_bubble(text: String) -> void:
 	_ping_label.text = text
 	_ping_label.modulate = Color(1.0, 1.0, 1.0, 1.0)
 	_ping_label.outline_modulate = Color(0.0, 0.0, 0.0, _PING_BUBBLE_OUTLINE_A)
+	var render_pos: Vector3 = _skater.render_transform().origin
 	_ping_label.global_position = Vector3(
-			_skater.global_position.x,
-			_skater.global_position.y + _PING_BUBBLE_HOVER_OFFSET,
-			_skater.global_position.z)
+			render_pos.x,
+			render_pos.y + _PING_BUBBLE_HOVER_OFFSET,
+			render_pos.z)
 	_ping_label.visible = true
 	_ping_bubble_time_left = _PING_BUBBLE_HOLD_S + _PING_BUBBLE_FADE_S
 
@@ -484,6 +508,10 @@ func _ensure_self_beacon() -> void:
 	_self_beacon = Node3D.new()
 	_self_beacon.name = "SelfBeacon"
 	_self_beacon.top_level = true
+	# Placed from the rendered pose at render rate, like the name plate — and
+	# unlike it, carrying a wall-clock bob and pulse the interpolator would chew
+	# into a stutter by resampling them at the tick rate.
+	_self_beacon.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	_self_beacon.visible = false
 	_skater.add_child(_self_beacon)
 
@@ -560,7 +588,7 @@ func set_world_hud_hidden(hidden: bool) -> void:
 		_hidden_for_replay = true
 		_ring_visible = false
 		_stamina_visible = false
-		_name_visible = false
+		_name_label.visible = false
 		_slapper_indicator_on = false
 		_slapper_arrow_on = false
 		if _self_beacon != null: _self_beacon.visible = false
@@ -601,7 +629,8 @@ func set_slapper_indicator(active: bool, offset_x: float = 0.0, offset_z: float 
 
 # ── Read by IceRingField each frame ──────────────────────────────────────────
 # Local-to-world happens here rather than at store time so the indicator tracks
-# the body the way a child node did.
+# the body the way a child node did — through the RENDERED pose, since the ice
+# it is painted on is drawn at the render rate.
 func slapper_visible() -> bool:
 	return _slapper_indicator_on and not _skater.is_ghost
 
@@ -611,7 +640,7 @@ func slapper_arrow_visible() -> bool:
 
 
 func slapper_center() -> Vector2:
-	var world: Vector3 = _skater.global_transform * _slapper_offset_local
+	var world: Vector3 = _skater.render_transform() * _slapper_offset_local
 	return Vector2(world.x, world.z)
 
 
@@ -625,7 +654,7 @@ func slapper_ring_scale() -> float:
 
 func slapper_arrow_dir() -> Vector2:
 	var local := Vector3(sin(_slapper_arrow_angle), 0.0, cos(_slapper_arrow_angle))
-	var world: Vector3 = _skater.global_transform.basis * local
+	var world: Vector3 = _skater.render_transform().basis * local
 	return Vector2(world.x, world.z)
 
 
@@ -637,21 +666,8 @@ func update_slapper_indicator_window(_t: float) -> void:
 	pass
 
 
-# Name plate: PlayerNameOverlay projects this anchor and draws the text. Same
-# world point the Label3D was placed at — on the ice, screen-down of the skater.
 func name_plate_visible() -> bool:
-	return _name_visible
-
-
-func name_plate_text() -> String:
-	return _player_name
-
-
-func name_plate_anchor() -> Vector3:
-	return Vector3(
-			_skater.global_position.x + _cached_screen_down.x * _NAME_RADIUS,
-			0.05,
-			_skater.global_position.z + _cached_screen_down.y * _NAME_RADIUS)
+	return _name_label != null and _name_label.visible
 
 
 # How many chevrons this skater shows (0-3) and where the first apex sits. The
@@ -663,9 +679,10 @@ func chevron_stack() -> int:
 
 
 func chevron_apex() -> Vector2:
+	var pos: Vector3 = _skater.render_transform().origin
 	return Vector2(
-			_skater.global_position.x + _cached_chevron_dir.x * _CHEVRON_RADIUS,
-			_skater.global_position.z + _cached_chevron_dir.z * _CHEVRON_RADIUS)
+			pos.x + _cached_chevron_dir.x * _CHEVRON_RADIUS,
+			pos.z + _cached_chevron_dir.z * _CHEVRON_RADIUS)
 
 
 # The camera's screen-down in world XZ. Cached here because this is where the
@@ -695,7 +712,7 @@ func apply_ghost(ghost: bool) -> void:
 	# via _update_beacon_visibility().
 	var hud_hidden: bool = _force_world_hud_hidden or _hidden_for_replay
 	_ring_visible = not ghost and not hud_hidden
-	_name_visible = not ghost and not hud_hidden
+	_name_label.visible = not ghost and not hud_hidden
 	# The stamina ring is left alone: like the beacon, it stays useful while
 	# ghosted (sprinting back to tag up), and its own show logic re-gates it.
 	# The slapper indicator reads _skater.is_ghost directly (see slapper_visible),
