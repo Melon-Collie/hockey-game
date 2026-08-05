@@ -1207,7 +1207,8 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 		# pace (see Puck._drive_analytic's touched_boards).
 		if not span_boards and tick_vel_in.length() >= 1.0:
 			var raw := Vector2(tick_prev.x + tick_vel_in.x * dt, tick_prev.z + tick_vel_in.z * dt)
-			if raw.distance_to(GameRules.clamp_to_rink_inner(raw)) > 0.001:
+			if raw.distance_to(GameRules.clamp_to_rink_inner(
+					raw, GameRules.PUCK_COLLISION_RADIUS)) > 0.001:
 				span_boards = true
 				if not _pred_cue_boards_prev:
 					predicted_board_contact.emit(pos, vel.length())
@@ -1405,13 +1406,14 @@ func _smooth_apply_and_prune(target_pos: Vector3, vel: Vector3, delta: float,
 			_state_buffer, NetworkManager.estimated_host_time() - interp_delay)
 
 
-# True when world position `p` (XZ) lies outside the inner board boundary — i.e.
-# a straight dead-reckon to here would have crossed a board (bounced). Uses the
-# same rounded-rect projection as the puck-OOB / blade-clamp callers, so the
+# True when world position `p` (XZ) lies outside the boundary the PUCK caroms off
+# — the inner boards inset by the disc's radius, since contact is its edge, not
+# its centre. Same rounded-rect projection as every other board caller, so the
 # corners are handled exactly.
 func _crosses_board(p: Vector3) -> bool:
 	var xz := Vector2(p.x, p.z)
-	return GameRules.clamp_to_rink_inner(xz).distance_squared_to(xz) > 1e-6
+	return GameRules.clamp_to_rink_inner(
+			xz, GameRules.PUCK_COLLISION_RADIUS).distance_squared_to(xz) > 1e-6
 
 
 # True when world position `p` sits inside a goal's net cavity: THE render-side

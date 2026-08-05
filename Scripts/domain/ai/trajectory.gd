@@ -30,13 +30,15 @@ static func predict(pos: Vector3, vel: Vector3,
 		bounce_factor: float = 0.0,
 		accel: Vector3 = Vector3.ZERO,
 		max_speed_m_s: float = 0.0,
-		board_friction: float = 0.0) -> Array[Vector3]:
+		board_friction: float = 0.0,
+		board_margin: float = 0.0) -> Array[Vector3]:
 	var out: Array[Vector3] = []
 	var p: Vector3 = pos
 	var v: Vector3 = vel
 	for i: int in range(steps):
 		var stepped: Transform3D = _step(
-				p, v, dt, decel_m_s2, bounce_factor, accel, max_speed_m_s, board_friction)
+				p, v, dt, decel_m_s2, bounce_factor, accel, max_speed_m_s, board_friction,
+				board_margin)
 		p = stepped.origin
 		v = stepped.basis.x
 		out.append(p)
@@ -54,12 +56,14 @@ static func predict_final(pos: Vector3, vel: Vector3,
 		bounce_factor: float = 0.0,
 		accel: Vector3 = Vector3.ZERO,
 		max_speed_m_s: float = 0.0,
-		board_friction: float = 0.0) -> Vector3:
+		board_friction: float = 0.0,
+		board_margin: float = 0.0) -> Vector3:
 	var p: Vector3 = pos
 	var v: Vector3 = vel
 	for i: int in range(steps):
 		var stepped: Transform3D = _step(
-				p, v, dt, decel_m_s2, bounce_factor, accel, max_speed_m_s, board_friction)
+				p, v, dt, decel_m_s2, bounce_factor, accel, max_speed_m_s, board_friction,
+				board_margin)
 		p = stepped.origin
 		v = stepped.basis.x
 	return p
@@ -73,7 +77,8 @@ static func predict_final(pos: Vector3, vel: Vector3,
 static func _step(p: Vector3, v: Vector3, dt: float,
 		decel_m_s2: float, bounce_factor: float,
 		accel: Vector3, max_speed_m_s: float,
-		board_friction: float = 0.0) -> Transform3D:
+		board_friction: float = 0.0,
+		board_margin: float = 0.0) -> Transform3D:
 	# Apply control acceleration BEFORE the position step so the step uses the
 	# velocity the body has during it. Forward-Euler is off by 0.5·a·dt² from the
 	# exact closed form per step, dwarfed by the pass / chase windows where this
@@ -100,7 +105,14 @@ static func _step(p: Vector3, v: Vector3, dt: float,
 	# walls that aren't there. Reflecting about the inward normal at the contact
 	# point reduces to the exact old `v.x = -v.x·bounce` on a straight wall and
 	# reflects radially in the corners.
-	var clamped_xz: Vector2 = GameRules.clamp_to_rink_inner(Vector2(p.x, p.z))
+	# `board_margin` is the body's own half-extent, so its EDGE stops at the board
+	# surface rather than its centre. A puck passes its radius here: without it the
+	# disc's centre sat on the kickplate face and half of it was inside the wall,
+	# which reads as the puck sinking into the boards — and got obvious once
+	# players could work the wall freely. Skater approximations pass 0 (unchanged).
+	# The margin also moves the CONTACT inward by the same amount, which is
+	# physically right: a puck caroms when its edge meets the board, not its centre.
+	var clamped_xz: Vector2 = GameRules.clamp_to_rink_inner(Vector2(p.x, p.z), board_margin)
 	if bounce_factor > 0.0:
 		var outward := Vector2(p.x - clamped_xz.x, p.z - clamped_xz.y)
 		if outward.length_squared() > 1e-9:
@@ -195,7 +207,8 @@ static func predict_puck(pos: Vector3, vel: Vector3,
 	return predict(pos, vel, steps, dt,
 			GameRules.PUCK_ICE_DECEL_M_S2,
 			GameRules.PUCK_BOARD_BOUNCE,
-			Vector3.ZERO, 0.0, GameRules.PUCK_BOARD_FRICTION)
+			Vector3.ZERO, 0.0, GameRules.PUCK_BOARD_FRICTION,
+			GameRules.PUCK_COLLISION_RADIUS)
 
 
 static func predict_puck_at(pos: Vector3, vel: Vector3, lead_time_s: float,
@@ -205,7 +218,8 @@ static func predict_puck_at(pos: Vector3, vel: Vector3, lead_time_s: float,
 	var dt: float = lead_time_s / float(steps)
 	return predict_final(pos, vel, steps, dt,
 			GameRules.PUCK_ICE_DECEL_M_S2, GameRules.PUCK_BOARD_BOUNCE,
-			Vector3.ZERO, 0.0, GameRules.PUCK_BOARD_FRICTION)
+			Vector3.ZERO, 0.0, GameRules.PUCK_BOARD_FRICTION,
+			GameRules.PUCK_COLLISION_RADIUS)
 
 
 # One deterministic puck step (ice friction + rounded-corner board reflection),
@@ -221,7 +235,8 @@ static func predict_puck_at(pos: Vector3, vel: Vector3, lead_time_s: float,
 static func step_puck(pos: Vector3, vel: Vector3, dt: float) -> Transform3D:
 	return _step(pos, vel, dt,
 			GameRules.PUCK_ICE_DECEL_M_S2, GameRules.PUCK_BOARD_BOUNCE,
-			Vector3.ZERO, 0.0, GameRules.PUCK_BOARD_FRICTION)
+			Vector3.ZERO, 0.0, GameRules.PUCK_BOARD_FRICTION,
+			GameRules.PUCK_COLLISION_RADIUS)
 
 
 # ── Board-aware reception gate ──────────────────────────────────────────────
@@ -362,7 +377,8 @@ static func step_puck_3d(pos: Vector3, vel: Vector3, dt: float,
 	# preserves Y) with a downward gravity accel and zero ice friction.
 	var stepped: Transform3D = _step(pos, vel, dt,
 			0.0, GameRules.PUCK_BOARD_BOUNCE,
-			Vector3(0.0, -GameRules.GRAVITY_M_S2, 0.0), 0.0, GameRules.PUCK_BOARD_FRICTION)
+			Vector3(0.0, -GameRules.GRAVITY_M_S2, 0.0), 0.0, GameRules.PUCK_BOARD_FRICTION,
+			GameRules.PUCK_COLLISION_RADIUS)
 	var p: Vector3 = stepped.origin
 	var v: Vector3 = stepped.basis.x
 	if p.y <= rest_height:
@@ -438,6 +454,15 @@ static func puck_launch_speed_for_runout(distance_m: float) -> float:
 # the inward normal there. Packed into a Vector3 (t, normal_x, normal_z) to stay
 # a value type on the compete path; t = INF when the ray leaves no board within
 # `max_t`. Mirrors clamp_to_rink_inner's straight-wall + corner-arc geometry.
+#
+# NOT inset by the puck's radius, unlike the stepped sim (_step's board_margin).
+# That is a known inconsistency, deliberately left: this closed form feeds the
+# bots' dump/rim VALUATION, and insetting it re-prices clears materially rather
+# than by the 6.5 cm it moves — in the pinned wall-lane scene
+# (test_role_carrier.test_a_camped_wall_lane_makes_the_clear_worth_less) the open
+# clear goes 0.00 -> -0.25 and stops distinguishing a camped lane at all. Worth
+# doing, but as its own change with its own playtest, not folded into a physics
+# fix. See the note in ARCHITECTURE.md -> Known Issues.
 static func _first_board_hit(p: Vector2, dir: Vector2, max_t: float) -> Vector3:
 	var best_t: float = INF
 	var best_n := Vector2.ZERO

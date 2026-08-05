@@ -928,8 +928,13 @@ func _drive_analytic(dt: float) -> void:
 	# boundary with into-board pace — a puck sliding parallel doesn't fire. Latched like the
 	# other contacts (a rim-around can re-cross the raw boundary every tick of the curve —
 	# one carom must read as one thud, not a 120 Hz burst).
+	# Inset by the disc's radius, matching where the carom actually resolves
+	# (AITrajectory._step's board_margin): contact is the puck's EDGE meeting the
+	# board, so a centre-based test would report the thud a radius late — and for a
+	# glancing rim, sometimes not at all.
 	var raw := Vector2(prev.x + incoming.x * dt, prev.z + incoming.z * dt)
-	var touched_boards: bool = raw.distance_to(GameRules.clamp_to_rink_inner(raw)) > 0.001 \
+	var touched_boards: bool = raw.distance_to(
+			GameRules.clamp_to_rink_inner(raw, GameRules.PUCK_COLLISION_RADIUS)) > 0.001 \
 			and incoming_speed >= 1.0
 
 	# 4) Commit. The puck can never sit below the ice — pins the grounded

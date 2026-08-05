@@ -15,7 +15,7 @@ namespace mitts {
 //   Scripts/domain/rules/puck_geometry_collision.gd (posts/crossbar/net panels)
 //   Scripts/domain/rules/puck_collision_rules.gd  (deflect_velocity)
 //   Scripts/domain/rules/swept_disc_obb.gd        (contact)
-//   Scripts/domain/config/game_rules.gd           (clamp_to_rink_inner)
+//   Scripts/domain/config/game_rules.gd           (clamp_to_rink_inner, with margin)
 // Those files are the behavioral reference — parity is pinned by
 // tests/unit/rules/test_native_puck_step_parity.gd; change both or neither.
 // Determinism note: host drive and client prediction must agree by
@@ -74,17 +74,18 @@ class NativePuckStep : public godot::RefCounted {
 	godot::Vector3 obb_normal;
 	double obb_depth = 0.0;
 
-	godot::Vector2 clamp_to_rink_inner(const godot::Vector2 &world_xz) const;
+	godot::Vector2 clamp_to_rink_inner(const godot::Vector2 &world_xz, double margin) const;
 	godot::Vector3 deflect_velocity_h(const godot::Vector3 &incoming, const godot::Vector3 &normal,
 			double restitution) const;
 	static godot::Vector3 reflect_3d(const godot::Vector3 &vel, const godot::Vector3 &normal,
 			double restitution);
 	void step_core(godot::Vector3 &p, godot::Vector3 &v, double dt,
 			double decel, double bounce, const godot::Vector3 &accel,
-			double max_speed_cap, double b_friction) const;
-	void step_puck_3d(godot::Vector3 &p, godot::Vector3 &v, double dt, double ice_height) const;
+			double max_speed_cap, double b_friction, double board_margin) const;
+	void step_puck_3d(godot::Vector3 &p, godot::Vector3 &v, double dt, double ice_height,
+			double puck_radius) const;
 	void advance_loose_puck(godot::Vector3 &p, godot::Vector3 &v, double dt,
-			double max_speed, double ice_height, double max_height) const;
+			double puck_radius, double max_speed, double ice_height, double max_height) const;
 	bool resolve_one_post(godot::Vector3 &p, godot::Vector3 &v, double puck_radius,
 			double post_x, double end_z) const;
 	bool resolve_posts(godot::Vector3 &p, godot::Vector3 &v, double puck_radius) const;
