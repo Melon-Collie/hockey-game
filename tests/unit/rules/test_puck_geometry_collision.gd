@@ -565,3 +565,58 @@ func test_feeding_back_an_unresolved_prev_is_what_broke_it() -> void:
 	var final_pos: Vector3 = _swipe_across_the_side_mesh(false)
 	assert_lt(absf(final_pos.x), NetGeometry.cavity_half_width(),
 			"raw prev walks the puck into the cage — the bug this guards")
+
+# ── The post catch, and why it cannot be gated on rebound speed ───────────────
+# A puck wedged on the pipe must come off the blade whether the carrier is flying
+# or standing still. These pin the two facts SkaterController._collide_pinned_
+# puck_with_net relies on: contact is reported regardless of velocity, and the
+# ejection always carries a usable outward direction even when the rebound does
+# not.
+
+func test_post_contact_is_reported_for_a_stationary_carrier() -> void:
+	var res := PuckGeometryCollision.Result.new()
+	var pin := Vector3(GameRules.NET_HALF_WIDTH - 0.05, 0.03, GameRules.GOAL_LINE_Z)
+	assert_true(PuckGeometryCollision.resolve_posts(pin, Vector3.ZERO, R, res),
+			"the pipe is touched even with nothing moving")
+	assert_almost_eq(res.velocity.length(), 0.0, 1e-4,
+			"and there is no rebound to inherit — which is why a magnitude guard "
+			+ "here silently skipped the release")
+
+
+func test_post_ejection_always_gives_an_outward_direction() -> void:
+	# The fallback the controller uses when the rebound is empty.
+	var res := PuckGeometryCollision.Result.new()
+	for deg: int in range(0, 360, 30):
+		var rad: float = deg_to_rad(float(deg))
+		var pin := Vector3(
+				GameRules.NET_HALF_WIDTH + cos(rad) * 0.04, 0.03,
+				GameRules.GOAL_LINE_Z + sin(rad) * 0.04)
+		assert_true(PuckGeometryCollision.resolve_posts(pin, Vector3.ZERO, R, res),
+				"in contact at %d°" % deg)
+		var out: Vector3 = res.position - pin
+		assert_gt(out.length(), 0.001, "ejection has a direction at %d°" % deg)
+		var axis := Vector2(GameRules.NET_HALF_WIDTH, GameRules.GOAL_LINE_Z)
+		assert_gt(Vector2(res.position.x, res.position.z).distance_to(axis),
+				Vector2(pin.x, pin.z).distance_to(axis) - 1e-4,
+				"and it points away from the pipe at %d°" % deg)
+
+
+func test_separating_carrier_still_registers_the_catch() -> void:
+	# Skating off the post: deflect_velocity passes a separating velocity straight
+	# through, so the rebound looks like ordinary carrier motion. The CONTACT is
+	# what decides, not the rebound.
+	var res := PuckGeometryCollision.Result.new()
+	var pin := Vector3(GameRules.NET_HALF_WIDTH - 0.05, 0.03, GameRules.GOAL_LINE_Z)
+	assert_true(PuckGeometryCollision.resolve_posts(pin, Vector3(-4.0, 0.0, 0.0), R, res),
+			"contact reported while skating away from the post")
+
+
+func test_pressing_the_back_twine_is_not_a_catch() -> void:
+	# The other half of the rule: handling into the back of the net from behind
+	# must cost nothing, so nothing here may report iron.
+	var res := PuckGeometryCollision.Result.new()
+	var pin := Vector3(0.0, 0.03, GameRules.GOAL_LINE_Z + 0.95)
+	assert_false(PuckGeometryCollision.resolve_posts(pin, Vector3(0.0, 0.0, 3.0), R, res),
+			"the back mesh is nowhere near a pipe")
+	assert_false(PuckGeometryCollision.resolve_crossbar_bends(pin, Vector3(0.0, 0.0, 3.0), R, res),
+			"nor a corner bend")

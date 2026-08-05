@@ -879,6 +879,11 @@ var show_one_timer_indicator: bool = false
 # The stick's own reach perpendicular to the blade segment, added to the pipe
 # radius so the blade stops on the outside of the iron rather than centre-on.
 @export var net_blade_half_thickness: float = 0.012
+# Floor on how briskly a puck caught on the pipe leaves the blade. A fast catch
+# inherits the pipe's own rebound instead; this only covers the slow/stationary
+# wedge, where there is no rebound to inherit but the puck must still come off
+# rather than ride along with a stick the post is holding back.
+@export var post_catch_release_speed: float = 1.5
 # How deep the twine lets the blade sink before stopping it. The mesh is
 # compliant and a real stick does bury itself in it, but only just — reach is
 # bounded before the blade ever gets here (SkaterIKCoordinator._board_reach_limit
@@ -1877,21 +1882,36 @@ func _collide_pinned_puck_with_net() -> void:
 	# position exactly as the loose puck's first sub-step does.
 	var prev: Vector3 = _prev_carry_pin if _has_prev_carry_pin else raw
 
-	# IRON — a wraparound that clangs the post loses the puck, and it leaves along
-	# the pipe's OWN reflection rather than a generic shove, so the rebound is the
-	# collision the puck would have had if it had never been carried. Live at
-	# POST_RESTITUTION, so a ring makes a scramble in a dangerous area. The frame's
-	# three tiling pieces all count (NetGeometry.post_top_y).
+	# IRON — a puck caught on the pipe comes off, whatever the carrier is doing.
+	# This is the distinction that matters at the net, and it is a property of the
+	# SURFACE rather than of the contact: a pipe is a hard 3 cm edge, so a puck
+	# pressed against it and dragged sideways snags and pops loose. Broad compliant
+	# twine is the opposite — the puck slides along it and you keep handling (see
+	# below), which is why stickhandling into the back of the net costs nothing.
+	#
+	# Deliberately NOT gated on the rebound having magnitude. deflect_velocity
+	# returns zero for a stationary carrier and passes a separating velocity
+	# through unchanged, so an earlier magnitude guard skipped the release in
+	# exactly the case that needs it: puck wedged on the post, carrier skating off,
+	# blade correctly held back by the reach limit — and the puck simply sat there.
+	# A catch is a catch at any speed.
 	if PuckGeometryCollision.resolve_posts(
 			raw, skater.velocity, GameRules.PUCK_COLLISION_RADIUS, _net_pin_result) \
 			or PuckGeometryCollision.resolve_crossbar_bends(
 					raw, skater.velocity, GameRules.PUCK_COLLISION_RADIUS, _net_pin_result):
 		var ring: Vector3 = _net_pin_result.velocity
-		if ring.length() > 0.001:
+		var dir: Vector3 = ring
+		dir.y = 0.0
+		if dir.length() < 0.001:
+			# No rebound to inherit (a slow or stationary catch): the puck drops off
+			# along the pipe's own outward normal, which the ejection already encodes.
+			dir = _net_pin_result.position - raw
+			dir.y = 0.0
+		if dir.length() >= 0.001:
 			_has_prev_carry_pin = false
 			skater.carry_pin_correction = Vector3.ZERO
 			last_release_was_shot = false  # forced dispossession, not an attempt
-			_do_release(ring.normalized(), ring.length())
+			_do_release(dir.normalized(), maxf(ring.length(), post_catch_release_speed))
 			return
 
 	# TWINE — solid, and it does NOT strip. Pressing the puck into the mesh holds
