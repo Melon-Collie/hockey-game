@@ -2893,16 +2893,12 @@ func _rim_ctx(team_size: int, wall_lane_blocked: bool) -> RoleContext:
 	# the wall — the real geometry), which is exactly what leaves the wall
 	# lane itself as the one protected out.
 	#
-	# The bodies are placed against where the clear actually COMES TO REST, and
-	# that spot is up the FAR wall (~(-11.9, -14.2)): the searched release banks
-	# off our own boards and wraps the far side, because the near-wall bearings
-	# that stay legal all die a further 9 m up-ice. So the camped body is their
-	# retreating D sitting on the resting spot, not a body on our own wall — and
-	# the winger's post is a race he can plausibly run, ~31 m off it, which is
-	# what keeps chase_recovery off its clamps here. (CHASE_CONTEST_MARGIN_M is a
-	# stride; against a 30 m race it saturates on almost any placement, and a
-	# fixture pinned on the saturated side measures a clamp flip rather than the
-	# race — see #650.)
+	# The bodies are placed against where the clear actually COMES TO REST. With
+	# the winger posted up the strong wall the search rims to him and the puck
+	# dies deep on that side (~(12.3, -23.0)), so the camped body is their
+	# retreating D standing on that spot. Both are derived from the delivery, not
+	# assumed: the release search is blind to skaters, so every scene here shares
+	# one candidate set and only the RACE for it moves.
 	var self_pos := Vector3(10.5, 0, 24.0)
 	var skaters: Array = [
 		[1, TEAM_ID, self_pos],
@@ -2912,7 +2908,7 @@ func _rim_ctx(team_size: int, wall_lane_blocked: bool) -> RoleContext:
 		[5, 1, Vector3(0.0, 0, 15.0)],
 	]
 	if wall_lane_blocked:
-		skaters.append([6, 1, Vector3(-11.5, 0, -17.5)])
+		skaters.append([6, 1, Vector3(12.0, 0, -20.5)])
 	var ctx := _make_ctx(self_pos, skaters)
 	ctx.team_size = team_size
 	return ctx
@@ -2990,13 +2986,46 @@ func test_behind_net_clear_is_a_real_play_under_a_committed_forecheck() -> void:
 			"and it actually leaves our zone")
 
 
+func test_the_clear_rims_to_the_wall_our_man_can_win() -> void:
+	# The search's whole job: among launches that are legal to make, take the one
+	# we concede least by. Which wall that is depends on who is standing there, so
+	# moving the posted winger across the ice moves the clear across with him —
+	# nothing else in the scene changes, and the release search itself is blind to
+	# skaters, so the candidate set is byte-identical in both runs.
+	#
+	# This is what the depth objective could not do. Ranked on metres-to-the-blue-
+	# line the two runs are the SAME ranking, so the clear fired at the same wall
+	# whether or not anyone was there to win it (#650).
+	var self_pos := Vector3(10.5, 0, 24.0)
+	var forecheck: Array = [
+		[3, 1, Vector3(8.8, 0, 23.0)],
+		[4, 1, Vector3(9.0, 0, 25.8)],
+		[5, 1, Vector3(0.0, 0, 15.0)],
+	]
+	var settles: Array[Vector3] = []
+	for post: Vector3 in [Vector3(11.5, 0, 6.0), Vector3(-11.5, 0, 6.0)]:
+		var skaters: Array = [[1, TEAM_ID, self_pos], [2, TEAM_ID, post]]
+		skaters.append_array(forecheck)
+		var ctx := _make_ctx(self_pos, skaters)
+		ctx.team_size = 5
+		var c := AIRoleCarrier.new()
+		c._build_action_opponents_lists(ctx)
+		settles.append(c._best_dump(ctx, ctx.defending_goal_pos)[4])
+	gut.p("  clear settles: strong-side post %s vs far-side post %s"
+			% [settles[0], settles[1]])
+	assert_gt(settles[0].x, 0.0, "with the winger up the strong wall, rim it there")
+	assert_lt(settles[1].x, 0.0, "post him on the far wall and the rim follows him")
+
+
 func test_a_camped_wall_lane_makes_the_clear_worth_less() -> void:
 	# A body sitting where the clear comes to rest is priced by the race, not by
 	# a lane test on a modelled route: he is simply nearer the resting puck, so
 	# our recovery odds drop and the clear is worth less. Same scene, one
-	# opponent added to the lane the rim wraps into (see _rim_ctx — the far wall).
-	# Both scenes settle on the SAME spot, since the release search reads only
-	# geometry; all that moves is who is standing on it.
+	# opponent added on the resting spot (see _rim_ctx). The candidate set is
+	# identical in both runs — the release search reads only geometry — so what
+	# this measures is purely the race: either the same clear costs more with him
+	# standing on it, or the search backs off to a different wall that costs more
+	# than the one he took away. Both are the assertion below.
 	var open_ctx := _rim_ctx(5, false)
 	var c_open := AIRoleCarrier.new()
 	c_open._build_action_opponents_lists(open_ctx)

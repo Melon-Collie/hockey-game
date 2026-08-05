@@ -3292,11 +3292,19 @@ static func potential_realization_discount(pos: Vector3,
 # carrier assembles into that EV (see _best_dump).
 
 # Corner depth from the goal line for a dump-in target (a corner retrieval, not a
-# behind-the-net wrap). Distance a stride's head-start turns a 50/50 loose-puck
-# race into a near-sure recovery — a physical contest band, not a tuning curve.
+# behind-the-net wrap).
 const DUMP_CORNER_DEPTH_M: float = 3.0
 const DUMP_RINK_INSET_M: float = 0.5
+# The head-start that turns a 50/50 loose-puck race into a near-sure recovery: a
+# stride, expressed as the TIME a stride buys at reference pace, because that is
+# the currency the race below is actually run in. The same physical measurement
+# the metre form named — a stride is a stride — but a metre band is only a
+# contest band at the range a metre means something. Over the 30-40 m a clear
+# travels, two metres is a rounding error, so a distance race saturated to 0 or 1
+# on essentially every placement and the whole concession became a step function
+# of who happened to be standing marginally nearer (#650).
 const CHASE_CONTEST_MARGIN_M: float = 2.0
+const CHASE_CONTEST_MARGIN_S: float = CHASE_CONTEST_MARGIN_M / SKATER_REF_SPEED_M_S
 
 
 # True when `pos` is on the attacking side of centre ice (z = 0) — past the red
@@ -3369,26 +3377,60 @@ static func dump_in_target(carrier_pos: Vector3, attacking_goal: Vector3,
 			attacking_goal.z - goal_dir * DUMP_CORNER_DEPTH_M)
 
 
-# Probability our team wins the race to a dumped puck: a distance race to the dump
-# `target` between our nearest chaser and their nearest, with a contest band around
-# a tie (CHASE_CONTEST_MARGIN_M — a stride's head-start). 1.0 uncontested, 0.0 if
-# we have no chaser. This is what makes a dump-in worth it ONLY when the chase is
-# winnable — outnumbered in a 3v3, it self-suppresses.
+# Probability our team wins the race to a dumped puck: an ARRIVAL race to the
+# dump `target` between our first body there and their first, with a contest band
+# around a tie (CHASE_CONTEST_MARGIN_S). 1.0 uncontested, 0.0 if we have no
+# chaser. This is what makes a dump-in worth it ONLY when the chase is winnable —
+# outnumbered in a 3v3, it self-suppresses.
+#
+# Momentum-honest, through the same time_to_arrive every other arrival in the
+# model uses: nearest by ETA, not by metres. A distance race can only answer
+# "who is closer", which is not the question — a body two metres nearer but
+# skating the other way loses this race, and over a clear's 30-40 m the ramp is
+# worth several metres by itself. `_best_dump` already priced its chase CLOCK
+# this way while its recovery PROBABILITY stayed on raw distance; one function,
+# two clocks (#650).
+#
+# `our_vels` / `opp_vels` are index-matched to their position arrays; omit them
+# and every chaser races from rest, which is still a real ramp rather than an
+# instant full-speed sprint. Everyone runs at the league reference build — the
+# same perception simplification counter_rush_cost makes for teammates.
 static func chase_recovery(
 		target: Vector3,
 		our_chasers: Array[Vector3],
-		opp_chasers: Array[Vector3]) -> float:
+		opp_chasers: Array[Vector3],
+		our_vels: Array[Vector3] = EMPTY_VEC3,
+		opp_vels: Array[Vector3] = EMPTY_VEC3) -> float:
 	if our_chasers.is_empty():
 		return 0.0
-	var our_dist: float = INF
-	for p: Vector3 in our_chasers:
-		our_dist = minf(our_dist, p.distance_to(target))
+	var our_t: float = _first_arrival(target, our_chasers, our_vels)
 	if opp_chasers.is_empty():
 		return 1.0
-	var opp_dist: float = INF
-	for p: Vector3 in opp_chasers:
-		opp_dist = minf(opp_dist, p.distance_to(target))
-	return clampf(0.5 + (opp_dist - our_dist) / (2.0 * CHASE_CONTEST_MARGIN_M), 0.0, 1.0)
+	var opp_t: float = _first_arrival(target, opp_chasers, opp_vels)
+	return clampf(0.5 + (opp_t - our_t) / (2.0 * CHASE_CONTEST_MARGIN_S), 0.0, 1.0)
+
+
+# Soonest any of `chasers` reaches `target`. `vels` is used only when it is
+# index-matched to `chasers`, so callers that hold no velocities pass EMPTY_VEC3
+# and every body races from rest.
+#
+# Only bodies that could still win pay for the full arrival solve. time_to_arrive
+# caps its ramp at the speed cap and only ever ADDS time for cross momentum, a
+# reversal, or a route around the net, so `straight_line_distance / cap` is a hard
+# lower bound on any chaser's answer — one already beaten by the best ETA so far
+# is out of the race arithmetically, not probably. Exact, and it matters because
+# the dump searches call this per candidate spot.
+static func _first_arrival(target: Vector3, chasers: Array[Vector3],
+		vels: Array[Vector3]) -> float:
+	var has_vels: bool = vels.size() == chasers.size()
+	var vmax: float = maxf(SKATER_REF_SPEED_M_S, MIN_TRAVEL_SPEED_M_S)
+	var best: float = INF
+	for i: int in chasers.size():
+		if chasers[i].distance_to(target) >= best * vmax:
+			continue
+		best = minf(best, time_to_arrive(chasers[i], target,
+				vels[i] if has_vels else Vector3.ZERO))
+	return best
 
 
 # "Threat surface" — the value an opp can extract from their current
@@ -5585,48 +5627,58 @@ static func dump_loft_hang_s(loft_level: int) -> float:
 	return 2.0 * vy / GameRules.GRAVITY_M_S2
 
 
-# The DZ clear: search launches and take the one that comes to rest NEAREST
-# neutral ice, without ever reaching their goal line.
+# The DZ clear: enumerate the launches it is LEGAL to make, and leave the
+# choosing to the caller.
 #
-# The objective is a target depth, not "as far as possible". Maximising up-ice
-# progress subject to the icing constraint picks, every time, the launch that
-# stops a metre short of their goal line — the puck ends up on their end wall
-# with our whole team behind it, which is the "clear went way too far" failure
-# made systematic. Neutral ice is what a clear actually wants: past our blue
-# line so the pressure is relieved, short of theirs so nobody is handed a free
-# regroup deep in our attacking end. Anything short of that is less relief,
-# anything past it is a giveaway, and one distance-to-target objective says
-# both.
+# Two refusals, both DOCTRINE rather than valuation — they say what a clear IS,
+# so they are filters and never penalties a good enough price could outvote:
+#   ICES — a launch that reaches their goal line starts a hybrid race we have no
+#     reason to run. Legality is bought by the PATH, not the pace: a steep bank
+#     into the near boards sheds 40-60% on contact and the carom lengthens the
+#     route, so the puck dies before the line and no race is ever judged.
+#   DOESN'T CLEAR — a launch that comes to rest still inside our own zone did not
+#     clear anything, however certainly we would win it back.
 #
-# Deliberately not an EV read — a clear has no offensive ambition, and pricing a
-# turnover surface over it was what made it read as a large concession exactly
-# when it is the right play.
+# What it deliberately no longer does is CHOOSE. It used to take the landing
+# nearest their blue line, which ranks candidates in METRES OF DEPTH while
+# `_best_dump` prices the winner in CONCESSION — so the search could hand over a
+# spot we have no chance at while a spot we would win outright sat one bearing
+# away, and the compete never saw the second one. Depth cannot separate them:
+# fired at the fixed quick-pass pace from a pinned corner, EVERY legal landing is
+# deep (the softest release the bot can make out-slides the rink twice over), and
+# which deep spot is right is entirely a question of who gets there first.
 #
-# Returns the chosen launch VELOCITY (xz, at `launch_speed`); zero when every
-# bearing ices, which leaves the caller to decide what to do with a puck that
-# cannot legally be cleared.
-static func solve_dump_clear(origin: Vector3, up_ice_dir: float,
-		launch_speed: float, loft_level: int) -> Vector3:
+# This is not the EV read that was rejected when the searched release landed. That
+# was paying the clear a positive GAIN term for the race it wins, which made a
+# clear score above zero and beat CARRYING where a clean regroup existed. The
+# clear is still a pure concession with no gain term and a value that cannot
+# exceed zero; all that changed is that the search now ranks its own candidates by
+# the number the caller is going to report, instead of by a different one.
+#
+# `out_vels` / `out_spots` are caller-owned and index-matched (the caller-owned
+# out-param pattern — the search allocates nothing on the compete path). Returns
+# the candidate count; 0 means no legal clear exists from here, which leaves the
+# caller to decide what to do with a puck that cannot be cleared at all.
+static func dump_clear_candidates(origin: Vector3, up_ice_dir: float,
+		launch_speed: float, loft_level: int, our_net: Vector3,
+		out_vels: Array[Vector3], out_spots: Array[Vector3]) -> int:
 	var hang_s: float = dump_loft_hang_s(loft_level)
 	# Their goal line is the one icing is judged at: up-ice of us.
 	var their_line_z: float = up_ice_dir * GameRules.GOAL_LINE_Z
 	var axis := Vector3(0.0, 0.0, up_ice_dir)
-	# The sweet spot: their blue line. The far edge of neutral ice — maximum
-	# relief that still leaves the puck contestable rather than gifted.
-	var target_z: float = up_ice_dir * GameRules.BLUE_LINE_Z
-	var best_vel: Vector3 = Vector3.ZERO
-	var best_miss: float = INF
+	out_vels.clear()
+	out_spots.clear()
 	for offset: float in DUMP_SEARCH_BEARINGS_RAD:
 		var vel: Vector3 = axis.rotated(Vector3.UP, offset) * launch_speed
 		var landing: Transform3D = AITrajectory.puck_release_landing(
 				origin, vel, hang_s, their_line_z, up_ice_dir)
 		if landing.basis.x.x > 0.5:
-			continue  # reaches their goal line — an icing race we need not run
-		var miss: float = absf(landing.origin.z - target_z)
-		if miss < best_miss:
-			best_miss = miss
-			best_vel = vel
-	return best_vel
+			continue
+		if in_offensive_zone(landing.origin, our_net):
+			continue  # dies in our own zone — that is not a clear
+		out_vels.append(vel)
+		out_spots.append(landing.origin)
+	return out_spots.size()
 
 
 # The NZ dump-in: search launches — BEARING x PACE — and take the one whose
@@ -5646,7 +5698,9 @@ static func solve_dump_clear(origin: Vector3, up_ice_dir: float,
 static func solve_dump_in(origin: Vector3, attacking_goal: Vector3,
 		max_launch_speed: float, loft_level: int,
 		our_chasers: Array[Vector3], opp_chasers: Array[Vector3],
-		keeper_pos: Vector3, out_landing: Array[Vector3]) -> Vector3:
+		keeper_pos: Vector3, out_landing: Array[Vector3],
+		our_vels: Array[Vector3] = EMPTY_VEC3,
+		opp_vels: Array[Vector3] = EMPTY_VEC3) -> Vector3:
 	var hang_s: float = dump_loft_hang_s(loft_level)
 	var goal_dir: float = signf(attacking_goal.z)
 	var axis := Vector3(0.0, 0.0, goal_dir)
@@ -5672,14 +5726,22 @@ static func solve_dump_in(origin: Vector3, attacking_goal: Vector3,
 			if keeper_collects_first(spot, keeper_pos, our_chasers,
 					SKATER_REF_SPEED_M_S):
 				continue
+			# What the spot is worth if we win it OUTRIGHT. Recovery is a
+			# probability, so this is the candidate's ceiling and a spot whose
+			# ceiling already loses cannot win at any odds — an exact prune, and
+			# the one that keeps the pace ladder affordable now that the race
+			# below is an arrival solve per chaser rather than a distance.
+			var ceiling: float = position_potential(spot, attacking_goal, opp_chasers) \
+					* potential_realization_discount(spot, attacking_goal)
+			if ceiling <= best_score:
+				continue
 			# The race is run to where the puck STOPS, over the time the puck
 			# spends getting there — chasers are not frozen while it travels,
 			# and a longer flight is exactly what a forecheck converts into
 			# position.
-			var recovery: float = chase_recovery(spot, our_chasers, opp_chasers)
-			var score: float = recovery \
-					* position_potential(spot, attacking_goal, opp_chasers) \
-					* potential_realization_discount(spot, attacking_goal)
+			var recovery: float = chase_recovery(
+					spot, our_chasers, opp_chasers, our_vels, opp_vels)
+			var score: float = recovery * ceiling
 			if score > best_score:
 				best_score = score
 				best_spot = spot

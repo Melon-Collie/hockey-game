@@ -655,9 +655,18 @@ var _scratch_bearing_control: Array[float] = []
 # Counter-threat memo by covering-body count (see counter_rush_cost) —
 # -1-seeded alongside the ETAs each compete.
 var _scratch_exposure_threat_memo: Array[float] = []
-# Our chasers for a dump race: our defenders plus ourselves (we dump and chase).
-# Rebuilt inside _best_dump.
+# Our chasers for a dump race: our defenders plus ourselves (we dump and chase),
+# and their velocities index-matched — the race is run on ETAs, so a chaser's
+# momentum is part of it. Rebuilt inside _best_dump.
 var _scratch_our_chasers: Array[Vector3] = []
+var _scratch_our_chaser_vels: Array[Vector3] = []
+# Legal DZ-clear launches and where each comes to rest, index-matched
+# (AIActionScoring.dump_clear_candidates fills them; _best_dump prices them).
+var _scratch_clear_vels: Array[Vector3] = []
+var _scratch_clear_spots: Array[Vector3] = []
+# Each clear candidate's recovery odds, filled by _best_dump's first pass so the
+# second doesn't re-race the same bodies to the same spots.
+var _scratch_clear_recovery: Array[float] = []
 # Directional-filtered opponents for the puck-protect read (see the protect
 # block in _pick_action): the full opponent set minus defenders the carrier's
 # body already screens (beaten / behind, per PROTECT_SCREEN_BEHIND_M). Kept
@@ -2687,17 +2696,18 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 # used to be the same number doing both jobs, which is the defect this rewrite
 # exists to remove.
 #
-# Both dumps are chosen by SEARCHING RELEASES (AIActionScoring.solve_dump_clear /
-# solve_dump_in) and pricing where the puck actually comes to rest, not by aiming
-# at a hand-placed spot and pricing the concession there. A dump at any pace the
-# bot can produce out-slides the rink several times over, so the aim point is a
-# place the puck passes through at speed — pricing the giveaway there understated
-# it wherever the aim was far from our net, which is why a clear read cheap enough
-# to beat carries that had real space.
+# Both dumps are chosen by SEARCHING RELEASES (AIActionScoring's
+# dump_clear_candidates / solve_dump_in) and pricing where the puck actually
+# comes to rest, not by aiming at a hand-placed spot and pricing the concession
+# there. A dump at any pace the bot can produce out-slides the rink several times
+# over, so the aim point is a place the puck passes through at speed — pricing the
+# giveaway there understated it wherever the aim was far from our net, which is
+# why a clear read cheap enough to beat carries that had real space.
 #
 # The two dumps are different errands and are priced as such:
-#   DZ CLEAR — aimed at neutral ice and refused outright if it would reach their
-#     goal line, so a clear that exists is one that stays in play.
+#   DZ CLEAR — every launch that neither ices nor dies in our own zone is a legal
+#     candidate, and the one we concede LEAST by is the clear. Still a pure
+#     concession: no gain term, so its value cannot exceed zero.
 #   NZ DUMP-IN — an offensive play. Get it deep, win it back, forecheck. Its
 #     gain is the race, and it cannot be icing by construction (offered only
 #     past the red line; icing needs a release from our own half).
@@ -2708,6 +2718,37 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 # chord — and a searched release makes the distinction meaningless: a launch
 # angled into the near boards IS the rim, and the landing solver walks the real
 # carom instead of a modelled one.
+# Two clears priced within this of each other are the same clear as far as the
+# compete is concerned, so depth breaks the tie (see _best_dump). Sized well
+# under the shot-threat scale everything here is denominated in — a real
+# difference in what we are handing over is worth far more than this.
+const CLEAR_PRICE_TIE_BAND: float = 0.001
+
+
+# What handing the puck over at `spot` costs us: the immediate threat there, plus
+# the counter-rush the loss opens (5v5). Returns (concede, recovery) packed into
+# a Vector2 — a value type, so pricing a whole candidate set allocates nothing.
+#
+# The clear's search ranks its candidates with this and _best_dump reports the
+# winner with it, so the delivery that is chosen is the delivery the compete is
+# told about. Those used to be two different numbers, ranked in different
+# currencies (see AIActionScoring.dump_clear_candidates).
+func _dump_concession(ctx: RoleContext, spot: Vector3, our_goalie: Vector3,
+		defending_goal: Vector3, known_recovery: float = -1.0) -> Vector2:
+	var recovery: float = known_recovery
+	if recovery < 0.0:
+		recovery = AIActionScoring.chase_recovery(
+				spot, _scratch_our_chasers, _scratch_opponents,
+				_scratch_our_chaser_vels, _scratch_opponent_vels)
+	var loss: float = 1.0 - recovery
+	var concede: float = AIActionScoring.turnover_cost(
+			spot, loss, defending_goal, our_goalie,
+			GameRules.NET_HALF_WIDTH, _scratch_our_defenders,
+			_scratch_our_defender_caps)
+	concede += _counter_exposure_cost(ctx, spot, loss, ctx.self_pos, our_goalie)
+	return Vector2(concede, recovery)
+
+
 func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 	var self_pos: Vector3 = ctx.self_pos
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
@@ -2722,29 +2763,80 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 	var origin: Vector3 = _pass_origin(ctx)
 	# Our chasers = teammates + ourselves; theirs = the opponents already gathered.
 	_scratch_our_chasers.clear()
-	for d: Vector3 in _scratch_our_defenders:
-		_scratch_our_chasers.append(d)
+	_scratch_our_chaser_vels.clear()
+	for i: int in _scratch_our_defenders.size():
+		_scratch_our_chasers.append(_scratch_our_defenders[i])
+		_scratch_our_chaser_vels.append(_scratch_our_defender_vels[i])
 	_scratch_our_chasers.append(self_pos)
+	_scratch_our_chaser_vels.append(ctx.self_velocity)
 
 	var launch: Vector3
 	var settle: Vector3
 	var is_soft: bool
+	# (concede, recovery) for the delivery finally chosen — filled by the clear's
+	# own ranking below, or computed once for the dump-in.
+	var priced := Vector2.ZERO
 	if in_own_zone:
 		# HIGH is doctrine here rather than a searched axis: the clear's job is to
 		# leave the zone, and the loft is what carries it over the sticks between
 		# us and the blue line. It buys no time (an airborne leg spends no
 		# friction) — it buys passage.
 		is_soft = false
-		launch = AIActionScoring.solve_dump_clear(
+		var n: int = AIActionScoring.dump_clear_candidates(
 				origin, -ctx.own_goal_dir, AIActionScoring.PASS_SPEED_M_S,
-				ShotMechanics.ELEVATION_HIGH)
-		if launch == Vector3.ZERO:
-			# Every launch reaches their goal line: there is no legal clear from
-			# here. Decline rather than ice it — the carry/pass compete is a
-			# better place to lose the puck than a whistle in our own end.
+				ShotMechanics.ELEVATION_HIGH, defending_goal,
+				_scratch_clear_vels, _scratch_clear_spots)
+		if n == 0:
+			# Every launch either ices or dies in our own zone: there is no legal
+			# clear from here. Decline rather than fire one — the carry/pass
+			# compete is a better place to lose the puck than a whistle in our own
+			# end, or a "clear" that never left it.
 			return [-INF, Vector3.INF, false, false, Vector3.INF, 0.0]
-		settle = AITrajectory.puck_release_landing(origin, launch,
-				AIActionScoring.dump_loft_hang_s(ShotMechanics.ELEVATION_HIGH)).origin
+		# Rank the legal launches by what conceding at each actually costs — the
+		# same number this function is about to report to the compete. Depth
+		# survives only as the tie-break, which is the job it can still do
+		# honestly: when two clears cost the same (both uncontested, both free),
+		# take the one that leaves the puck nearer neutral ice rather than the one
+		# whose bearing happens to come first.
+		#
+		# The RACE runs first and alone decides it whenever anyone wins one
+		# outright. Every term in the concession carries the loss probability as a
+		# factor (turnover_cost and counter_rush_cost both scale by it), so a
+		# candidate we are certain to recover concedes exactly ZERO — the most any
+		# clear can score, since there is no gain term to lift one above it. So
+		# once a free clear exists, nothing dearer can win and none of the threat
+		# surfaces below need computing at all. An EXACT prune, not a search
+		# budget: it discards only candidates that provably cannot win.
+		_scratch_clear_recovery.resize(n)
+		var free_exists: bool = false
+		for i: int in n:
+			var rec: float = AIActionScoring.chase_recovery(
+					_scratch_clear_spots[i], _scratch_our_chasers, _scratch_opponents,
+					_scratch_our_chaser_vels, _scratch_opponent_vels)
+			_scratch_clear_recovery[i] = rec
+			free_exists = free_exists or rec >= 1.0
+		var target_z: float = -ctx.own_goal_dir * GameRules.BLUE_LINE_Z
+		var best_price: float = -INF
+		var best_miss: float = INF
+		for i: int in n:
+			var rec: float = _scratch_clear_recovery[i]
+			if free_exists and rec < 1.0:
+				continue
+			var spot: Vector3 = _scratch_clear_spots[i]
+			var spot_priced := Vector2(0.0, rec)
+			if rec < 1.0:
+				spot_priced = _dump_concession(ctx, spot, our_goalie, defending_goal, rec)
+			var price: float = -spot_priced.x
+			var miss: float = absf(spot.z - target_z)
+			if price <= best_price - CLEAR_PRICE_TIE_BAND:
+				continue
+			if price < best_price + CLEAR_PRICE_TIE_BAND and miss >= best_miss:
+				continue
+			best_price = maxf(price, best_price)
+			best_miss = miss
+			launch = _scratch_clear_vels[i]
+			settle = spot
+			priced = spot_priced
 	else:
 		is_soft = true
 		_scratch_dump_landing[0] = origin
@@ -2756,20 +2848,16 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 				origin, attacking_goal, ctx.self_wrister_shot_speed,
 				ShotMechanics.ELEVATION_FLAT,
 				_scratch_our_chasers, _scratch_opponents, _goalie_now(ctx),
-				_scratch_dump_landing)
+				_scratch_dump_landing, _scratch_our_chaser_vels,
+				_scratch_opponent_vels)
 		if launch == Vector3.ZERO:
 			return [-INF, Vector3.INF, false, false, Vector3.INF, 0.0]
 		settle = _scratch_dump_landing[0]
+		priced = _dump_concession(ctx, settle, our_goalie, defending_goal)
 
 	# Everything below prices the RESTING spot.
-	var recovery: float = AIActionScoring.chase_recovery(
-			settle, _scratch_our_chasers, _scratch_opponents)
-	var concede: float = AIActionScoring.turnover_cost(
-			settle, 1.0 - recovery, defending_goal, our_goalie,
-			GameRules.NET_HALF_WIDTH, _scratch_our_defenders,
-			_scratch_our_defender_caps)
-	concede += _counter_exposure_cost(ctx, settle, 1.0 - recovery,
-			ctx.self_pos, our_goalie)
+	var recovery: float = priced.y
+	var concede: float = priced.x
 	# Only the DUMP-IN earns a gain. It is an offensive errand — get it deep, win
 	# it back — so it is paid for the race it is trying to win.
 	#

@@ -1018,6 +1018,44 @@ func test_chase_recovery_race() -> void:
 	assert_lt(AIActionScoring.chase_recovery(target, theirs, ours), 0.01)
 
 
+func test_chase_recovery_races_arrivals_not_metres() -> void:
+	# The race is won by whoever GETS there, which is not whoever is nearest: a
+	# body 2 m closer but skating the other way has to shed its speed, turn, and
+	# come back. Distance alone cannot see that, and over the 30-40 m a clear
+	# travels it is the difference between a puck we recover and one we hand over.
+	var target := Vector3(0, 0, 0)
+	# Ours is FARTHER but already flying at the spot; theirs is nearer and leaving.
+	var ours: Array[Vector3] = [Vector3(0, 0, 12)]
+	var our_vels: Array[Vector3] = [Vector3(0, 0, -9)]
+	var theirs: Array[Vector3] = [Vector3(0, 0, -10)]
+	var their_vels: Array[Vector3] = [Vector3(0, 0, -9)]
+	# On metres alone this is a race we lose outright (10 m vs 12 m).
+	assert_eq(AIActionScoring.chase_recovery(target, ours, theirs), 0.0,
+			"the distance read hands it to the nearer body")
+	assert_gt(AIActionScoring.chase_recovery(
+			target, ours, theirs, our_vels, their_vels), 0.99,
+			"...but we arrive first, so the arrival race gives it to us")
+	# Symmetric: the same two bodies with the momentum swapped flips it back.
+	assert_lt(AIActionScoring.chase_recovery(
+			target, theirs, ours, their_vels, our_vels), 0.01)
+
+
+func test_chase_recovery_without_velocities_races_from_rest() -> void:
+	# Callers holding no velocities still get a real ramp rather than an instant
+	# full-speed sprint, and the contest band is the same stride it always was —
+	# CHASE_CONTEST_MARGIN_S is that stride's duration at reference pace, so a
+	# standing race calibrates exactly where the metre form did.
+	var target := Vector3(0, 0, 0)
+	assert_almost_eq(AIActionScoring.chase_recovery(
+			target, [Vector3(0, 0, 4)], [Vector3(0, 0, 4)]), 0.5, 1e-6,
+			"equal standing starts are a coin flip")
+	assert_almost_eq(
+			AIActionScoring.CHASE_CONTEST_MARGIN_S
+					* AIActionScoring.SKATER_REF_SPEED_M_S,
+			AIActionScoring.CHASE_CONTEST_MARGIN_M, 1e-6,
+			"the time band is the stride band at reference pace")
+
+
 # ── time_to_arrive ───────────────────────────────────────────────────────────
 
 func test_time_to_arrive_zero_at_destination() -> void:
