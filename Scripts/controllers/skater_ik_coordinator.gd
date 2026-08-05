@@ -80,7 +80,18 @@ func setup(skater: Skater, controller: SkaterController) -> void:
 	_controller = controller
 	if ClassDB.class_exists(&"NativeTopHandIK"):
 		_native_top = ClassDB.instantiate(&"NativeTopHandIK")
-		_native_bottom = ClassDB.instantiate(&"NativeBottomHandIK")
+		# Stale-binary guard, one level finer than NativeKernels' class census:
+		# max_blade_reach was ADDED to an existing kernel, so a binary predating it
+		# still registers the class and passes that check. Writing the property
+		# would then quietly no-op and the boards would stop bounding blade reach —
+		# wrong behaviour that looks like working behaviour. Fall back to GDScript,
+		# which is slower and correct, rather than fast and silently wrong.
+		if not _native_top.has_method(&"set_max_blade_reach"):
+			push_warning("NativeTopHandIK predates max_blade_reach — "
+					+ "using the GDScript solver. Rebuild native/ (bash native/build.sh).")
+			_native_top = null
+		else:
+			_native_bottom = ClassDB.instantiate(&"NativeBottomHandIK")
 	if ClassDB.class_exists(&"NativeBladeDangle"):
 		_native_dangle = ClassDB.instantiate(&"NativeBladeDangle")
 		_sync_dangle_config()
