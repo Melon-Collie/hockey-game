@@ -43,9 +43,9 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # part of the blade still out on it is the toe. Onset is ~6° past the lie
 # (blade ≈ 0.78 m out from the hands at the rest hand height); full at the dig
 # clamp (≈ 0.50 m), where the blade is tucked at the feet. Two readouts share
-# the factor: the wrists roll the face CLOSED over the puck (signed against the
-# elevation scoop, so a drag visibly cups where a loft opens), and the carried
-# puck slides toward the toe (see carry_contact_drag_u).
+# the factor, both carry-only: the wrists roll the face CLOSED over the puck
+# (signed against the elevation scoop, so a drag visibly cups where a loft
+# opens), and the carried puck slides toward the toe (see carry_contact_drag_u).
 const _BLADE_TOE_DRAG_ONSET_DEG: float = -6.0
 const _BLADE_TOE_DRAG_FULL_DEG: float = _BLADE_FOLLOW_PITCH_MIN_DEG
 const _BLADE_TOE_DRAG_ROLL_DEG: float = 20.0         # about Z (handedness-signed)
@@ -387,7 +387,18 @@ signal post_move_integrated()
 # Mirrors SkaterStateMachine.State for the current carrier. Updated each tick
 # by Local/RemoteController so the goalie AI can read shot-state tells (e.g.
 # SLAPPER_CHARGE_WITH_PUCK windup) without reaching across controller boundaries.
-var current_shot_state: int = 0
+#
+# Gaining or losing the puck raises _blade_tilt_dirty because the toe-drag wrist
+# roll is carry-only: possession can flip on a tick where no marker moved, and
+# _rig_pose_changed cannot see that (same reason _update_blade_elevation raises
+# it). Only the has-puck EDGE trips it — shot-state churn within a carry, which
+# is most of the traffic through here, costs a comparison.
+var current_shot_state: int = 0:
+	set(v):
+		if SkaterStateMachine.state_has_puck(v) \
+				!= SkaterStateMachine.state_has_puck(current_shot_state):
+			_blade_tilt_dirty = true
+		current_shot_state = v
 
 # Movement INTENT — the raw WASD vector (world frame) and brake hold, stamped
 # per tick by whichever controller simulates this skater (local input, bot AI,
@@ -1124,10 +1135,16 @@ func _shaft_follow_pitch_deg() -> float:
 # alone (see the _BLADE_TOE_DRAG_* constants). Drives the wrist-roll pose here
 # and the toe-ward slide of the carried puck in get_carry_contact_u().
 #
+# Carry-only, like the forehand/backhand side and its transit lift: a toe drag
+# is a puckhandling move, not a consequence of shaft angle, so an empty-handed
+# player who tucks the stick in tight keeps a square blade.
+#
 # Deliberately positional, not gestural: the drag is a fact about where the
 # stick IS, so it needs no velocity state, survives reconcile replay untouched,
 # and reads identically on a remote from the interpolated pose.
 func get_toe_drag_factor() -> float:
+	if not SkaterStateMachine.state_has_puck(current_shot_state):
+		return 0.0
 	return clampf(
 			inverse_lerp(_BLADE_TOE_DRAG_ONSET_DEG, _BLADE_TOE_DRAG_FULL_DEG,
 					_shaft_follow_pitch_deg()),
@@ -1141,8 +1158,8 @@ func get_toe_drag_factor() -> float:
 #   2. Resting toe-lift + the scroll-loft elevation extras (about X).
 #   3. Face-open loft (about Z, handedness-signed — the forehand face is on
 #      opposite sides for L/R shots), opened by the loft level and CLOSED by the
-#      toe-drag wrist roll. The two oppose each other on purpose: a lofted blade
-#      cups under the puck, a dragged one rolls over the top of it.
+#      carry-only toe-drag wrist roll. The two oppose each other on purpose: a
+#      lofted blade cups under the puck, a dragged one rolls over the top of it.
 # The mesh is heel-origin (StickBladeMeshBuilder), so the rotation pivots
 # about the heel and the shaft→blade junction stays pinned at any pitch.
 # Idempotent (recomputed from identity each call, scale preserved — the
