@@ -99,35 +99,6 @@ it, mesh just stops you.** Both halves are visible from outside — you can see
 which surface you hit — which is the property the current single box lacks
 entirely.
 
-### 2.5 Ringing iron strips the puck
-
-Decided: yes. A wraparound that clangs the post loses the puck, and that reads as
-earned rather than confiscated, because the player can see and hear exactly what
-beat them.
-
-The important detail is *how* it comes off. Not `_do_release` with a generic
-`goalie_strip_power` shove — the puck should leave along its **own reflection off
-the pipe**, which `PuckGeometryCollision.resolve_posts` already computes:
-eject flush against the cylinder, reflect the into-post component at
-`POST_RESTITUTION` 0.55, keep the tangential (pipes are near-frictionless). So
-the strip velocity is not a new number to tune; it is the collision the loose
-puck would have had, which is the whole thesis of this document applied to the
-one case where the puck stops being carried.
-
-Consequences worth stating:
-
-- It gives the goalie's post seal a free ally at exactly the moment it should
-  have one, without buffing the goalie's *reads* at all — the doctrine
-  constraint in §5.3 is untouched, because iron is not a save.
-- The rebound is live (0.55 off the pipe), so a ring is a loose puck in a
-  dangerous area, not a whistle. Ringing iron should create a scramble.
-- It applies to the jam too: prying against the post and catching pipe ends the
-  jam and squirts the puck.
-
-Twine remains non-stripping, so the asymmetry does real work — it makes *which
-part of the net you attack* a decision, where today every part of it behaves
-identically.
-
 New pure rule, mirroring the existing one so the two stay reviewable side by
 side:
 
@@ -170,12 +141,13 @@ plus the new rule:
 | `SkaterShotPoseCoordinator` :85 — slapper wind-up | `NetBladeCollision` — pose only |
 | `SkaterShotPoseCoordinator` :223 — wrister follow-through | `NetBladeCollision` — pose only |
 | `SkaterShotPoseCoordinator` :313 — slapper follow-through | `NetBladeCollision` — pose only |
-| `SkaterController._clamp_carry_pin_from_net` | keeps the legality rule (§3) |
-| `SkaterController._clamp_slapshot_pin_from_net` | keeps the legality rule (§3) |
+| `SkaterController._clamp_carry_pin_from_net` | becomes pin **collision** (§3.2) |
+| `SkaterController._clamp_slapshot_pin_from_net` | merges into the same pin collision — the stricter/looser split stops existing |
 
 The wrapper is why the pose sites already pass `allow_front = has_puck` and the
 pin sites pass it explicitly — the legality flag is threaded through four call
-sites that have no business knowing about it. That thread disappears in §3.
+sites that have no business knowing about it. In §3 the flag stops existing
+entirely, so all six sites become plain collision against one shared geometry.
 
 ### 2.4 Interaction with the reach work already shipped
 
@@ -189,47 +161,151 @@ agreed net geometry to cast against, which is what §2.1 produces.
 `TopHandIK.hand_for_clamped_blade` already handles whatever the collision does
 move: blade authoritative, arm inside ROM, stick length yields. No change needed.
 
+### 2.5 Ringing iron strips the puck
+
+Decided: yes. A wraparound that clangs the post loses the puck, and that reads as
+earned rather than confiscated, because the player can see and hear exactly what
+beat them.
+
+The important detail is *how* it comes off. Not `_do_release` with a generic
+`goalie_strip_power` shove — the puck should leave along its **own reflection off
+the pipe**, which `PuckGeometryCollision.resolve_posts` already computes:
+eject flush against the cylinder, reflect the into-post component at
+`POST_RESTITUTION` 0.55, keep the tangential (pipes are near-frictionless). So
+the strip velocity is not a new number to tune; it is the collision the loose
+puck would have had, which is the whole thesis of this document applied to the
+one case where the puck stops being carried.
+
+Consequences worth stating:
+
+- It gives the goalie's post seal a free ally at exactly the moment it should
+  have one, without buffing the goalie's *reads* at all — the doctrine
+  constraint in §5.3 is untouched, because iron is not a save.
+- The rebound is live (0.55 off the pipe), so a ring is a loose puck in a
+  dangerous area, not a whistle. Ringing iron should create a scramble.
+- It applies to the jam too: prying against the post and catching pipe ends the
+  jam and squirts the puck.
+
+Twine remains non-stripping, so the asymmetry does real work — it makes *which
+part of the net you attack* a decision, where today every part of it behaves
+identically.
+
 ---
 
-## 3. Part B — collision is not legality
+## 3. Part B — there is no legality, only collision
 
-Split the two jobs `NetClampRules` currently fuses.
+*Earlier drafts of this section split legality out of the blade rule and rehomed
+it on the carried puck. That was too timid. The correct version is stronger:*
 
-**The blade just collides.** No `allow_front`, no `prev` path argument, no mouth
-column, no concept of legality at all. It is a surface.
+**If the puck and the blade both collide with the net properly, legality is not a
+separate concept at all.** A puck inside the cage is inside the cage because it
+got there — the mouth is the only opening, so any continuous path in went through
+it. There is nothing left to adjudicate.
 
-**The puck owns legality.** A degenerate goal is a statement about *the puck
-crossing the line*, not about where a stick is. That test stays exactly where it
-already lives and works — `SkaterController._clamp_carry_pin_from_net`, on
-`Skater.get_carry_target_global()` — and becomes the **only** place it lives:
+### 3.1 The codebase already argues this
 
-> A carried puck may be inside the goal volume only if its own swept path entered
-> through the mouth opening. Otherwise it is knocked loose.
+`GoalDetectionRules`' bent-path fallback (which exists so a post-and-in scores
+rather than being locked out by the freshness guard) is justified in exactly
+these terms:
 
-That is the current `allow_front` rule, unchanged in substance, applied to the
-object it is actually about. `GoalDetectionRules` (host-only swept centre
-crossing, `HockeyGoal.goal_scored`) is untouched throughout.
+> If the puck's center finished this tick fully inside the net CAVITY, **the only
+> continuous route there from in front of the line is through the mouth** — the
+> posts, bar, side/top netting and back mesh are all solid — so award the goal on
+> the endpoint.
 
-**Why this is the important half:** it decouples feel from safety. Today, every
-softening of the blade rule is a potential own-goal exploit, so nobody softens
-it. After the split, §2 can be tuned freely — the guarantee does not run through
-it.
+The emergence argument is already load-bearing for free pucks. And directly above
+it sits the confession of why it can't be used for carried ones:
 
-### 3.1 What this retires: the mouth column
+> A CARRIED puck stops here: it is pinned to the blade (**teleported every tick,
+> not collision-constrained**), so the cavity fallback's core assumption … does
+> not hold for it.
 
-`NetClampRules._resolve` confines a legal occupant to `|x| <= mouth_hw` and the
+```gdscript
+if carried:
+    return false
+```
+
+That is the whole story. **`NetClampRules`, `allow_front`, the mouth column, and
+`_clamp_pinned_puck_from_net` all exist to compensate for one fact: the pinned
+puck is a teleported point, not a collider.** Fix that fact and every one of them
+is redundant.
+
+Direction is emergent too, for the same reason it already is:
+`crossed_into_net` rejects a fresh crossing when `prev_depth >= puck_radius`, so
+a puck fed across from behind the line can never satisfy the edge condition. No
+rule required.
+
+### 3.2 The one thing that must be built
+
+**The pinned puck becomes a collider.** Swept against the same net geometry as
+everything else, using its own previous position — not a legality test, the
+identical collision a loose puck gets.
+
+| Surface | Pinned puck |
+|---|---|
+| Twine | presses into the compliant mesh; past `carry_net_squeeze_threshold` the pin breaks and the puck is lost |
+| Pipes | stripped, off the pipe's own reflection (§2.5) |
+
+The twine case is deliberately the same shape as the boards' existing
+`wall_squeeze_threshold` — you press, the surface gives, and past a point you
+can't hold it any more. One concept, two obstacles.
+
+A note on a distinction that will otherwise cause confusion, since both take a
+`prev` and look alike:
+
+- `NetClampRules._entered_via_front(prev, …)` asks *"did you get here
+  legitimately?"* — a **history** question. Deleted.
+- `PuckGeometryCollision.resolve_net_panels(prev, …)` asks *"which side of this
+  plane were you on?"* — a **sweep** question. Kept, and extended to the pin.
+
+Only the second is collision. Only the second survives.
+
+### 3.3 What this deletes
+
+- `Scripts/domain/rules/net_clamp_rules.gd` — the whole file
+- `allow_front` threaded through four blade-pose call sites that have no business
+  knowing about it
+- `_entered_via_front` and the mouth-column confinement
+- `_prev_carry_pin` / `_has_prev_carry_pin` cross-tick state on `SkaterController`
+- the asymmetry where `_clamp_slapshot_pin_from_net` is *stricter* than
+  `_clamp_carry_pin_from_net` (`allow_front` false vs true) — physically
+  unjustifiable, purely an artifact of approximating legality per-caller
+- `if carried: return false` in `GoalDetectionRules`
+
+That last one is a **bug fix, not just a simplification**. Today a legitimate
+carried tuck that clips the post on the way in cannot score, because carried
+pucks are locked out of the bent-path fallback. That lockout is a cost currently
+being paid for the pin not being a collider, and it disappears with it.
+
+### 3.4 What retiring the mouth column buys
+
+`NetClampRules._resolve` confines a legal occupant to `|x| <= mouth_hw`, and the
 caller strips the puck the instant that clamp binds. So the boundary between
-"I stuffed it" and "I lost it" is a sub-centimetre lateral threshold evaluated
-on a blade that may be travelling several metres per second.
+"I stuffed it" and "I lost it" is a sub-centimetre lateral threshold evaluated on
+a blade that may be travelling several metres per second — a coin flip with a
+float compare for a referee.
 
-That is not skill expression; it is a coin flip with a float compare for a
-referee. It exists only because the blade rule was carrying the legality job —
-the column is what stopped a blade that got in legally from then roaming the box
-and dragging the puck through the side mesh.
+It also *caused* the bug it is famous for fixing. The wraparound own-goal (a
+blade sweeping across the goal-line plane right at the post registering as a
+legal front entry, then roaming the box) was possible only because the legality
+abstraction's "mouth" was a buffer-expanded box wider than the physical opening —
+so a strip of "mouth" existed exactly where a post is. **With real geometry that
+strip does not exist: there is a post there, and you hit it.** The bug is deleted
+along with the abstraction that created it.
 
-Once the puck owns legality, the column is unnecessary: the puck's own path is
-tested every tick, so a puck dragged sideways into the side twine is stopped by
-the twine, as a puck. The blade goes wherever the mesh lets it.
+### 3.5 Two boundaries to keep clear
+
+**Physical legality is emergent; rule legality is not.** High-sticking and
+distinct-kicking-motion are not derivable from collision. They also do not exist
+in this game today — there is no such rule anywhere in `Scripts/`. If either is
+ever wanted, it is a rules layer sitting on the goal *event*, never a collision
+concern. Keeping that line clean is what stops §3 being re-muddied in a year.
+
+**Emergence holds in the host's continuous simulation.** A reconcile snap is a
+discontinuity, not a sweep, so the "only continuous route" argument does not
+survive one. This is fine because only the host decides goals and the host never
+snaps its own authoritative puck — but it is an invariant, not an accident, and
+it is the reason `GoalDetectionRules` must stay host-only.
 
 ---
 
@@ -245,6 +321,14 @@ the twine, as a puck. The blade goes wherever the mesh lets it.
   brushes geometry.
 - The wall-pin threshold retune already deferred on the boards side
   (`wall_squeeze_threshold`) gets a matching, honest baseline here.
+- A carried tuck deflected in off the post finally scores — the
+  `if carried: return false` lockout goes away (§3.3).
+- **Net code shrinks.** A whole rules file, a threaded flag, two cross-tick state
+  vars, and a special case in the goal detector are deleted, and nothing replaces
+  them but geometry that already existed. The correctness argument gets shorter
+  too: "the mouth is the only opening" is checkable by inspection in a way that
+  "did the swept segment enter through the buffer-expanded mouth column" never
+  was.
 
 And it should be said plainly: **this only stops the area feeling bad.** It does
 not make it good. That is Part C.
@@ -320,9 +404,15 @@ choice has to keep paying.
 
 ## 6. Invariants that must not break
 
-1. **No degenerate goals.** The puck's swept path across the goal-line plane
-   through the mouth opening remains the only legal entry. `GoalDetectionRules`
-   is untouched.
+1. **No degenerate goals.** Unchanged as a guarantee, but it is now *emergent*
+   rather than *enforced*: the mouth is the only opening, so any continuous path
+   into the cavity went through it. `GoalDetectionRules` keeps its own geometry
+   (whole-puck swept crossing inside the tightened mouth, freshness edge for
+   direction); the one change to it is lifting `if carried: return false`, which
+   is only safe once §3.2 has made the pin a collider. **Those two land
+   together or not at all** — lifting the lockout without the pin collision
+   reopens exactly the phantom "in from the back, on the stick" goal its comment
+   describes.
 2. **Determinism.** All of this is on the 120 Hz path and inside reconcile
    replay. Pure value math, no allocation, no cross-tick state that is not
    reset at reconcile entry — the same discipline as
@@ -336,6 +426,13 @@ choice has to keep paying.
    whatever the jam resolves from, the bots must read the same quantities or
    they will plan against a net they do not face — the AI MIRROR rule in
    `goalie_skill_profile.gd`.
+6. **Emergence is a property of the host's continuous simulation.** A reconcile
+   snap is a discontinuity, not a sweep, so "the only continuous route" does not
+   survive one. This is why `GoalDetectionRules` must stay host-only — it is an
+   invariant now, not merely how it happens to be wired.
+7. **Physical legality only.** Rule legality (high stick, distinct kicking
+   motion) is not derivable from collision and does not exist in this game. If
+   ever added it belongs on the goal *event*, never in the collision layer.
 
 ---
 
@@ -347,7 +444,7 @@ Each stage is independently shippable and independently revertible.
 |---|---|---|
 | **A1** | Shared net geometry; `NetBladeCollision` (segment vs pipes + twine); blade call sites switched | low — pose only |
 | **A2** | Buffer removed from the blade path; posts ring; iron strips the carried puck off its own reflection (§2.5) | low |
-| **B1** | Legality moved wholly onto the carried puck; `allow_front` / mouth column deleted from the blade rule | **medium — this is the own-goal surface**; gate on the wraparound regression tests below |
+| **B1** | The pinned puck becomes a swept collider; `NetClampRules` deleted whole (`allow_front`, mouth column, `_prev_carry_pin`); `if carried: return false` lifted from `GoalDetectionRules` | **medium — this is the own-goal surface**; gate on the wraparound regression battery below |
 | **A3** | Net folded into the reach cast alongside the boards | low |
 | **C1** | Jam contest | design pass; own playtest cycle |
 
@@ -390,13 +487,24 @@ Pure rules, so most of this is unit-testable headless.
 about where every surface is, at a sweep of heights. This is the test that stops
 the two nets diverging again, and it is the most valuable test in the set.
 
-**Wraparound regression (gates B1)** — a seeded battery of blade-and-puck paths
-around both posts, from both sides, at a range of speeds:
+**Wraparound regression (gates B1)** — the load-bearing battery, because B1
+removes an explicit guard and relies on emergence instead. Seeded blade-and-puck
+paths around both posts, from both sides, at a range of speeds:
 - legal front-mouth tuck scores;
+- carried tuck deflected in off the post scores (the case the `carried` lockout
+  currently refuses);
 - reach from directly behind does not;
-- blade sweeping *across* the post at the goal-line plane does not (this is the
-  own-goal bug the mouth column was added for — it must stay dead without it);
-- lateral drift inside the cage presses the side twine and does not pass.
+- blade sweeping *across* the post at the goal-line plane does not — this is the
+  own-goal the mouth column was added for, and it must stay dead **for a
+  different reason**: there is now a post in that strip and the sweep hits it;
+- lateral drag inside the cage presses the side twine and does not pass;
+- a pinned puck driven at the side mesh from outside is stopped, and past the
+  squeeze threshold is lost — never passed through.
+
+The bot angles are the adversary here. `GoalDetectionRules` notes phantom
+"in from the back, on the stick" goals came "usually on a bot, whose angles are
+exact", so the battery should be driven from bot-precision paths, not
+hand-picked ones.
 
 **Iron strips, twine does not** — a carried puck driven into a post comes off
 along the pipe reflection (`resolve_posts`) with a live rebound, and the same
@@ -419,10 +527,10 @@ reverse. These have no coverage today because the blade is a point.
 1. **Blade penetration depth into twine** — 0.12 m is a guess. It wants to be
    deep enough to read as "buried in the mesh" and shallow enough that it never
    reaches a puck on the other side. Playtest.
-2. **Does a jam need a distinct input**, or is holding the existing carry into
-   contact enough? Preference: no new button — the situation should select the
-   mechanic.
-3. **Jam vs. the body-check commit** — a defender arriving mid-jam should end it.
+   `carry_net_squeeze_threshold` (§3.2) is unset for the same reason, and the two
+   want tuning together: they are the same physical story told about the stick
+   and about the puck.
+2. **Jam vs. the body-check commit** — a defender arriving mid-jam should end it.
    Whether that is the existing stagger/knockdown path or something specific to
    the scrum is unresolved.
 
@@ -430,3 +538,10 @@ Resolved:
 
 - **Does a post ring strip a carried puck?** Yes — §2.5. Off the pipe's own
   reflection, not a generic shove.
+- **Does the jam need its own input?** No. Holding the existing carry into
+  contact is the jam; the situation selects the mechanic. Nothing new to bind,
+  nothing new to teach, and it keeps the jam continuous with ordinary carrying
+  rather than a mode you enter.
+- **Does legality need its own rule at all?** No — §3. If the puck and the blade
+  both collide properly, a puck in the net got there legitimately by
+  construction.
