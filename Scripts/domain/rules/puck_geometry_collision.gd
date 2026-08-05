@@ -252,14 +252,18 @@ static func resolve_net_panels(prev: Vector3, pos: Vector3, vel: Vector3,
 		# the segment is crossing from ITS side; a diagonal corner case resolves one
 		# face now and the other on the next ≤4 cm sub-step.
 		var back_dist: float = NetGeometry.back_plane_distance(p)
-		if NetGeometry.back_plane_distance(prev) >= 0.0 and back_dist < puck_radius:
+		if NetGeometry.back_plane_distance(prev) >= 0.0 and back_dist < puck_radius \
+				and NetGeometry.within_back_panel(p.x, puck_radius):
 			# Behind the back twine and pressing on it — a rim into the back of the
 			# cage, or a puck dropping into the wedge above the slant. Eject flush
 			# along the mesh's own normal (back AND up), so the puck dies on the
 			# VISIBLE mesh at its own height and then tracks down the outside instead
-			# of being pulled through into the cavity. Starting from `prev`'s side
-			# (rather than the position alone) keeps a puck BESIDE the cage — in front
-			# of this plane but laterally outside — on the side face below.
+			# of being pulled through into the cavity. Two guards keep this face from
+			# answering for contacts that are not its own: `prev`'s side of the plane
+			# (a puck in FRONT of it plays the side face below), and the panel's own
+			# width — a puck rounding the cage's back corner is behind the plane but
+			# laterally past the mesh, and claiming it here left the side face, which
+			# is the one that should have stopped it, unreached in that sub-step.
 			#
 			# GEOMETRY uses the slant's normal; the RESPONSE stays a horizontal absorb,
 			# like the interior face. Rebounding along the true normal instead sends the

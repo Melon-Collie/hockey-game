@@ -145,8 +145,11 @@ func test_blade_sinks_into_back_twine_from_outside_and_stops() -> void:
 func test_blade_inside_the_cavity_is_held_inside() -> void:
 	# A legal occupant driving outward is stopped by the same twine, from the
 	# other side. No mouth column, no lateral coin flip — just the mesh.
+	# The overshoot is a tick of blade travel, not the half metre this used to
+	# sample: containment reaches as far as the cage's own footprint and no
+	# further, since past that the blade never crossed the mesh at all.
 	var prev := Vector3(0.0, ICE, GL + 0.3)
-	var heel := Vector3(HW + 0.5, ICE, GL + 0.3)
+	var heel := Vector3(HW + 0.2, ICE, GL + 0.3)
 	var res: NetBladeCollision.Result = _resolve(prev, heel, heel)
 	assert_true(res.hit(), "pressing the side mesh from inside")
 	var stopped_x: float = heel.x + res.offset.x
@@ -188,6 +191,48 @@ func test_result_is_reset_between_resolves() -> void:
 	var res: NetBladeCollision.Result = _resolve(clear, clear, _flat_toe(clear))
 	assert_false(res.hit(), "clear of everything")
 	assert_eq(res.pipe_normal, Vector3.ZERO, "and the stale strip signal is gone")
+
+# ── The panels are finite: a plane equation is not a surface ──────────────────
+# Every face test asks a plane which side of it a point is on, and a plane runs
+# to the horizon. Without the panel's own span the back mesh is a wall across the
+# rink: it pinned a stick in the corner against a surface metres away, and the
+# stick then hung there while the player skated off it.
+
+func test_a_blade_out_by_the_boards_touches_nothing_at_goal_line_depth() -> void:
+	# The reported bug, at its own coordinates: a skater jammed on the boards in
+	# the corner, blade at the depth of the back twine but nine metres wide of it.
+	var heel := Vector3(9.4, ICE, GL + 0.6)
+	for prev: Vector3 in [
+			Vector3(9.3, ICE, GL + 1.4),    # prev behind the back plane
+			Vector3(0.0, ICE, GL + 0.3),    # prev inside the cavity
+			Vector3(0.0, ICE, GL - 0.4)]:   # prev in the mouth column
+		assert_false(_resolve(prev, heel, _flat_toe(heel)).hit(),
+				"nothing to collide with out there, whatever prev says (prev=%s)" % prev)
+
+
+func test_a_blade_rounding_the_cage_is_not_pinned_by_the_back_mesh() -> void:
+	# Past the side twine but still within the cage's footprint, at back-mesh
+	# depth, having come from behind the cage. The back panel does not span this
+	# far, so the SIDE panel is the surface — and from outside it, that means the
+	# blade is left where it is rather than dragged back and up the slant.
+	var heel := Vector3(HW + 0.15, ICE, GL + 0.5)
+	var res: NetBladeCollision.Result = _resolve(
+			Vector3(HW + 0.15, ICE, GL + 1.6), heel, heel + Vector3(0.0, 0.0, -0.30))
+	assert_almost_eq(res.offset.z, 0.0, EPS, "no push along the back mesh's normal")
+	assert_almost_eq(res.offset.y, 0.0, EPS, "and none up its slant")
+
+
+func test_the_footprint_bound_scales_with_the_clearance_it_is_given() -> void:
+	# The bound is geometry plus the caller's own compliance, not a constant: a
+	# blade allowed to sink further into the mesh is still on it further out.
+	var heel := Vector3(GameRules.NET_BACK_HALF_WIDTH + 0.08, ICE, GL + 0.4)
+	NetBladeCollision.resolve(
+			Vector3(0.0, ICE, GL + 0.3), heel, heel, THICK, GIVE, _r)
+	assert_true(_r.hit(), "within the footprint at this give, the mesh still holds it")
+	NetBladeCollision.resolve(
+			Vector3(0.0, ICE, GL + 0.3), heel, heel, THICK, 0.0, _r)
+	assert_false(_r.hit(), "with no give at all the same point is past the cage")
+
 
 # ── Reach limit: the net bounds the aim, like the boards ──────────────────────
 # The stick is stopped BEFORE it is aimed through the mesh, rather than solved to

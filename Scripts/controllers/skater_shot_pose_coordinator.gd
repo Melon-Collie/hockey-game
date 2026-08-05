@@ -61,6 +61,7 @@ func apply_slapper_blade_position() -> void:
 			_controller.slapper_wind_up_height,
 			wind_up_t) + quiver
 	var pos := Vector3(blade_x, current_blade_y, blade_z)
+	var intended: Vector3 = pos
 	pos = _skater.clamp_blade_to_walls(pos)
 	var blade_world: Vector3 = _skater.upper_body_to_global(pos)
 	var clamped_heel: Vector3 = blade_world
@@ -79,6 +80,12 @@ func apply_slapper_blade_position() -> void:
 	clamped_heel += _ik.resolve_blade_against_net(clamped_heel).offset
 	if clamped_heel != blade_world:
 		pos = _skater.upper_body_to_local(clamped_heel)
+	# Authored poses need the arm rebuild as much as the tracked one does: the
+	# wind-up hand is placed relative to the shoulder, so a clamp that moves the
+	# blade and not the hand stretches the shaft by the whole correction. Blade
+	# authoritative, arm in ROM, stick length yields — as everywhere else.
+	if pos != intended:
+		hand_pos = _ik.hand_for_clamped_blade(pos, blade_side_sign)
 	_skater.set_top_hand_position(hand_pos)
 	_skater.set_blade_position(pos)
 
@@ -97,11 +104,16 @@ func apply_block_blade_position() -> void:
 	var blade_z: float = _skater.shoulder.position.z - _controller.block_blade_reach
 	var blade_y: float = _ik.blade_y_lean_corrected(blade_x, blade_z)
 	var blade_local := Vector3(blade_x, blade_y, blade_z)
+	var intended: Vector3 = blade_local
 	blade_local = _skater.clamp_blade_to_walls(blade_local)
 	var hand_pos := Vector3(
 			_skater.shoulder.position.x + blade_side_sign * _controller.block_hand_x,
 			_controller.block_hand_y,
 			_skater.shoulder.position.z - _controller.block_hand_forward)
+	# The blocking stick is the furthest this pose reaches, so a board clamp bites
+	# hardest here; the arm follows the blade rather than the shaft stretching.
+	if blade_local != intended:
+		hand_pos = _ik.hand_for_clamped_blade(blade_local, blade_side_sign)
 	_skater.set_top_hand_position(hand_pos)
 	_skater.set_blade_position(blade_local)
 
@@ -128,6 +140,11 @@ func apply_celebration_pose(t: float) -> void:
 			_skater.shoulder.position.x + blade_side_sign * 0.18,
 			hand_pos.y + _controller.celebration_stick_rise * ramp,
 			_skater.shoulder.position.z - 0.28)
+	# Alone among the posed states this does NOT rebuild the arm onto a clamped
+	# blade: the blade is deliberately ABOVE the hand here, and the rebuild solves
+	# a grounded stick — it would drop the raised arm this pose exists to show. The
+	# celebration blade sits centimetres off the shoulder, so a board clamp barely
+	# moves it, and the pose is cosmetic and whistle-gated either way.
 	blade_pos = _skater.clamp_blade_to_walls(blade_pos)
 	_skater.set_top_hand_position(hand_pos)
 	_skater.set_blade_position(blade_pos)
@@ -299,9 +316,16 @@ func apply_slapper_follow_through() -> void:
 		var hand_follow: float = reach * _controller.slapper_follow_through_hand_follow
 		hand_pos.x += dir_local.x * hand_follow
 		hand_pos.z += dir_local.z * hand_follow
+	# Wall + net clamps and the arm rebuild behind them, exactly as the wrister
+	# finish does it: the finish is where the stick is furthest from the body, so
+	# the correction is at its largest and carrying it on the blade alone is what
+	# stretched the shaft.
+	var intended: Vector3 = blade_pos
 	blade_pos = _skater.clamp_blade_to_walls(blade_pos)
 	var sft_heel: Vector3 = _skater.upper_body_to_global(blade_pos)
 	blade_pos = _skater.upper_body_to_local(
 			sft_heel + _ik.resolve_blade_against_net(sft_heel).offset)
+	if blade_pos != intended:
+		hand_pos = _ik.hand_for_clamped_blade(blade_pos, blade_side_sign)
 	_skater.set_top_hand_position(hand_pos)
 	_skater.set_blade_position(blade_pos)
