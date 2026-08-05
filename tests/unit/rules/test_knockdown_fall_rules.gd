@@ -116,6 +116,52 @@ func test_brace_releases_through_the_getup() -> void:
 			"brace eases out with the same envelope as the tilt")
 
 
+# ── wall_safe_fall_dir ────────────────────────────────────────────────────────
+# proximity is a BoardPlayRules.board_proximity result: the INWARD normal (away
+# from the wall) scaled by closeness 0..1. These tests use a wall to the +X side,
+# so inward is −X and the into-wall direction is +X.
+
+func test_wall_untouched_when_clear() -> void:
+	var dir := Vector2(1, 0)
+	assert_eq(KnockdownFallRules.wall_safe_fall_dir(dir, Vector2.ZERO), dir,
+			"no boards within reach → the fall direction is the hit's")
+
+func test_wall_untouched_when_falling_away() -> void:
+	var away := Vector2(-1, 0)
+	assert_eq(KnockdownFallRules.wall_safe_fall_dir(away, Vector2(-0.9, 0)), away,
+			"falling away from a nearby wall is never fought")
+
+func test_against_the_glass_falls_parallel() -> void:
+	var out: Vector2 = KnockdownFallRules.wall_safe_fall_dir(
+			Vector2(1, 0), Vector2(-1, 0))
+	assert_almost_eq(out.dot(Vector2(1, 0)), 0.0, 0.0001,
+			"pinned to the boards → the body lies along them, zero into-wall")
+	assert_almost_eq(out.length(), 1.0, 0.0001, "still a unit direction")
+
+func test_partial_gap_budgets_the_into_wall_component() -> void:
+	# Boards at 40% of the body reach away → closeness 0.6, so the gap absorbs
+	# an into-wall component of 0.4 and no more.
+	var out: Vector2 = KnockdownFallRules.wall_safe_fall_dir(
+			Vector2(1, 0), Vector2(-0.6, 0))
+	assert_almost_eq(out.dot(Vector2(1, 0)), 0.4, 0.0001,
+			"into-wall component clamped to the fraction the gap can absorb")
+	assert_almost_eq(out.length(), 1.0, 0.0001, "still a unit direction")
+
+func test_wall_keeps_the_leaned_tangent_side() -> void:
+	var leaning_pos_y: Vector2 = KnockdownFallRules.wall_safe_fall_dir(
+			Vector2(1, 0.2).normalized(), Vector2(-1, 0))
+	var leaning_neg_y: Vector2 = KnockdownFallRules.wall_safe_fall_dir(
+			Vector2(1, -0.2).normalized(), Vector2(-1, 0))
+	assert_true(leaning_pos_y.y > 0.9, "sweeps onto the wall line the short way (+)")
+	assert_true(leaning_neg_y.y < -0.9, "sweeps onto the wall line the short way (−)")
+
+func test_wall_dead_perpendicular_tie_break_is_deterministic() -> void:
+	var a: Vector2 = KnockdownFallRules.wall_safe_fall_dir(Vector2(1, 0), Vector2(-1, 0))
+	var b: Vector2 = KnockdownFallRules.wall_safe_fall_dir(Vector2(1, 0), Vector2(-1, 0))
+	assert_eq(a, b, "a dead-perpendicular shove resolves the same way every call")
+	assert_almost_eq(a.length(), 1.0, 0.0001, "and stays unit")
+
+
 # First elapsed at which the tilt is within grab distance of the settle angle.
 # The grid can straddle the exact touch instant (the impact is a kink, not a
 # dwell), so the threshold is loose — callers treat this as "at/just past first

@@ -178,6 +178,11 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var knockdown_fall_rest_omega: float = 0.7
 @export var knockdown_fall_com_height_m: float = 0.95
 @export var knockdown_fall_max_entry_omega: float = 4.2
+# Head-ward extent of the tipped body (height + a little stick/arm slack): both
+# the wall probe distance and the reach the wall deflection budgets against
+# (KnockdownFallRules.wall_safe_fall_dir), so a fall near the glass lies along
+# the boards instead of through them.
+@export var knockdown_fall_body_reach_m: float = 1.9
 @export var knockdown_brace_in_seconds: float = 0.15  # arms pull into the brace over this
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
 # How fast facing drifts toward the cursor during normal play. Lower = more
@@ -1755,7 +1760,20 @@ func _apply_knockdown_fall() -> void:
 	# horizontal perpendicular, so positive tilt tips the head the way the hit
 	# shoved. Falling backward lands face-up, forward face-down — the read
 	# emerges from direction vs facing with no face-up/down logic of its own.
-	var d := Vector3(stagger_recoil_dir.x, 0.0, stagger_recoil_dir.y)
+	# The wall deflection runs in WORLD space (the rink is world geometry) on the
+	# capsule's live position each frame: the capsule keeps sliding while down,
+	# so a body that goes down near the glass sweeps onto the wall line as it
+	# slides in — the crumple-down-the-boards read — instead of resolving once at
+	# entry and clipping through as the slide closes the gap.
+	var dir_world: Vector3 = skater.global_transform.basis \
+			* Vector3(stagger_recoil_dir.x, 0.0, stagger_recoil_dir.y)
+	var safe_dir: Vector2 = KnockdownFallRules.wall_safe_fall_dir(
+			Vector2(dir_world.x, dir_world.z),
+			BoardPlayRules.board_proximity(
+					Vector2(skater.global_position.x, skater.global_position.z),
+					knockdown_fall_body_reach_m))
+	var d: Vector3 = skater.global_transform.basis.inverse() \
+			* Vector3(safe_dir.x, 0.0, safe_dir.y)
 	skater.set_knockdown_fall(Vector3.UP.cross(d), tilt)
 
 

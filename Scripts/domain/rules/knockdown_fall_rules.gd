@@ -70,3 +70,30 @@ static func getup_scale(kd_t: float) -> float:
 static func brace_at(elapsed: float, kd_t: float, brace_in_seconds: float) -> float:
 	var ramp: float = clampf(elapsed / maxf(brace_in_seconds, 0.001), 0.0, 1.0)
 	return ramp * getup_scale(kd_t)
+
+
+# Deflects a fall direction (unit, world XZ) so the tipped body cannot lie
+# through the boards: a body checked into the glass crumples DOWN it and ends up
+# along the wall, because the wall is where the fall's momentum goes. `proximity`
+# is a BoardPlayRules.board_proximity() result probed at the body's reach, so
+# closeness 0→1 spans "boards one body-length away" → "against them"; the
+# into-wall component is clamped to the fraction of the reach the remaining gap
+# can absorb (gap/reach = 1 − closeness), which lands the head exactly at the
+# glass in the worst case and leaves any fall that already fits untouched. The
+# tangential remainder keeps the side the fall already leaned to, so the body
+# sweeps the short way onto the wall line; a dead-perpendicular shove breaks the
+# tie the same way on every machine (the rotated normal).
+static func wall_safe_fall_dir(dir: Vector2, proximity: Vector2) -> Vector2:
+	var closeness: float = proximity.length()
+	if closeness < 0.0001 or dir.length_squared() < 0.0001:
+		return dir
+	var into: Vector2 = -proximity / closeness
+	var into_amt: float = dir.dot(into)
+	var max_into: float = 1.0 - closeness
+	if into_amt <= max_into:
+		return dir
+	var tangent := Vector2(-into.y, into.x)
+	if dir.dot(tangent) < 0.0:
+		tangent = -tangent
+	var tangent_amt: float = sqrt(maxf(1.0 - max_into * max_into, 0.0))
+	return into * max_into + tangent * tangent_amt
