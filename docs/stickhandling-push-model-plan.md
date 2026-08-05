@@ -1,9 +1,23 @@
 # Stickhandling push model — motion-keyed blade contact
 
-Status: agreed design, not yet implemented. Follows the contact-point tell
-(#596, `docs/elevation-rework-plan.md` §6.3), which seated the carried puck
-heel→toe by loft level and added a shaft-angle toe drag. This plan subsumes
-that toe drag into a general model.
+Status: IMPLEMENTED (`CarryContactRules` + `Skater._update_carry_contact`),
+pending on-ice tuning. Follows the contact-point tell (#596,
+`docs/elevation-rework-plan.md` §6.3), which seated the carried puck heel→toe
+by loft level and added a shaft-angle toe drag; this model subsumes that toe
+drag. Deltas from the plan as written:
+
+- The update lives in `Skater._physics_process`, not the IK call site — it
+  runs identically on local, AI, and remote skaters (the IK pipeline never
+  touches a client-rendered remote), which delivered §5's remote parity
+  directly instead of via a separate feed. Consequence: remote views now
+  reconstruct the full blade-beside-puck arrangement (the forehand factor is
+  no longer 0 on remotes; a peer flipping a beat off the owner is absorbed by
+  the factor smoothing).
+- The transit lift became a sin-envelope hop fired per face flip (a flip
+  during a live hop rides it out) — the "complete each hop" option from trap
+  #2, replacing (1 − |smoothed factor|) outright.
+- `carry_side_switch_threshold` (the position-hysteresis export) is retired;
+  the flip-speed threshold is the hysteresis.
 
 ## 1. The defect in the current model
 
