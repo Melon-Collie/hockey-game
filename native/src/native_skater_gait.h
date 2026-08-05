@@ -26,12 +26,15 @@ namespace mitts {
 
 // Every controller @export the gait reads, by its exact property name.
 #define MITTS_GAIT_TUNABLES(X) \
-	X(backpedal_ccut_roll_deg) X(backpedal_chest_deg) X(backpedal_start) \
+	X(backpedal_ccut_roll_deg) X(backpedal_ccut_sweep_deg) X(backpedal_chest_deg) \
+	X(backpedal_pitch_fade) X(backpedal_start) X(backpedal_tuck_fade) \
 	X(block_extend_knee_deg) X(block_kneel_hip_deg) X(block_kneel_shin_deg) \
 	X(block_pose_blend_speed) X(cadence_cruise_falloff) X(cadence_glide_stance_gain) \
-	X(carve_base_lean_deg) X(carve_clearance_knee_deg) X(carve_engage_speed) \
-	X(carve_forward_ramp) X(carve_min_speed) X(carve_over_pitch_deg) \
-	X(carve_over_roll_deg) X(carve_ref_turn_rate) X(carve_rock_fade) \
+	X(carve_bank_gain) X(carve_bank_knee_accel) X(carve_bank_max_deg) \
+	X(carve_base_lean_deg) \
+	X(carve_clearance_knee_deg) X(carve_engage_speed) X(carve_forward_ramp) \
+	X(carve_min_speed) X(carve_over_pitch_deg) X(carve_over_roll_deg) \
+	X(carve_ref_turn_rate) X(carve_rock_fade) X(carve_stance) \
 	X(carve_stride_fade) X(carve_under_roll_deg) X(celebration_leg_stance) \
 	X(check_drive_lean_deg) X(check_drive_stance) X(check_drive_time) \
 	X(crossover_lean_deg) X(crossover_phase_per_turn) X(crossover_scissor_deg) \
@@ -46,6 +49,10 @@ namespace mitts {
 	X(hockey_stop_max_yaw_deg) X(hockey_stop_min_speed) X(hockey_stop_split_deg) \
 	X(hockey_stop_stance) X(hockey_stop_trunk_roll_deg) X(intent_signal_speed) \
 	X(knockdown_getup_seconds) X(knockdown_pose_drop_m) X(max_speed) \
+	X(pivot_band_hi_deg) X(pivot_band_lo_deg) X(pivot_blend_speed) \
+	X(pivot_commit_time) X(pivot_depth_ramp_deg) X(pivot_min_speed) \
+	X(pivot_mohawk_deg) X(pivot_rate_min) X(pivot_stance) \
+	X(pivot_step_begin) X(pivot_stride_fade) X(pivot_yaw_speed) \
 	X(reversal_lean_deg) X(reversal_min_speed) X(reversal_plant_deg) \
 	X(reversal_stance) X(reversal_start_opposition) X(reversal_stride_fade) \
 	X(shot_stride_fade) X(shuffle_cadence_rate) X(shuffle_fade_speed) \
@@ -64,6 +71,7 @@ namespace mitts {
 	X(stride_intensity_speed) X(stride_knee_deg) X(stride_pitch_deg) \
 	X(stride_push_ceiling) X(stride_push_gain) X(stride_rear_bias) \
 	X(stride_roll_deg) X(stride_skew) X(stride_sway_deg) \
+	X(trunk_texture_smooth_rate) \
 	X(weight_shift_deg) X(weight_spring_damping) X(weight_spring_stiffness) \
 	X(wrister_kick_back_deg) X(wrister_kick_hip_yaw_deg) \
 	X(wrister_kick_knee_extend_deg) X(wrister_kick_lean_deg) \
@@ -119,11 +127,17 @@ private:
 	double stride_phase = 0.0;
 	double trunk_pitch_add = 0.0;
 	double trunk_roll_add = 0.0;
+	double trunk_pitch_s = 0.0;
+	double trunk_roll_s = 0.0;
 	double hit_commit_blend = 0.0;
 	double intensity = 0.0;
 	double effort = 0.0;
 	godot::Vector3 prev_velocity;
 	bool have_prev_velocity = false;
+	double fd_time = 0.0;
+	double fd_effort_target = 0.0;
+	double fd_turn = 0.0;
+	double fd_carve = 0.0;
 	double faceoff_blend = 0.0;
 	double stop_yaw_offset = 0.0;
 	bool stop_engaged = false;
@@ -131,6 +145,14 @@ private:
 	double stop_blend = 0.0;
 	double travel_align_yaw = 0.0;
 	double hip_align_yaw = 0.0;
+	double prev_psi = 0.0;
+	bool have_prev_psi = false;
+	double psi_smooth = 0.0;
+	double psi_rate = 0.0;
+	bool pivot_engaged = false;
+	double pivot_sense = 1.0;
+	double pivot_blend = 0.0;
+	double pivot_dwell = 0.0;
 	double carve = 0.0;
 	double carve_curve = 0.0;
 	double turn_rate = 0.0;
@@ -159,7 +181,9 @@ private:
 	// Pose outputs of the last APPLY_ACTIVE pass.
 	double out_l_pitch = 0.0, out_l_roll = 0.0, out_l_knee = 0.0;
 	double out_r_pitch = 0.0, out_r_roll = 0.0, out_r_knee = 0.0;
+	double out_l_yaw = 0.0, out_r_yaw = 0.0;
 	double out_foot_evert_l = 0.0, out_foot_evert_r = 0.0;
+	double out_edge_load_l = 0.0, out_edge_load_r = 0.0;
 	double out_drop = 0.0;
 
 	void reset_state();
@@ -201,14 +225,19 @@ public:
 	double get_r_pitch() const { return out_r_pitch; }
 	double get_r_roll() const { return out_r_roll; }
 	double get_r_knee() const { return out_r_knee; }
+	double get_l_yaw() const { return out_l_yaw; }
+	double get_r_yaw() const { return out_r_yaw; }
 	double get_foot_evert_l() const { return out_foot_evert_l; }
 	double get_foot_evert_r() const { return out_foot_evert_r; }
+	double get_edge_load_l() const { return out_edge_load_l; }
+	double get_edge_load_r() const { return out_edge_load_r; }
 	double get_crouch_drop() const { return out_drop; }
 	double get_trunk_pitch_add() const { return trunk_pitch_add; }
 	double get_trunk_roll_add() const { return trunk_roll_add; }
 	double get_stop_yaw_offset() const { return stop_yaw_offset; }
 	double get_travel_align_yaw() const { return travel_align_yaw; }
 	double get_shot_hip_yaw() const { return shot_hip_yaw; }
+	double get_pivot_blend() const { return pivot_blend; }
 	double get_stride_phase() const { return stride_phase; }
 	bool is_settled() const { return settled; }
 };

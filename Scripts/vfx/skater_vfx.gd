@@ -53,8 +53,12 @@ const BLADE_TRAIL_LIFETIME: float = 1.5   # seconds each mark lingers
 const BLADE_TRAIL_AMOUNT: int = 300       # max concurrent marks per blade
 const BLADE_TRAIL_RADIUS: float = 0.025   # dot radius (smaller than puck's 0.055)
 const BLADE_TRAIL_COLOR: Color = Color(0.95, 0.93, 0.88, 0.5)
-const BLADE_X_OFFSET: float = 0.12       # left/right blade separation from center
+const BLADE_X_OFFSET: float = 0.12       # emitter rest offset; per-frame the emitters ride the FOOT bones
 const ICE_Y: float = 0.005              # world Y for trail dots (just above ice)
+# A blade this far above the lower boot is airborne (recovery swing, clearance
+# step) and stops marking — matches IceScratchMap.LIFT_EPS_M so the live trail
+# and the persistent scratch break in the same places.
+const LIFT_EPS_M: float = 0.03
 # Same GPUParticles3D frustum-culling hazard as the puck trail (see PuckVFX): the
 # marks emit in world space but the visibility AABB is measured local to the node,
 # i.e. centred on the skater, and defaults to ~±4 m. A blade trail lingers 1.5 s and
@@ -154,13 +158,19 @@ func _process(_delta: float) -> void:
 		_speed_lines.emitting = false
 		return
 
-	# Pin blade trail emitters to ice level (skater origin is ~1m above ice).
-	var ice_local_y: float = ICE_Y - curr_pos.y
-	for i: int in _blade_trail_emitters.size():
-		_blade_trail_emitters[i].position.y = ice_local_y
-
-	# Skate trails: continuous marks on ice while moving
-	_set_blade_trails_emitting(speed > TRAIL_MIN_SPEED)
+	# Blade-accurate trails: each emitter rides its FOOT bone (pinned to ice
+	# level), so the marks follow the skates through crossovers, C-cuts, stops
+	# and pivots instead of streaming from two fixed offsets under the torso —
+	# and an airborne recovery skate stops marking, which is what turns the
+	# stride's trail into alternating push strokes.
+	var blade_l: Vector3 = skater.blade_mark_position(true)
+	var blade_r: Vector3 = skater.blade_mark_position(false)
+	_blade_trail_emitters[0].global_position = Vector3(blade_l.x, ICE_Y, blade_l.z)
+	_blade_trail_emitters[1].global_position = Vector3(blade_r.x, ICE_Y, blade_r.z)
+	var blade_base_y: float = minf(blade_l.y, blade_r.y)
+	var trails_on: bool = speed > TRAIL_MIN_SPEED
+	_blade_trail_emitters[0].emitting = trails_on and blade_l.y - blade_base_y < LIFT_EPS_M
+	_blade_trail_emitters[1].emitting = trails_on and blade_r.y - blade_base_y < LIFT_EPS_M
 
 	# Hockey stop: emit continuously while pure braking, stop when not.
 	if skater.is_braking and speed > STOP_MIN_SPEED:

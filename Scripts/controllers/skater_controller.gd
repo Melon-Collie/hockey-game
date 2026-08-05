@@ -406,6 +406,15 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var carve_forward_ramp: float = 1.0    # m/s of forward travel over which crossovers fade in
 @export var carve_base_lean_deg: float = 7.0   # static both-leg lean into the turn while striding a carve
 @export var carve_rock_fade: float = 0.85      # edge-rock/abduction/scissor faded out at full carve
+# Centripetal trunk bank: the inclination that balances a turn is atan(v·ω/g),
+# derived from the speed and turn rate the carve already smooths — so every
+# machine banks identically with no new state, and the angle scales with how
+# hard the arc actually is instead of a fixed lean. The legs' carve lean
+# carries part of the physical angle; the gain sets the trunk's share.
+@export var carve_bank_gain: float = 0.5       # fraction of the physical bank angle the trunk shows
+@export var carve_bank_knee_accel: float = 2.0 # m/s² of lateral accel at half bank authority — the steering-noise gate
+@export var carve_bank_max_deg: float = 16.0   # trunk bank cap for the tightest whips
+@export var carve_stance: float = 0.75         # stance floor at full carve — sit low to hold the edges
 # Gliding — releasing all movement keys settles the legs to rest (the stride
 # is input-gated, v15 intent byte) while this floor keeps working knees under
 # a coasting skater, scaled by speed.
@@ -422,6 +431,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var stride_bob_m: float = 0.02            # vertical body bob per half-stride (weight transfer)
 @export var stride_sway_deg: float = 3.0          # torso weight-shift roll oscillating with the stride
 @export var stride_dig_lean_deg: float = 8.0      # extra trunk pitch from effort: forward driving, back braking
+# Trunk inertia at the texture seam: the trunk texture sums many reads and
+# each carries residual step/noise from its input; the trunk — the body's
+# most massive segment — cannot physically re-orient at those frequencies.
+# One first-order tracker on the SUMMED texture models that inertia (the
+# stagger wobble bypasses it — a stumble is supposed to shake). 0 = off.
+@export var trunk_texture_smooth_rate: float = 14.0
 # Glide-vs-push: stride amplitude scales above/below the speed baseline by the
 # sign of tangential acceleration — driving digs in, coasting settles to a glide.
 @export var stride_effort_ref_accel: float = 9.0  # m/s^2 of tangential accel mapping to full push effort
@@ -479,6 +494,27 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # the backward C-cut / crossover gaits on the residual, as designed.
 @export var hip_align_max_deg: float = 50.0  # cap on the hips' turn toward travel
 @export var hip_align_speed: float = 6.0     # how fast the hips settle onto the travel line
+# Pivot — the facing↔travel swap (PivotRules; the pivot block in
+# SkaterSkatingCoordinator). ψ = travel direction in the body frame; a pivot
+# is ψ transiting the lateral band at speed, driven by |dψ/dt| — facing
+# whipping against travel, which a coordinated carve (both rotating together)
+# never produces. While engaged the hips hold the entry orientation past the
+# alignment clamp, gliding the old line under the swinging torso, then step
+# around to the exit orientation over the transit's tail. Derived entirely
+# from replicated facing + velocity, so every machine reads the identical
+# pivot; phase comes from ψ itself, so an aborted swing unwinds cleanly.
+@export var pivot_band_lo_deg: float = 50.0   # ψ where the transit begins — matches hip_align_max_deg for a seamless handoff
+@export var pivot_band_hi_deg: float = 130.0  # ψ where the transit completes
+@export var pivot_rate_min: float = 2.5       # rad/s of |dψ/dt| that reads as a pivot, not a drifting cursor
+@export var pivot_min_speed: float = 2.5      # m/s floor — pivoting is a gliding move; slow spins are steps
+@export var pivot_step_begin: float = 0.6     # transit fraction where the hips step around to the exit line
+@export var pivot_depth_ramp_deg: float = 50.0  # ψ depth past the band edge over which the hold earns full authority — the aim-flick guard
+@export var pivot_commit_time: float = 0.22   # seconds ψ must DWELL in the band before full authority — a flick returns sooner, a pivot parks
+@export var pivot_yaw_speed: float = 12.0     # hip tracking ease while pivoting (hip_align_speed is too lazy to hold ψ)
+@export var pivot_stride_fade: float = 0.85   # stride suppression while engaged — pivots glide, they don't stride
+@export var pivot_stance: float = 0.8         # stance floor — the step-around needs bent knees
+@export var pivot_mohawk_deg: float = 50.0    # lead-skate external rotation at the transit's middle (heel-to-heel V); negative mirrors the lead choice
+@export var pivot_blend_speed: float = 8.0    # engage/release ease of the whole read
 # Input-intent gait reads (GaitIntentRules, v15 intent byte) — signals for
 # what the player is TRYING to do, layered over the velocity-derived gait.
 # All cosmetic; every signal derives from replicated state, so local, bot,
@@ -504,8 +540,16 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var shuffle_intensity: float = 0.6       # stride intensity floor while side-stepping
 @export var shuffle_cadence_rate: float = 3.0    # rad/s stride-phase floor for the steps
 # Backpedal: intent held behind the facing — a defender's deliberate back-skate.
+# The C-cut re-shape (sweep/tuck/pitch below): real backward skating carves
+# alternating C's with the blades never leaving the ice — the push is a lateral
+# out-and-in sweep of one leg at a time, not a fore/aft pump with a recovery
+# lift. All three fade in with the backpedal read; 0 restores the mirrored
+# forward gait.
 @export var backpedal_start: float = 0.35        # backward intent fraction where the read begins
-@export var backpedal_ccut_roll_deg: float = 6.0 # extra out-and-in leg sweep (real C-cuts)
+@export var backpedal_ccut_roll_deg: float = 6.0 # extra shared edge rock under the C-cuts
+@export var backpedal_ccut_sweep_deg: float = 8.0  # extra per-leg out-and-in flare of the pushing leg
+@export var backpedal_tuck_fade: float = 0.75    # recovery-tuck lift removed at full C-cut (blades stay down)
+@export var backpedal_pitch_fade: float = 0.4    # fore/aft pump removed at full C-cut (the push is the sweep)
 @export var backpedal_chest_deg: float = 4.0     # chest-up trunk pitch over the C-cuts
 # Glide enrichment: coasting (no keys) sways weight edge-to-edge, and a carve
 # released into a glide exits the turn on its edges (one-foot-glide read).
