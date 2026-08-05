@@ -918,8 +918,10 @@ func _check_goal_crossing() -> void:
 	# Both loose AND carried pucks are tracked: the puck is pinned to the carry
 	# target each tick (Puck._physics_process), so a stick tuck-in — the carrier
 	# pushing the puck across the line from the front of the mouth — is a real
-	# crossing. The net exclusion clamp (NetClampRules) is what gates whether the
-	# blade can get there; here we just watch the puck's path.
+	# crossing, and it needs no special-casing: the pinned puck collides with the
+	# net like any other body (SkaterController._collide_pinned_puck_with_net), so
+	# reaching the cavity by any route other than the mouth is not available to it.
+	# Here we just watch the puck's path.
 	var curr: Vector3 = puck.global_position
 	var carried: bool = puck.carrier != null
 	# Reseed on a cold tracker or a loose->carried transition: the pickup snaps
@@ -947,7 +949,7 @@ func _check_goal_crossing() -> void:
 			if carried and was_carried else _GOAL_MAX_TICK_TRAVEL
 	if _prev_puck_pos.distance_to(curr) <= max_travel:
 		for goal: HockeyGoal in goals:
-			goal.check_goal_crossing(_prev_puck_pos, curr, carried)
+			goal.check_goal_crossing(_prev_puck_pos, curr)
 	_prev_puck_pos = curr
 
 

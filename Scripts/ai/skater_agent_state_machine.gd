@@ -323,7 +323,7 @@ const CARRY_BLADE_AIM_FORWARD_M: float = 1.3
 # over CARRY_BEHIND_NET_BAND_M as it crosses the goal line) so the puck rides in a
 # tight cradle the body walks around the post with — the "carry it close and take
 # it out clean" read. This is the SOFT layer: it keeps the blade away from the
-# cage in the first place. NetClampRules on the puck pin (SkaterController) is the
+# cage in the first place. The puck pin's own net collision (SkaterController) is the
 # HARD backstop if the reach still grazes. Feel constants (hand-tuned), not an
 # evaluator. Fire-tracking (a live shot/pass look) overrides carry aim, so this
 # never blunts a real net-front shot — it only tames the behind-the-net cycle.

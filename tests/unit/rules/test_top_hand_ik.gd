@@ -336,3 +336,124 @@ func test_inner_boundary_grows_with_stick_length() -> void:
 	var near2_inner: float = Vector2(near2_blade.x - shoulder.x, near2_blade.z - shoulder.z).length()
 	assert_gt(near2_inner, near_inner * 2.0,
 			"5 cm of stick more than doubles the inner circle near the vertical limit")
+
+# ── Obstacle reach cap (max_blade_reach) ─────────────────────────────────
+# The boards intersect the ROM envelope: a blade cannot be farther from the
+# shoulder than the wall along the aim line. The cap lands on the DESIRED
+# distance before the regime split, so a wall-limited reach flows into the
+# CLOSE branch and chokes up instead of being dragged back out of FAR.
+
+func test_reach_cap_pulls_blade_to_the_limit() -> void:
+	var shoulder: Vector3 = _lefty_shoulder()
+	var cfg := _cfg()
+	cfg.max_blade_reach = 0.90
+	# Straight ahead, well past both the cap and stick_horiz_at_rest.
+	var target := Vector2(shoulder.x, shoulder.z - 3.0)
+	var blade: Vector3 = TopHandIK.project_blade(shoulder, target, -1.0, cfg)
+	var d: float = Vector2(blade.x - shoulder.x, blade.z - shoulder.z).length()
+	assert_almost_eq(d, 0.90, 0.001, "blade stops at the obstacle, not at ROM")
+
+func test_reach_cap_preserves_aim_direction() -> void:
+	var shoulder: Vector3 = _lefty_shoulder()
+	var cfg := _cfg()
+	cfg.max_blade_reach = 0.80
+	# Swept inside the angular ROM (lefty: forehand at negative deg, capped at
+	# 45°; backhand at positive, capped at 120°). Past those the aim is clamped
+	# to the boundary ray by design, which is the FAR regime's behavior, not the
+	# reach cap's — test_reach_cap_pulls_blade_to_the_limit covers distance.
+	for deg: int in range(-40, 91, 10):
+		var rad: float = deg_to_rad(float(deg))
+		var aim := Vector2(sin(rad), -cos(rad))
+		var target := Vector2(shoulder.x, shoulder.z) + aim * 3.0
+		var blade: Vector3 = TopHandIK.project_blade(shoulder, target, -1.0, cfg)
+		var got := Vector2(blade.x - shoulder.x, blade.z - shoulder.z)
+		# Inside the angular ROM the capped blade stays on the same ray.
+		assert_almost_eq(got.normalized().angle_to(aim), 0.0, 0.001,
+				"capped blade holds the aim line at %d°" % deg)
+
+func test_reach_cap_chokes_up_rather_than_shortening_the_stick() -> void:
+	var shoulder: Vector3 = _lefty_shoulder()
+	var cfg := _cfg()
+	cfg.max_blade_reach = 0.70  # inside stick_horiz_at_rest → CLOSE regime
+	var target := Vector2(shoulder.x, shoulder.z - 3.0)
+	var res: TopHandIK.Result = TopHandIK.solve(shoulder, target, -1.0, cfg)
+	assert_gt(res.hand.y, HAND_REST_Y, "hand rises — the stick tilts toward vertical")
+	assert_almost_eq((res.blade - res.hand).length(), STICK_LENGTH, 0.001,
+			"rigid stick survives the cap")
+
+func test_reach_cap_is_inert_when_slacker_than_rom() -> void:
+	var shoulder: Vector3 = _lefty_shoulder()
+	var capped := _cfg()
+	capped.max_blade_reach = 50.0
+	var target := Vector2(shoulder.x - 1.0, shoulder.z - 1.5)
+	var with_cap: Vector3 = TopHandIK.project_blade(shoulder, target, -1.0, capped)
+	var without: Vector3 = TopHandIK.project_blade(shoulder, target, -1.0, _cfg())
+	assert_almost_eq(with_cap.x, without.x, 0.0001, "far cap changes nothing (x)")
+	assert_almost_eq(with_cap.z, without.z, 0.0001, "far cap changes nothing (z)")
+
+# ── hand_for_clamped_blade ───────────────────────────────────────────────
+# Arm reconstruction for a blade an obstacle clamp has already placed. The
+# blade is authoritative, the arm stays inside ROM, and stick length yields.
+
+func test_hand_reconstruction_inverts_solve_exactly() -> void:
+	# For any blade solve() itself placed, the reconstruction must return the
+	# same hand — otherwise the pose pops the instant a clamp starts biting.
+	var cfg := _cfg()
+	for sign_i: float in [-1.0, 1.0]:
+		var shoulder: Vector3 = _lefty_shoulder() if sign_i < 0.0 else _righty_shoulder()
+		for deg: int in range(-180, 180, 15):
+			for dist: float in [0.1, 0.5, 1.0, 1.16, 1.4, 2.0, 4.0]:
+				var rad: float = deg_to_rad(float(deg))
+				var target := Vector2(shoulder.x, shoulder.z) \
+						+ Vector2(sin(rad), -cos(rad)) * dist
+				var res: TopHandIK.Result = TopHandIK.solve(shoulder, target, sign_i, cfg)
+				var hand: Vector3 = TopHandIK.hand_for_clamped_blade(
+						shoulder, Vector2(res.blade.x, res.blade.z), res.blade.y, sign_i, cfg)
+				assert_almost_eq(hand.x, res.hand.x, 0.0005,
+						"hand.x at %d° / %.2f m" % [deg, dist])
+				assert_almost_eq(hand.y, res.hand.y, 0.0005,
+						"hand.y at %d° / %.2f m" % [deg, dist])
+				assert_almost_eq(hand.z, res.hand.z, 0.0005,
+						"hand.z at %d° / %.2f m" % [deg, dist])
+
+func test_hand_never_leaves_arm_reach_for_any_clamped_blade() -> void:
+	# The failure this replaces: a clamp offset translated the hand rigidly, so
+	# it could land anywhere — including behind the shoulder, which folded the
+	# elbow through the torso. Reconstruction bounds it by ROM reach always.
+	var cfg := _cfg()
+	var shoulder: Vector3 = _lefty_shoulder()
+	for deg: int in range(-180, 180, 10):
+		for dist: float in [0.0, 0.05, 0.3, 0.9, 1.16, 1.5, 2.0, 3.0, 6.0]:
+			var rad: float = deg_to_rad(float(deg))
+			var blade_xz := Vector2(shoulder.x, shoulder.z) \
+					+ Vector2(sin(rad), -cos(rad)) * dist
+			var hand: Vector3 = TopHandIK.hand_for_clamped_blade(
+					shoulder, blade_xz, BLADE_Y, -1.0, cfg)
+			var reach: float = Vector2(hand.x - shoulder.x, hand.z - shoulder.z).length()
+			assert_lte(reach, BACK_REACH + 0.0005,
+					"hand within arm reach at %d° / %.2f m (got %.3f)" % [deg, dist, reach])
+
+func test_clamped_blade_pulled_behind_keeps_hand_in_front_of_shoulder() -> void:
+	# A carrier jammed on the boards: the blade gets clamped back to just in
+	# front of the body. The hand must come in over the shoulder and rise (choke
+	# up), never slide behind it.
+	var cfg := _cfg()
+	var shoulder: Vector3 = _lefty_shoulder()
+	var blade_xz := Vector2(shoulder.x, shoulder.z - 0.35)  # deep inside stick reach
+	var hand: Vector3 = TopHandIK.hand_for_clamped_blade(
+			shoulder, blade_xz, BLADE_Y, -1.0, cfg)
+	assert_almost_eq(hand.x, shoulder.x, 0.0005, "hand stacks over the shoulder")
+	assert_almost_eq(hand.z, shoulder.z, 0.0005, "hand does not slide behind")
+	assert_gt(hand.y, HAND_REST_Y, "hand rises — the choke-up")
+	assert_lte(hand.y, HAND_Y_MAX + 0.0005, "choke-up bounded by hand_y_max")
+
+func test_stick_length_yields_not_arm_length_when_blade_is_pinned() -> void:
+	# The priority ladder: blade stays put, arm stays in ROM, stick gives.
+	var cfg := _cfg()
+	var shoulder: Vector3 = _lefty_shoulder()
+	var blade_xz := Vector2(shoulder.x - 0.20, shoulder.z - 0.30)
+	var hand: Vector3 = TopHandIK.hand_for_clamped_blade(
+			shoulder, blade_xz, BLADE_Y, -1.0, cfg)
+	var rendered: float = (Vector3(blade_xz.x, BLADE_Y, blade_xz.y) - hand).length()
+	assert_lte(rendered, STICK_LENGTH + 0.0005,
+			"rendered shaft never exceeds the real stick — it chokes up, not stretches")

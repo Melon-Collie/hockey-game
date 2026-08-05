@@ -29,12 +29,6 @@ func _crossed(prev: Vector3, curr: Vector3, facing: float = 1.0) -> bool:
 			HALF_W, NET_H, POST_R, R, HH, DEPTH)
 
 
-func _crossed_carried(prev: Vector3, curr: Vector3, facing: float = 1.0) -> bool:
-	return GoalDetectionRules.crossed_into_net(
-			prev, curr, GOAL_Z * signf(facing), facing,
-			HALF_W, NET_H, POST_R, R, HH, DEPTH, true)
-
-
 # ── The good case ─────────────────────────────────────────────────────────────
 
 func test_clean_center_goal() -> void:
@@ -152,49 +146,49 @@ func test_diagonal_post_and_in_grazing_the_pipe_still_counts() -> void:
 
 
 # ── Carried (pinned) puck: only a real mouth crossing counts ──────────────────
-# A carried puck is teleported to the blade each tick, not collision-constrained,
-# so the "panels are solid → only route is the mouth" assumption behind the
-# cavity fallback does not hold. A carried puck must cross the actual mouth
-# opening (point_in_mouth); the endpoint-in-cavity fallback is disabled for it.
+# ── Carried pucks are not a special case ──────────────────────────────────────
+# They used to be: a pinned puck was teleported to a blade offset rather than
+# collision-constrained, so the "panels are solid → the only route in is the
+# mouth" premise behind the cavity fallback did not hold for it, and the fallback
+# was disabled via a `carried` flag. The pin is a collider now
+# (SkaterController._collide_pinned_puck_with_net), so the premise holds for it
+# exactly as for a free puck and the flag is gone. The guarantee did not weaken —
+# it MOVED, from this file to the collision that stops the pin reaching those
+# places at all (tests/unit/rules/test_net_blade_collision.gd).
 
-func test_carried_clean_mouth_tuck_still_counts() -> void:
-	# A legit wraparound / jam: the pinned puck's center crosses the goal-line
-	# plane inside the mouth. Still a goal — point_in_mouth catches it.
-	assert_true(_crossed_carried(
+func test_carried_clean_mouth_tuck_counts() -> void:
+	# A legit wraparound / jam: the pinned puck crosses the plane inside the mouth.
+	assert_true(_crossed(
 			Vector3(0.0, ICE_Y, GOAL_Z - 0.05),
 			Vector3(0.0, ICE_Y, GOAL_Z + 0.10)))
 
 
-func test_carried_tight_post_tuck_still_counts() -> void:
-	# Tucked in tight to the post but still through the opening (center x = 0.80,
-	# inside the 0.82 mouth clearance).
-	assert_true(_crossed_carried(
+func test_carried_tight_post_tuck_counts() -> void:
+	# Tight to the post but through the opening (center x = 0.80, inside the 0.82
+	# mouth clearance).
+	assert_true(_crossed(
 			Vector3(0.80, ICE_Y, GOAL_Z - 0.05),
 			Vector3(0.80, ICE_Y, GOAL_Z + 0.10)))
 
 
-func test_carried_curled_into_cavity_from_the_side_is_no_goal() -> void:
-	# The bot case: the pinned puck is dragged from beside the post into the
-	# cavity, crossing the plane at x ~0.95 (outside the 0.82 mouth) but ending
-	# its center inside the cavity. As a FREE puck this passes the cavity
-	# fallback (a plausible post-and-in); as a CARRIED puck the pin was placed
-	# there, not deflected, so it must not score.
-	assert_false(_crossed_carried(
-			Vector3(1.0, ICE_Y, GOAL_Z - 0.02),
-			Vector3(0.7, ICE_Y, GOAL_Z + 0.40)))
-	# Same segment, FREE puck: still a goal (post-and-in), so the two paths
-	# genuinely diverge and the carried flag is what gates it.
+func test_deflected_tuck_off_the_post_counts() -> void:
+	# THE BUG THE LOCKOUT COST. A carried tuck deflected in off the post is a bent
+	# path, which is precisely what the cavity fallback exists to catch — the
+	# straight sample pierces the plane in the pipe band, outside the tightened
+	# mouth. Under the old `carried` flag this could not score; a real goal was
+	# refused because the pin was not trustworthy. Now it counts.
 	assert_true(_crossed(
-			Vector3(1.0, ICE_Y, GOAL_Z - 0.02),
-			Vector3(0.7, ICE_Y, GOAL_Z + 0.40)))
+			Vector3(0.86, ICE_Y, GOAL_Z - 0.02),
+			Vector3(0.60, ICE_Y, GOAL_Z + 0.30)))
 
 
-func test_carried_behind_the_net_endpoint_in_cavity_is_no_goal() -> void:
-	# Pinned puck swung from behind-the-goal-line beside the post into the
-	# cavity: post-and-in-shaped endpoint, but carried, so no goal.
-	assert_false(_crossed_carried(
-			Vector3(0.84, ICE_Y, GOAL_Z - 0.10),
-			Vector3(0.84, ICE_Y, GOAL_Z + 0.20)))
+func test_crossing_far_outside_the_frame_is_still_no_goal() -> void:
+	# The pipe-band gate is what keeps the fallback honest, and it never depended
+	# on the carried flag: a segment piercing the plane well wide of the post
+	# never touched iron, so it came from outside a solid face.
+	assert_false(_crossed(
+			Vector3(1.30, ICE_Y, GOAL_Z - 0.02),
+			Vector3(0.70, ICE_Y, GOAL_Z + 0.40)))
 
 
 # ── False positives the old sensor allowed ────────────────────────────────────

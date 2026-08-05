@@ -15,7 +15,7 @@ namespace mitts {
 //   Scripts/domain/rules/puck_geometry_collision.gd (posts/crossbar/net panels)
 //   Scripts/domain/rules/puck_collision_rules.gd  (deflect_velocity)
 //   Scripts/domain/rules/swept_disc_obb.gd        (contact)
-//   Scripts/domain/config/game_rules.gd           (clamp_to_rink_inner)
+//   Scripts/domain/config/game_rules.gd           (clamp_to_rink_inner, with margin)
 // Those files are the behavioral reference — parity is pinned by
 // tests/unit/rules/test_native_puck_step_parity.gd; change both or neither.
 // Determinism note: host drive and client prediction must agree by
@@ -51,6 +51,7 @@ class NativePuckStep : public godot::RefCounted {
 	double net_back_half_width = 0.0;
 	double net_height = 0.0;
 	double net_crown_half_width = 0.0;
+	double net_mouth_corner_radius = 0.0;
 	double net_top_depth = 0.0;
 	double puck_half_height = 0.0;
 	double post_restitution = 0.0;
@@ -73,21 +74,25 @@ class NativePuckStep : public godot::RefCounted {
 	godot::Vector3 obb_normal;
 	double obb_depth = 0.0;
 
-	godot::Vector2 clamp_to_rink_inner(const godot::Vector2 &world_xz) const;
+	godot::Vector2 clamp_to_rink_inner(const godot::Vector2 &world_xz, double margin) const;
 	godot::Vector3 deflect_velocity_h(const godot::Vector3 &incoming, const godot::Vector3 &normal,
 			double restitution) const;
 	static godot::Vector3 reflect_3d(const godot::Vector3 &vel, const godot::Vector3 &normal,
 			double restitution);
 	void step_core(godot::Vector3 &p, godot::Vector3 &v, double dt,
 			double decel, double bounce, const godot::Vector3 &accel,
-			double max_speed_cap, double b_friction) const;
-	void step_puck_3d(godot::Vector3 &p, godot::Vector3 &v, double dt, double ice_height) const;
+			double max_speed_cap, double b_friction, double board_margin) const;
+	void step_puck_3d(godot::Vector3 &p, godot::Vector3 &v, double dt, double ice_height,
+			double puck_radius) const;
 	void advance_loose_puck(godot::Vector3 &p, godot::Vector3 &v, double dt,
-			double max_speed, double ice_height, double max_height) const;
+			double puck_radius, double max_speed, double ice_height, double max_height) const;
 	bool resolve_one_post(godot::Vector3 &p, godot::Vector3 &v, double puck_radius,
 			double post_x, double end_z) const;
 	bool resolve_posts(godot::Vector3 &p, godot::Vector3 &v, double puck_radius) const;
 	bool resolve_crossbar(godot::Vector3 &p, godot::Vector3 &v, double puck_radius) const;
+	bool resolve_crossbar_bends(godot::Vector3 &p, godot::Vector3 &v, double puck_radius) const;
+	double post_top_y() const;
+	godot::Vector3 closest_point_on_bend(const godot::Vector3 &p, double end_z) const;
 	bool resolve_top_net(const godot::Vector3 &prev, godot::Vector3 &p, godot::Vector3 &v) const;
 	double back_plane_distance(const godot::Vector3 &p) const;
 	double back_plane_norm() const;
@@ -108,7 +113,8 @@ public:
 			double p_ice_decel, double p_gravity, double p_rest_height);
 	void set_net_geometry(double p_goal_line_z, double p_net_half_width,
 			double p_net_post_radius, double p_net_depth, double p_net_back_half_width,
-			double p_net_height, double p_net_crown_half_width, double p_net_top_depth,
+			double p_net_height, double p_net_crown_half_width,
+			double p_net_mouth_corner_radius, double p_net_top_depth,
 			double p_puck_half_height, double p_post_restitution, double p_net_restitution);
 	void set_substep_params(double p_range_z, double p_substep_m, int64_t p_max_substeps);
 

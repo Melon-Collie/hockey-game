@@ -76,18 +76,7 @@ func apply_slapper_blade_position() -> void:
 			_skater.shoulder.position.x - blade_side_sign * _controller.slapper_wind_up_hand_inward * wind_up_eased,
 			_controller.hand_rest_y + _controller.slapper_wind_up_hand_up * wind_up_eased + quiver * 0.5,
 			_skater.shoulder.position.z + _controller.slapper_wind_up_hand_back * wind_up_eased - _controller.slapper_wind_up_hand_forward * wind_up_eased)
-	var hand_world: Vector3 = _skater.upper_body_to_global(hand_pos)
-	var shaft: Vector3 = clamped_heel - hand_world
-	shaft.y = 0.0
-	var contact_world: Vector3 = clamped_heel
-	if shaft.length() > 0.001:
-		contact_world = clamped_heel + shaft.normalized() * _skater.blade_length * 0.5
-	var clamped_contact: Vector3 = _ik.clamp_blade_from_net(contact_world)
-	if clamped_contact != contact_world:
-		var delta: Vector3 = clamped_contact - contact_world
-		clamped_heel += delta
-		if _controller.has_puck:
-			_controller._do_release(delta.normalized(), _controller.goalie_strip_power)
+	clamped_heel += _ik.resolve_blade_against_net(clamped_heel).offset
 	if clamped_heel != blade_world:
 		pos = _skater.upper_body_to_local(clamped_heel)
 	_skater.set_top_hand_position(hand_pos)
@@ -213,18 +202,18 @@ func _apply_wrister_whip(t: float, aim_world: Vector3) -> void:
 			_controller.stick_length * _controller.stick_length - drop * drop, 0.0001))
 	var intended_target: Vector3 = hand_pos + local_dir * horiz
 	intended_target.y = blade_y
-	# Wall + net clamps (identical to the tracked path), hand kept rigid to the stick.
+	# Wall + net clamps, identical to the tracked path — including how the arm is
+	# rebuilt afterwards. A finish that runs the blade into the boards or around a
+	# post is where the stick is furthest from the body, so the clamp correction
+	# is at its largest, and translating the hand by it is what threw the arm
+	# across the net. The blade stays where the clamps put it; the stick chokes up.
 	var local_target: Vector3 = _skater.clamp_blade_to_walls(intended_target)
-	var clamp_delta_xz := Vector3(
-			local_target.x - intended_target.x, 0.0, local_target.z - intended_target.z)
-	if clamp_delta_xz.length_squared() > 0.0:
-		hand_pos.x += clamp_delta_xz.x
-		hand_pos.z += clamp_delta_xz.z
-	var net_world: Vector3 = _ik.clamp_blade_from_net(_skater.upper_body_to_global(local_target))
-	var net_local: Vector3 = _skater.upper_body_to_local(net_world)
-	hand_pos.x += net_local.x - local_target.x
-	hand_pos.z += net_local.z - local_target.z
-	local_target = net_local
+	var ft_heel: Vector3 = _skater.upper_body_to_global(local_target)
+	local_target = _skater.upper_body_to_local(
+			ft_heel + _ik.resolve_blade_against_net(ft_heel).offset)
+	if local_target != intended_target:
+		var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
+		hand_pos = _ik.hand_for_clamped_blade(local_target, blade_side_sign)
 	_skater.set_top_hand_position(hand_pos)
 	_skater.set_blade_position(local_target)
 
@@ -311,6 +300,8 @@ func apply_slapper_follow_through() -> void:
 		hand_pos.x += dir_local.x * hand_follow
 		hand_pos.z += dir_local.z * hand_follow
 	blade_pos = _skater.clamp_blade_to_walls(blade_pos)
-	blade_pos = _skater.upper_body_to_local(_ik.clamp_blade_from_net(_skater.upper_body_to_global(blade_pos)))
+	var sft_heel: Vector3 = _skater.upper_body_to_global(blade_pos)
+	blade_pos = _skater.upper_body_to_local(
+			sft_heel + _ik.resolve_blade_against_net(sft_heel).offset)
 	_skater.set_top_hand_position(hand_pos)
 	_skater.set_blade_position(blade_pos)

@@ -38,7 +38,8 @@ void NativePuckStep::set_puck_params(double p_board_bounce, double p_board_frict
 
 void NativePuckStep::set_net_geometry(double p_goal_line_z, double p_net_half_width,
 		double p_net_post_radius, double p_net_depth, double p_net_back_half_width,
-		double p_net_height, double p_net_crown_half_width, double p_net_top_depth,
+		double p_net_height, double p_net_crown_half_width,
+		double p_net_mouth_corner_radius, double p_net_top_depth,
 		double p_puck_half_height, double p_post_restitution, double p_net_restitution) {
 	goal_line_z = p_goal_line_z;
 	net_half_width = p_net_half_width;
@@ -47,6 +48,7 @@ void NativePuckStep::set_net_geometry(double p_goal_line_z, double p_net_half_wi
 	net_back_half_width = p_net_back_half_width;
 	net_height = p_net_height;
 	net_crown_half_width = p_net_crown_half_width;
+	net_mouth_corner_radius = p_net_mouth_corner_radius;
 	net_top_depth = p_net_top_depth;
 	puck_half_height = p_puck_half_height;
 	post_restitution = p_post_restitution;
@@ -59,12 +61,16 @@ void NativePuckStep::set_substep_params(double p_range_z, double p_substep_m, in
 	max_substeps = p_max_substeps;
 }
 
-// ── GameRules.clamp_to_rink_inner (margin 0) ─────────────────────────────────
+// ── GameRules.clamp_to_rink_inner ────────────────────────────────────────────
+// `margin` insets the boundary uniformly, so a body's EDGE stops at the board
+// rather than its centre. The corner CENTRES are invariant under the inset —
+// half-width and corner radius shrink by the same amount — so the straight /
+// corner split is unchanged.
 
-Vector2 NativePuckStep::clamp_to_rink_inner(const Vector2 &world_xz) const {
-	const double half_w = inner_half_width;
-	const double half_l = inner_half_length;
-	const double corner_r = inner_corner_radius;
+Vector2 NativePuckStep::clamp_to_rink_inner(const Vector2 &world_xz, double margin) const {
+	const double half_w = inner_half_width - margin;
+	const double half_l = inner_half_length - margin;
+	const double corner_r = inner_corner_radius - margin;
 	const double ax = Math::abs((double)world_xz.x);
 	const double az = Math::abs((double)world_xz.y);
 	if (ax > corner_center_x && az > corner_center_z) {
@@ -122,7 +128,7 @@ Vector3 NativePuckStep::reflect_3d(const Vector3 &vel, const Vector3 &normal, do
 
 void NativePuckStep::step_core(Vector3 &p, Vector3 &v, double dt,
 		double decel, double bounce, const Vector3 &accel,
-		double max_speed_cap, double b_friction) const {
+		double max_speed_cap, double b_friction, double board_margin) const {
 	if (accel != Vector3()) {
 		v += accel * (real_t)dt;
 	}
@@ -136,7 +142,8 @@ void NativePuckStep::step_core(Vector3 &p, Vector3 &v, double dt,
 	}
 	p += v * (real_t)dt;
 
-	const Vector2 clamped_xz = clamp_to_rink_inner(Vector2(p.x, p.z));
+	// The puck caroms on its EDGE — see AITrajectory._step's board_margin.
+	const Vector2 clamped_xz = clamp_to_rink_inner(Vector2(p.x, p.z), board_margin);
 	if (bounce > 0.0) {
 		const Vector2 outward(p.x - clamped_xz.x, p.z - clamped_xz.y);
 		if ((double)outward.length_squared() > 1e-9) {
@@ -179,15 +186,17 @@ void NativePuckStep::step_core(Vector3 &p, Vector3 &v, double dt,
 
 // ── AITrajectory.step_puck_3d (grounded branch == step_puck) ─────────────────
 
-void NativePuckStep::step_puck_3d(Vector3 &p, Vector3 &v, double dt, double ice_height) const {
+void NativePuckStep::step_puck_3d(Vector3 &p, Vector3 &v, double dt, double ice_height,
+		double puck_radius) const {
 	const bool airborne = (double)p.y > ice_height + AIRBORNE_POS_EPS_M ||
 			Math::abs((double)v.y) > AIRBORNE_VY_EPS_M_S;
 	if (!airborne) {
-		step_core(p, v, dt, ice_decel, board_bounce, Vector3(), 0.0, board_friction);
+		step_core(p, v, dt, ice_decel, board_bounce, Vector3(), 0.0, board_friction,
+				puck_radius);
 		return;
 	}
 	step_core(p, v, dt, 0.0, board_bounce,
-			Vector3(0.0f, (real_t)-gravity, 0.0f), 0.0, board_friction);
+			Vector3(0.0f, (real_t)-gravity, 0.0f), 0.0, board_friction, puck_radius);
 	if ((double)p.y <= ice_height) {
 		p.y = (real_t)ice_height;
 		v.y = 0.0f;
@@ -197,8 +206,8 @@ void NativePuckStep::step_puck_3d(Vector3 &p, Vector3 &v, double dt, double ice_
 // ── PuckAuthorityRules.advance_loose_puck ────────────────────────────────────
 
 void NativePuckStep::advance_loose_puck(Vector3 &p, Vector3 &v, double dt,
-		double max_speed, double ice_height, double max_height) const {
-	step_puck_3d(p, v, dt, ice_height);
+		double puck_radius, double max_speed, double ice_height, double max_height) const {
+	step_puck_3d(p, v, dt, ice_height, puck_radius);
 	if ((double)v.length() > max_speed) {
 		v = v.normalized() * (real_t)max_speed;
 	}
@@ -235,7 +244,7 @@ bool NativePuckStep::resolve_posts(Vector3 &p, Vector3 &v, double puck_radius) c
 	if (Math::abs((double)p.z - end_z) > 1.0 + puck_radius + net_post_radius) {
 		return false;
 	}
-	if ((double)p.y > net_height + puck_radius) {
+	if ((double)p.y > post_top_y() + puck_radius) {
 		return false;
 	}
 	const double first_x = (double)p.x >= 0.0 ? net_half_width : -net_half_width;
@@ -243,6 +252,50 @@ bool NativePuckStep::resolve_posts(Vector3 &p, Vector3 &v, double puck_radius) c
 		return true;
 	}
 	return resolve_one_post(p, v, puck_radius, -first_x, end_z);
+}
+
+double NativePuckStep::post_top_y() const {
+	return net_height - net_mouth_corner_radius;
+}
+
+Vector3 NativePuckStep::closest_point_on_bend(const Vector3 &p, double end_z) const {
+	const double side = (double)p.x >= 0.0 ? 1.0 : -1.0;
+	const double cx = side * net_crown_half_width;
+	const double cy = post_top_y();
+	double u = MAX(((double)p.x - cx) * side, 0.0);
+	const double vv = MAX((double)p.y - cy, 0.0);
+	if (u <= 0.0 && vv <= 0.0) {
+		u = 1.0;
+	}
+	const double inv = net_mouth_corner_radius / Math::sqrt(u * u + vv * vv);
+	return Vector3((real_t)(cx + side * u * inv), (real_t)(cy + vv * inv), (real_t)end_z);
+}
+
+// Mouth-corner bends — see puck_geometry_collision.gd for the geometry and why
+// the frame is modelled in three tiling pieces (issue #598).
+bool NativePuckStep::resolve_crossbar_bends(Vector3 &p, Vector3 &v, double puck_radius) const {
+	const double ax = Math::abs((double)p.x);
+	if (ax < net_crown_half_width - puck_radius || ax > net_half_width + puck_radius) {
+		return false;
+	}
+	if ((double)p.y < post_top_y() - puck_radius || (double)p.y > net_height + puck_radius) {
+		return false;
+	}
+	const double end_z = (double)p.z >= 0.0 ? goal_line_z : -goal_line_z;
+	if (Math::abs((double)p.z - end_z) > puck_radius + net_post_radius) {
+		return false;
+	}
+	const Vector3 axis = closest_point_on_bend(p, end_z);
+	const Vector3 offset = p - axis;
+	const double d = offset.length();
+	const double combined_r = puck_radius + net_post_radius;
+	if (d >= combined_r || d < 1e-6) {
+		return false;
+	}
+	const Vector3 n = offset / (real_t)d;
+	p = axis + n * (real_t)combined_r;
+	v = reflect_3d(v, n, post_restitution);
+	return true;
 }
 
 bool NativePuckStep::resolve_crossbar(Vector3 &p, Vector3 &v, double puck_radius) const {
@@ -387,8 +440,9 @@ void NativePuckStep::step_frame_substep(const Vector3 &pos, const Vector3 &vel,
 	const Vector3 sub_prev = pos;
 	Vector3 p = pos;
 	Vector3 v = vel;
-	advance_loose_puck(p, v, sub_dt, max_speed, ice_height, max_height);
-	if (resolve_posts(p, v, puck_radius) || resolve_crossbar(p, v, puck_radius)) {
+	advance_loose_puck(p, v, sub_dt, puck_radius, max_speed, ice_height, max_height);
+	if (resolve_posts(p, v, puck_radius) || resolve_crossbar_bends(p, v, puck_radius)
+			|| resolve_crossbar(p, v, puck_radius)) {
 		out_touched_post = true;
 	}
 	if (resolve_top_net(sub_prev, p, v) || resolve_net_panels(sub_prev, p, v, puck_radius)) {
@@ -551,6 +605,7 @@ void NativePuckStep::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_net_geometry",
 			"goal_line_z", "net_half_width", "net_post_radius", "net_depth",
 			"net_back_half_width", "net_height", "net_crown_half_width",
+			"net_mouth_corner_radius",
 			"net_top_depth", "puck_half_height", "post_restitution", "net_restitution"),
 			&NativePuckStep::set_net_geometry);
 	ClassDB::bind_method(D_METHOD("set_substep_params", "range_z", "substep_m", "max_substeps"),

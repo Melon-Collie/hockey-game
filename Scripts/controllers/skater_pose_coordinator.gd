@@ -252,7 +252,20 @@ func apply_facing(input: InputState, delta: float) -> void:
 				# very committed straight line). Deterministic across replay.
 				if _controller.hit_active:
 					drag *= _controller.hit_turn_multiplier
-				facing = facing.lerp(to_mouse.normalized(), drag * delta).normalized()
+				var facing_target: Vector2 = to_mouse.normalized()
+				# Board shield: a carrier working the wall squares up ALONG it and
+				# protects the puck rather than facing into it. Gated to carrying —
+				# digging a loose puck out of the corner keeps full facing freedom,
+				# because there's nothing to shield. Pure in the skater's position and
+				# the cursor, so it re-derives identically through reconcile replay.
+				if _controller.has_puck:
+					facing_target = BoardPlayRules.board_shield_facing(
+							facing_target,
+							BoardPlayRules.board_proximity(
+									Vector2(_skater.global_position.x, _skater.global_position.z),
+									_controller.board_shield_probe),
+							deg_to_rad(_controller.board_shield_max_deg))
+				facing = facing.lerp(facing_target, drag * delta).normalized()
 		_skater.set_facing(facing)
 		var turn_delta: float = angle_difference(prev_angle, _skater.rotation.y)
 		lower_body_lag = clampf(
