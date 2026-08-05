@@ -419,6 +419,9 @@ func stage_at(pos: Vector3) -> void:
 	global_position = pos
 	linear_velocity = Vector3.ZERO
 	_pending_elevation_vel = Vector3.ZERO
+	# Drop the interpolation history so the restage isn't drawn as a smear from
+	# wherever the puck was (see SkaterController.teleport_to).
+	reset_physics_interpolation()
 
 # Direct-velocity launch used by the tutorial's staged pucks. Applies the
 # same _pending_elevation_vel treatment as release() so the drive's next tick
@@ -768,6 +771,8 @@ func _drive_analytic(dt: float) -> void:
 		global_position = Vector3(_pending_reset_xz.x, ice_height, _pending_reset_xz.y)
 		linear_velocity = Vector3.ZERO
 		_pending_reset_xz = Vector2.ZERO
+		# Faceoff / whistle staging is a jump, not motion — see stage_at.
+		reset_physics_interpolation()
 		return
 	# Pinned puck (goalie cover / glove hold) and replay playback: the pinning
 	# authority (GoalieController re-pins the position every tick; the replay driver

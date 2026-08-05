@@ -146,8 +146,12 @@ func _process(_delta: float) -> void:
 		# everything the gait wrote (stride pitch, hip yaw through crossovers /
 		# stops / pivots, the mohawk V), so crossovers scratch crossing arcs
 		# and C-cuts scratch lobes instead of two parallel rails under the
-		# body. The bone read reflects the rendered pose directly — the gait
-		# itself runs at render rate.
+		# body. blade_mark_position reads the skeleton's INTERPOLATED transform,
+		# so a stroke lands under the skate as drawn rather than up to a tick of
+		# travel ahead of it.
+		#
+		# `pos` stays the raw sim position on purpose: it only feeds the teleport
+		# guard below, which wants to compare tick states, not rendered ones.
 		var pos: Vector3 = skater.global_position
 		var left_world: Vector3 = skater.blade_mark_position(true)
 		var right_world: Vector3 = skater.blade_mark_position(false)

@@ -85,8 +85,14 @@ var _local_team_id: int = -1
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
 var _current_height: float = 15.0
+# Smoothed framing position, kept separate from global_position so shake and the
+# impact kick stay per-frame offsets instead of leaking into the smoother (see
+# Step 6c). Seeded from the scene transform in _ready so the first frame eases
+# from where the camera was authored, not from the origin.
+var _framing_position: Vector3 = Vector3.ZERO
 var _smoothed_attack_dir: float = 0.0    # lerps between -1, 0, +1 on possession change
 var _smoothed_direction_factor: float = 1.0  # lerps movement-direction bias to avoid snapping
+var _in_ozone: bool = false              # latched, see _update_in_ozone
 
 # ── Shake ─────────────────────────────────────────────────────────────────────
 var _shake_trauma: float = 0.0
@@ -207,6 +213,32 @@ func _get_attacking_direction() -> int:
 		return 0
 	return 1 if attacking_goal.defending_team_id == 0 else -1
 
+# Latches whether the attacking-zone goal fit is engaged.
+#
+# The fit is a step change — crossing in adds the goal line to the Z extent,
+# swinging `target_height` by most of the zoom range and dragging the camera's Z
+# with it through the tilt offset — so it must not chatter. A single threshold on
+# the predicted Z does chatter: prediction leads position by
+# `velocity.z * ozone_predict_time`, so a skater stopping or reversing at the line
+# swings `predicted_z` by that much while standing still, toggling the fit on
+# every direction change. Skating hard back and forth at the line pumped the zoom
+# once per reversal.
+#
+# The fix needs no margin constant. Engage on the predicted Z, because arriving
+# before the crossing is the whole point of the prediction; release on the true
+# Z. Since the two differ by exactly the prediction lead, testing the release
+# against real position cancels that term precisely: once engaged, only actually
+# retreating past the line releases it, and no change in velocity alone can.
+func _update_in_ozone(player_z: float, predicted_z: float, attack_dir: int) -> bool:
+	if attack_dir == 0:
+		_in_ozone = false
+		return false
+	var dir: float = float(attack_dir)
+	var test_z: float = player_z if _in_ozone else predicted_z
+	_in_ozone = (test_z * dir) > GameRules.BLUE_LINE_Z
+	return _in_ozone
+
+
 # The point ahead of the carrier the camera should keep in frame. Blends from
 # a fixed up-ice (attacking-direction) probe when slow toward a
 # skating-direction probe at `carry_lookahead_full_speed`, and clamps to the
@@ -280,6 +312,12 @@ static func _smooth_t(speed: float, delta: float) -> float:
 
 func _ready() -> void:
 	make_current()
+	# Framing is computed fresh every rendered frame below, so this transform is
+	# already continuous — handing it to the interpolator would lerp it toward a
+	# tick-old pose and give the camera a frame of lag it does not need. Every
+	# player-perspective cam opts out for the same reason.
+	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	_framing_position = global_position
 	# Framing runs in _process (render rate), and LocalInputGatherer's
 	# screen→world cursor read consumes this camera's transform from its own
 	# _process. Negative priority pins the camera ahead of every default-priority
@@ -323,7 +361,19 @@ func impact_kick(direction: Vector3, intensity: float) -> void:
 # Render rate, NOT the physics tick: every line below is framing (zoom fit, zone
 # bias, shake, impact kick, goal push-in, intro sweep) and nothing gameplay-side
 # reads it per tick. At 120 Hz this also CAPPED camera motion on higher-refresh
-# displays — the move is a visual improvement there, not just a saving.
+# displays.
+#
+# That uncapping has a cost worth knowing before touching anything here. Actors
+# move only on the physics tick and nothing interpolates them to the render rate,
+# so above the tick rate the camera slides between ticks while the skater is
+# held: the skater's SCREEN position sawtooths by one tick of travel, growing
+# with speed. At or below 120 fps every frame advances the same whole number of
+# ticks and it aliases away; at 240 it is visible on every second frame. So this
+# is a real improvement for the world (the rink no longer steps at 120 Hz) and a
+# real regression for the actors, and the actor half is only fixable by
+# interpolating THEM — running framing back on the tick would just move the
+# stutter onto the rink. The F3 perf page measures the sawtooth directly
+# (NetworkDebugOverlay._render_sim_phase).
 #
 # Every time-evolving term here is delta-scaled, and the exponential smoothers go
 # through _smooth_t so the feel no longer depends on the frame rate (see there).
@@ -386,6 +436,9 @@ func _process(delta: float) -> void:
 			half_span_x = 0.0
 			fit_min_z = player_pos.z
 			fit_max_z = player_pos.z
+		# Locked mode never reads the latch, so drop it rather than let it go
+		# stale — a mid-session switch back to dynamic must re-earn the goal fit.
+		_in_ozone = false
 	else:
 		# Dynamic broadcast framing: anchor on the midpoint of {player, puck}.
 		# When the carrier is attacking and the local player is past the
@@ -396,13 +449,12 @@ func _process(delta: float) -> void:
 		# instead of needing a separate `ozone_min_height` bump that wastes
 		# screen on a wider general zoom-out.
 		#
-		# `in_ozone` uses a velocity-predicted Z so the bias engages/releases
-		# before the player actually crosses the blue line, leaving time for the
-		# smoothing to settle.
+		# `in_ozone` engages on a velocity-predicted Z so the bias arrives before
+		# the player actually crosses the blue line, leaving the smoothing time to
+		# settle, and releases on the true Z (see _update_in_ozone).
 		base_center = (player_pos + puck_pos) * 0.5
 		var predicted_z: float = player_pos.z + skater.velocity.z * ozone_predict_time
-		var in_ozone: bool = attack_dir_now != 0 and \
-			(predicted_z * float(attack_dir_now)) > GameRules.BLUE_LINE_Z
+		var in_ozone: bool = _update_in_ozone(player_pos.z, predicted_z, attack_dir_now)
 		half_span_x = abs(player_pos.x - puck_pos.x) * 0.5
 		fit_min_z = minf(player_pos.z, puck_pos.z)
 		fit_max_z = maxf(player_pos.z, puck_pos.z)
@@ -542,7 +594,11 @@ func _process(delta: float) -> void:
 	var tilt_z_offset: float = raw_offset * flip_sign
 	var target_pos: Vector3 = Vector3(
 			render_center.x, render_height, render_center.z + tilt_z_offset)
-	global_position = global_position.lerp(target_pos, _smooth_t(smooth_speed, delta))
+	# Smoothed in its OWN state, not in global_position. The smoother is seeded
+	# with its previous output, so anything added to global_position downstream
+	# would be fed back in and decay at the smoothing rate instead of clearing —
+	# see the transient composition at Step 6c.
+	_framing_position = _framing_position.lerp(target_pos, _smooth_t(smooth_speed, delta))
 
 	# ── Step 5b: Apply pitch + attack-up yaw flip. Always tilted perspective. ──
 	if projection != PROJECTION_PERSPECTIVE:
@@ -551,25 +607,35 @@ func _process(delta: float) -> void:
 	rotation_degrees = Vector3(pitch, flip_y, 0.0)
 
 	# ── Step 6: Shake ─────────────────────────────────────────────────────────
+	# Accumulated into a per-frame offset rather than written onto the camera, so
+	# that this frame's noise is gone next frame (see Step 6c).
+	var transient: Vector3 = Vector3.ZERO
 	if _shake_trauma > 0.0:
 		_shake_trauma = maxf(0.0, _shake_trauma - _SHAKE_DECAY * delta)
-		global_position += Vector3(
+		transient += Vector3(
 			randf_range(-1.0, 1.0) * _shake_trauma * _SHAKE_MAG,
 			0.0,
 			randf_range(-1.0, 1.0) * _shake_trauma * _SHAKE_MAG)
 
 	# ── Step 6b: Impact kick ──────────────────────────────────────────────────
 	# Under-damped spring toward rest; the injected velocity swings the offset out
-	# and back. Added as a per-frame offset (global_position is re-derived from the
-	# framing each tick, so it never compounds).
+	# and back.
 	if _impact_kick.length_squared() > 1e-7 or _impact_kick_vel.length_squared() > 1e-7:
 		var accel: Vector3 = -_KICK_STIFFNESS * _impact_kick - _KICK_DAMPING * _impact_kick_vel
 		_impact_kick_vel += accel * delta
 		_impact_kick += _impact_kick_vel * delta
-		global_position += _impact_kick
+		transient += _impact_kick
 	else:
 		_impact_kick = Vector3.ZERO
 		_impact_kick_vel = Vector3.ZERO
+
+	# ── Step 6c: Compose ──────────────────────────────────────────────────────
+	# The one write of the framing position. Transients are added HERE rather than
+	# onto the smoother's state, which is what makes them genuinely per-frame: the
+	# shake is independent noise each frame (not a random walk that wanders off
+	# center and unwinds over the smoothing time constant), and the kick leaves
+	# nothing behind once its spring returns to rest.
+	global_position = _framing_position + transient
 
 	# ── Step 6c: Period-break wide hold ───────────────────────────────────────
 	# Ease from the live framing up to the captured wide transform and sit there

@@ -1977,6 +1977,11 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	_approach_active = false
 	skater.global_position = pos
 	skater.velocity = Vector3.ZERO
+	# Physics interpolation renders between the last two tick poses, so a jump
+	# would be drawn as a smear across the rink for one tick. Every skater
+	# discontinuity — respawn, slot swap, faceoff staging, drill restage — funnels
+	# through here, so this is the one place that has to drop the history.
+	skater.reset_physics_interpolation()
 	# Fresh legs out of a faceoff / respawn — refill the stamina pool and clear
 	# any exhaustion lockout so play resumes from a clean slate.
 	stamina = 1.0
