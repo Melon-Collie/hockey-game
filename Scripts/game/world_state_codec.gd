@@ -477,9 +477,12 @@ static func _write_skater_quantized(b: PackedByteArray, o: int, s: SkaterNetwork
 	b.encode_u8(o, clampi(roundi(s.knockdown_timer * 100.0), 0, 255)); o += 1
 	# Movement-intent byte (v15): bits [0..2] move-direction octant, bit [3]
 	# moving, bit [4] brake held, bit [5] sprint active (v16), bit [6] hit-commit
-	# (v28, the body-check brace/delivery signal). WASD is 8-way, so the octant
-	# quantization is lossless; the gait reads intent (glide / crossover anticipation
-	# / brake-gated hockey stop / sprint stride) on client-rendered remotes from this.
+	# (v28, the body-check brace/delivery signal), bit [7] wrister address side
+	# (v56 — which face of the still puck the frozen blade addresses during a
+	# wrister aim; meaningful only while shot_state == WRISTER_AIM, garbage
+	# otherwise). WASD is 8-way, so the octant quantization is lossless; the
+	# gait reads intent (glide / crossover anticipation / brake-gated hockey
+	# stop / sprint stride) on client-rendered remotes from this.
 	var intent: int = 0
 	if s.move_intent.length_squared() > 0.0025:
 		var oct: int = wrapi(roundi(atan2(s.move_intent.x, s.move_intent.y) / (PI / 4.0)), 0, 8)
@@ -490,6 +493,8 @@ static func _write_skater_quantized(b: PackedByteArray, o: int, s: SkaterNetwork
 		intent |= 0x20
 	if s.hit_committed:
 		intent |= 0x40
+	if s.wrister_address_side > 0:
+		intent |= 0x80
 	b.encode_u8(o, intent); o += 1
 	return o
 
@@ -563,6 +568,7 @@ static func _decode_skater_quantized(b: PackedByteArray, offset: int = 0) -> Ska
 	s.brake_intent = (intent & 0x10) != 0
 	s.sprint_active = (intent & 0x20) != 0
 	s.hit_committed = (intent & 0x40) != 0
+	s.wrister_address_side = 1 if (intent & 0x80) != 0 else -1
 	return s
 
 

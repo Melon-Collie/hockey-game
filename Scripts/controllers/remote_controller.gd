@@ -415,6 +415,7 @@ func _interpolate(delta: float) -> void:
 		interpolated.brake_intent = newest.brake_intent
 		interpolated.hit_committed = newest.hit_committed
 		interpolated.sprint_active = newest.sprint_active
+		interpolated.wrister_address_side = newest.wrister_address_side
 	else:
 		var from_state: SkaterNetworkState = bracket.from_state
 		var to_state: SkaterNetworkState = bracket.to_state
@@ -451,6 +452,7 @@ func _interpolate(delta: float) -> void:
 		interpolated.brake_intent = to_state.brake_intent
 		interpolated.hit_committed = to_state.hit_committed
 		interpolated.sprint_active = to_state.sprint_active
+		interpolated.wrister_address_side = to_state.wrister_address_side
 		# The hermite result sits a full interp_delay in the past (or, past the
 		# newest sample, the is_extrapolating branch dead-reckons it); the stage-3
 		# intent integration below is what carries the body toward present. Any
@@ -569,6 +571,12 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# any reader (AI off-puck, VFX) on spectated remotes.
 	skater.blade_up = state.blade_up
 	skater.current_shot_state = state.shot_state
+	# Wrister address, gated on the aim state — the wire bit is garbage
+	# otherwise. The skater's address pass adopts it so a spectated shooter's
+	# frozen blade re-addresses the same side the shooter sees (Skater
+	# .set_wrister_address_side).
+	if state.shot_state == SkaterStateMachine.State.WRISTER_AIM:
+		skater.set_wrister_address_side(state.wrister_address_side)
 	# Charge drives the stick-flex load bow (Skater._update_stick_flex reads
 	# it in WRISTER_AIM every rendered frame). It was replicated and decoded
 	# but never applied here, so remote wristers always bowed at zero charge

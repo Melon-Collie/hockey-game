@@ -19,8 +19,8 @@ extends Node3D
 # from _position_hand_markers() so it tracks live handedness flips. Both are
 # tunable — flip a sign here if a side looks wrong in the editor.
 # Resting blade tilt. Toe-lift (about X, lie angle, handedness-neutral) is kept
-# small; the face-open loft (about Z, handedness-signed — the forehand face is
-# on opposite sides for L/R) is a tiny resting cup.
+# small; the face-open loft (axial twist about the hosel line, handedness-signed
+# — the forehand face is on opposite sides for L/R) is a tiny resting cup.
 const _BLADE_TOE_LIFT_DEG: float = 4.0
 const _BLADE_FACE_OPEN_DEG: float = 4.0
 # Rigid shaft-follow pitch (see _apply_blade_tilt): the blade mesh pitches by
@@ -31,13 +31,29 @@ const _BLADE_FACE_OPEN_DEG: float = 4.0
 # the ice, the ceiling caps the wind-up apex just past shaft-aligned.
 const _BLADE_FOLLOW_PITCH_MIN_DEG: float = -18.0
 const _BLADE_FOLLOW_PITCH_MAX_DEG: float = 100.0
-# Blended in with the scroll-wheel loft level (half strength at LOW, full at
-# HIGH): the loft opens the face upward to "scoop" the puck, so elevation keys
-# off the Z loft far more than the X toe-lift. Eased via _blade_elevation_blend
-# in _physics_process so it doesn't snap.
-const _BLADE_ELEVATED_EXTRA_LOFT_DEG: float = 16.0   # about Z (handedness-signed)
+# Blended in with the scroll-wheel loft level (a third per rung, full at HIGH):
+# the loft opens the face upward to "scoop" the puck, so elevation keys off the
+# axial twist far more than the X toe-lift. Eased via _blade_elevation_blend in
+# _physics_process so it doesn't snap.
+const _BLADE_ELEVATED_EXTRA_LOFT_DEG: float = 16.0   # axial twist (handedness-signed)
 const _BLADE_ELEVATED_EXTRA_LIFT_DEG: float = 4.0    # about X (small touch of toe-lift)
 const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swing in ~0.17 s)
+# Toe-drag read. The shaft only steepens past its lie in TopHandIK's CLOSE
+# regime (the hand rising to shorten the stick's horizontal run) — in the FAR
+# regime the hand rides at rest height and the shaft holds the lie exactly, so
+# the factor is identically 0 there. Onset is ~6° past the lie (blade ≈ 0.87 m
+# from the shoulder); full at the dig clamp (≈ 0.65 m), holding full from there
+# down to the hand_y_max floor (≈ 0.28 m). Carry-only: the wrists roll the
+# face CLOSED over the puck (signed against the elevation scoop, so a drag
+# visibly cups where a loft opens) and curl the toe in around it (the
+# axial-twist sweep).
+const _BLADE_TOE_DRAG_ONSET_DEG: float = -6.0
+const _BLADE_TOE_DRAG_FULL_DEG: float = _BLADE_FOLLOW_PITCH_MIN_DEG
+const _BLADE_TOE_DRAG_ROLL_DEG: float = 20.0         # axial twist (handedness-signed)
+# Mild face close at full backhand cradle — a backhand can't roll to a
+# forehand hook, so the cradle cups instead of rolling (grammar table in the
+# push-model plan).
+const _BLADE_CRADLE_CUP_DEG: float = 8.0             # axial twist (handedness-signed)
 
 # Shoulder anchor offset from body center. The shoulder (top-hand anchor)
 # sits on the OPPOSITE side of the body from the blade: a left-handed shooter
@@ -125,20 +141,82 @@ var _face_gear_mesh: MeshInstance3D = null
 # face. Pure cosmetic — IK math, pickup distance, shot release all use the
 # centered blade contact.
 @export var carry_blade_offset: float = 0.07
-# Hysteresis distance (in upper-body-local X) the blade must travel past
-# center to flip carry side. Larger = more deliberate switches; smaller =
-# more responsive but jitters near center. While carrying, the side is
-# always ±1 — never centered.
-@export var carry_side_switch_threshold: float = 0.10
 # How fast the rendered carry factor lerps toward the discrete ±1 side.
 # Higher = snappier flip, lower = visible swing through center. ~12/s ≈ 80 ms
 # to traverse 95% of the transition.
 @export var carry_side_lerp_speed: float = 12.0
-# Peak Y lift (world meters) applied to the blade during a forehand/backhand
-# flip — peaks when the smoothed factor is at 0 (mid-flip), falls to 0 when
-# fully on either side. Reads as the blade rising over the puck as it
-# switches sides, like a real stickhandle. Set to 0 to disable.
+# Peak Y lift (world meters) of the transit hop — the blade rising over the
+# puck while the pushing face flips (see get_carry_transit_factor). Set to 0
+# to disable.
 @export var carry_transit_lift: float = 0.10
+# ── Stickhandling push model (docs/stickhandling-push-model-plan.md) ──────────
+# The blade renders on the side of the puck it is PUSHING from — the side
+# opposite the puck's motion in the carrier's frame — and inward pulls play
+# the toe-drag / heel-cradle grammar. All keyed off blade velocity relative to
+# the body, which every peer derives from the replicated pose, so the strokes
+# read identically across the lobby with no wire field.
+#
+# Lateral stroke speed (m/s in the carrier's frame) that flips the pushing
+# face. Below it the blade cradles on its current side; the threshold doubles
+# as the flip hysteresis, since re-flipping takes a genuine opposite stroke
+# back above the same bar. Sized well above interpolation noise and well
+# under a deliberate dangle stroke.
+@export var carry_flip_speed: float = 0.8
+# Inward-pull speed band (m/s toward the body) over which the pull grammar
+# ramps 0→1. The floor keeps a slow reposition a plain cradle; the ceiling
+# lands full grammar at a committed pull, still far under the dangle
+# speed cap.
+@export var carry_pull_ramp_min: float = 0.8
+@export var carry_pull_ramp_max: float = 2.5
+# Half-band (m of handedness-normalized body-local blade X) over which an
+# inward pull blends between the toe drag (forehand side) and the heel cradle
+# (backhand side), covering pulls through body centre without a seam.
+@export var carry_diagonal_band: float = 0.15
+# Ease rate (units/s) for the two pull-gesture factors — fast enough to land
+# inside a real pull (~0.13 s full swing), slow enough not to flicker on a
+# jittery stroke.
+@export var carry_gesture_ease: float = 8.0
+# Duration (s) of one transit hop. A flip that arrives while a hop is still
+# in flight rides it out rather than restarting, so a fast dangle bounces
+# once per stroke instead of hovering mid-air (the plan's trap #2).
+# Deliberately LONGER than the smoothed side factor's flip traverse
+# (~2 / carry_side_lerp_speed ≈ 0.17 s): the blade crosses at the same speed
+# but hangs before landing, which is the readable gap between blade touches —
+# release off the toe, a beat of air, the heel catch on the far face.
+@export var carry_transit_hop_time: float = 0.24
+# ── Catch/release blade geometry (mesh-only, like the wrister address) ────────
+# The visible blade slides along its own heel→toe axis so each stroke reads as
+# real contact prosody: a hard push rolls the puck out toward the TOE (the toe
+# is the last point of contact of every real stroke, so flips — which only
+# happen mid-stroke — release off the toe automatically), and the far face
+# lands HEEL-first and rolls back to the carry seat. Pure blade-mesh offsets
+# (_apply_blade_tilt): the puck stays bound to the cursor, and the marker the
+# gameplay reads is untouched.
+#
+# Toe-ward ride at full stroke speed, as a fraction of blade_length; ramps in
+# over [carry_flip_speed, carry_stroke_full_speed] of lateral stroke.
+@export var carry_stroke_toe_u: float = 0.12
+@export var carry_stroke_full_speed: float = 3.0
+# Heel-first landing offset at the instant of the catch (fraction of
+# blade_length), decaying to the seat at carry_catch_decay per second.
+@export var carry_catch_heel_u: float = 0.14
+@export var carry_catch_decay: float = 7.0
+# Commit threshold on |aim_dir · face_normal| (both unit) for the wrister
+# address flip — the aim line must sit at least ~asin(this) (~14°) off the
+# stick line before the addressed side changes, so a near-parallel aim holds
+# instead of flickering. See _update_wrister_address.
+@export var wrister_address_commit_dot: float = 0.25
+# WHERE ALONG THE BLADE the wound-up puck sits, as a fraction of blade_length
+# from the heel (0.5 = mid-blade, the un-tell'd contact point). This is the
+# diegetic readout of the loft level during a wrister wind-up: the level is
+# fictionalized as the contact point, so a defender or goalie studying a
+# committed shooter can read the elevation intent off the blade's seat and the
+# shooter can beat that read by switching levels late. Blade-mesh only
+# (_aim_seat_offset_u → _apply_blade_tilt): the BLADE slides around the frozen
+# puck, the pin never leaves the cursor. Derived per peer from the replicated
+# elevation_level and blade pose, so remote views agree.
+@export var carry_contact_flat_u: float = 0.34
+@export var carry_contact_high_u: float = 0.70
 
 # ── Arm Tuning ────────────────────────────────────────────────────────────────
 # Two-bone arm IK: shoulder → elbow → top_hand. ROM is derived from these
@@ -358,7 +436,18 @@ signal post_move_integrated()
 # Mirrors SkaterStateMachine.State for the current carrier. Updated each tick
 # by Local/RemoteController so the goalie AI can read shot-state tells (e.g.
 # SLAPPER_CHARGE_WITH_PUCK windup) without reaching across controller boundaries.
-var current_shot_state: int = 0
+#
+# Gaining or losing the puck raises _blade_tilt_dirty because the toe-drag wrist
+# roll is carry-only: possession can flip on a tick where no marker moved, and
+# _rig_pose_changed cannot see that (same reason _update_blade_elevation raises
+# it). Only the has-puck EDGE trips it — shot-state churn within a carry, which
+# is most of the traffic through here, costs a comparison.
+var current_shot_state: int = 0:
+	set(v):
+		if SkaterStateMachine.state_has_puck(v) \
+				!= SkaterStateMachine.state_has_puck(current_shot_state):
+			_blade_tilt_dirty = true
+		current_shot_state = v
 
 # Movement INTENT — the raw WASD vector (world frame) and brake hold, stamped
 # per tick by whichever controller simulates this skater (local input, bot AI,
@@ -599,13 +688,57 @@ var _slapper_zone_radius: float = 0.0
 # with the body and drops it to the ice plane.
 var _slapper_zone_offset: Vector3 = Vector3.ZERO
 var _skeleton_root_offset: float = 0.0  # see set_skeleton_root_offset
-# Sticky carry side: 0 when not carrying, +1 forehand, -1 backhand.
-# Advanced by update_carry_side() each tick from the IK pipeline.
+# Sticky carry side: 0 when not carrying, ±1 while carrying — stored in
+# forehand-normalized space (+1 = the offset lands on the forehand side for
+# either handedness), flipped by strokes in _update_carry_contact.
 var _carry_side: int = 0
 # Smoothed rendered carry factor — lerps toward _carry_side at
 # carry_side_lerp_speed. This is what get_carry_forehand_factor() returns so
 # the visible flip animates through center instead of teleporting.
 var _carry_side_smoothed: float = 0.0
+# Eased pull-grammar factors (0→1), advanced by _update_carry_contact: the
+# gestural toe drag (inward pull on the forehand diagonal — merged with the
+# positional read in get_toe_drag_factor) and the backhand heel cradle.
+var _toe_drag_gesture: float = 0.0
+var _heel_cradle: float = 0.0
+# Remaining phase (1→0) of the current transit hop; see
+# get_carry_transit_factor.
+var _transit_hop: float = 0.0
+# Eased catch/release blade-geometry blends (0→1), advanced by
+# _update_carry_contact: stroke-speed toe ride and the heel-first catch
+# transient fired when a hop lands. Both feed the mesh seat slide in
+# _apply_blade_tilt only.
+var _stroke_toe_blend: float = 0.0
+var _catch_heel_blend: float = 0.0
+# Eased 0→1 gate for the wind-up elevation seat (_aim_seat_offset_u) — 1 while
+# in WRISTER_AIM, so the seat tell slides in with the commit and back out with
+# the release instead of snapping on the state edge.
+var _aim_seat_blend: float = 0.0
+# ── Wrister address (see set_wrister_address) ─────────────────────────────────
+# The live aim line (origin→cursor, world XZ), pushed per aim tick by the
+# controller. The shot is a push along this line, so the frozen blade
+# addresses the side of the puck it will push from — the same trailing-side
+# rule strokes use, which is what makes the address geometric and
+# handedness-free: it tracks where the aim actually is, not a body-relative
+# hand label (a label-keyed side sat on the wrong side of the puck whenever
+# the aim line disagreed with the natural pose for that hand). valid is false
+# on peers that never receive the push (client-rendered remotes), which keep
+# the frozen entry pose rather than guessing.
+var _wrister_address_dir: Vector3 = Vector3.ZERO
+var _wrister_address_valid: bool = false
+# Eased blade-address factor in face-normal space (get_carry_forehand_factor's
+# units). Outside a wrister aim it is pinned to the live carry factor (zero
+# offset); during the aim it eases toward the addressed side, and the delta to
+# the live factor slides the blade MESH over the still puck (_apply_blade_tilt).
+var _address_factor: float = 0.0
+# Committed address side in face-normal sign space (0 = unseeded). Flipped by
+# CarryContactRules.stroke_side over the aim-line dot on simulating peers, or
+# adopted from the wire-staged target on render-only remotes; a change is the
+# crossing that fires the transit hop.
+var _wrister_address_side: int = 0
+# Wire-staged side from set_wrister_address_side (0 = none staged) — adopted
+# by _update_wrister_address so crossings are detected in one place.
+var _wrister_address_target_side: int = 0
 # Visual-only offset applied to MeshRoot each frame. Set by LocalController
 # during reconcile blending to ease the visible correction over a few ticks.
 # The body itself is always at the authoritative position.
@@ -815,12 +948,14 @@ func _physics_process(delta: float) -> void:
 	_forced_lift_timer = maxf(_forced_lift_timer - delta, 0.0)
 	_update_blade_lift(delta)
 	_update_commit_lift(delta)
+	_update_carry_contact(delta)
 	# Position + velocity are now fully settled for this tick (integration,
 	# body-check resolution, and the containment clamps above have all run).
 	# The local controller captures its reconcile prediction snapshot here so it
 	# reads the same post-integration state the host broadcasts (see the signal
-	# doc-comment). Blade elevation/lift above is cosmetic and doesn't touch the
-	# body position/velocity/upper-body fields the snapshot records.
+	# doc-comment). The blade elevation/lift/carry-contact blends above are
+	# cosmetic and don't touch the body position/velocity/upper-body fields the
+	# snapshot records.
 	post_move_integrated.emit()
 	HostCostProbe.record(HostCostProbe.Section.SKATER_PHYS, Time.get_ticks_usec() - _t0)
 
@@ -1068,20 +1203,73 @@ func _position_hand_markers() -> void:
 	_apply_blade_tilt()
 
 
+# How far the blade has pitched off its built-in lie, in degrees, clamped to the
+# render bounds. The blade is rigidly attached to the shaft, so it pitches by
+# (blade_lie_deg − live shaft angle): ~0 at the rest lie (blade flat on the ice),
+# POSITIVE toe-up when the stick rises (slapshot wind-up, stick lift, high
+# follow-through finish) so the blade stays on the shaft line instead of floating
+# ice-parallel at the tip of a steep shaft, NEGATIVE toe-down when the cursor
+# pulls the blade in close and the shaft steepens past its lie.
+#
+# A pure function of the current hand/blade markers, which are replicated (and
+# interpolated) on remotes — so every peer derives the same pitch, and anything
+# keyed to it agrees across the lobby without its own wire field.
+func _shaft_follow_pitch_deg() -> float:
+	if top_hand == null or blade == null:
+		return 0.0
+	var shaft: Vector3 = blade.position - top_hand.position
+	var horiz: float = Vector2(shaft.x, shaft.z).length()
+	if horiz <= 0.001 and absf(shaft.y) <= 0.001:
+		return 0.0
+	var shaft_pitch_deg: float = rad_to_deg(atan2(-shaft.y, horiz))
+	return clampf(blade_lie_deg - shaft_pitch_deg,
+			_BLADE_FOLLOW_PITCH_MIN_DEG, _BLADE_FOLLOW_PITCH_MAX_DEG)
+
+
+# 0→1 "the puck has come in under the body" factor. Two reads merged by max,
+# both meaning the same posture (toe hooked over the puck, wrists rolled):
+#   positional — the shaft steepened past its lie (see _BLADE_TOE_DRAG_*), the
+#   stick tucked in tight at the feet;
+#   gestural — a live inward pull on the forehand diagonal (_toe_drag_gesture,
+#   advanced by _update_carry_contact), which fires out at full reach too,
+#   where the shaft never steepens.
+# Drives the wrist-roll twist in _apply_blade_tilt.
+#
+# Carry-only, like the forehand/backhand side and its transit lift: a toe drag
+# is a puckhandling move, not a consequence of shaft angle, so an empty-handed
+# player who tucks the stick in tight keeps a square blade.
+func get_toe_drag_factor() -> float:
+	if not SkaterStateMachine.state_has_puck(current_shot_state):
+		return 0.0
+	var positional: float = clampf(
+			inverse_lerp(_BLADE_TOE_DRAG_ONSET_DEG, _BLADE_TOE_DRAG_FULL_DEG,
+					_shaft_follow_pitch_deg()),
+			0.0, 1.0)
+	return maxf(positional, _toe_drag_gesture)
+
+
 # Sets the cosmetic blade-mesh orientation — never the Blade marker the
 # puck-contact math reads (set_blade_position / get_blade_contact_global).
 # Three composed reads:
-#   1. Shaft-follow pitch: the blade is rigidly attached to the shaft, so it
-#      pitches by (blade_lie_deg − live shaft angle). At the rest lie that's
-#      ~0 (blade flat on the ice); when the stick rises (slapshot wind-up,
-#      stick lift, high follow-through finish) the blade tips toe-up and stays
-#      on the shaft line instead of floating ice-parallel at the tip of a
-#      steep shaft; when the cursor pulls the blade in close (steep shaft) it
-#      digs slightly toe-down — the toe-drag read. Clamped by the
-#      _BLADE_FOLLOW_PITCH_* bounds.
+#   1. Shaft-follow pitch (_shaft_follow_pitch_deg) — the rigid shaft attachment.
 #   2. Resting toe-lift + the scroll-loft elevation extras (about X).
-#   3. Face-open loft (about Z, handedness-signed — the forehand face is on
-#      opposite sides for L/R shots).
+#   3. Axial twist about the hosel axis (handedness-signed): every face-angle
+#      dressing composed into one wrist rotation — the resting cup, the loft
+#      level's scoop, the toe-drag roll, and the backhand-cradle cup, the last
+#      two closing against the first two on purpose (a lofted blade cups under
+#      the puck, a dragged one rolls over the top of it).
+# The twist axis is the one a real wrist roll has: a blade has no degrees of
+# freedom relative to the shaft, so every face rotation is the whole stick
+# twisting about its own line. Structurally load-bearing, not flavor — the
+# hosel tip (the point update_stick_mesh aims the shaft at) LIES ON that axis,
+# so it is invariant under any twist angle: the shaft→blade junction cannot
+# kink and the shaft never swings when a dressing engages. Rotating the same
+# angles about a heel-local axis instead (as this used to, about Z and Y)
+# dragged the tip off the shaft line by up to a few cm at full toe drag. The
+# twist also sweeps the toe horizontally (~7 cm at 20°) — the drag curl the
+# overhead camera reads. The one remaining junction bend is the follow-pitch
+# clamp at its floor/ceiling, which is deliberate (the dig floor keeps the toe
+# out of the ice).
 # The mesh is heel-origin (StickBladeMeshBuilder), so the rotation pivots
 # about the heel and the shaft→blade junction stays pinned at any pitch.
 # Idempotent (recomputed from identity each call, scale preserved — the
@@ -1090,25 +1278,45 @@ func _position_hand_markers() -> void:
 func _apply_blade_tilt() -> void:
 	if _blade_mesh_instance == null or not is_instance_valid(_blade_mesh_instance):
 		return
-	var follow_pitch_deg: float = 0.0
-	if top_hand != null and blade != null:
-		var shaft: Vector3 = blade.position - top_hand.position
-		var horiz: float = Vector2(shaft.x, shaft.z).length()
-		if horiz > 0.001 or absf(shaft.y) > 0.001:
-			var shaft_pitch_deg: float = rad_to_deg(atan2(-shaft.y, horiz))
-			follow_pitch_deg = clampf(blade_lie_deg - shaft_pitch_deg,
-					_BLADE_FOLLOW_PITCH_MIN_DEG, _BLADE_FOLLOW_PITCH_MAX_DEG)
-	# Loft sign: opens the forehand face upward. Flipped from the usual
+	var follow_pitch_deg: float = _shaft_follow_pitch_deg()
+	# Twist sign: opens the forehand face upward. Flipped from the usual
 	# blade_side_sign convention so the cup tilts the right way for each hand.
 	var blade_side_sign: float = 1.0 if is_left_handed else -1.0
+	var drag: float = get_toe_drag_factor()
 	var toe_lift: float = _BLADE_TOE_LIFT_DEG + follow_pitch_deg \
 			+ _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LIFT_DEG
-	var loft: float = (_BLADE_FACE_OPEN_DEG + _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LOFT_DEG) * blade_side_sign
-	var rot: Basis = Basis.IDENTITY \
-			.rotated(Vector3.RIGHT, deg_to_rad(toe_lift)) \
-			.rotated(Vector3.BACK, deg_to_rad(loft))
+	var twist: float = (_BLADE_FACE_OPEN_DEG \
+			+ _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LOFT_DEG \
+			- drag * _BLADE_TOE_DRAG_ROLL_DEG \
+			- _heel_cradle * _BLADE_CRADLE_CUP_DEG) * blade_side_sign
+	var pitch_basis: Basis = Basis.IDENTITY.rotated(Vector3.RIGHT, deg_to_rad(toe_lift))
+	# Hosel axis (StickBladeMeshBuilder._add_hosel: (0, sin lie, cos lie) in
+	# blade-local space), carried through the pitch so the twist stays about
+	# the pitched shaft line.
+	var lie_rad: float = deg_to_rad(blade_lie_deg)
+	var hosel_axis: Vector3 = pitch_basis * Vector3(0.0, sin(lie_rad), cos(lie_rad))
+	var rot: Basis = pitch_basis.rotated(hosel_axis, deg_to_rad(twist))
 	var keep_scale: Vector3 = _blade_mesh_instance.transform.basis.get_scale()
 	_blade_mesh_instance.transform.basis = rot.scaled(keep_scale)
+	# Mesh-only slides (never the marker; the shaft follows for free, since
+	# update_stick_mesh aims it at the hosel tip through this transform):
+	#   X — wrister-address slide along the face-normal axis, addressing the
+	#   hand the release will fire as. Marker local +X IS the face normal
+	#   (set_blade_position aims marker −Z along the shaft, so +X is its 90°
+	#   Y-rotation, the same axis get_carry_target_global offsets the pin
+	#   along). Zero outside an aim (_address_factor pins to the live factor).
+	#   Z — seat along the blade's own heel→toe axis (the mesh extends
+	#   toe-ward along −Z, so a heel-ward +Z shift seats the puck nearer the
+	#   toe): a hard stroke rides the puck out to the toe, a landing hop
+	#   catches heel-first and rolls back, and a wrister wind-up seats the
+	#   frozen puck per the loft level (_aim_seat_offset_u — the elevation
+	#   tell). Blade-mesh prosody only — the puck stays bound to the cursor.
+	_blade_mesh_instance.position = Vector3(
+			(_address_factor - get_carry_forehand_factor()) * carry_blade_offset,
+			0.0,
+			(_stroke_toe_blend * carry_stroke_toe_u
+					- _catch_heel_blend * carry_catch_heel_u
+					+ _aim_seat_offset_u()) * blade_length)
 
 
 # (Re)generates the procedural curved blade mesh (and the tape band riding it,
@@ -1588,9 +1796,8 @@ func get_blade_contact_global() -> Vector3:
 
 
 # Smoothed rendered factor in [−1, +1]. Discrete _carry_side is sticky
-# (forehand/backhand never centered while carrying); this lerps toward it
-# so flips animate through center over carry_side_lerp_speed instead of
-# teleporting.
+# (never centered while carrying); this lerps toward it so flips animate
+# through center over carry_side_lerp_speed instead of teleporting.
 #
 # Sign convention is mirrored between handednesses so the visual offset
 # direction (applied by SkaterIKCoordinator and get_carry_target_global)
@@ -1603,32 +1810,243 @@ func get_carry_forehand_factor() -> float:
 	return _carry_side_smoothed * handedness_sign
 
 
-# Called once per tick from SkaterIKCoordinator.apply_blade_from_mouse —
-# advances the sticky carry-side state and lerps the rendered factor.
-# Hysteresis prevents flip-flopping near center; on first carry frame the
-# side initializes from current blade position (defaults to forehand if
-# exactly centered). On release the discrete target falls to 0, so the
-# smoothed factor eases the visible offset back to center over the lerp.
-func update_carry_side(has_puck: bool, delta: float) -> void:
-	if not has_puck:
+# 0→1→0 envelope of the current transit hop — the blade rising over the puck
+# while the pushing face flips to the other side. sin over the linear phase
+# peaks mid-hop and lands at zero on both ends, so hops never pop; consumed by
+# the transit-lift block in SkaterIKCoordinator.apply_blade_from_mouse.
+func get_carry_transit_factor() -> float:
+	return sin(PI * _transit_hop)
+
+
+# Push the wrister's live aim line onto the skater — called every WRISTER_AIM
+# tick by SkaterController._apply_wrister_aim_blade with _wrister_aim_dir's
+# answer (origin→cursor for humans, the committed direction for bots). The
+# address pass in _update_carry_contact consumes it so the wound-up blade
+# visibly addresses the side of the still puck the shot will push from: a
+# carrier who froze on the backhand and then aims a forehand sees the blade
+# hop over the puck onto the shot line's trailing side. Runs on the owning
+# client and on the host (which drives remote skaters from input), so every
+# simulating peer shows it; render-only remotes never receive the push and
+# keep the frozen entry pose (valid stays false).
+func set_wrister_address(aim_dir: Vector3) -> void:
+	_wrister_address_dir = aim_dir
+	_wrister_address_valid = true
+
+
+# The replicated form of the push, for client-rendered remotes: the committed
+# side arrives off the wire (SkaterNetworkState.wrister_address_side, computed
+# by the host running this same model) instead of being derived from an aim
+# line the client doesn't have. Stages the side; _update_wrister_address
+# adopts it, so the hop-on-crossing detection lives in one place for both
+# sources. Caller gates on shot_state == WRISTER_AIM — the wire value is
+# garbage outside it.
+func set_wrister_address_side(side: int) -> void:
+	_wrister_address_target_side = side
+	_wrister_address_dir = Vector3.ZERO
+	_wrister_address_valid = true
+
+
+# The committed address side for the wire (±1; 0 before the first aim tick
+# seeds it, which fill_network_state maps to the forehand bit state).
+func get_wrister_address_side() -> int:
+	return _wrister_address_side
+
+
+# The stickhandling push model (docs/stickhandling-push-model-plan.md): the
+# blade renders on the side of the puck it is PUSHING from — the side opposite
+# the puck's motion in the carrier's frame — and an inward pull plays the
+# toe-drag / heel-cradle grammar, because no blade face points back at the
+# carrier: pulling requires hooking the toe over the puck.
+#
+# Keyed off blade_world_velocity − velocity, both derived on every peer from
+# the replicated pose, so this runs identically for local, AI, and remote
+# skaters (called from _physics_process, not the IK pipeline) and remote views
+# read the same strokes with no wire field. The velocity is one tick stale
+# relative to the pose being placed this tick — invisible under the gesture
+# ease. Live-only, never replayed: pure cosmetic smoothing memory, absorbed
+# across reconcile snaps like every other blend here.
+func _update_carry_contact(delta: float) -> void:
+	var drag_target: float = 0.0
+	var cradle_target: float = 0.0
+	var stroke_toe_target: float = 0.0
+	if not SkaterStateMachine.state_has_puck(current_shot_state):
 		_carry_side = 0
 	else:
-		var handedness_sign: float = -1.0 if is_left_handed else 1.0
-		var blade_x_norm: float = blade.position.x * handedness_sign
-		if _carry_side == 0:
-			_carry_side = -1 if blade_x_norm < 0.0 else 1
-		elif _carry_side > 0 and blade_x_norm < -carry_side_switch_threshold:
-			_carry_side = -1
-		elif _carry_side < 0 and blade_x_norm > carry_side_switch_threshold:
-			_carry_side = 1
+		var stick: Vector3 = get_blade_contact_global() - top_hand.global_position
+		stick.y = 0.0
+		if stick.length_squared() > 0.000001:
+			stick = stick.normalized()
+			# Same axes get_carry_target_global offsets along, so the stroke
+			# read and the rendered offset can never disagree on direction.
+			var face_normal := Vector3(-stick.z, 0.0, stick.x)
+			var v_rel: Vector3 = blade_world_velocity - velocity
+			var v_perp: float = v_rel.dot(face_normal)
+			var v_in: float = -v_rel.dot(stick)
+			# Two handedness signs, matching the pair the old position key used:
+			# factor space (get_carry_forehand_factor's mirror) converts the
+			# stroke solver's geometric side to/from forehand-normalized
+			# storage; position space normalizes body-local X so positive is
+			# the blade's natural side.
+			var factor_hs: int = 1 if is_left_handed else -1
+			var pos_hs: float = -1.0 if is_left_handed else 1.0
+			var body_x_norm: float = blade.position.x * pos_hs
+			if _carry_side == 0:
+				# First carry tick: no stroke yet — cradle on the body side the
+				# puck was picked up on (forehand if exactly centered).
+				_carry_side = -1 if body_x_norm < 0.0 else 1
+			else:
+				var sign_now: int = _carry_side * factor_hs
+				var sign_new: int = CarryContactRules.stroke_side(
+						sign_now, v_perp, carry_flip_speed)
+				if sign_new != sign_now:
+					_carry_side = sign_new * factor_hs
+					# One hop per flip; a flip during a live hop rides it out,
+					# so a fast dangle bounces per stroke instead of hovering.
+					if _transit_hop <= 0.0:
+						_transit_hop = 1.0
+			var pull: float = CarryContactRules.pull_gesture(
+					v_in, carry_pull_ramp_min, carry_pull_ramp_max)
+			var forehand_w: float = CarryContactRules.forehand_weight(
+					body_x_norm, carry_diagonal_band)
+			drag_target = pull * forehand_w
+			cradle_target = pull * (1.0 - forehand_w)
+			# Stroke-speed toe ride: a hard lateral push rolls the puck out
+			# along the curve toward the toe. Ramps in above the flip
+			# threshold so a cradle stays seated; because flips only fire
+			# mid-stroke, every release leaves off the toe by construction.
+			stroke_toe_target = CarryContactRules.pull_gesture(
+					absf(v_perp), carry_flip_speed, carry_stroke_full_speed)
 	_carry_side_smoothed = lerpf(
 			_carry_side_smoothed, float(_carry_side), carry_side_lerp_speed * delta)
+	var hop_was_live: bool = _transit_hop > 0.0
+	_transit_hop = maxf(_transit_hop - delta / carry_transit_hop_time, 0.0)
+	if hop_was_live and _transit_hop <= 0.0 \
+			and SkaterStateMachine.state_has_puck(current_shot_state):
+		# The hop just landed on the far face: the catch. Heel-first, rolling
+		# back to the carry seat as the blend decays.
+		_catch_heel_blend = 1.0
+	var new_drag: float = move_toward(_toe_drag_gesture, drag_target, carry_gesture_ease * delta)
+	var new_cradle: float = move_toward(_heel_cradle, cradle_target, carry_gesture_ease * delta)
+	var new_stroke: float = move_toward(
+			_stroke_toe_blend, stroke_toe_target, carry_gesture_ease * delta)
+	var new_catch: float = move_toward(_catch_heel_blend, 0.0, carry_catch_decay * delta)
+	var aim_seat_target: float = 1.0 \
+			if current_shot_state == SkaterStateMachine.State.WRISTER_AIM else 0.0
+	var new_aim_seat: float = move_toward(
+			_aim_seat_blend, aim_seat_target, carry_gesture_ease * delta)
+	if new_drag != _toe_drag_gesture or new_cradle != _heel_cradle \
+			or new_stroke != _stroke_toe_blend or new_catch != _catch_heel_blend \
+			or new_aim_seat != _aim_seat_blend:
+		# The gesture factors tilt/slide the blade mesh without moving any
+		# marker, so the render-rate rig pass can't see the change — same
+		# escape as _update_blade_elevation.
+		_blade_tilt_dirty = true
+	_toe_drag_gesture = new_drag
+	_heel_cradle = new_cradle
+	_stroke_toe_blend = new_stroke
+	_catch_heel_blend = new_catch
+	_aim_seat_blend = new_aim_seat
+	_update_wrister_address(delta)
+
+
+# The wrister-address pass: while the blade is frozen in a wrister aim, the
+# visible blade addresses the side of the still puck the shot will push from —
+# the push model applied to the shot line. The trailing side of D (origin→
+# cursor) in face-normal space is −sign(D·N), which is exactly the stroke rule,
+# so CarryContactRules.stroke_side decides it with the aim-line dot as the
+# stroke and the commit threshold as the hysteresis (a near-parallel aim, D
+# almost along the stick, holds the current side instead of flickering). The
+# delta between the eased address factor and the live carry factor slides the
+# blade MESH along the face-normal axis in _apply_blade_tilt; the marker, pin,
+# release spawn, and aim line are untouched, so the fix is visually complete
+# and gameplay-inert. Geometric and handedness-free: the address tracks where
+# the aim actually is, so it cannot land on the wrong side of the puck.
+#
+# On aim exit the address becomes the real carry side (the arrangement the
+# player last saw), so the mesh offset collapses to zero with no pop and the
+# post-release ease starts from the addressed pose.
+func _update_wrister_address(delta: float) -> void:
+	var in_aim: bool = current_shot_state == SkaterStateMachine.State.WRISTER_AIM \
+			and _wrister_address_valid
+	if not in_aim:
+		if _wrister_address_valid:
+			# Just left the aim: adopt the addressed arrangement as the carry side.
+			_wrister_address_valid = false
+			var factor_hs: float = 1.0 if is_left_handed else -1.0
+			_carry_side_smoothed = _address_factor * factor_hs
+			if _carry_side != 0:
+				_carry_side = -1 if _carry_side_smoothed < 0.0 else 1
+		_address_factor = get_carry_forehand_factor()
+		_wrister_address_side = 0
+		_wrister_address_target_side = 0
+		return
+	var prev_side: int = _wrister_address_side
+	var aim: Vector3 = _wrister_address_dir
+	aim.y = 0.0
+	var stick: Vector3 = get_blade_contact_global() - top_hand.global_position
+	stick.y = 0.0
+	if aim.length_squared() > 0.000001 and stick.length_squared() > 0.000001:
+		# Simulating peer: derive the side from the aim line.
+		aim = aim.normalized()
+		stick = stick.normalized()
+		var face_normal := Vector3(-stick.z, 0.0, stick.x)
+		var seed: int = _wrister_address_side
+		if seed == 0:
+			# Seed from the entry arrangement so an aim that already trails
+			# the blade re-addresses nothing.
+			seed = -1 if _address_factor < 0.0 else 1
+		_wrister_address_side = CarryContactRules.stroke_side(
+				seed, aim.dot(face_normal), wrister_address_commit_dot)
+	elif _wrister_address_target_side != 0:
+		# Render-only remote: adopt the host's committed side off the wire.
+		_wrister_address_side = _wrister_address_target_side
+	# The crossing fires the same one-per-flip transit hop as a stroke —
+	# against the previous committed side, or on the first commit against the
+	# entry arrangement (committing LMB onto the other face).
+	var reference: int = prev_side
+	if reference == 0 and absf(_address_factor) > 0.0001:
+		reference = -1 if _address_factor < 0.0 else 1
+	if reference != 0 and _wrister_address_side != 0 \
+			and _wrister_address_side != reference:
+		if _transit_hop <= 0.0:
+			_transit_hop = 1.0
+	var new_addr: float = _address_factor
+	if _wrister_address_side != 0:
+		new_addr = move_toward(
+				_address_factor, float(_wrister_address_side), carry_side_lerp_speed * delta)
+	if new_addr != _address_factor:
+		_blade_tilt_dirty = true  # the mesh offset moves without any marker
+	_address_factor = new_addr
+
+
+# Where along the blade the carried puck rides, as a fraction of blade_length
+# from the heel — the contact-point tell. 0.5 (mid-blade, i.e. no offset) when
+# not carrying, so the non-carry consumers of get_carry_target_global() see the
+# plain blade contact they always did.
+#
+# Where along the blade the WOUND-UP puck sits, as a signed offset from
+# mid-blade in fractions of blade_length — the contact-point tell, told the
+# way every other tell here is told: the BLADE slides around the still puck
+# (mesh channel, _apply_blade_tilt), never the puck off the cursor. Scoped to
+# the wrister wind-up (_aim_seat_blend eases it in and out of WRISTER_AIM):
+# that is where the read matters — the goalie/defender studying a committed
+# shooter — and a plain carry keeps the puck exactly at the cursor with a
+# mid-blade seat, so stickhandling never fights the mouse binding. Eased
+# through _blade_elevation_blend, so a level switch slides the blade along
+# the puck instead of teleporting — that ease is the deception window, since
+# the read lands a beat after the commit.
+func _aim_seat_offset_u() -> float:
+	return (lerpf(carry_contact_flat_u, carry_contact_high_u, _blade_elevation_blend) - 0.5) \
+			* _aim_seat_blend
 
 
 # Where the puck pins while carrying. The blade marker is shifted to the
 # forehand/backhand side via the IK target (so the stick visibly attaches to
 # the offset blade). The puck sits at the un-offset position — adjacent to
-# the blade on the opposite face, where the cursor effectively is.
+# the blade on the opposite face, where the cursor effectively is. All the
+# heel→toe contact storytelling (elevation seat, stroke prosody, catches)
+# lives on the blade MESH instead (_apply_blade_tilt), so this pin never
+# drifts off the cursor.
 # Pure derivation: contact − face_normal × forehand_factor × carry_blade_offset.
 # Returns get_blade_contact_global() (centered) when not carrying or when
 # the geometry is degenerate, so existing non-carry consumers are unaffected.
@@ -1989,8 +2407,8 @@ func update_stick_mesh() -> void:
 #
 # Reads only the rendered stick pose, which every machine reconstructs from the
 # replicated blade/hand markers, so the bow direction agrees across the lobby.
-# (The carry side this used to key off does not: update_carry_side runs from the
-# IK pipeline, which never touches a client-rendered remote.)
+# (The carry side it used to key off now also updates per-peer, but it is
+# smoothing state a beat behind the pose — the marker read is frame-exact.)
 func _solve_stick_flex_axis(shaft_dir: Vector3) -> float:
 	var horiz: float = sqrt(shaft_dir.x * shaft_dir.x + shaft_dir.z * shaft_dir.z)
 	if horiz < 0.0001:

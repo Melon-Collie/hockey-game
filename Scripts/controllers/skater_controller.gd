@@ -1710,6 +1710,10 @@ func fill_network_state(state: SkaterNetworkState) -> void:
 	# is upper-body-local and can't be used for host-side world geometry.
 	state.top_hand_world = skater.upper_body_to_global(skater.get_top_hand_position())
 	state.shot_state = _sm.get_state() as int
+	# Meaningful only while shot_state == WRISTER_AIM (one bit on the wire, no
+	# validity flag): the unseeded 0 maps to forehand, matching the address
+	# pass's own forehand seed on the first aim tick.
+	state.wrister_address_side = 1 if skater.get_wrister_address_side() >= 0 else -1
 	# The normalized 0..1 charge (skater.shot_charge covers the wrister's
 	# predicted release power AND slapper wind-up), in the u8 codec range.
 	# Consumed on the receive side by the cosmetic pose layers (stick flex,
@@ -2378,6 +2382,10 @@ func _apply_wrister_aim_blade(input: InputState, delta: float) -> void:
 	if offset.length_squared() > 0.0001:
 		hold_target = skater.global_position + offset
 		hold_target.y = 0.0
+	# Feed the live aim line so the frozen blade visibly addresses the side of
+	# the puck the shot will push from (Skater.set_wrister_address). Re-read
+	# per tick: an aim swung across the stick line re-addresses on the spot.
+	skater.set_wrister_address(_wrister_aim_dir(input))
 	_ik.apply_blade_from_mouse(input, delta, true, hold_target)
 
 # Bearing the swing-chirality tracker seeds from at charge start: origin→cursor,

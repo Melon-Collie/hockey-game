@@ -908,8 +908,11 @@ func _pin_puck_to_carrier(carrier: Skater, delta: float) -> void:
 	# puck feels weighty during stickhandling rather than teleporting instantly to
 	# the blade tip. Carry target is the un-offset contact (= cursor position on the
 	# owning client) so the puck stays under the cursor while the blade renders to
-	# the forehand or backhand side; on a remote skater the forehand factor is 0 so
-	# it cleanly reduces to the interpolated blade contact.
+	# the pushing side. Every peer runs the same motion-keyed carry-contact model
+	# (Skater._update_carry_contact, fed by the replicated pose), so a remote view
+	# reproduces the carrier's blade-beside-puck arrangement too;
+	# a peer flipping the pushing side a beat earlier or later than the owner is
+	# absorbed by the factor smoothing under this same lerp.
 	var contact: Vector3 = carrier.get_carry_target_global()
 	contact.y = puck.ice_height
 	# SNAP ON THE SLAPSHOT PIN, don't smooth into it. Entering a slapper charge

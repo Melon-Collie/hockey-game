@@ -179,6 +179,13 @@ pass). Benchmarks after (rung iteration is 3× the v2 solve — still trivial).
 1. Playtest the ladder values (§1 table is the tuning surface).
 2. The goalie high-game complement (pre-arm read) if mastered static snipes
    still feel free — issue #597.
-3. The contact-point visual tell (puck rides heel→toe) — replaces chevrons
-   eventually, makes the level readable to the defense — issue #596.
+3. The contact-point visual tell — LANDED, reworked after playtest to the
+   wind-up-only, blade-moves form (`Skater._aim_seat_offset_u`, issue #596):
+   during a wrister wind-up the BLADE seats the frozen puck heel→toe per the
+   level (mesh channel; the puck never leaves the cursor), joined by a toe
+   drag that rolls the face closed over the puck. A plain carry shows no
+   seat — the read matters when a shooter has committed, which is also when
+   the goalie pre-arm will consume it. The chevrons still ship alongside;
+   whether they shrink to a local-only affordance or retire outright is a
+   playtest call now that the level is readable off a wound-up blade.
 4. Crossbar corner-arc collision + drill-target audit — issue #598.

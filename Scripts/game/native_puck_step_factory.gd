@@ -11,6 +11,18 @@ class_name NativePuckStepFactory
 # GDScript step.
 
 
+# Argument count of set_net_geometry once the mouth-corner bends landed.
+const NET_GEOMETRY_ARITY: int = 12
+
+
+# Argument count of a ClassDB-bound method, or -1 when the class does not expose it.
+static func _bound_arity(native: RefCounted, method: StringName) -> int:
+	for m: Dictionary in native.get_method_list():
+		if m.name == method:
+			return (m.args as Array).size()
+	return -1
+
+
 static func make_configured() -> RefCounted:
 	if not ClassDB.class_exists(&"NativePuckStep"):
 		return null
@@ -19,12 +31,18 @@ static func make_configured() -> RefCounted:
 	# bends, and a binary predating them still exports the class and the method —
 	# so the configure call below would fail at runtime rather than degrade. Unlike
 	# NativeTopHandIK's property write (which quietly no-ops), that breaks the puck
-	# outright, so probe for a method the old binary cannot have and fall back to
-	# the GDScript step instead. NativeKernels' class census cannot see this: the
+	# outright, so measure the arity directly and fall back to the GDScript step
+	# when it is the old shape. NativeKernels' class census cannot see this: the
 	# class is present, it is the shape that moved.
-	if not native.has_method(&"resolve_crossbar_bends"):
+	#
+	# Arity, not has_method: only ClassDB-bound methods are visible to GDScript, so
+	# probing an internal C++ helper reports false on every binary ever built and
+	# disables the kernel outright. Runs once per puck spawn, so the method-list
+	# walk is not on any hot path.
+	if _bound_arity(native, &"set_net_geometry") != NET_GEOMETRY_ARITY:
 		push_warning("NativePuckStep predates the mouth-corner bends — "
-				+ "using the GDScript puck step. Rebuild native/ (bash native/build.sh).")
+				+ "using the GDScript puck step. Rebuild native/ (bash native/build.sh); "
+				+ "if you just did, restart the editor so the reload takes.")
 		return null
 	native.set_rink_geometry(
 			GameRules.INNER_HALF_WIDTH, GameRules.INNER_HALF_LENGTH,

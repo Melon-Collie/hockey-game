@@ -679,6 +679,11 @@ func release(direction: Vector3, power: float) -> void:
 		if ex_carrier.is_slapshot_pinning():
 			global_position = ex_carrier.get_carry_target_global()
 		else:
+			# Mid-blade contact — also where the wrister's aim line is anchored
+			# (SkaterStateMachine._enter_wrister_aim). The heel→toe seat tells
+			# live on the blade MESH only, so nothing they show ever moves this
+			# origin: launch trajectory stays a position-free function of
+			# (level, gear).
 			global_position = ex_carrier.get_blade_contact_global()
 	if direction.y > 0:
 		global_position.y = ice_height + 0.1
@@ -1027,10 +1032,10 @@ func _physics_process(delta: float) -> void:
 
 	if carrier != null:
 		_pending_elevation_vel = Vector3.ZERO
-		# Pin at the carry target — same as blade contact when blade is
-		# centered, but inverse-offset from the blade's actual position when
-		# the IK shifted the marker for forehand/backhand carry. Result: puck
-		# stays at the cursor while the blade renders to one side.
+		# Pin at the carry target — inverse-offset from the blade's actual
+		# position when the IK shifted the marker for forehand/backhand carry,
+		# so the puck stays at the cursor while the blade renders to one side
+		# (and tells the heel→toe seat story around it, mesh-only).
 		global_position = carrier.get_carry_target_global()
 		global_position.y = ice_height
 	else:

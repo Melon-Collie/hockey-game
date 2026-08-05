@@ -155,13 +155,11 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 
 	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
 
-	# Advance the sticky carry-side state and its smoothed factor before
-	# reading the forehand factor. When not carrying the discrete side resets
-	# to 0 and the smoothed factor lerps back to center; when carrying it
-	# holds the current side until the blade crosses past
-	# carry_side_switch_threshold on the opposite side, then flips and lerps
-	# through center over carry_side_lerp_speed.
-	_skater.update_carry_side(_controller.has_puck, delta)
+	# The carry-side state this pipeline reads (get_carry_forehand_factor, via
+	# _apply_carry_offset below) is advanced in Skater._update_carry_contact —
+	# on the physics tick, for every peer — not here: the push model keys it
+	# off blade motion, which remote skaters have and this pipeline does not run
+	# for them.
 
 	# FREEZE (hold_blade, set for the WRISTER_AIM state): during a wrister
 	# charge, hold the blade at its current body-local pose instead of chasing the
@@ -364,12 +362,15 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 	var blade_local: Vector3 = ik.blade
 
 	# Carry transit lift: while carrying, raise the blade over the puck during
-	# a forehand/backhand flip. (1 − |smoothed|) peaks at 1 when the smoothed
-	# factor is mid-flip and falls to 0 when fully on either side. cos(p)*cos(r)
-	# divisor converts world-Y target into upper-body-local Y so the lift lands
-	# at the intended height in world space (matches the lean-correction math).
+	# a pushing-face flip. One sin-envelope hop per flip (Skater
+	# .get_carry_transit_factor) rather than (1 − |smoothed factor|): under a
+	# fast dangle the smoothed factor lives near zero, which would hold the
+	# blade permanently mid-air — the hop bounces once per stroke instead.
+	# cos(p)*cos(r) divisor converts world-Y target into upper-body-local Y so
+	# the lift lands at the intended height in world space (matches the
+	# lean-correction math).
 	if _controller.has_puck and _skater.carry_transit_lift > 0.0:
-		var transit: float = 1.0 - absf(_skater.get_carry_forehand_factor())
+		var transit: float = _skater.get_carry_transit_factor()
 		if transit > 0.0001:
 			var lift_world: float = transit * _skater.carry_transit_lift
 			var cpcr: float = maxf(
