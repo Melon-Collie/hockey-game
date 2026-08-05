@@ -537,7 +537,7 @@ func _add_net_quad(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 # face and never accounted for the puck's radius, so post grazes and side-net
 # entries scored. The center-based swept crossing here (see GoalDetectionRules)
 # rejects both and reliably catches fast shots the sensor could tunnel through.
-func check_goal_crossing(prev_center: Vector3, curr_center: Vector3, carried: bool = false) -> void:
+func check_goal_crossing(prev_center: Vector3, curr_center: Vector3) -> void:
 	if GoalDetectionRules.crossed_into_net(
 			prev_center,
 			curr_center,
@@ -548,8 +548,7 @@ func check_goal_crossing(prev_center: Vector3, curr_center: Vector3, carried: bo
 			POST_RADIUS,
 			GameRules.PUCK_COLLISION_RADIUS,
 			GameRules.PUCK_COLLISION_HALF_HEIGHT,
-			BASE_DEPTH,
-			carried):  # a carried (pinned) puck must cross the actual mouth, not just land in the cavity
+			BASE_DEPTH):
 		goal_scored.emit()
 
 

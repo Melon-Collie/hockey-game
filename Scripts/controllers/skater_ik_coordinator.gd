@@ -2,7 +2,8 @@ class_name SkaterIKCoordinator
 extends RefCounted
 
 # Owns the per-tick blade and arm IK pipeline:
-# - Mouse → top-hand IK + blade placement (asymmetric ROM, wall/goalie/net clamps).
+# - Mouse → top-hand IK + blade placement (asymmetric ROM intersected with the
+#   open ice via _board_reach_limit, then wall/goalie/net clamps).
 # - Bottom-hand IK from the placed top hand + blade.
 # - Geometry helpers shared with SkaterShotPoseCoordinator: blade_y_local,
 #   blade_y_lean_corrected, stick_horiz.
@@ -62,6 +63,7 @@ var last_target_blade_world: Vector3 = Vector3.ZERO
 var _cached_top_cfg: TopHandIK.Config = null
 var _cached_bottom_cfg: BottomHandIK.Config = null
 var _ik_result := TopHandIK.Result.new()
+var _net_result := NetBladeCollision.Result.new()
 # Native IK solvers (null = extension absent, GDScript fallback). Config
 # properties sync inside the cached-config builders — the same rebuild moment —
 # so invalidate_configs() covers both representations.
@@ -78,7 +80,18 @@ func setup(skater: Skater, controller: SkaterController) -> void:
 	_controller = controller
 	if ClassDB.class_exists(&"NativeTopHandIK"):
 		_native_top = ClassDB.instantiate(&"NativeTopHandIK")
-		_native_bottom = ClassDB.instantiate(&"NativeBottomHandIK")
+		# Stale-binary guard, one level finer than NativeKernels' class census:
+		# max_blade_reach was ADDED to an existing kernel, so a binary predating it
+		# still registers the class and passes that check. Writing the property
+		# would then quietly no-op and the boards would stop bounding blade reach —
+		# wrong behaviour that looks like working behaviour. Fall back to GDScript,
+		# which is slower and correct, rather than fast and silently wrong.
+		if not _native_top.has_method(&"set_max_blade_reach"):
+			push_warning("NativeTopHandIK predates max_blade_reach — "
+					+ "using the GDScript solver. Rebuild native/ (bash native/build.sh).")
+			_native_top = null
+		else:
+			_native_bottom = ClassDB.instantiate(&"NativeBottomHandIK")
 	if ClassDB.class_exists(&"NativeBladeDangle"):
 		_native_dangle = ClassDB.instantiate(&"NativeBladeDangle")
 		_sync_dangle_config()
@@ -178,8 +191,13 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 			return
 
 		# 1. Resolve the RAW cursor to the blade the player is actually reaching for:
-		#    convert to upper-body-local, apply the carry offset, then ROM-clamp via
-		#    the iterative top-hand IK. This is the TARGET the speed cap chases. ROM
+		#    convert to upper-body-local, apply the carry offset, then clamp to the
+		#    reachable set — ROM intersected with the open ice (see
+		#    _board_reach_limit; every consumer of this resolved target, from the
+		#    speed cap below to the wrister charge gate that reads
+		#    last_target_blade_world, inherits the boards for free because the limit
+		#    lands here rather than on the solved pose). This is the TARGET the
+		#    speed cap chases. ROM
 		#    clamping the target up front (rather than after the cap) is the whole
 		#    point: the cap then limits the speed of the REACHABLE blade, not the
 		#    intent point far out past ROM. A distant cursor maps to a point on the
@@ -194,15 +212,16 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 		# precision (hand + lean blade_y) below. Uses rest blade_y for the projection:
 		# the sub-cm lean refinement the iterative solve adds is irrelevant to a point
 		# that's about to be capped and re-solved.
+		var target_reach: float = _board_reach_limit(target_blade_xz, shoulder_world)
 		var target_blade_local: Vector3
 		if _native_top != null:
-			_ik_config(blade_y_local())
+			_ik_config(blade_y_local(), target_reach)
 			target_blade_local = _native_top.project_blade(
 					_skater.shoulder.position, target_blade_xz, blade_side_sign)
 		else:
 			target_blade_local = TopHandIK.project_blade(
 					_skater.shoulder.position, target_blade_xz, blade_side_sign,
-					_ik_config(blade_y_local()))
+					_ik_config(blade_y_local(), target_reach))
 		target_blade_world = _skater.upper_body_to_global(target_blade_local)
 		target_blade_world.y = 0.0
 		last_target_blade_world = target_blade_world
@@ -332,7 +351,15 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 				_controller.hit_commit_blade_local_x * blade_side_sign,
 				_controller.hit_commit_blade_local_z)
 		capped_blade_xz = capped_blade_xz.lerp(loaded, commit_t)
-	var ik: TopHandIK.Result = _solve_top_hand(capped_blade_xz, blade_side_sign)
+	# The board limit is re-derived for the CAPPED aim line, not reused from the
+	# target above: the smoothed blade lags the target (and is carried along by
+	# the skater's own translation), so the two can point at different stretches
+	# of wall. Without it the FAR regime would extend this solve back out past the
+	# boards, which is exactly what the clamp below then has to undo.
+	var ik: TopHandIK.Result = _solve_top_hand(
+			capped_blade_xz, blade_side_sign,
+			_board_reach_limit(capped_blade_xz, _skater.upper_body_to_global(
+					_skater.shoulder.position)))
 	var hand_local: Vector3 = ik.hand
 	var blade_local: Vector3 = ik.blade
 
@@ -378,43 +405,77 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 					back = -_skater.global_transform.basis.z
 				_controller._do_release(back.normalized(), 3.0)
 
-	# When the blade got pulled back by the wall clamp, slide the hand by the
-	# same horizontal offset so |hand − blade| stays at stick_horiz. Prevents
-	# the stick mesh from compressing; reads as "pulling the stick back".
-	var clamp_delta_xz := Vector3(
-			wall_clamped.x - intended_blade.x, 0.0, wall_clamped.z - intended_blade.z)
-	if clamp_delta_xz.length_squared() > 0.0:
-		hand_local.x += clamp_delta_xz.x
-		hand_local.z += clamp_delta_xz.z
-
-	# Goalie body clamp (strips puck on contact) + net exclusion zone.
+	# Goalie body clamp (strips puck on contact) + the net.
 	# All work in world space; convert back once at the end.
 	var heel_world: Vector3 = _skater.upper_body_to_global(wall_clamped)
 	var clamped_heel: Vector3 = heel_world
 	if _controller.has_puck:
 		clamped_heel = clamp_blade_from_goalies(clamped_heel)
-	# Compute the puck contact point (mid-blade) and clamp that against the net,
-	# not the heel. This is geometrically correct regardless of blade angle.
-	var hand_world: Vector3 = _skater.upper_body_to_global(hand_local)
-	var shaft: Vector3 = clamped_heel - hand_world
-	shaft.y = 0.0
-	var contact_world: Vector3 = clamped_heel
-	if shaft.length() > 0.001:
-		contact_world = clamped_heel + shaft.normalized() * _skater.blade_length * 0.5
-	var clamped_contact: Vector3 = clamp_blade_from_net(contact_world)
-	if clamped_contact != contact_world:
-		var net_offset: Vector3 = clamped_contact - contact_world
-		clamped_heel += net_offset
-		if _controller.has_puck:
-			_controller._do_release(net_offset.normalized(), _controller.goalie_strip_power)
+	# The net is pure collision here — no strip, no legality. The blade stops on
+	# iron and sinks into twine; whether the PUCK survives that is the puck's own
+	# collision to resolve (SkaterController._collide_pinned_puck_with_net), which
+	# is the only place that can answer it correctly since the puck rides a pin
+	# OFF the blade. The mid-blade contact-point proxy this used to clamp is gone
+	# with it: the blade is a segment now, so heel and toe are tested directly.
+	clamped_heel += resolve_blade_against_net(clamped_heel).offset
 	if clamped_heel != heel_world:
-		var clamped_local: Vector3 = _skater.upper_body_to_local(clamped_heel)
-		hand_local.x += clamped_local.x - wall_clamped.x
-		hand_local.z += clamped_local.z - wall_clamped.z
-		wall_clamped = clamped_local
+		wall_clamped = _skater.upper_body_to_local(clamped_heel)
+
+	# Rebuild the arm for the FINAL blade whenever a clamp moved it. The blade is
+	# authoritative from here (gameplay decided it — net legality, goalie contact,
+	# the board surface), so the arm is solved to reach it and the stick chokes up
+	# to make up the difference. Sliding the hand by the clamp offset instead
+	# preserves stick length at the cost of arm length, which is what walked the
+	# hand behind the shoulder against the boards and stretched it across the net.
+	# Skipped when nothing moved: the reconstruction is an exact inverse of the
+	# solve there, so it would only redo work.
+	if wall_clamped != intended_blade:
+		hand_local = TopHandIK.hand_for_clamped_blade(
+				_skater.shoulder.position,
+				Vector2(wall_clamped.x, wall_clamped.z),
+				wall_clamped.y,
+				blade_side_sign,
+				_ik_config(blade_y_local()))
 
 	_skater.set_top_hand_position(hand_local)
 	_skater.set_blade_position(wall_clamped)
+
+# ── Board Reach Limit ─────────────────────────────────────────────────────────
+# How far the blade may sit from the shoulder along the aim toward
+# `target_blade_xz` before it runs into the boards, in metres (INF on open ice).
+# Fed to TopHandIK as max_blade_reach so the reachable blade set is the ROM
+# envelope INTERSECTED with the rink, rather than ROM alone with the wall
+# discovered afterwards.
+#
+# `target_blade_xz` is upper-body-local and the boards live in world space, so
+# the aim direction is rotated through the torso basis before the cast; the
+# returned scalar is then compared against an upper-body-local radius inside the
+# solver, so the two disagree by the lean's cosine (sub-centimetre at the reach
+# where this binds). The exact heel/toe clamp downstream remains the backstop —
+# this limit exists so that clamp has almost nothing left to correct.
+func _board_reach_limit(target_blade_xz: Vector2, shoulder_world: Vector3) -> float:
+	var aim_local := Vector3(
+			target_blade_xz.x - _skater.shoulder.position.x,
+			0.0,
+			target_blade_xz.y - _skater.shoulder.position.z)
+	if aim_local.length_squared() < 0.000001:
+		return INF
+	var aim_world: Vector3 = _skater.upper_body.global_transform.basis * aim_local
+	var dir := Vector2(aim_world.x, aim_world.z)
+	if dir.length_squared() < 0.000001:
+		return INF
+	var origin := Vector2(shoulder_world.x, shoulder_world.z)
+	var unit: Vector2 = dir.normalized()
+	# The net is the second obstacle on this aim line, and it earns the same
+	# treatment as the boards: bound the REACH so the stick is never aimed through
+	# the mesh, instead of letting it solve full reach and clamping the pose back.
+	# NetGeometry.ray_to_solid_face leaves the open mouth unlimited, so reaching in
+	# from the front — the whole of net-front play — is untouched.
+	return minf(
+			GameRules.ray_to_rink_inner(origin, unit),
+			NetGeometry.ray_to_net(
+					origin, unit, _controller.blade_height,
+					_controller.net_blade_half_thickness))
 
 # While carrying, offset the IK target perpendicular to the shoulder→target
 # direction so the blade marker (and therefore the visible blade + stick
@@ -444,12 +505,13 @@ func _apply_carry_offset(desired_blade_xz: Vector2) -> Vector2:
 # reach + max lean. Using the SOLVED blade XZ from each pass (not the raw target)
 # converges to the right answer even when the target is past ROM. Writes into and
 # returns the shared _ik_result — callers must consume it before the next solve.
-func _solve_top_hand(desired_blade_xz: Vector2, blade_side_sign: float) -> TopHandIK.Result:
+func _solve_top_hand(desired_blade_xz: Vector2, blade_side_sign: float,
+		max_blade_reach: float = INF) -> TopHandIK.Result:
 	var blade_y: float = blade_y_local()
 	var ik: TopHandIK.Result = _ik_result
 	for i in 3:
 		if _native_top != null:
-			_ik_config(blade_y)
+			_ik_config(blade_y, max_blade_reach)
 			_native_top.solve(_skater.shoulder.position, desired_blade_xz, blade_side_sign)
 			ik.hand = _native_top.get_hand()
 			ik.blade = _native_top.get_blade()
@@ -458,7 +520,7 @@ func _solve_top_hand(desired_blade_xz: Vector2, blade_side_sign: float) -> TopHa
 					_skater.shoulder.position,
 					desired_blade_xz,
 					blade_side_sign,
-					_ik_config(blade_y),
+					_ik_config(blade_y, max_blade_reach),
 					ik)
 		blade_y = blade_y_lean_corrected(ik.blade.x, ik.blade.z)
 	return ik
@@ -490,31 +552,46 @@ func update_bottom_hand() -> void:
 				cfg)
 	_skater.set_bottom_hand_position(bh)
 
-# ── Net Exclusion Clamp ───────────────────────────────────────────────────────
-# Clamps `point` (either the puck contact point or the blade heel during
-# follow-through) out of the net, which NetClampRules treats as a solid object
-# with only its front face (the mouth) open. The point escapes through the
-# nearest solid face — never the front.
+# Arm pose for a blade the obstacle clamps have already placed — this skater's
+# shoulder and cached config wrapped around the pure rule. Shared with
+# SkaterShotPoseCoordinator so the follow-through reconstructs the arm the same
+# way the tracked path does.
+func hand_for_clamped_blade(blade_local: Vector3, blade_side_sign: float) -> Vector3:
+	return TopHandIK.hand_for_clamped_blade(
+			_skater.shoulder.position,
+			Vector2(blade_local.x, blade_local.z),
+			blade_local.y,
+			blade_side_sign,
+			_ik_config(blade_y_local()))
+
+# ── Net Collision ─────────────────────────────────────────────────────────────
+# Resolves the blade SEGMENT (heel → toe) against the net for a proposed heel,
+# and returns the correction to apply. Pure collision: iron stops the stick, the
+# twine lets it sink in and stops it there, and neither strips the puck — see
+# NetBladeCollision, and docs/net-play-plan.md §3 for why there is no legality
+# concept on this path any more.
 #
-# Tuck-in: while CARRYING, the front face is open, so a blade whose swept path
-# (prev contact → this contact) came IN through the mouth is left unclamped and
-# carries the puck across the line (wraparounds / jams). Entry from a side or the
-# back is still blocked — the stick can't reach through the mesh, no matter where
-# the skater's body is. Because a legal tuck leaves the contact UNCLAMPED, the
-# caller's "clamp moved the contact → auto-release" path (see apply_blade_from_
-# mouse) doesn't fire, so the puck rides in instead of being ejected. Follow-
-# through / non-carry calls pass allow_front = false and behave exactly as before.
-func clamp_blade_from_net(point: Vector3) -> Vector3:
-	return NetClampRules.clamp_out_of_net(
-			point,
+# The returned Result is shared and overwritten by the next call, like _ik_result:
+# consume it before resolving again.
+func resolve_blade_against_net(heel_world: Vector3) -> NetBladeCollision.Result:
+	NetBladeCollision.resolve(
 			_skater.get_prev_blade_contact_global(),
-			GameRules.GOAL_LINE_Z,
-			GameRules.NET_HALF_WIDTH,
-			GameRules.NET_POST_RADIUS,
-			GameRules.NET_PUCK_BUFFER,
-			GameRules.NET_DEPTH,
-			GameRules.NET_HEIGHT,
-			_controller.has_puck)
+			heel_world,
+			_blade_toe_for(heel_world),
+			_controller.net_blade_half_thickness,
+			_controller.net_mesh_give,
+			_net_result)
+	return _net_result
+
+# The blade's far end for a hypothetical heel, using the blade node's CURRENT
+# forward. Same approximation Skater.clamp_blade_to_walls makes for the boards:
+# this tick's orientation applied to the position the solve is proposing.
+func _blade_toe_for(heel_world: Vector3) -> Vector3:
+	var forward: Vector3 = -_skater.blade.global_transform.basis.z
+	forward.y = 0.0
+	if forward.length_squared() < 0.000001:
+		return heel_world
+	return heel_world + forward.normalized() * _skater.blade_length
 
 # ── Goalie Body / Butterfly Clamp ─────────────────────────────────────────────
 # Pushes blade_world out of every goalie's collision zone and strips the puck
@@ -631,7 +708,7 @@ func stick_horiz() -> float:
 # ── Config Builders ───────────────────────────────────────────────────────────
 # Cached: export-derived fields are filled once (until invalidate_configs);
 # only the per-tick fields are written per call.
-func _ik_config(blade_y: float) -> TopHandIK.Config:
+func _ik_config(blade_y: float, max_blade_reach: float = INF) -> TopHandIK.Config:
 	if _cached_top_cfg == null:
 		_cached_top_cfg = TopHandIK.Config.new()
 		_cached_top_cfg.stick_length = _controller.stick_length
@@ -649,9 +726,14 @@ func _ik_config(blade_y: float) -> TopHandIK.Config:
 			_native_top.rom_backhand_angle_max = _cached_top_cfg.rom_backhand_angle_max
 			_native_top.rom_forehand_reach_max = _cached_top_cfg.rom_forehand_reach_max
 			_native_top.rom_backhand_reach_max = _cached_top_cfg.rom_backhand_reach_max
+	# Both per-tick fields are written on EVERY call, never left to carry over:
+	# max_blade_reach is a property of the aim line being solved, so a stale one
+	# would silently constrain an unrelated later solve this tick.
 	_cached_top_cfg.blade_y = blade_y
+	_cached_top_cfg.max_blade_reach = max_blade_reach
 	if _native_top != null:
 		_native_top.blade_y = blade_y
+		_native_top.max_blade_reach = max_blade_reach
 	return _cached_top_cfg
 
 func _bottom_hand_ik_config() -> BottomHandIK.Config:

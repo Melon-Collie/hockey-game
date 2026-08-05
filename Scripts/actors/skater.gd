@@ -1618,7 +1618,24 @@ func update_carry_side(has_puck: bool, delta: float) -> void:
 # the ice in front of the skater so they can coast / brake during the wind-up
 # without leaving the puck behind, and so the eventual shot fires from a sane
 # ice position rather than from the elevated blade tip.
+# Correction the controller's per-tick net collision applies to the raw pin, so
+# the carried puck is HELD at the twine instead of being allowed inside it. Zero
+# whenever the pin is clear (the overwhelmingly common case). Written every
+# simulated tick from deterministic inputs, so it replays; not cross-tick state.
+var carry_pin_correction: Vector3 = Vector3.ZERO
+
+# The pin as the blade defines it, before the net has its say. Only the
+# controller's net collision wants this — everything else wants the resolved
+# position below.
+func get_carry_target_raw() -> Vector3:
+	return _carry_target_raw()
+
+
 func get_carry_target_global() -> Vector3:
+	return _carry_target_raw() + carry_pin_correction
+
+
+func _carry_target_raw() -> Vector3:
 	if _slapshot_pin_active:
 		var local := Vector3(_slapshot_pin_local.x, 0.0, _slapshot_pin_local.y)
 		return global_position + global_transform.basis * local

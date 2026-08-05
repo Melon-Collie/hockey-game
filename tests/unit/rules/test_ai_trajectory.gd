@@ -377,3 +377,75 @@ func test_a_puck_already_on_the_blade_gates_at_itself() -> void:
 			_GATE_REACH, _GATE_HORIZON_S, _GATE_STEPS)
 	assert_true(found)
 	assert_eq(AITrajectory.gate_point, puck_pos)
+
+# ── The puck caroms on its edge, not its centre ───────────────────────────────
+# The disc's centre used to be clamped straight onto the kickplate face, so half
+# the puck (a 6.5 cm radius) sat inside the wall. Harmless-looking until players
+# could work the boards freely, at which point a puck visibly buried in the
+# kickplate is what you see. AITrajectory._step now takes the body's own
+# half-extent; every puck entry point passes the disc radius, skater
+# approximations still pass 0.
+
+const _PR: float = GameRules.PUCK_COLLISION_RADIUS
+
+
+func test_a_puck_driven_into_the_side_boards_rests_a_radius_short() -> void:
+	var p := Vector3(GameRules.INNER_HALF_WIDTH - 0.5, 0.0175, 0.0)
+	var v := Vector3(6.0, 0.0, 0.0)
+	for i: int in 200:
+		var stepped: Transform3D = AITrajectory.step_puck(p, v, 1.0 / 120.0)
+		p = stepped.origin
+		v = stepped.basis.x
+	assert_lte(p.x, GameRules.INNER_HALF_WIDTH - _PR + 1e-3,
+			"the puck's EDGE stops at the kickplate — its centre never reaches the face")
+
+
+func test_the_puck_never_overlaps_the_boards_anywhere_on_the_boundary() -> void:
+	# Straight walls and the rounded corners alike.
+	for deg: int in range(0, 360, 20):
+		var rad: float = deg_to_rad(float(deg))
+		var dir := Vector3(cos(rad), 0.0, sin(rad))
+		var p: Vector3 = dir * 2.0
+		p.y = 0.0175
+		var v: Vector3 = dir * 14.0
+		for i: int in 300:
+			var stepped: Transform3D = AITrajectory.step_puck(p, v, 1.0 / 120.0)
+			p = stepped.origin
+			v = stepped.basis.x
+		var xz := Vector2(p.x, p.z)
+		var inset: Vector2 = GameRules.clamp_to_rink_inner(xz, _PR)
+		assert_almost_eq(inset.distance_to(xz), 0.0, 1e-3,
+				"puck edge stays out of the boards on the %d° heading" % deg)
+
+
+func test_airborne_pucks_use_the_same_inset() -> void:
+	var p := Vector3(GameRules.INNER_HALF_WIDTH - 0.4, 0.35, 0.0)
+	var v := Vector3(7.0, 1.0, 0.0)
+	for i: int in 240:
+		var stepped: Transform3D = AITrajectory.step_puck_3d(p, v, 1.0 / 120.0)
+		p = stepped.origin
+		v = stepped.basis.x
+	assert_lte(p.x, GameRules.INNER_HALF_WIDTH - _PR + 1e-3,
+			"a lofted puck caroms on its edge too")
+
+
+func test_the_bots_predict_the_same_boundary_the_puck_uses() -> void:
+	# predict_puck must not model a puck that slides a radius deeper than the real
+	# one — the rim reads it plans against would be wrong by that much per contact.
+	var traj: Array[Vector3] = AITrajectory.predict_puck(
+			Vector3(GameRules.INNER_HALF_WIDTH - 0.5, 0.0175, 0.0),
+			Vector3(9.0, 0.0, 2.0), 90, 1.0 / 60.0)
+	for point: Vector3 in traj:
+		var xz := Vector2(point.x, point.z)
+		assert_almost_eq(GameRules.clamp_to_rink_inner(xz, _PR).distance_to(xz), 0.0, 1e-3,
+				"predicted puck respects the same inset boundary")
+
+
+func test_skater_approximations_are_unchanged() -> void:
+	# _step's default margin is 0, so the no-bounce skater path still clamps the
+	# body centre exactly as before.
+	var end: Vector3 = AITrajectory.predict_final(
+			Vector3(GameRules.INNER_HALF_WIDTH - 0.2, 0.0, 0.0),
+			Vector3(8.0, 0.0, 0.0), 60, 1.0 / 60.0)
+	assert_almost_eq(end.x, GameRules.INNER_HALF_WIDTH, 1e-3,
+			"a skater prediction still stops with its centre on the boundary")

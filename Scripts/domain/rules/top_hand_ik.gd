@@ -48,6 +48,15 @@ class Config:
 	var rom_backhand_angle_max: float = 0.0  # radians; ROM on backhand side (large)
 	var rom_forehand_reach_max: float = 0.0  # meters; max hand displacement forehand
 	var rom_backhand_reach_max: float = 0.0  # meters; max hand displacement backhand
+	# Hard cap on the blade's horizontal distance from the shoulder (meters).
+	# An obstacle the blade cannot reach past — in practice the boards — makes the
+	# reachable region the ROM envelope INTERSECTED with the open ice, and this is
+	# that intersection expressed along the current aim line. Capping the DESIRED
+	# distance up front routes a wall-limited reach into the CLOSE regime, where
+	# the hand rises and the stick's horizontal projection shrinks: the choke-up a
+	# real player does when jammed on the boards, rather than a full-reach pose
+	# that a post-hoc clamp then has to drag back. INF = unconstrained.
+	var max_blade_reach: float = INF
 
 class Result:
 	var hand: Vector3 = Vector3.ZERO
@@ -72,6 +81,10 @@ static func project_blade(
 	var delta: Vector2 = desired_blade_xz - shoulder_xz
 	var r: float = delta.length()
 	var aim_dir: Vector2 = delta / r if r > 0.0001 else Vector2(0.0, -1.0)
+	# Obstacle cap (the boards) applied to the desired DISTANCE, before the regime
+	# split, so a wall-limited reach flows into the CLOSE branch and chokes up
+	# naturally instead of being clamped back out of the FAR branch afterwards.
+	r = minf(r, maxf(cfg.max_blade_reach, 0.0))
 
 	# CLOSE regime: target is inside the default stick reach. The hand would
 	# rise so the stick tilts more vertically, shortening its horizontal reach
@@ -111,19 +124,7 @@ static func project_blade(
 	angle_to_forehand = clampf(
 			angle_to_forehand, -cfg.rom_backhand_angle_max, cfg.rom_forehand_angle_max)
 
-	# Max reach is asymmetric: cross-body forehand reach is limited by
-	# anatomy, same-side backhand reach allows full arm extension. Small
-	# linear blend across zero avoids a seam.
-	var blend_band: float = deg_to_rad(5.0)
-	var max_reach: float
-	if angle_to_forehand >= blend_band:
-		max_reach = cfg.rom_forehand_reach_max
-	elif angle_to_forehand <= -blend_band:
-		max_reach = cfg.rom_backhand_reach_max
-	else:
-		var t: float = (angle_to_forehand + blend_band) / (2.0 * blend_band)
-		max_reach = lerpf(cfg.rom_backhand_reach_max, cfg.rom_forehand_reach_max, t)
-	radius = clampf(radius, 0.0, max_reach)
+	radius = clampf(radius, 0.0, _max_reach_for_angle(angle_to_forehand, cfg))
 
 	# Back to Cartesian. world_angle undoes the forehand-sign flip. Using the
 	# clamped world_angle (not hand_to_target) keeps the blade at the ROM limit
@@ -169,6 +170,66 @@ static func solve(
 		var hand_y: float = cfg.blade_y + sqrt(maxf(drop_sq, 0.0))
 		out.hand = Vector3(shoulder_xz.x, hand_y, shoulder_xz.y)
 	return out
+
+# Reconstruct the top hand for a blade position that is AUTHORITATIVE — one an
+# obstacle clamp (boards, net, goalie body) has already decided and that the
+# caller must not move. Unlike solve(), which is free to place the blade, this
+# takes the blade as given and builds the most plausible arm that reaches it.
+#
+# Something has to yield when the blade is pinned, and the priority is
+# anatomical: the blade stays where gameplay put it, the ARM stays inside its
+# ROM, and STICK LENGTH is what gives — the hand slides down the shaft, the
+# choke-up a real player does when jammed on the boards or reaching around a
+# net. Translating the hand rigidly with the blade instead (which preserves
+# stick length) is what puts the hand behind the shoulder and folds the elbow
+# through the torso, because nothing in that translation is bounded by the arm.
+#
+# The arm's DIRECTION is deliberately not ROM-clamped, unlike project_blade's:
+# the hand has to lie along the shaft toward the blade, and swinging it onto a
+# ROM boundary ray would detach the grip from the stick — worse than a stick
+# that reads short. Only the reach RADIUS yields, and rom_*_reach_max is derived
+# from arm length (SkaterController.apply_attributes), so the result is always
+# within anatomical reach.
+#
+# For a blade that solve() itself placed this is an exact inverse — same hand,
+# no discontinuity when a clamp starts or stops biting.
+static func hand_for_clamped_blade(
+		shoulder: Vector3,
+		blade_xz: Vector2,
+		blade_y: float,
+		blade_side_sign: float,
+		cfg: Config) -> Vector3:
+	var shoulder_xz := Vector2(shoulder.x, shoulder.z)
+	var from_shoulder: Vector2 = blade_xz - shoulder_xz
+	var d: float = from_shoulder.length()
+	var stick_horiz_at_rest: float = _stick_horiz_for(cfg.stick_length, cfg.hand_rest_y, blade_y)
+	if d < stick_horiz_at_rest:
+		# CLOSE: hands come in over the shoulder and rise, tilting the stick
+		# toward vertical. hand_y_max bounds the choke-up; past it the stick
+		# simply reads shorter than it is.
+		var drop_sq: float = cfg.stick_length * cfg.stick_length - d * d
+		var hand_y: float = minf(blade_y + sqrt(maxf(drop_sq, 0.0)), cfg.hand_y_max)
+		return Vector3(shoulder_xz.x, hand_y, shoulder_xz.y)
+	var dir: Vector2 = from_shoulder / d
+	var angle_to_forehand: float = clampf(
+			atan2(dir.x, -dir.y) * blade_side_sign,
+			-cfg.rom_backhand_angle_max, cfg.rom_forehand_angle_max)
+	var reach: float = minf(
+			d - stick_horiz_at_rest, _max_reach_for_angle(angle_to_forehand, cfg))
+	var hand_xz: Vector2 = shoulder_xz + dir * reach
+	return Vector3(hand_xz.x, cfg.hand_rest_y, hand_xz.y)
+
+# Max hand displacement from the shoulder at a forehand-signed arm angle.
+# Cross-body forehand reach is limited by anatomy, same-side backhand reach
+# allows full extension; a small linear blend across zero avoids a seam.
+static func _max_reach_for_angle(angle_to_forehand: float, cfg: Config) -> float:
+	var blend_band: float = deg_to_rad(5.0)
+	if angle_to_forehand >= blend_band:
+		return cfg.rom_forehand_reach_max
+	if angle_to_forehand <= -blend_band:
+		return cfg.rom_backhand_reach_max
+	var t: float = (angle_to_forehand + blend_band) / (2.0 * blend_band)
+	return lerpf(cfg.rom_backhand_reach_max, cfg.rom_forehand_reach_max, t)
 
 # Clamp an aim direction (unit, from the shoulder) to the asymmetric angular
 # ROM — the same limits the FAR regime applies to the hand displacement.

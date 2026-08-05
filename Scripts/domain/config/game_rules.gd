@@ -92,8 +92,19 @@ const NET_DEPTH: float = 1.02            # goal depth from goal line to back fra
 const NET_BACK_HALF_WIDTH: float = 1.02  # half-width at back of net (trapezoid wider end)
 const NET_HEIGHT: float = 1.22           # crossbar height (pipe centerline) — must match HockeyGoal.NET_HEIGHT
 const NET_CROWN_HALF_WIDTH: float = 0.815  # half-span of the crossbar / top net panel — must match HockeyGoal.CROWN_HALF_WIDTH
+# Radius of the post-to-crossbar bend — must match HockeyGoal.MOUTH_CORNER_RADIUS.
+# The frame is continuous by construction: the post stands to
+# NET_HEIGHT − this, the bend sweeps a quarter circle from there to the crossbar
+# end, and NET_CROWN_HALF_WIDTH is NET_HALF_WIDTH − this (which is how HockeyGoal
+# derives it). NetGeometry relies on that tiling — a puck leaving one surface
+# must be picked up by the next with no seam.
+const NET_MOUTH_CORNER_RADIUS: float = 0.10
 const NET_TOP_DEPTH: float = 0.559       # depth of the top net panel from the goal line — must match HockeyGoal.TOP_DEPTH
-const NET_PUCK_BUFFER: float = 0.10      # exclusion zone expansion beyond the physical net boundary
+# Coarse padding for the "is this over/near the net" footprint query below. NOT a
+# collision surface: the blade and the puck both collide with the real cage
+# (NetGeometry), where an invisible 10 cm apron is exactly the lie that made the
+# area feel broken. Do not reintroduce it into a collider.
+const NET_PUCK_BUFFER: float = 0.10
 
 # Half the skater's body so the blue line keys off the body EDGE, not its
 # centre — matching real hockey. You tag up the instant any part of your body
@@ -163,6 +174,48 @@ static func clamp_to_rink_inner(world_xz: Vector2, margin: float = 0.0) -> Vecto
 		if az > half_l:
 			return Vector2(world_xz.x, sign(world_xz.y) * half_l)
 	return world_xz
+
+# Distance from an interior point to the inner rink boundary along `dir_xz` (a
+# unit world-XZ direction) — how much room the point has before it runs into the
+# boards on that heading. Shares the boundary clamp_to_rink_inner projects onto,
+# so a reach limited by this result stops exactly where that clamp would have
+# caught it.
+#
+# Exact rather than iterative, which the 120 Hz blade IK needs. The straight
+# walls give an axis-aligned box exit; the true boundary in a corner quadrant is
+# the arc, which is always nearer than the box corner, so an exit landing there
+# is re-solved against that corner's circle. The ray is inside the disc wherever
+# it is inside the rink's corner region, so the disc's FAR root is the rink exit
+# whether or not the origin itself started inside that disc.
+#
+# Returns INF for a degenerate direction, and 0.0 for an origin already outside.
+static func ray_to_rink_inner(
+		origin_xz: Vector2, dir_xz: Vector2, margin: float = 0.0) -> float:
+	if dir_xz.length_squared() < 0.000001:
+		return INF
+	var half_w: float = INNER_HALF_WIDTH - margin
+	var half_l: float = INNER_HALF_LENGTH - margin
+	var corner_r: float = INNER_CORNER_RADIUS - margin
+	var t: float = INF
+	if absf(dir_xz.x) > 0.000001:
+		var wall_x: float = half_w if dir_xz.x > 0.0 else -half_w
+		t = (wall_x - origin_xz.x) / dir_xz.x
+	if absf(dir_xz.y) > 0.000001:
+		var wall_z: float = half_l if dir_xz.y > 0.0 else -half_l
+		t = minf(t, (wall_z - origin_xz.y) / dir_xz.y)
+	if is_inf(t):
+		return INF
+	var hit: Vector2 = origin_xz + dir_xz * t
+	if absf(hit.x) > CORNER_CENTER_X and absf(hit.y) > CORNER_CENTER_Z:
+		var center := Vector2(
+				signf(hit.x) * CORNER_CENTER_X, signf(hit.y) * CORNER_CENTER_Z)
+		var m: Vector2 = origin_xz - center
+		var b: float = m.dot(dir_xz)
+		var c: float = m.length_squared() - corner_r * corner_r
+		var disc: float = b * b - c
+		if disc > 0.0:
+			t = minf(t, -b + sqrt(disc))
+	return maxf(t, 0.0)
 
 # True if world_xz sits over a goal-net footprint — within the posts laterally
 # (widened to the trapezoid back + puck buffer) and between the goal line and the
