@@ -93,8 +93,8 @@ term did the same sweep but bent the junction; it's gone.
 - The pin is sacred: cursor = puck, `get_carry_target_global` stays the
   authority, no push physics, no independent puck motion during carry.
 - The elevation seat (`carry_contact_flat_u/high_u`) — that is *intent*, not
-  stroke; the heel→toe loft tell keeps working and composes with the stroke
-  seat.
+  stroke. Reworked after playtest (§7d): it is WIND-UP-ONLY and expressed by
+  the blade mesh sliding around the frozen puck, never by the pin.
 - The transit-lift mechanism (blade hops over the puck when the smoothed face
   factor crosses zero) — right mechanism, it just fires far more often once
   the side is motion-keyed.
@@ -220,6 +220,21 @@ The full one-sided contact model (puck coasting between touches, catches
 where geometry says, the pokeable free window) remains the v2 if this
 reads too safe — it renegotiates the pin's letter and needs its own
 design pass.
+
+## 7d. Playtest rework: the pin never carries a seat
+
+First on-ice pass verdict: any seat term on the PIN moves the puck off the
+cursor while stickhandling, which fights the mouse binding — and after the
+address (§7b) and the catch/release prosody (§7c) proved the blade-mesh
+channel, pin seats were also inconsistent with how every other tell is
+told. Reworked: `get_carry_target_global` carries no along-blade term at
+all (cursor = puck is exact during carry), the drag/cradle pin-seat slides
+are gone (`carry_contact_drag_u`/`_cradle_u` retired — the drag keeps its
+roll + toe-curl twist, the cradle its cup), and the elevation seat lives
+only in the wrister wind-up, as a mesh slide seating the frozen puck
+heel→toe per the level (`_aim_seat_offset_u`, eased in/out of WRISTER_AIM).
+That is where the read matters — a committed shooter — and where the goalie
+pre-arm will consume it.
 
 ## 8. What this buys
 

@@ -910,7 +910,7 @@ func _pin_puck_to_carrier(carrier: Skater, delta: float) -> void:
 	# owning client) so the puck stays under the cursor while the blade renders to
 	# the pushing side. Every peer runs the same motion-keyed carry-contact model
 	# (Skater._update_carry_contact, fed by the replicated pose), so a remote view
-	# reproduces the carrier's blade-beside-puck arrangement and heel→toe seat too;
+	# reproduces the carrier's blade-beside-puck arrangement too;
 	# a peer flipping the pushing side a beat earlier or later than the owner is
 	# absorbed by the factor smoothing under this same lerp.
 	var contact: Vector3 = carrier.get_carry_target_global()
