@@ -1417,6 +1417,28 @@ func _pose_leg_pivot(bone: int, euler: Vector3) -> void:
 			Transform3D(Basis.from_euler(euler), _leg_pos[bone]))
 
 
+# ── Rendered pose seam (on-ice HUD, ice VFX) ─────────────────────────────────
+# Where this skater is being DRAWN this frame. `global_transform` is the
+# post-tick physics pose, which is up to a tick of travel away from it — anything
+# that must sit under the body on screen (slot ring, chevrons, name plate,
+# stamina gauge, slapper reticle) has to read this instead, or it steps at 120 Hz
+# against a body that slides at the refresh rate.
+#
+# Memoized per drawn frame because several readers want it and their _process
+# order is not fixed: computing it on demand keeps every one of them on the SAME
+# frame's pose instead of leaving whichever runs first a frame ahead.
+var _render_xform: Transform3D = Transform3D.IDENTITY
+var _render_xform_frame: int = -1
+
+
+func render_transform() -> Transform3D:
+	var frame: int = Engine.get_frames_drawn()
+	if frame != _render_xform_frame:
+		_render_xform_frame = frame
+		_render_xform = get_global_transform_interpolated()
+	return _render_xform
+
+
 # ── Blade mark seam (ice VFX) ─────────────────────────────────────────────────
 # World position of a FOOT bone, composed through everything the gait wrote —
 # lower-body yaw (alignment / pivot / stop), stride pitch, the mohawk yaw — so
@@ -2717,6 +2739,10 @@ func stamina_field_up() -> Vector2:
 	return _hud.stamina_gauge_up()
 
 
+func stamina_field_center() -> Vector2:
+	return _hud.stamina_gauge_center()
+
+
 # ── Slapper indicator (read by IceRingField, drawn by the ice shader) ────────
 func slapper_field_visible() -> bool:
 	return _hud.slapper_visible()
@@ -2746,17 +2772,9 @@ func hud_screen_down() -> Vector2:
 	return _hud.screen_down()
 
 
-# ── Name plate (read by PlayerNameOverlay, drawn as 2D) ──────────────────────
+# ── Name plate (billboarded Label3D on this skater) ──────────────────────────
 func name_plate_visible() -> bool:
 	return _hud.name_plate_visible()
-
-
-func name_plate_text() -> String:
-	return _hud.name_plate_text()
-
-
-func name_plate_anchor() -> Vector3:
-	return _hud.name_plate_anchor()
 
 
 func set_skin_tone(index: int) -> void:

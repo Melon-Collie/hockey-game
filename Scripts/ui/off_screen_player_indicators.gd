@@ -79,7 +79,11 @@ func _draw() -> void:
 	# ~30 cm occlusion shadow the boards cast at the default camera tilt).
 	var puck: Puck = GameManager.puck
 	if puck != null:
-		var puck_world_pos: Vector3 = puck.global_position
+		# Rendered pose, not the post-tick one: the hover case parks this arrow
+		# ON the puck's screen point, so a raw read would leave it crawling
+		# against the puck by a tick of travel. The player arrows above are
+		# clamped to the screen border, where the same tick is sub-pixel.
+		var puck_world_pos: Vector3 = puck.get_global_transform_interpolated().origin
 		var puck_behind: bool = camera.is_position_behind(puck_world_pos)
 		var puck_raw: Vector2 = camera.unproject_position(puck_world_pos)
 		var puck_dist: float = local_pos.distance_to(puck_world_pos)

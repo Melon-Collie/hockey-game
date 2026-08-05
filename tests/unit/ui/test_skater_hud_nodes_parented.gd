@@ -2,11 +2,12 @@ extends GutTest
 
 # The per-skater world HUD, as it now exists.
 #
-# Almost all of it has left the node tree: the slot ring, elevation chevrons,
-# the slapper one-timer indicator and the stamina gauge are ice-shader uniforms,
-# and the name plate is drawn by a 2D overlay. What remains is the self-beacon,
-# which floats above the head and so cannot be an ice decal — and it is built
-# LAZILY, only on the skater the ring-relation resolver reports as SELF.
+# The flat-on-ice half has left the node tree: the slot ring, elevation chevrons,
+# the slapper one-timer indicator and the stamina gauge are ice-shader uniforms.
+# What stays a node is what cannot be painted on the ice — the name plate, which
+# is world-sized text standing up off the surface, and the self-beacon, which
+# floats above the head. The beacon is additionally built LAZILY, only on the
+# skater the ring-relation resolver reports as SELF.
 #
 # Both properties pinned below have broken before:
 #
@@ -19,11 +20,11 @@ extends GutTest
 #     coordinator's own references is deliberate: the references would be
 #     non-null in exactly the broken case.
 #
-#   • Visibility defaults. `_ring_visible` / `_name_visible` replaced a
-#     MeshInstance3D and a Label3D, both born visible = true, and defaulted to
-#     false. Their only writers are the replay/spectator latch and the ghost
-#     pass, neither of which runs on an ordinary skater, so the ring and the
-#     plate stayed hidden from spawn until the first goal replay restored them.
+#   • Visibility defaults. `_ring_visible` replaced a MeshInstance3D born
+#     visible = true and defaulted to false. Its only writers are the
+#     replay/spectator latch and the ghost pass, neither of which runs on an
+#     ordinary skater, so the ring stayed hidden from spawn until the first goal
+#     replay restored it.
 
 const SKATER_SCENE: PackedScene = preload("res://Scenes/Skater.tscn")
 
@@ -44,6 +45,14 @@ func _spawn() -> Skater:
 	var skater: Skater = SKATER_SCENE.instantiate() as Skater
 	add_child_autofree(skater)
 	return skater
+
+
+func test_name_plate_is_parented() -> void:
+	var skater: Skater = _spawn()
+	await get_tree().process_frame
+	assert_true(_has_descendant_named(skater, "PlayerNameLabel"),
+			"the name plate must be parented into the skater — an unparented Label3D "
+			+ "fails silently on its first global_position write")
 
 
 func test_self_beacon_is_lazy_and_parented_once_built() -> void:

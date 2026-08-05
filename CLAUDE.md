@@ -243,6 +243,15 @@ call `reset_physics_interpolation()` (see `SkaterController.teleport_to`). A
 uniformly tick-rate scene reads as a lower frame rate, which is fine — a mixed
 one reads as jitter, which is not.
 
+**Interpolation makes `global_position` the wrong read for anything drawn onto
+an actor.** It is the post-tick pose; the body on screen is between poses. Any
+chrome placed at render rate — a nameplate, a marker, an ice-shader uniform —
+must read `Skater.render_transform()` (memoized `get_global_transform_
+interpolated()`) or it crawls against the body it belongs to, worse the faster
+the skater and the higher the refresh rate. A node placed that way must also opt
+OUT of interpolation (`PHYSICS_INTERPOLATION_MODE_OFF`), or the engine
+interpolates an already-interpolated pose and puts the lag back.
+
 Keep the layer boundary **and** the performance — a Callable/collaborator
 boundary is an interface, not a license to allocate per call. *Memoize at the
 seam* (`PlayerRegistry` caches `Array[Skater]`; `puck_controller` caches

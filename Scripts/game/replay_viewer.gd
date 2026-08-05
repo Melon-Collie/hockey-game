@@ -186,8 +186,8 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 	# Latch off the flat-on-ice slot rings, name labels, stamina rings, and
 	# slapper indicators — they're designed for the local player's top-down
 	# gameplay camera and look wrong (or misleading, in the top-down POV cam)
-	# from the director's camera angles. set_physics_process(false) above also
-	# means SkaterHUDCoordinator.update() would never auto-hide them.
+	# from the director's camera angles. The latch, not the coordinator's own
+	# replay check, is what hides them here: this viewer never sets replay mode.
 	skater.set_world_hud_hidden(true)
 	skater.set_player_name(p_name)
 	skater.set_uniform(team_colors)
