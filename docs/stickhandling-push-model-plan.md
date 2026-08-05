@@ -193,6 +193,34 @@ shooter's blade re-addresses exactly as the shooter sees it. This makes the
 address a real defensive tell: every peer — goalie, bots, and human
 defenders alike — reads the wind-up side before the release.
 
+## 7c. Catch/release blade geometry (follow-up, implemented)
+
+The last visible untruth was the space *between* strokes: a real dangle is
+push → the blade hops over → the far face receives, and each contact has a
+place on the blade — every push leaves **off the toe** (the toe is the last
+point of contact of any stroke), and the far face lands **heel-first** and
+rolls the puck back out to the carry seat.
+
+Told entirely on the blade-mesh channel the wrister address established —
+the cursor = puck binding is untouched, no coast, no free-flight physics,
+zero gameplay surface:
+
+- **Stroke toe ride** — the mesh slides heel-ward with `|v_perp|` (ramping
+  over [`carry_flip_speed`, `carry_stroke_full_speed`]), seating the puck
+  toward the toe through a hard push. Flips only fire mid-stroke, so every
+  release leaves off the toe by construction — no future knowledge needed.
+- **Extended hop** — `carry_transit_hop_time` 0.18 → 0.24 s: the blade
+  crosses at the same speed but hangs, the readable gap between touches.
+- **Heel catch** — when a hop lands while carrying, a transient slides the
+  mesh toe-ward (heel at the puck) and decays at `carry_catch_decay`,
+  rolling the puck back to the seat. Fires on stroke flips and wrister
+  re-address landings alike.
+
+The full one-sided contact model (puck coasting between touches, catches
+where geometry says, the pokeable free window) remains the v2 if this
+reads too safe — it renegotiates the pin's letter and needs its own
+design pass.
+
 ## 8. What this buys
 
 The blade side telegraphs the next stroke — a defender watching the carrier

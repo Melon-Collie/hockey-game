@@ -178,9 +178,29 @@ var _face_gear_mesh: MeshInstance3D = null
 @export var carry_gesture_ease: float = 8.0
 # Duration (s) of one transit hop. A flip that arrives while a hop is still
 # in flight rides it out rather than restarting, so a fast dangle bounces
-# once per stroke instead of hovering mid-air (the plan's trap #2). Matched
-# to the smoothed side factor's flip traverse (~2 / carry_side_lerp_speed).
-@export var carry_transit_hop_time: float = 0.18
+# once per stroke instead of hovering mid-air (the plan's trap #2).
+# Deliberately LONGER than the smoothed side factor's flip traverse
+# (~2 / carry_side_lerp_speed ≈ 0.17 s): the blade crosses at the same speed
+# but hangs before landing, which is the readable gap between blade touches —
+# release off the toe, a beat of air, the heel catch on the far face.
+@export var carry_transit_hop_time: float = 0.24
+# ── Catch/release blade geometry (mesh-only, like the wrister address) ────────
+# The visible blade slides along its own heel→toe axis so each stroke reads as
+# real contact prosody: a hard push rolls the puck out toward the TOE (the toe
+# is the last point of contact of every real stroke, so flips — which only
+# happen mid-stroke — release off the toe automatically), and the far face
+# lands HEEL-first and rolls back to the carry seat. Pure blade-mesh offsets
+# (_apply_blade_tilt): the puck stays bound to the cursor, and the marker the
+# gameplay reads is untouched.
+#
+# Toe-ward ride at full stroke speed, as a fraction of blade_length; ramps in
+# over [carry_flip_speed, carry_stroke_full_speed] of lateral stroke.
+@export var carry_stroke_toe_u: float = 0.12
+@export var carry_stroke_full_speed: float = 3.0
+# Heel-first landing offset at the instant of the catch (fraction of
+# blade_length), decaying to the seat at carry_catch_decay per second.
+@export var carry_catch_heel_u: float = 0.14
+@export var carry_catch_decay: float = 7.0
 # Heel-ward seat slide at full backhand cradle — the mirror of
 # carry_contact_drag_u, deliberately smaller than a loft rung for the same
 # can't-fake-the-tell reason.
@@ -695,6 +715,12 @@ var _heel_cradle: float = 0.0
 # Remaining phase (1→0) of the current transit hop; see
 # get_carry_transit_factor.
 var _transit_hop: float = 0.0
+# Eased catch/release blade-geometry blends (0→1), advanced by
+# _update_carry_contact: stroke-speed toe ride and the heel-first catch
+# transient fired when a hop lands. Both feed the mesh seat slide in
+# _apply_blade_tilt only.
+var _stroke_toe_blend: float = 0.0
+var _catch_heel_blend: float = 0.0
 # ── Wrister address (see set_wrister_address) ─────────────────────────────────
 # The live aim line (origin→cursor, world XZ), pushed per aim tick by the
 # controller. The shot is a push along this line, so the frozen blade
@@ -1280,16 +1306,23 @@ func _apply_blade_tilt() -> void:
 	var rot: Basis = pitch_basis.rotated(hosel_axis, deg_to_rad(twist))
 	var keep_scale: Vector3 = _blade_mesh_instance.transform.basis.get_scale()
 	_blade_mesh_instance.transform.basis = rot.scaled(keep_scale)
-	# Wrister-address slide: during a wrister aim the blade MESH (never the
-	# marker) slides along the face-normal axis to address the hand the release
-	# will fire as — marker local +X IS the face normal (set_blade_position
-	# aims marker −Z along the shaft, so +X is its 90° Y-rotation, the same
-	# axis get_carry_target_global offsets the pin along). Zero outside an aim
-	# (_address_factor is pinned to the live factor). The shaft follows for
-	# free: update_stick_mesh aims it at the hosel tip through this transform.
+	# Mesh-only slides (never the marker; the shaft follows for free, since
+	# update_stick_mesh aims it at the hosel tip through this transform):
+	#   X — wrister-address slide along the face-normal axis, addressing the
+	#   hand the release will fire as. Marker local +X IS the face normal
+	#   (set_blade_position aims marker −Z along the shaft, so +X is its 90°
+	#   Y-rotation, the same axis get_carry_target_global offsets the pin
+	#   along). Zero outside an aim (_address_factor pins to the live factor).
+	#   Z — catch/release seat along the blade's own heel→toe axis (the mesh
+	#   extends toe-ward along −Z, so a heel-ward +Z shift seats the puck
+	#   nearer the toe): a hard stroke rides the puck out to the toe, and a
+	#   landing hop catches heel-first and rolls back. Blade-mesh prosody
+	#   only — the puck stays bound to the cursor.
 	_blade_mesh_instance.position = Vector3(
 			(_address_factor - get_carry_forehand_factor()) * carry_blade_offset,
-			0.0, 0.0)
+			0.0,
+			(_stroke_toe_blend * carry_stroke_toe_u
+					- _catch_heel_blend * carry_catch_heel_u) * blade_length)
 
 
 # (Re)generates the procedural curved blade mesh (and the tape band riding it,
@@ -1819,6 +1852,7 @@ func get_wrister_address_side() -> int:
 func _update_carry_contact(delta: float) -> void:
 	var drag_target: float = 0.0
 	var cradle_target: float = 0.0
+	var stroke_toe_target: float = 0.0
 	if not SkaterStateMachine.state_has_puck(current_shot_state):
 		_carry_side = 0
 	else:
@@ -1860,18 +1894,36 @@ func _update_carry_contact(delta: float) -> void:
 					body_x_norm, carry_diagonal_band)
 			drag_target = pull * forehand_w
 			cradle_target = pull * (1.0 - forehand_w)
+			# Stroke-speed toe ride: a hard lateral push rolls the puck out
+			# along the curve toward the toe. Ramps in above the flip
+			# threshold so a cradle stays seated; because flips only fire
+			# mid-stroke, every release leaves off the toe by construction.
+			stroke_toe_target = CarryContactRules.pull_gesture(
+					absf(v_perp), carry_flip_speed, carry_stroke_full_speed)
 	_carry_side_smoothed = lerpf(
 			_carry_side_smoothed, float(_carry_side), carry_side_lerp_speed * delta)
+	var hop_was_live: bool = _transit_hop > 0.0
 	_transit_hop = maxf(_transit_hop - delta / carry_transit_hop_time, 0.0)
+	if hop_was_live and _transit_hop <= 0.0 \
+			and SkaterStateMachine.state_has_puck(current_shot_state):
+		# The hop just landed on the far face: the catch. Heel-first, rolling
+		# back to the carry seat as the blend decays.
+		_catch_heel_blend = 1.0
 	var new_drag: float = move_toward(_toe_drag_gesture, drag_target, carry_gesture_ease * delta)
 	var new_cradle: float = move_toward(_heel_cradle, cradle_target, carry_gesture_ease * delta)
-	if new_drag != _toe_drag_gesture or new_cradle != _heel_cradle:
-		# The gesture factors tilt the blade mesh without moving any marker, so
-		# the render-rate rig pass can't see the change — same escape as
-		# _update_blade_elevation.
+	var new_stroke: float = move_toward(
+			_stroke_toe_blend, stroke_toe_target, carry_gesture_ease * delta)
+	var new_catch: float = move_toward(_catch_heel_blend, 0.0, carry_catch_decay * delta)
+	if new_drag != _toe_drag_gesture or new_cradle != _heel_cradle \
+			or new_stroke != _stroke_toe_blend or new_catch != _catch_heel_blend:
+		# The gesture factors tilt/slide the blade mesh without moving any
+		# marker, so the render-rate rig pass can't see the change — same
+		# escape as _update_blade_elevation.
 		_blade_tilt_dirty = true
 	_toe_drag_gesture = new_drag
 	_heel_cradle = new_cradle
+	_stroke_toe_blend = new_stroke
+	_catch_heel_blend = new_catch
 	_update_wrister_address(delta)
 
 
