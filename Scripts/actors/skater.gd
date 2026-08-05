@@ -185,6 +185,11 @@ var _face_gear_mesh: MeshInstance3D = null
 # carry_contact_drag_u, deliberately smaller than a loft rung for the same
 # can't-fake-the-tell reason.
 @export var carry_contact_cradle_u: float = 0.08
+# Commit threshold on |aim_dir · face_normal| (both unit) for the wrister
+# address flip — the aim line must sit at least ~asin(this) (~14°) off the
+# stick line before the addressed side changes, so a near-parallel aim holds
+# instead of flickering. See _update_wrister_address.
+@export var wrister_address_commit_dot: float = 0.25
 # WHERE ALONG THE BLADE the carried puck rides, as a fraction of blade_length
 # from the heel (0.5 = mid-blade, the un-tell'd contact point). This is the
 # diegetic readout of the loft level: the level is fictionalized as the contact
@@ -691,21 +696,26 @@ var _heel_cradle: float = 0.0
 # get_carry_transit_factor.
 var _transit_hop: float = 0.0
 # ── Wrister address (see set_wrister_address) ─────────────────────────────────
-# The hand the wrister will release as, pushed per aim tick by the controller
-# from the live swing-chirality classification — the SAME read the release
-# uses, so this tell can never disagree with the shot that fires. valid is
-# false on peers that never receive the push (client-rendered remotes), which
-# fall back to the frozen entry pose rather than showing a possibly-wrong hand.
-var _wrister_address_backhand: bool = false
+# The live aim line (origin→cursor, world XZ), pushed per aim tick by the
+# controller. The shot is a push along this line, so the frozen blade
+# addresses the side of the puck it will push from — the same trailing-side
+# rule strokes use, which is what makes the address geometric and
+# handedness-free: it tracks where the aim actually is, not a body-relative
+# hand label (a label-keyed side sat on the wrong side of the puck whenever
+# the aim line disagreed with the natural pose for that hand). valid is false
+# on peers that never receive the push (client-rendered remotes), which keep
+# the frozen entry pose rather than guessing.
+var _wrister_address_dir: Vector3 = Vector3.ZERO
 var _wrister_address_valid: bool = false
 # Eased blade-address factor in face-normal space (get_carry_forehand_factor's
 # units). Outside a wrister aim it is pinned to the live carry factor (zero
-# offset); during the aim it eases toward the predicted hand, and the delta to
+# offset); during the aim it eases toward the addressed side, and the delta to
 # the live factor slides the blade MESH over the still puck (_apply_blade_tilt).
 var _address_factor: float = 0.0
-# Previous tick's address target — a sign flip is the crossing that fires the
-# transit hop.
-var _prev_address_target: float = 0.0
+# Committed address side in face-normal sign space (0 = unseeded). Flipped by
+# CarryContactRules.stroke_side over the aim-line dot; a flip is the crossing
+# that fires the transit hop.
+var _wrister_address_side: int = 0
 # Visual-only offset applied to MeshRoot each frame. Set by LocalController
 # during reconcile blending to ease the visible correction over a few ticks.
 # The body itself is always at the authoritative position.
@@ -1755,18 +1765,18 @@ func get_carry_transit_factor() -> float:
 	return sin(PI * _transit_hop)
 
 
-# Push the wrister's live forehand/backhand classification onto the skater —
-# called every WRISTER_AIM tick by SkaterController._apply_wrister_aim_blade
-# with ShotMechanics.wrister_is_backhand's answer (swing chirality for humans,
-# the committed hand for bots). The address pass in _update_carry_contact
-# consumes it so the wound-up blade visibly ADDRESSES the hand that will fire:
-# a carrier who froze on the backhand and then sweeps a forehand sees the
-# blade hop over the still puck to the forehand face. Runs on the owning
+# Push the wrister's live aim line onto the skater — called every WRISTER_AIM
+# tick by SkaterController._apply_wrister_aim_blade with _wrister_aim_dir's
+# answer (origin→cursor for humans, the committed direction for bots). The
+# address pass in _update_carry_contact consumes it so the wound-up blade
+# visibly addresses the side of the still puck the shot will push from: a
+# carrier who froze on the backhand and then aims a forehand sees the blade
+# hop over the puck onto the shot line's trailing side. Runs on the owning
 # client and on the host (which drives remote skaters from input), so every
 # simulating peer shows it; render-only remotes never receive the push and
 # keep the frozen entry pose (valid stays false).
-func set_wrister_address(is_backhand: bool) -> void:
-	_wrister_address_backhand = is_backhand
+func set_wrister_address(aim_dir: Vector3) -> void:
+	_wrister_address_dir = aim_dir
 	_wrister_address_valid = true
 
 
@@ -1842,14 +1852,18 @@ func _update_carry_contact(delta: float) -> void:
 	_update_wrister_address(delta)
 
 
-# The wrister-address pass: while the blade is frozen in a wrister aim, ease
-# _address_factor toward the hand the release will fire as, so the visible
-# blade re-addresses the still puck when the aimed swing crosses chirality
-# (the frozen backhand pose winding a forehand — the tell this fixes). The
-# delta between the address factor and the live carry factor slides the blade
-# MESH along the face-normal axis in _apply_blade_tilt; the marker, pin,
+# The wrister-address pass: while the blade is frozen in a wrister aim, the
+# visible blade addresses the side of the still puck the shot will push from —
+# the push model applied to the shot line. The trailing side of D (origin→
+# cursor) in face-normal space is −sign(D·N), which is exactly the stroke rule,
+# so CarryContactRules.stroke_side decides it with the aim-line dot as the
+# stroke and the commit threshold as the hysteresis (a near-parallel aim, D
+# almost along the stick, holds the current side instead of flickering). The
+# delta between the eased address factor and the live carry factor slides the
+# blade MESH along the face-normal axis in _apply_blade_tilt; the marker, pin,
 # release spawn, and aim line are untouched, so the fix is visually complete
-# and gameplay-inert.
+# and gameplay-inert. Geometric and handedness-free: the address tracks where
+# the aim actually is, so it cannot land on the wrong side of the puck.
 #
 # On aim exit the address becomes the real carry side (the arrangement the
 # player last saw), so the mesh offset collapses to zero with no pop and the
@@ -1857,29 +1871,40 @@ func _update_carry_contact(delta: float) -> void:
 func _update_wrister_address(delta: float) -> void:
 	var in_aim: bool = current_shot_state == SkaterStateMachine.State.WRISTER_AIM \
 			and _wrister_address_valid
-	var factor_hs: float = 1.0 if is_left_handed else -1.0
 	if not in_aim:
 		if _wrister_address_valid:
-			# Just left the aim: adopt the addressed hand as the carry side.
+			# Just left the aim: adopt the addressed arrangement as the carry side.
 			_wrister_address_valid = false
+			var factor_hs: float = 1.0 if is_left_handed else -1.0
 			_carry_side_smoothed = _address_factor * factor_hs
 			if _carry_side != 0:
 				_carry_side = -1 if _carry_side_smoothed < 0.0 else 1
 		_address_factor = get_carry_forehand_factor()
-		_prev_address_target = 0.0
+		_wrister_address_side = 0
 		return
-	var target: float = (-1.0 if _wrister_address_backhand else 1.0) * factor_hs
-	# The crossing fires the same one-per-flip transit hop the stroke flips
-	# use. Compared against the previous target once one exists (a mid-aim
-	# chirality change), else against the entry pose (committing LMB while
-	# carried on the other face — the hop onto the deadband-default forehand).
-	var reference: float = _prev_address_target \
-			if _prev_address_target != 0.0 else _address_factor
-	if absf(reference) > 0.0001 and signf(target) != signf(reference):
-		if _transit_hop <= 0.0:
-			_transit_hop = 1.0
-	_prev_address_target = target
-	var new_addr: float = move_toward(_address_factor, target, carry_side_lerp_speed * delta)
+	var aim: Vector3 = _wrister_address_dir
+	aim.y = 0.0
+	var stick: Vector3 = get_blade_contact_global() - top_hand.global_position
+	stick.y = 0.0
+	if aim.length_squared() > 0.000001 and stick.length_squared() > 0.000001:
+		aim = aim.normalized()
+		stick = stick.normalized()
+		var face_normal := Vector3(-stick.z, 0.0, stick.x)
+		if _wrister_address_side == 0:
+			# Seed from the entry arrangement so an aim that already trails
+			# the blade re-addresses nothing.
+			_wrister_address_side = -1 if _address_factor < 0.0 else 1
+		var new_side: int = CarryContactRules.stroke_side(
+				_wrister_address_side, aim.dot(face_normal), wrister_address_commit_dot)
+		if new_side != _wrister_address_side:
+			_wrister_address_side = new_side
+			# The crossing fires the same one-per-flip transit hop as a stroke.
+			if _transit_hop <= 0.0:
+				_transit_hop = 1.0
+	var new_addr: float = _address_factor
+	if _wrister_address_side != 0:
+		new_addr = move_toward(
+				_address_factor, float(_wrister_address_side), carry_side_lerp_speed * delta)
 	if new_addr != _address_factor:
 		_blade_tilt_dirty = true  # the mesh offset moves without any marker
 	_address_factor = new_addr
