@@ -266,11 +266,17 @@ func apply_facing(input: InputState, delta: float) -> void:
 	# torso faces the cursor) ride the same lower-body channel: the gait
 	# computes both, this coordinator stays the single writer of the rotation.
 	lower_body_lag = lerpf(lower_body_lag, 0.0, _controller.lower_body_lag_speed * delta)
+	var lag_share: float = lower_body_lag
 	var gait_yaw: float = 0.0
 	if _skating != null:
 		gait_yaw = _skating.stop_yaw_offset + _skating.travel_align_yaw \
 				+ _skating.shot_hip_yaw
-	_skater.set_lower_body_lag(lower_body_lag + gait_yaw)
+		# During a pivot the hold IS the turn lag: the facing-driven lag pump
+		# tracks the same rotation on the same node with its own decay clock,
+		# and the sum of the two wobbles. The hold's authority fades the
+		# generic lag out; it returns as the pivot releases.
+		lag_share *= 1.0 - _skating.pivot_hold
+	_skater.set_lower_body_lag(lag_share + gait_yaw)
 
 func apply_upper_body(delta: float) -> void:
 	if _sm.get_state() == State.SHOT_BLOCKING:

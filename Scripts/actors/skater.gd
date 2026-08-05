@@ -1378,13 +1378,19 @@ var _leg_base_pos: PackedVector3Array = PackedVector3Array()
 # x, write it back" — the shin's authored Y/Z survived. `_leg_shin_base_euler`
 # holds those so the composed basis says the same thing.
 func set_leg_swing(left_pitch: float, left_roll: float, left_knee: float,
-		right_pitch: float, right_roll: float, right_knee: float) -> void:
+		right_pitch: float, right_roll: float, right_knee: float,
+		left_yaw: float = 0.0, right_yaw: float = 0.0) -> void:
 	var base_l: Vector3 = _leg_shin_base_euler[0]
 	var base_r: Vector3 = _leg_shin_base_euler[1]
-	_pose_leg_pivot(SkaterMeshBuilder.LegBone.LEG_L, Vector3(left_pitch, 0.0, left_roll))
+	# Yaw rides the hip pivot's free Y slot: YXZ euler order puts it outermost,
+	# so the leg externally rotates about vertical and the shin + boot carry it
+	# — the mohawk open hip. Defaults keep the pre-yaw callers unchanged.
+	_pose_leg_pivot(SkaterMeshBuilder.LegBone.LEG_L,
+			Vector3(left_pitch, left_yaw, left_roll))
 	_pose_leg_pivot(SkaterMeshBuilder.LegBone.SHIN_L,
 			Vector3(left_knee, base_l.y, base_l.z))
-	_pose_leg_pivot(SkaterMeshBuilder.LegBone.LEG_R, Vector3(right_pitch, 0.0, right_roll))
+	_pose_leg_pivot(SkaterMeshBuilder.LegBone.LEG_R,
+			Vector3(right_pitch, right_yaw, right_roll))
 	_pose_leg_pivot(SkaterMeshBuilder.LegBone.SHIN_R,
 			Vector3(right_knee, base_r.y, base_r.z))
 
@@ -1392,6 +1398,36 @@ func set_leg_swing(left_pitch: float, left_roll: float, left_knee: float,
 func _pose_leg_pivot(bone: int, euler: Vector3) -> void:
 	_leg_skeleton.set_bone_pose(bone,
 			Transform3D(Basis.from_euler(euler), _leg_pos[bone]))
+
+
+# ── Blade mark seam (ice VFX) ─────────────────────────────────────────────────
+# World position of a FOOT bone, composed through everything the gait wrote —
+# lower-body yaw (alignment / pivot / stop), stride pitch, the mohawk yaw — so
+# ice marks made from here follow the SKATES, not the torso. Falls back to the
+# old body-center offset until the rig is built.
+func blade_mark_position(left: bool) -> Vector3:
+	if _leg_skeleton == null:
+		return global_position + global_transform.basis.x * (-0.12 if left else 0.12)
+	var bone: int = SkaterMeshBuilder.LegBone.FOOT_L if left \
+			else SkaterMeshBuilder.LegBone.FOOT_R
+	return (_leg_skeleton.global_transform
+			* _leg_skeleton.get_bone_global_pose(bone)).origin
+
+
+# Per-blade edge load [0, 1], published by the gait each pose pass (push
+# extension, carve under-push, hockey-stop scrape): the ice VFX scale mark
+# intensity by it, so a loaded edge bites visibly harder than a glide.
+var _edge_load_l: float = 0.0
+var _edge_load_r: float = 0.0
+
+
+func set_edge_loads(left: float, right: float) -> void:
+	_edge_load_l = left
+	_edge_load_r = right
+
+
+func edge_load(left: bool) -> float:
+	return _edge_load_l if left else _edge_load_r
 
 
 # Ankle eversion (radians, about the shin's Z): rolls the SKATE against its
@@ -2408,8 +2444,20 @@ func set_upper_surface_material(surface: int, mat: Material) -> void:
 # so this keeps the invariant documented in SkaterPoseCoordinator._apply_lean.
 # The arms stay anchored to the (deterministic) hands and stick on purpose.
 var _trunk_texture := Basis.IDENTITY
+var _trunk_texture_head := Basis.IDENTITY
 var _trunk_texture_pitch: float = 0.0
 var _trunk_texture_roll: float = 0.0
+
+# Head stabilization: the helmet rides only a fraction of the trunk texture.
+# Real players hold the head steady while the shoulders work under it (the
+# vestibulocollic "eyes level" reflex) — with full coupling every per-stride
+# trunk roll was also a head wobble, the most visible motion on the rig. Roll
+# (the oscillating weight-shift channel) is damped hard; pitch follows nearly
+# fully because its big components are sustained postures (the effort dig, the
+# sprint lean) the head genuinely leans with — a low follow there detaches the
+# helmet from the torso top at deep folds. 1.0 / 1.0 restores rigid coupling.
+@export var helmet_pitch_follow: float = 0.85
+@export var helmet_roll_follow: float = 0.4
 
 
 func set_trunk_texture(pitch_add: float, roll_add: float) -> void:
@@ -2419,6 +2467,8 @@ func set_trunk_texture(pitch_add: float, roll_add: float) -> void:
 	_trunk_texture_pitch = pitch_add
 	_trunk_texture_roll = roll_add
 	_trunk_texture = Basis.from_euler(Vector3(pitch_add, 0.0, roll_add))
+	_trunk_texture_head = Basis.from_euler(Vector3(
+			pitch_add * helmet_pitch_follow, 0.0, roll_add * helmet_roll_follow))
 	_repose_upper_bone(SkaterMeshBuilder.UpperBone.TORSO)
 	_repose_upper_bone(SkaterMeshBuilder.UpperBone.HELMET)
 	_repose_upper_bone(SkaterMeshBuilder.UpperBone.SHOULDER_L)
@@ -2430,12 +2480,14 @@ func _repose_upper_bone(bone: int) -> void:
 			_upper_basis[bone].scaled_local(_upper_scale[bone]), _upper_pos[bone])
 	# The trunk texture rotates the upper-body SHELL about the trunk pivot (the
 	# skeleton lives in upper-body space, so a zero-origin premultiply is that
-	# pivot). Arm bones are excluded — they follow the hands.
+	# pivot). Arm bones are excluded — they follow the hands; the helmet takes
+	# the stabilized head share instead of the full texture.
 	if bone == SkaterMeshBuilder.UpperBone.TORSO \
-			or bone == SkaterMeshBuilder.UpperBone.HELMET \
 			or bone == SkaterMeshBuilder.UpperBone.SHOULDER_L \
 			or bone == SkaterMeshBuilder.UpperBone.SHOULDER_R:
 		pose = Transform3D(_trunk_texture, Vector3.ZERO) * pose
+	elif bone == SkaterMeshBuilder.UpperBone.HELMET:
+		pose = Transform3D(_trunk_texture_head, Vector3.ZERO) * pose
 	_arm_skeleton.set_bone_pose(bone, pose)
 
 

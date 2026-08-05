@@ -65,8 +65,10 @@ func test_check_drive_refire_hardens_without_restarting() -> void:
 	_coord.start_check_drive(Vector3(0.0, 0.0, -1.0), 0.4)
 	_tick(20)  # mid-envelope
 	_coord.start_check_drive(Vector3(1.0, 0.0, 0.0), 1.0)  # grind re-fire
-	# The clock must not restart: the drive finishes on the original timer.
-	_tick(40)  # 20 + 40 = 60 ticks = 0.5 s > check_drive_time
+	# The clock must not restart: the drive finishes on the original timer,
+	# plus the trunk inertia filter's ~0.2 s settle tail
+	# (trunk_texture_smooth_rate) before the pitch reads as square again.
+	_tick(64)  # 20 + 64 ticks = 0.7 s > check_drive_time + settle tail
 	assert_almost_eq(_coord.trunk_pitch_add, 0.0, 0.01,
 			"a sustained-contact re-fire must not extend the drive forever")
 
