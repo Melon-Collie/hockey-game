@@ -229,6 +229,20 @@ degrades the whole lobby. Two failure modes:
    skip when idle (dirty flag) or off-screen. Gameplay reads the `blade`/
    `Marker3D` anchors, not the cosmetic mesh.
 
+**Render rate is a clock, and clocks must not be mixed inside one frame.** A
+rendered frame depicts a single instant, so everything visible in it has to be
+sampled at that instant. Moving visual work to `_process` is therefore safe only
+when nothing still on the tick shares a spatial relationship with it — and the
+camera shares one with every actor, so it can never move alone. Moving *it* to
+render rate while actors stayed on the tick is what put a one-tick-of-travel
+sawtooth into every skater's screen position above 120 fps (see
+`GameCamera._process`). Either everything visible moves together, or the
+tick-rate half is interpolated up to render time; `physics/common/
+physics_interpolation` now does the latter, which is why actor teleports must
+call `reset_physics_interpolation()` (see `SkaterController.teleport_to`). A
+uniformly tick-rate scene reads as a lower frame rate, which is fine — a mixed
+one reads as jitter, which is not.
+
 Keep the layer boundary **and** the performance — a Callable/collaborator
 boundary is an interface, not a license to allocate per call. *Memoize at the
 seam* (`PlayerRegistry` caches `Array[Skater]`; `puck_controller` caches
