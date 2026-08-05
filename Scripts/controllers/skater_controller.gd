@@ -179,9 +179,9 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var knockdown_fall_com_height_m: float = 0.95
 @export var knockdown_fall_max_entry_omega: float = 4.2
 # Head-ward extent of the tipped body (height + a little stick/arm slack): both
-# the wall probe distance and the reach the wall deflection budgets against
-# (KnockdownFallRules.wall_safe_fall_dir), so a fall near the glass lies along
-# the boards instead of through them.
+# the obstacle probe distance and the reach the deflection budgets against
+# (KnockdownFallRules.wall_safe_fall_dir), so a fall near the glass or the goal
+# net lies along the obstacle instead of through it.
 @export var knockdown_fall_body_reach_m: float = 1.9
 @export var knockdown_brace_in_seconds: float = 0.15  # arms pull into the brace over this
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
@@ -1767,11 +1767,19 @@ func _apply_knockdown_fall() -> void:
 	# entry and clipping through as the slide closes the gap.
 	var dir_world: Vector3 = skater.global_transform.basis \
 			* Vector3(stagger_recoil_dir.x, 0.0, stagger_recoil_dir.y)
+	# Boards and the goal net both report the same proximity shape; the stronger
+	# (nearer) obstacle wins the deflection. In the band behind the net where
+	# both are within reach, the per-frame re-resolve self-corrects: a tangent
+	# that slides toward the other obstacle raises its closeness next frame and
+	# the deflection re-picks.
+	var pos_xz := Vector2(skater.global_position.x, skater.global_position.z)
+	var obstacle: Vector2 = BoardPlayRules.board_proximity(
+			pos_xz, knockdown_fall_body_reach_m)
+	var net_prox: Vector2 = GameRules.net_proximity(pos_xz, knockdown_fall_body_reach_m)
+	if net_prox.length_squared() > obstacle.length_squared():
+		obstacle = net_prox
 	var safe_dir: Vector2 = KnockdownFallRules.wall_safe_fall_dir(
-			Vector2(dir_world.x, dir_world.z),
-			BoardPlayRules.board_proximity(
-					Vector2(skater.global_position.x, skater.global_position.z),
-					knockdown_fall_body_reach_m))
+			Vector2(dir_world.x, dir_world.z), obstacle)
 	var d: Vector3 = skater.global_transform.basis.inverse() \
 			* Vector3(safe_dir.x, 0.0, safe_dir.y)
 	skater.set_knockdown_fall(Vector3.UP.cross(d), tilt)
