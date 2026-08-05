@@ -238,3 +238,10 @@ here whenever you bump, in the same format.
 #      fishbowl) rendered on the helmet. Same payload shape (still one int),
 #      but a v54 peer masks the field off and renders every face bare, so
 #      mixed builds must be refused.
+# v56: wrister address on the wire — the movement-intent byte's spare bit 7
+#      carries which side of the still puck the frozen blade addresses during
+#      a wrister aim (face-normal sign; meaningful only while shot_state ==
+#      WRISTER_AIM), so render-only clients show the shooter's re-address
+#      tell. A v55 peer sends the bit always-clear and every aiming shooter
+#      would read as addressing one fixed side — a *wrong* defensive tell,
+#      worse than none, so mixed builds must be refused.

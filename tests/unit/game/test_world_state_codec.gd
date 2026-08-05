@@ -243,7 +243,7 @@ func test_skater_flags_round_trip_all_combinations() -> void:
 func test_skater_move_intent_round_trips_all_octants() -> void:
 	# The intent byte (v15) quantizes the WASD vector to 8 directions —
 	# lossless for keyboard input. Every octant + brake + sprint (v16) + idle
-	# round-trips, and the three flag bits can't clobber each other.
+	# round-trips, and the flag bits can't clobber each other.
 	for oct: int in range(8):
 		var a: float = float(oct) * (PI / 4.0)
 		var s := SkaterNetworkState.new()
@@ -251,6 +251,7 @@ func test_skater_move_intent_round_trips_all_octants() -> void:
 		s.brake_intent = (oct % 2 == 0)
 		s.sprint_active = (oct % 3 == 0)
 		s.hit_committed = (oct % 2 == 1)  # v28 bit [6]; interleaved so it can't alias brake/sprint
+		s.wrister_address_side = 1 if oct % 3 == 1 else -1  # v56 bit [7]
 		var dec: SkaterNetworkState = WorldStateCodec._decode_skater_quantized(
 				WorldStateCodec._encode_skater_quantized(s))
 		assert_almost_eq(dec.move_intent.x, s.move_intent.x, 0.001, "octant %d x" % oct)
@@ -258,6 +259,8 @@ func test_skater_move_intent_round_trips_all_octants() -> void:
 		assert_eq(dec.brake_intent, s.brake_intent, "octant %d brake" % oct)
 		assert_eq(dec.sprint_active, s.sprint_active, "octant %d sprint" % oct)
 		assert_eq(dec.hit_committed, s.hit_committed, "octant %d hit-commit" % oct)
+		assert_eq(dec.wrister_address_side, s.wrister_address_side,
+				"octant %d wrister address" % oct)
 
 
 func test_quantize_move_intent_matches_wire_round_trip() -> void:

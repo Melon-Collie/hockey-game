@@ -180,8 +180,18 @@ Mesh-only by design: the marker, pin, release spawn, and the pinned aim
 origin are untouched (`wrister_origin_world` is load-bearing for the
 gamepad's shot-cursor anchor and the chirality bearing, so it must not
 move). On aim exit the address becomes the real carry side, so there is no
-pop. Render-only remotes never receive the push and keep the frozen entry
-pose rather than guessing (`_wrister_address_valid`).
+pop.
+
+**Replicated (v56):** render-only remotes can't derive the side (no aim
+line; the replicated torso coil is a scaled+clamped encoding that can't be
+inverted without the shooter's controller tunables), so the host's committed
+side rides the movement-intent byte's spare bit 7 — validity implicit in
+`shot_state == WRISTER_AIM`. `RemoteController` pushes it via
+`set_wrister_address_side`, and the skater's address pass adopts it through
+the same crossing/hop detection as the derived path, so a spectated
+shooter's blade re-addresses exactly as the shooter sees it. This makes the
+address a real defensive tell: every peer — goalie, bots, and human
+defenders alike — reads the wind-up side before the release.
 
 ## 8. What this buys
 

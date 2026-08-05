@@ -61,6 +61,12 @@ var sprint_active: bool = false
 # passive delivery correctly on a client (host knows all locally) — the brace moved
 # off brake onto the hit button. Bit 6 of the intent byte (no block growth).
 var hit_committed: bool = false
+# Which side of the still puck the frozen blade addresses during a wrister aim
+# (face-normal sign, ±1) — the re-address tell, so render-only clients show the
+# shooter's blade on the side the shot will push from. Meaningful ONLY while
+# shot_state == WRISTER_AIM (validity is implicit in the state, so the wire
+# spends one bit); garbage otherwise, and consumers must gate on the state.
+var wrister_address_side: int = 1
 var host_timestamp: float = 0.0         # host-only, not serialized
 var blade_contact_world: Vector3 = Vector3.ZERO  # host-only, not serialized
 # World-space top-hand (grip) point. host-only, not serialized — paired with
@@ -93,6 +99,7 @@ func to_array() -> Array:
 		sprint_active,
 		knockdown_timer,
 		hit_committed,
+		wrister_address_side,
 	]
 
 func copy_from(s: SkaterNetworkState) -> void:
@@ -118,6 +125,7 @@ func copy_from(s: SkaterNetworkState) -> void:
 	brake_intent = s.brake_intent
 	sprint_active = s.sprint_active
 	hit_committed = s.hit_committed
+	wrister_address_side = s.wrister_address_side
 	host_timestamp = s.host_timestamp
 	blade_contact_world = s.blade_contact_world
 	top_hand_world = s.top_hand_world
@@ -154,4 +162,6 @@ static func from_array(data: Array) -> SkaterNetworkState:
 		state.knockdown_timer = data[20]
 	if data.size() > 21:
 		state.hit_committed = data[21]
+	if data.size() > 22:
+		state.wrister_address_side = data[22]
 	return state

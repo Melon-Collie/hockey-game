@@ -713,9 +713,13 @@ var _wrister_address_valid: bool = false
 # the live factor slides the blade MESH over the still puck (_apply_blade_tilt).
 var _address_factor: float = 0.0
 # Committed address side in face-normal sign space (0 = unseeded). Flipped by
-# CarryContactRules.stroke_side over the aim-line dot; a flip is the crossing
-# that fires the transit hop.
+# CarryContactRules.stroke_side over the aim-line dot on simulating peers, or
+# adopted from the wire-staged target on render-only remotes; a change is the
+# crossing that fires the transit hop.
 var _wrister_address_side: int = 0
+# Wire-staged side from set_wrister_address_side (0 = none staged) — adopted
+# by _update_wrister_address so crossings are detected in one place.
+var _wrister_address_target_side: int = 0
 # Visual-only offset applied to MeshRoot each frame. Set by LocalController
 # during reconcile blending to ease the visible correction over a few ticks.
 # The body itself is always at the authoritative position.
@@ -1780,6 +1784,25 @@ func set_wrister_address(aim_dir: Vector3) -> void:
 	_wrister_address_valid = true
 
 
+# The replicated form of the push, for client-rendered remotes: the committed
+# side arrives off the wire (SkaterNetworkState.wrister_address_side, computed
+# by the host running this same model) instead of being derived from an aim
+# line the client doesn't have. Stages the side; _update_wrister_address
+# adopts it, so the hop-on-crossing detection lives in one place for both
+# sources. Caller gates on shot_state == WRISTER_AIM — the wire value is
+# garbage outside it.
+func set_wrister_address_side(side: int) -> void:
+	_wrister_address_target_side = side
+	_wrister_address_dir = Vector3.ZERO
+	_wrister_address_valid = true
+
+
+# The committed address side for the wire (±1; 0 before the first aim tick
+# seeds it, which fill_network_state maps to the forehand bit state).
+func get_wrister_address_side() -> int:
+	return _wrister_address_side
+
+
 # The stickhandling push model (docs/stickhandling-push-model-plan.md): the
 # blade renders on the side of the puck it is PUSHING from — the side opposite
 # the puck's motion in the carrier's frame — and an inward pull plays the
@@ -1881,26 +1904,38 @@ func _update_wrister_address(delta: float) -> void:
 				_carry_side = -1 if _carry_side_smoothed < 0.0 else 1
 		_address_factor = get_carry_forehand_factor()
 		_wrister_address_side = 0
+		_wrister_address_target_side = 0
 		return
+	var prev_side: int = _wrister_address_side
 	var aim: Vector3 = _wrister_address_dir
 	aim.y = 0.0
 	var stick: Vector3 = get_blade_contact_global() - top_hand.global_position
 	stick.y = 0.0
 	if aim.length_squared() > 0.000001 and stick.length_squared() > 0.000001:
+		# Simulating peer: derive the side from the aim line.
 		aim = aim.normalized()
 		stick = stick.normalized()
 		var face_normal := Vector3(-stick.z, 0.0, stick.x)
-		if _wrister_address_side == 0:
+		var seed: int = _wrister_address_side
+		if seed == 0:
 			# Seed from the entry arrangement so an aim that already trails
 			# the blade re-addresses nothing.
-			_wrister_address_side = -1 if _address_factor < 0.0 else 1
-		var new_side: int = CarryContactRules.stroke_side(
-				_wrister_address_side, aim.dot(face_normal), wrister_address_commit_dot)
-		if new_side != _wrister_address_side:
-			_wrister_address_side = new_side
-			# The crossing fires the same one-per-flip transit hop as a stroke.
-			if _transit_hop <= 0.0:
-				_transit_hop = 1.0
+			seed = -1 if _address_factor < 0.0 else 1
+		_wrister_address_side = CarryContactRules.stroke_side(
+				seed, aim.dot(face_normal), wrister_address_commit_dot)
+	elif _wrister_address_target_side != 0:
+		# Render-only remote: adopt the host's committed side off the wire.
+		_wrister_address_side = _wrister_address_target_side
+	# The crossing fires the same one-per-flip transit hop as a stroke —
+	# against the previous committed side, or on the first commit against the
+	# entry arrangement (committing LMB onto the other face).
+	var reference: int = prev_side
+	if reference == 0 and absf(_address_factor) > 0.0001:
+		reference = -1 if _address_factor < 0.0 else 1
+	if reference != 0 and _wrister_address_side != 0 \
+			and _wrister_address_side != reference:
+		if _transit_hop <= 0.0:
+			_transit_hop = 1.0
 	var new_addr: float = _address_factor
 	if _wrister_address_side != 0:
 		new_addr = move_toward(

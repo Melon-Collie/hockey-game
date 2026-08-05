@@ -1710,6 +1710,10 @@ func fill_network_state(state: SkaterNetworkState) -> void:
 	# is upper-body-local and can't be used for host-side world geometry.
 	state.top_hand_world = skater.upper_body_to_global(skater.get_top_hand_position())
 	state.shot_state = _sm.get_state() as int
+	# Meaningful only while shot_state == WRISTER_AIM (one bit on the wire, no
+	# validity flag): the unseeded 0 maps to forehand, matching the address
+	# pass's own forehand seed on the first aim tick.
+	state.wrister_address_side = 1 if skater.get_wrister_address_side() >= 0 else -1
 	# The normalized 0..1 charge (skater.shot_charge covers the wrister's
 	# predicted release power AND slapper wind-up), in the u8 codec range.
 	# Consumed on the receive side by the cosmetic pose layers (stick flex,
