@@ -78,10 +78,14 @@ Chirality picks which inward diagonal gets which dressing. For a lefty
 | pull in from the backhand side (down/left) | backhand face | heel-to-mid | mild cup — the backhand cradle (a backhand can't roll to a forehand hook) |
 | at rest / below deadband | hold last side | unchanged | cupped — the cradle |
 
-Camera note: from the gameplay camera's ~75° tilt, roll about the blade's long
-axis barely reads (that axis points near the viewer). The dressing that reads
-from overhead is **yaw** — the toe visibly curling in around the puck — so the
-toe-drag pose should carry a yaw term alongside the roll.
+Camera note: from the gameplay camera's ~75° tilt, roll about the blade's
+long axis barely reads (that axis points near the viewer). What does read from
+overhead is the toe visibly curling in around the puck. Implemented as an
+**axial twist about the hosel line** — the axis a real wrist roll actually
+has — which produces that horizontal toe sweep (~7 cm at 20°) as a
+consequence AND keeps the hosel tip (the point the shaft aims at) invariant,
+so no dressing can kink the shaft→blade junction. An earlier heel-local yaw
+term did the same sweep but bent the junction; it's gone.
 
 ## 4. What is kept, what is reworked
 
@@ -100,11 +104,11 @@ toe-drag pose should carry a yaw term alongside the roll.
   velocity hysteresis instead of the position threshold).
 - `get_toe_drag_factor` becomes the inward-pull grammar: composes the current
   positional read (shaft steep = stick tucked at the feet — still a legitimate
-  drag posture) with the gestural read (`v_in` on the correct diagonal), and
-  gains the yaw dressing.
+  drag posture) with the gestural read (`v_in` on the correct diagonal); all
+  face-angle dressings ride one axial hosel-line twist (see §3 camera note).
 
 **Where the code goes:** the stroke solver — (v_perp, v_in, current side,
-handedness) → (face target, seat offset, roll, yaw) — is pure stateless math:
+handedness) → (face target, seat offset, twist) — is pure stateless math:
 `domain/rules/` + GUT tests, per the project rule. `Skater` owns the smoothed
 state and applies the solved targets; the IK coordinator feeds it, replacing
 the `update_carry_side` call site.
@@ -139,7 +143,7 @@ allocation — same budget as the code it replaces.
    forehand/backhand carry reads when *not* stroking. Playtest checkpoint —
    the deadband cradle should preserve it, but that's a judgment call on ice.
 4. **Blade marker vs mesh.** The face-side offset moves the blade *marker*
-   (as today, ±`carry_blade_offset`); the roll/yaw dressing moves the *mesh
+   (as today, ±`carry_blade_offset`); the twist dressing moves the *mesh
    only* — never the marker the contact math reads.
 
 ## 7. Open decisions
@@ -162,6 +166,6 @@ good dangler beats it by changing late. The whole blade becomes legible.
 - GUT for the stroke solver: face target per quadrant of (v_perp, v_in) ×
   handedness, deadband hold, hysteresis (no flip-flop straddling the
   threshold), dressing clamps.
-- Nothing mechanical beyond that — seat/roll/yaw are cosmetic; carry/release
+- Nothing mechanical beyond that — seat/twist are cosmetic; carry/release
   feel verified in a local session. The release-origin invariant (mid-blade,
   position-free trajectory) is untouched by construction.

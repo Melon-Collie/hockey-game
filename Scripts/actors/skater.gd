@@ -19,8 +19,8 @@ extends Node3D
 # from _position_hand_markers() so it tracks live handedness flips. Both are
 # tunable — flip a sign here if a side looks wrong in the editor.
 # Resting blade tilt. Toe-lift (about X, lie angle, handedness-neutral) is kept
-# small; the face-open loft (about Z, handedness-signed — the forehand face is
-# on opposite sides for L/R) is a tiny resting cup.
+# small; the face-open loft (axial twist about the hosel line, handedness-signed
+# — the forehand face is on opposite sides for L/R) is a tiny resting cup.
 const _BLADE_TOE_LIFT_DEG: float = 4.0
 const _BLADE_FACE_OPEN_DEG: float = 4.0
 # Rigid shaft-follow pitch (see _apply_blade_tilt): the blade mesh pitches by
@@ -33,9 +33,9 @@ const _BLADE_FOLLOW_PITCH_MIN_DEG: float = -18.0
 const _BLADE_FOLLOW_PITCH_MAX_DEG: float = 100.0
 # Blended in with the scroll-wheel loft level (a third per rung, full at HIGH):
 # the loft opens the face upward to "scoop" the puck, so elevation keys off the
-# Z loft far more than the X toe-lift. Eased via _blade_elevation_blend in
+# axial twist far more than the X toe-lift. Eased via _blade_elevation_blend in
 # _physics_process so it doesn't snap.
-const _BLADE_ELEVATED_EXTRA_LOFT_DEG: float = 16.0   # about Z (handedness-signed)
+const _BLADE_ELEVATED_EXTRA_LOFT_DEG: float = 16.0   # axial twist (handedness-signed)
 const _BLADE_ELEVATED_EXTRA_LIFT_DEG: float = 4.0    # about X (small touch of toe-lift)
 const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swing in ~0.17 s)
 # Toe-drag read. The shaft only steepens past its lie in TopHandIK's CLOSE
@@ -49,16 +49,11 @@ const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swi
 # opens), and the carried puck slides toward the toe (see carry_contact_drag_u).
 const _BLADE_TOE_DRAG_ONSET_DEG: float = -6.0
 const _BLADE_TOE_DRAG_FULL_DEG: float = _BLADE_FOLLOW_PITCH_MIN_DEG
-const _BLADE_TOE_DRAG_ROLL_DEG: float = 20.0         # about Z (handedness-signed)
-# The toe curling in around the puck at full drag. Yaw is the axis the
-# gameplay camera actually sees from its ~75° tilt — roll about the blade's
-# long axis points nearly at the viewer and barely changes the silhouette, so
-# this is the readout that makes the drag legible from overhead.
-const _BLADE_TOE_DRAG_YAW_DEG: float = 18.0          # about Y (handedness-signed)
+const _BLADE_TOE_DRAG_ROLL_DEG: float = 20.0         # axial twist (handedness-signed)
 # Mild face close at full backhand cradle — a backhand can't roll to a
 # forehand hook, so the cradle cups instead of rolling (grammar table in the
 # push-model plan).
-const _BLADE_CRADLE_CUP_DEG: float = 8.0             # about Z (handedness-signed)
+const _BLADE_CRADLE_CUP_DEG: float = 8.0             # axial twist (handedness-signed)
 
 # Shoulder anchor offset from body center. The shoulder (top-hand anchor)
 # sits on the OPPOSITE side of the body from the blade: a left-handed shooter
@@ -1189,7 +1184,7 @@ func _shaft_follow_pitch_deg() -> float:
 #   gestural — a live inward pull on the forehand diagonal (_toe_drag_gesture,
 #   advanced by _update_carry_contact), which fires out at full reach too,
 #   where the shaft never steepens.
-# Drives the wrist-roll/yaw pose in _apply_blade_tilt and the toe-ward seat
+# Drives the wrist-roll twist in _apply_blade_tilt and the toe-ward seat
 # slide in get_carry_contact_u().
 #
 # Carry-only, like the forehand/backhand side and its transit lift: a toe drag
@@ -1210,13 +1205,23 @@ func get_toe_drag_factor() -> float:
 # Three composed reads:
 #   1. Shaft-follow pitch (_shaft_follow_pitch_deg) — the rigid shaft attachment.
 #   2. Resting toe-lift + the scroll-loft elevation extras (about X).
-#   3. Face-open loft (about Z, handedness-signed — the forehand face is on
-#      opposite sides for L/R shots), opened by the loft level and CLOSED by
-#      the carry-only toe-drag wrist roll and the milder backhand-cradle cup.
-#      Loft and roll oppose each other on purpose: a lofted blade cups under
-#      the puck, a dragged one rolls over the top of it.
-#   4. Toe-drag yaw (about Y, handedness-signed) — the toe curling in around
-#      the puck, the read that survives the overhead camera.
+#   3. Axial twist about the hosel axis (handedness-signed): every face-angle
+#      dressing composed into one wrist rotation — the resting cup, the loft
+#      level's scoop, the toe-drag roll, and the backhand-cradle cup, the last
+#      two closing against the first two on purpose (a lofted blade cups under
+#      the puck, a dragged one rolls over the top of it).
+# The twist axis is the one a real wrist roll has: a blade has no degrees of
+# freedom relative to the shaft, so every face rotation is the whole stick
+# twisting about its own line. Structurally load-bearing, not flavor — the
+# hosel tip (the point update_stick_mesh aims the shaft at) LIES ON that axis,
+# so it is invariant under any twist angle: the shaft→blade junction cannot
+# kink and the shaft never swings when a dressing engages. Rotating the same
+# angles about a heel-local axis instead (as this used to, about Z and Y)
+# dragged the tip off the shaft line by up to a few cm at full toe drag. The
+# twist also sweeps the toe horizontally (~7 cm at 20°) — the drag curl the
+# overhead camera reads. The one remaining junction bend is the follow-pitch
+# clamp at its floor/ceiling, which is deliberate (the dig floor keeps the toe
+# out of the ice).
 # The mesh is heel-origin (StickBladeMeshBuilder), so the rotation pivots
 # about the heel and the shaft→blade junction stays pinned at any pitch.
 # Idempotent (recomputed from identity each call, scale preserved — the
@@ -1226,21 +1231,23 @@ func _apply_blade_tilt() -> void:
 	if _blade_mesh_instance == null or not is_instance_valid(_blade_mesh_instance):
 		return
 	var follow_pitch_deg: float = _shaft_follow_pitch_deg()
-	# Loft sign: opens the forehand face upward. Flipped from the usual
+	# Twist sign: opens the forehand face upward. Flipped from the usual
 	# blade_side_sign convention so the cup tilts the right way for each hand.
 	var blade_side_sign: float = 1.0 if is_left_handed else -1.0
 	var drag: float = get_toe_drag_factor()
 	var toe_lift: float = _BLADE_TOE_LIFT_DEG + follow_pitch_deg \
 			+ _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LIFT_DEG
-	var loft: float = (_BLADE_FACE_OPEN_DEG \
+	var twist: float = (_BLADE_FACE_OPEN_DEG \
 			+ _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LOFT_DEG \
 			- drag * _BLADE_TOE_DRAG_ROLL_DEG \
 			- _heel_cradle * _BLADE_CRADLE_CUP_DEG) * blade_side_sign
-	var yaw: float = drag * _BLADE_TOE_DRAG_YAW_DEG * blade_side_sign
-	var rot: Basis = Basis.IDENTITY \
-			.rotated(Vector3.RIGHT, deg_to_rad(toe_lift)) \
-			.rotated(Vector3.BACK, deg_to_rad(loft)) \
-			.rotated(Vector3.UP, deg_to_rad(yaw))
+	var pitch_basis: Basis = Basis.IDENTITY.rotated(Vector3.RIGHT, deg_to_rad(toe_lift))
+	# Hosel axis (StickBladeMeshBuilder._add_hosel: (0, sin lie, cos lie) in
+	# blade-local space), carried through the pitch so the twist stays about
+	# the pitched shaft line.
+	var lie_rad: float = deg_to_rad(blade_lie_deg)
+	var hosel_axis: Vector3 = pitch_basis * Vector3(0.0, sin(lie_rad), cos(lie_rad))
+	var rot: Basis = pitch_basis.rotated(hosel_axis, deg_to_rad(twist))
 	var keep_scale: Vector3 = _blade_mesh_instance.transform.basis.get_scale()
 	_blade_mesh_instance.transform.basis = rot.scaled(keep_scale)
 
