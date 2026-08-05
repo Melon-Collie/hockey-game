@@ -241,8 +241,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		_phase_primed = false
 	elif event.keycode == KEY_F4:
 		_log_felt_lag()
-	elif event.keycode == KEY_F5:
-		_toggle_physics_interpolation()
 	elif event.keycode == KEY_C and _showing:
 		# Only while the F3 panel is open, so a bare C keypress in gameplay
 		# never gets swallowed here.
@@ -251,24 +249,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		# Panel-open gated like C. The digest always carries BOTH pages, so
 		# whichever one is on screen never decides what a bug report contains.
 		_page = Page.NET if _page == Page.PERF else Page.PERF
-
-# A/B the sim→render interpolation live, so the sawtooth this overlay measures
-# can be seen appearing and disappearing on the same rush rather than across two
-# launches. Ungated by the panel (the point is to watch the GAME, not the
-# readout) and deliberately not persisted — it mirrors the project setting for a
-# session and reverts on restart.
-#
-# Toggling is itself a discontinuity: switching on with no history makes the
-# interpolator lerp every actor from wherever its previous transform happened to
-# be, so the whole rink smears for one tick without the reset.
-func _toggle_physics_interpolation() -> void:
-	var tree: SceneTree = get_tree()
-	tree.physics_interpolation = not tree.physics_interpolation
-	tree.root.reset_physics_interpolation()
-	_toast.text = "Physics interpolation: %s" % ("ON" if tree.physics_interpolation else "OFF")
-	_toast.show()
-	_toast_timer = TOAST_SECONDS
-
 
 # A tester pressing F4 flags "this felt laggy right now." We snapshot the most
 # diagnostic LIVE values and append a marker to the session summary so the
@@ -530,7 +510,7 @@ func _refresh() -> void:
 	if t.session.felt_lag_count > 0:
 		felt = "   [color=#%s]%d lag report(s)[/color]" % [COL_WARN, t.session.felt_lag_count]
 	var other: String = "P perf" if _page == Page.NET else "P back to net"
-	var header := "[b]%s[/b]   [color=#%s]%s[/color]   [color=#%s]%s[/color]%s   [color=#%s](F3 close · F4 report lag · F5 interpolation · C copy digest · %s)[/color]" % [
+	var header := "[b]%s[/b]   [color=#%s]%s[/color]   [color=#%s]%s[/color]%s   [color=#%s](F3 close · F4 report lag · C copy digest · %s)[/color]" % [
 		"Network Debug" if _page == Page.NET else "Frame Cost",
 		_col(_worst), verdict, COL_HEAD, role, felt, COL_DIM, other]
 	_rt.text = header + "\n" + "\n".join(_lines)
@@ -811,7 +791,7 @@ func _render_sim_phase() -> void:
 		"one tick of travel — how far your skater drifts back across the frame while the sim is held, before snapping forward. Zero at rest and linear in speed, which is why this only shows on a fast rush")
 	_info("Interpolation",
 		"on" if get_tree().physics_interpolation else "off",
-		"F5 toggles it live. Off = rendered positions snap to tick boundaries, so the only way to hide the sawtooth is to sample it at one phase (cap fps at or below the sim rate). On = the renderer draws between ticks and the frame rate stops mattering")
+		"why the uneven share above is or isn't a problem. Off = rendered positions snap to tick boundaries, so the only way to hide the sawtooth is to sample it at one phase (cap fps at or below the sim rate). On = the renderer draws between ticks and the frame rate stops mattering")
 
 
 # Non-empty buckets of the last published window, for the copied digest. Keys are
