@@ -2378,6 +2378,11 @@ func _apply_wrister_aim_blade(input: InputState, delta: float) -> void:
 	if offset.length_squared() > 0.0001:
 		hold_target = skater.global_position + offset
 		hold_target.y = 0.0
+	# Feed the live forehand/backhand classification — the SAME read the
+	# release will use — so the frozen blade visibly addresses the hand that
+	# will fire (Skater.set_wrister_address). Recomputed per tick: a swing
+	# that crosses chirality mid-aim re-addresses on the spot.
+	skater.set_wrister_address(_wrister_is_backhand(input))
 	_ik.apply_blade_from_mouse(input, delta, true, hold_target)
 
 # Bearing the swing-chirality tracker seeds from at charge start: origin→cursor,

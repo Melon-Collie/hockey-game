@@ -690,6 +690,22 @@ var _heel_cradle: float = 0.0
 # Remaining phase (1→0) of the current transit hop; see
 # get_carry_transit_factor.
 var _transit_hop: float = 0.0
+# ── Wrister address (see set_wrister_address) ─────────────────────────────────
+# The hand the wrister will release as, pushed per aim tick by the controller
+# from the live swing-chirality classification — the SAME read the release
+# uses, so this tell can never disagree with the shot that fires. valid is
+# false on peers that never receive the push (client-rendered remotes), which
+# fall back to the frozen entry pose rather than showing a possibly-wrong hand.
+var _wrister_address_backhand: bool = false
+var _wrister_address_valid: bool = false
+# Eased blade-address factor in face-normal space (get_carry_forehand_factor's
+# units). Outside a wrister aim it is pinned to the live carry factor (zero
+# offset); during the aim it eases toward the predicted hand, and the delta to
+# the live factor slides the blade MESH over the still puck (_apply_blade_tilt).
+var _address_factor: float = 0.0
+# Previous tick's address target — a sign flip is the crossing that fires the
+# transit hop.
+var _prev_address_target: float = 0.0
 # Visual-only offset applied to MeshRoot each frame. Set by LocalController
 # during reconcile blending to ease the visible correction over a few ticks.
 # The body itself is always at the authoritative position.
@@ -1250,6 +1266,16 @@ func _apply_blade_tilt() -> void:
 	var rot: Basis = pitch_basis.rotated(hosel_axis, deg_to_rad(twist))
 	var keep_scale: Vector3 = _blade_mesh_instance.transform.basis.get_scale()
 	_blade_mesh_instance.transform.basis = rot.scaled(keep_scale)
+	# Wrister-address slide: during a wrister aim the blade MESH (never the
+	# marker) slides along the face-normal axis to address the hand the release
+	# will fire as — marker local +X IS the face normal (set_blade_position
+	# aims marker −Z along the shaft, so +X is its 90° Y-rotation, the same
+	# axis get_carry_target_global offsets the pin along). Zero outside an aim
+	# (_address_factor is pinned to the live factor). The shaft follows for
+	# free: update_stick_mesh aims it at the hosel tip through this transform.
+	_blade_mesh_instance.position = Vector3(
+			(_address_factor - get_carry_forehand_factor()) * carry_blade_offset,
+			0.0, 0.0)
 
 
 # (Re)generates the procedural curved blade mesh (and the tape band riding it,
@@ -1729,6 +1755,21 @@ func get_carry_transit_factor() -> float:
 	return sin(PI * _transit_hop)
 
 
+# Push the wrister's live forehand/backhand classification onto the skater —
+# called every WRISTER_AIM tick by SkaterController._apply_wrister_aim_blade
+# with ShotMechanics.wrister_is_backhand's answer (swing chirality for humans,
+# the committed hand for bots). The address pass in _update_carry_contact
+# consumes it so the wound-up blade visibly ADDRESSES the hand that will fire:
+# a carrier who froze on the backhand and then sweeps a forehand sees the
+# blade hop over the still puck to the forehand face. Runs on the owning
+# client and on the host (which drives remote skaters from input), so every
+# simulating peer shows it; render-only remotes never receive the push and
+# keep the frozen entry pose (valid stays false).
+func set_wrister_address(is_backhand: bool) -> void:
+	_wrister_address_backhand = is_backhand
+	_wrister_address_valid = true
+
+
 # The stickhandling push model (docs/stickhandling-push-model-plan.md): the
 # blade renders on the side of the puck it is PUSHING from — the side opposite
 # the puck's motion in the carrier's frame — and an inward pull plays the
@@ -1798,6 +1839,50 @@ func _update_carry_contact(delta: float) -> void:
 		_blade_tilt_dirty = true
 	_toe_drag_gesture = new_drag
 	_heel_cradle = new_cradle
+	_update_wrister_address(delta)
+
+
+# The wrister-address pass: while the blade is frozen in a wrister aim, ease
+# _address_factor toward the hand the release will fire as, so the visible
+# blade re-addresses the still puck when the aimed swing crosses chirality
+# (the frozen backhand pose winding a forehand — the tell this fixes). The
+# delta between the address factor and the live carry factor slides the blade
+# MESH along the face-normal axis in _apply_blade_tilt; the marker, pin,
+# release spawn, and aim line are untouched, so the fix is visually complete
+# and gameplay-inert.
+#
+# On aim exit the address becomes the real carry side (the arrangement the
+# player last saw), so the mesh offset collapses to zero with no pop and the
+# post-release ease starts from the addressed pose.
+func _update_wrister_address(delta: float) -> void:
+	var in_aim: bool = current_shot_state == SkaterStateMachine.State.WRISTER_AIM \
+			and _wrister_address_valid
+	var factor_hs: float = 1.0 if is_left_handed else -1.0
+	if not in_aim:
+		if _wrister_address_valid:
+			# Just left the aim: adopt the addressed hand as the carry side.
+			_wrister_address_valid = false
+			_carry_side_smoothed = _address_factor * factor_hs
+			if _carry_side != 0:
+				_carry_side = -1 if _carry_side_smoothed < 0.0 else 1
+		_address_factor = get_carry_forehand_factor()
+		_prev_address_target = 0.0
+		return
+	var target: float = (-1.0 if _wrister_address_backhand else 1.0) * factor_hs
+	# The crossing fires the same one-per-flip transit hop the stroke flips
+	# use. Compared against the previous target once one exists (a mid-aim
+	# chirality change), else against the entry pose (committing LMB while
+	# carried on the other face — the hop onto the deadband-default forehand).
+	var reference: float = _prev_address_target \
+			if _prev_address_target != 0.0 else _address_factor
+	if absf(reference) > 0.0001 and signf(target) != signf(reference):
+		if _transit_hop <= 0.0:
+			_transit_hop = 1.0
+	_prev_address_target = target
+	var new_addr: float = move_toward(_address_factor, target, carry_side_lerp_speed * delta)
+	if new_addr != _address_factor:
+		_blade_tilt_dirty = true  # the mesh offset moves without any marker
+	_address_factor = new_addr
 
 
 # Where along the blade the carried puck rides, as a fraction of blade_length

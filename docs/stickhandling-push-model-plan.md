@@ -154,6 +154,23 @@ allocation — same budget as the code it replaces.
 - Whether the elevation chevrons shrink/retire stays parked with the
   contact-point tell playtest (elevation plan §6.3).
 
+## 7b. Wrister address (follow-up, implemented)
+
+The freeze at LMB-down used to fossilize whatever carry side was live, so a
+backhand-frozen pose could wind a forehand shot — the pose lied. During
+WRISTER_AIM the controller now pushes the live release classification
+(`ShotMechanics.wrister_is_backhand` — swing chirality for humans, the
+committed hand for bots) onto the skater each tick; an address factor eases
+toward it and the delta to the live carry factor slides the blade **mesh**
+along the face-normal axis (marker local +X), with the transit hop firing on
+the crossing. Mesh-only by design: the marker, pin, release spawn, and the
+pinned aim origin are untouched (`wrister_origin_world` is load-bearing for
+the gamepad's shot-cursor anchor and the chirality bearing, so it must not
+move). On aim exit the address becomes the real carry side, so there is no
+pop. Render-only remotes never receive the push and keep the frozen entry
+pose rather than guessing (`_wrister_address_valid`); replicating the 1-bit
+address is a possible future wire nicety.
+
 ## 8. What this buys
 
 The blade side telegraphs the next stroke — a defender watching the carrier
