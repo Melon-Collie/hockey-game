@@ -84,6 +84,7 @@ defines, as a **segment** (heel → toe), with two materials:
 - **Pipes** (posts, crossbar) — hard. A blade segment against a post cylinder
   ejects flush, exactly at the drawn radius, no buffer beyond the blade's own
   half-thickness. The stick stops on iron where the player can see iron.
+  **A carried puck driven into a pipe is stripped** (§2.5).
 - **Twine** (sides, back, top) — soft. The segment may **penetrate** to
   `blade_mesh_penetration_m` (start: 0.12) against a spring-like resistance, and
   is stopped there. It is not teleported to a face and the puck is **not**
@@ -92,6 +93,40 @@ defines, as a **segment** (heel → toe), with two materials:
 A stick reaching for the puck from behind the net therefore resolves as *your
 blade is buried in twine and can do nothing* — which is what physically happens,
 and which reads correctly — instead of *a box confiscated your puck*.
+
+That split gives the player one learnable rule for the whole area: **iron takes
+it, mesh just stops you.** Both halves are visible from outside — you can see
+which surface you hit — which is the property the current single box lacks
+entirely.
+
+### 2.5 Ringing iron strips the puck
+
+Decided: yes. A wraparound that clangs the post loses the puck, and that reads as
+earned rather than confiscated, because the player can see and hear exactly what
+beat them.
+
+The important detail is *how* it comes off. Not `_do_release` with a generic
+`goalie_strip_power` shove — the puck should leave along its **own reflection off
+the pipe**, which `PuckGeometryCollision.resolve_posts` already computes:
+eject flush against the cylinder, reflect the into-post component at
+`POST_RESTITUTION` 0.55, keep the tangential (pipes are near-frictionless). So
+the strip velocity is not a new number to tune; it is the collision the loose
+puck would have had, which is the whole thesis of this document applied to the
+one case where the puck stops being carried.
+
+Consequences worth stating:
+
+- It gives the goalie's post seal a free ally at exactly the moment it should
+  have one, without buffing the goalie's *reads* at all — the doctrine
+  constraint in §5.3 is untouched, because iron is not a save.
+- The rebound is live (0.55 off the pipe), so a ring is a loose puck in a
+  dangerous area, not a whistle. Ringing iron should create a scramble.
+- It applies to the jam too: prying against the post and catching pipe ends the
+  jam and squirts the puck.
+
+Twine remains non-stripping, so the asymmetry does real work — it makes *which
+part of the net you attack* a decision, where today every part of it behaves
+identically.
 
 New pure rule, mirroring the existing one so the two stay reviewable side by
 side:
@@ -311,7 +346,7 @@ Each stage is independently shippable and independently revertible.
 | Stage | Content | Risk |
 |---|---|---|
 | **A1** | Shared net geometry; `NetBladeCollision` (segment vs pipes + twine); blade call sites switched | low — pose only |
-| **A2** | Buffer removed from the blade path; posts ring | low |
+| **A2** | Buffer removed from the blade path; posts ring; iron strips the carried puck off its own reflection (§2.5) | low |
 | **B1** | Legality moved wholly onto the carried puck; `allow_front` / mouth column deleted from the blade rule | **medium — this is the own-goal surface**; gate on the wraparound regression tests below |
 | **A3** | Net folded into the reach cast alongside the boards | low |
 | **C1** | Jam contest | design pass; own playtest cycle |
@@ -363,6 +398,11 @@ around both posts, from both sides, at a range of speeds:
   own-goal bug the mouth column was added for — it must stay dead without it);
 - lateral drift inside the cage presses the side twine and does not pass.
 
+**Iron strips, twine does not** — a carried puck driven into a post comes off
+along the pipe reflection (`resolve_posts`) with a live rebound, and the same
+carry driven into side or back mesh is stopped without a strip. The asymmetry is
+the learnable rule, so it gets a test rather than being left to tuning.
+
 **Segment vs point** — cases where the heel is legal and the toe is not, and the
 reverse. These have no coverage today because the blade is a point.
 
@@ -382,9 +422,11 @@ reverse. These have no coverage today because the blade is a point.
 2. **Does a jam need a distinct input**, or is holding the existing carry into
    contact enough? Preference: no new button — the situation should select the
    mechanic.
-3. **Should a post ring off the carried puck strip it?** Leaning yes: hitting
-   iron on a wraparound losing you the puck is correct and feels earned, unlike
-   the current mesh strip.
-4. **Jam vs. the body-check commit** — a defender arriving mid-jam should end it.
+3. **Jam vs. the body-check commit** — a defender arriving mid-jam should end it.
    Whether that is the existing stagger/knockdown path or something specific to
    the scrum is unresolved.
+
+Resolved:
+
+- **Does a post ring strip a carried puck?** Yes — §2.5. Off the pipe's own
+  reflection, not a generic shove.
