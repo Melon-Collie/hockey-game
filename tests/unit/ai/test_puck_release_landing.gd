@@ -18,10 +18,14 @@ const STEP_DT: float = 0.005
 
 
 func _stepped_landing(origin: Vector3, vel: Vector3, seconds: float) -> Vector3:
+	# board_margin = the puck radius, matching every live puck entry point: the
+	# reference has to be the walk the game actually runs, or the cross-
+	# validation below certifies agreement with a puck nobody simulates.
 	return AITrajectory.predict_final(
 			origin, vel, int(seconds / STEP_DT), STEP_DT,
 			GameRules.PUCK_ICE_DECEL_M_S2, GameRules.PUCK_BOARD_BOUNCE,
-			Vector3.ZERO, 0.0, GameRules.PUCK_BOARD_FRICTION)
+			Vector3.ZERO, 0.0, GameRules.PUCK_BOARD_FRICTION,
+			GameRules.PUCK_COLLISION_RADIUS)
 
 
 func _landing(origin: Vector3, vel: Vector3, hang_s: float = 0.0) -> Vector3:
@@ -140,14 +144,22 @@ func test_matches_the_stepped_walk_around_a_corner() -> void:
 
 
 func test_landing_is_always_on_the_playing_surface() -> void:
-	for speed: float in [4.0, 9.0, 14.0]:
-		for deg: float in [0.0, 35.0, 90.0, 145.0, 200.0, 290.0]:
-			var vel: Vector3 = Vector3(0.0, 0.0, speed).rotated(Vector3.UP, deg_to_rad(deg))
-			var landing: Vector3 = _landing(Vector3(3.0, 0.0, 14.0), vel)
-			var clamped: Vector2 = GameRules.clamp_to_rink_inner(
-					Vector2(landing.x, landing.z))
-			assert_almost_eq(Vector2(landing.x, landing.z).distance_to(clamped), 0.0, 0.01,
-					"landing stays in the rink (%.0f m/s at %.0f deg)" % [speed, deg])
+	# Both hang times, because they take different routes to the first slide leg
+	# and only the LOFTED one clamps its start point onto the boundary — the
+	# escape in #650, where a start rounded a float32 width outside the boards
+	# made the leg loop find no contact and slide the whole runout through them.
+	var hang_high: float = AIActionScoring.dump_loft_hang_s(ShotMechanics.ELEVATION_HIGH)
+	for hang: float in [0.0, hang_high]:
+		for speed: float in [4.0, 9.0, 14.0]:
+			for deg: float in [0.0, 35.0, 90.0, 145.0, 200.0, 290.0]:
+				var vel: Vector3 = Vector3(0.0, 0.0, speed).rotated(
+						Vector3.UP, deg_to_rad(deg))
+				var landing: Vector3 = _landing(Vector3(3.0, 0.0, 14.0), vel, hang)
+				var clamped: Vector2 = GameRules.clamp_to_rink_inner(
+						Vector2(landing.x, landing.z), GameRules.PUCK_COLLISION_RADIUS)
+				assert_almost_eq(Vector2(landing.x, landing.z).distance_to(clamped), 0.0,
+						0.01, "landing stays in the rink (%.0f m/s at %.0f deg, hang %.2f)"
+						% [speed, deg, hang])
 
 
 # ── The icing read ───────────────────────────────────────────────────────────
