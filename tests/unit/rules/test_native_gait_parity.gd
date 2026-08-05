@@ -46,6 +46,12 @@ class CaptureSkater extends Skater:
 		cap_evert[0] = left_roll
 		cap_evert[1] = right_roll
 
+	var cap_edge: PackedFloat64Array = PackedFloat64Array([0, 0])
+
+	func set_edge_loads(left: float, right: float) -> void:
+		cap_edge[0] = left
+		cap_edge[1] = right
+
 	func set_skating_crouch_drop(drop: float) -> void:
 		cap_crouch = drop
 
@@ -180,6 +186,8 @@ func _step(delta: float, label: String) -> bool:
 		["r_yaw", _skater.cap_leg[7], _native.get_r_yaw()],
 		["evert_l", _skater.cap_evert[0], _native.get_foot_evert_l()],
 		["evert_r", _skater.cap_evert[1], _native.get_foot_evert_r()],
+		["edge_l", _skater.cap_edge[0], _native.get_edge_load_l()],
+		["edge_r", _skater.cap_edge[1], _native.get_edge_load_r()],
 		["crouch", _skater.cap_crouch, _native.get_crouch_drop()],
 		["trunk_pitch", _gd().trunk_pitch_add, _native.get_trunk_pitch_add()],
 		["trunk_roll", _gd().trunk_roll_add, _native.get_trunk_roll_add()],

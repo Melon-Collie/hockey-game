@@ -183,6 +183,7 @@ private:
 	double out_r_pitch = 0.0, out_r_roll = 0.0, out_r_knee = 0.0;
 	double out_l_yaw = 0.0, out_r_yaw = 0.0;
 	double out_foot_evert_l = 0.0, out_foot_evert_r = 0.0;
+	double out_edge_load_l = 0.0, out_edge_load_r = 0.0;
 	double out_drop = 0.0;
 
 	void reset_state();
@@ -228,6 +229,8 @@ public:
 	double get_r_yaw() const { return out_r_yaw; }
 	double get_foot_evert_l() const { return out_foot_evert_l; }
 	double get_foot_evert_r() const { return out_foot_evert_r; }
+	double get_edge_load_l() const { return out_edge_load_l; }
+	double get_edge_load_r() const { return out_edge_load_r; }
 	double get_crouch_drop() const { return out_drop; }
 	double get_trunk_pitch_add() const { return trunk_pitch_add; }
 	double get_trunk_roll_add() const { return trunk_roll_add; }

@@ -1385,6 +1385,36 @@ func _pose_leg_pivot(bone: int, euler: Vector3) -> void:
 			Transform3D(Basis.from_euler(euler), _leg_pos[bone]))
 
 
+# ── Blade mark seam (ice VFX) ─────────────────────────────────────────────────
+# World position of a FOOT bone, composed through everything the gait wrote —
+# lower-body yaw (alignment / pivot / stop), stride pitch, the mohawk yaw — so
+# ice marks made from here follow the SKATES, not the torso. Falls back to the
+# old body-center offset until the rig is built.
+func blade_mark_position(left: bool) -> Vector3:
+	if _leg_skeleton == null:
+		return global_position + global_transform.basis.x * (-0.12 if left else 0.12)
+	var bone: int = SkaterMeshBuilder.LegBone.FOOT_L if left \
+			else SkaterMeshBuilder.LegBone.FOOT_R
+	return (_leg_skeleton.global_transform
+			* _leg_skeleton.get_bone_global_pose(bone)).origin
+
+
+# Per-blade edge load [0, 1], published by the gait each pose pass (push
+# extension, carve under-push, hockey-stop scrape): the ice VFX scale mark
+# intensity by it, so a loaded edge bites visibly harder than a glide.
+var _edge_load_l: float = 0.0
+var _edge_load_r: float = 0.0
+
+
+func set_edge_loads(left: float, right: float) -> void:
+	_edge_load_l = left
+	_edge_load_r = right
+
+
+func edge_load(left: bool) -> float:
+	return _edge_load_l if left else _edge_load_r
+
+
 # Ankle eversion (radians, about the shin's Z): rolls the SKATE against its
 # leg's splay so the blade stays flat on the ice. The boot hangs below the ankle
 # joint, so a leg rolled far out of vertical — the shot block's extended leg —

@@ -260,6 +260,8 @@ void NativeSkaterGait::reset_state() {
 	out_r_yaw = 0.0;
 	out_foot_evert_l = 0.0;
 	out_foot_evert_r = 0.0;
+	out_edge_load_l = 0.0;
+	out_edge_load_r = 0.0;
 	out_drop = 0.0;
 }
 
@@ -1032,6 +1034,8 @@ int64_t NativeSkaterGait::apply(
 	out_r_yaw = pivot_yaw_r * (1.0 - kd_t);
 	out_foot_evert_l = foot_evert_l;
 	out_foot_evert_r = foot_evert_r;
+	out_edge_load_l = CLAMP(MAX(l_ext * intensity, stop_blend), 0.0, 1.0) * (1.0 - kd_t);
+	out_edge_load_r = CLAMP(MAX(r_ext * intensity, stop_blend), 0.0, 1.0) * (1.0 - kd_t);
 	out_drop = drop;
 	return APPLY_ACTIVE;
 }
@@ -1068,6 +1072,8 @@ void NativeSkaterGait::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_pivot_blend"), &NativeSkaterGait::get_pivot_blend);
 	ClassDB::bind_method(D_METHOD("get_l_yaw"), &NativeSkaterGait::get_l_yaw);
 	ClassDB::bind_method(D_METHOD("get_r_yaw"), &NativeSkaterGait::get_r_yaw);
+	ClassDB::bind_method(D_METHOD("get_edge_load_l"), &NativeSkaterGait::get_edge_load_l);
+	ClassDB::bind_method(D_METHOD("get_edge_load_r"), &NativeSkaterGait::get_edge_load_r);
 	ClassDB::bind_method(D_METHOD("get_stop_yaw_offset"), &NativeSkaterGait::get_stop_yaw_offset);
 	ClassDB::bind_method(D_METHOD("get_travel_align_yaw"), &NativeSkaterGait::get_travel_align_yaw);
 	ClassDB::bind_method(D_METHOD("get_shot_hip_yaw"), &NativeSkaterGait::get_shot_hip_yaw);

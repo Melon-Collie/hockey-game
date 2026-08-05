@@ -313,6 +313,7 @@ func reset_to_rest() -> void:
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 		_skater.set_skating_crouch_drop(0.0)
 		_skater.set_trunk_texture(0.0, 0.0)
+		_skater.set_edge_loads(0.0, 0.0)
 
 
 # Arms the check-delivery drive (see the runtime state above). During
@@ -1462,6 +1463,12 @@ func apply(delta: float) -> void:
 	# The mohawk yaw fades with the crumple like every other leg channel.
 	_skater.set_leg_swing(l_pitch, l_roll, l_knee, r_pitch, r_roll, r_knee,
 			pivot_yaw_l * (1.0 - kd_t), pivot_yaw_r * (1.0 - kd_t))
+	# Publish per-blade edge load for the ice VFX: the push half-wave (which
+	# already carries the carve under-stroke) scaled by stride engagement,
+	# floored by the stop scrape — and released through the crumple.
+	_skater.set_edge_loads(
+			clampf(maxf(l_ext * _intensity, _stop_blend), 0.0, 1.0) * (1.0 - kd_t),
+			clampf(maxf(r_ext * _intensity, _stop_blend), 0.0, 1.0) * (1.0 - kd_t))
 	_skater.set_foot_eversion(foot_evert_l, foot_evert_r)
 	_skater.set_skating_crouch_drop(drop)
 	# Trunk inertia: filter the summed texture, then layer the stumble wobble
@@ -1504,6 +1511,7 @@ func _apply_native(delta: float) -> void:
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 		_skater.set_skating_crouch_drop(0.0)
 		_skater.set_trunk_texture(0.0, 0.0)
+		_skater.set_edge_loads(0.0, 0.0)
 		stride_phase = 0.0
 		trunk_pitch_add = 0.0
 		trunk_roll_add = 0.0
@@ -1523,6 +1531,7 @@ func _apply_native(delta: float) -> void:
 			_native.get_r_pitch(), _native.get_r_roll(), _native.get_r_knee(),
 			_native.get_l_yaw(), _native.get_r_yaw())
 	_skater.set_foot_eversion(_native.get_foot_evert_l(), _native.get_foot_evert_r())
+	_skater.set_edge_loads(_native.get_edge_load_l(), _native.get_edge_load_r())
 	_skater.set_skating_crouch_drop(_native.get_crouch_drop())
 	trunk_pitch_add = _native.get_trunk_pitch_add()
 	trunk_roll_add = _native.get_trunk_roll_add()
