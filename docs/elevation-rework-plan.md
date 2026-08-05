@@ -179,6 +179,10 @@ pass). Benchmarks after (rung iteration is 3× the v2 solve — still trivial).
 1. Playtest the ladder values (§1 table is the tuning surface).
 2. The goalie high-game complement (pre-arm read) if mastered static snipes
    still feel free — issue #597.
-3. The contact-point visual tell (puck rides heel→toe) — replaces chevrons
-   eventually, makes the level readable to the defense — issue #596.
+3. The contact-point visual tell (puck rides heel→toe) — LANDED
+   (`Skater.get_carry_contact_u`, issue #596), joined by a shaft-angle-derived
+   toe drag that rolls the face closed and slides the puck onto the toe. The
+   chevrons still ship alongside it; whether they shrink to a local-only
+   affordance or retire outright is a playtest call now that the level is
+   readable off the blade.
 4. Crossbar corner-arc collision + drill-target audit — issue #598.

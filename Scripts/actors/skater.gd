@@ -31,13 +31,24 @@ const _BLADE_FACE_OPEN_DEG: float = 4.0
 # the ice, the ceiling caps the wind-up apex just past shaft-aligned.
 const _BLADE_FOLLOW_PITCH_MIN_DEG: float = -18.0
 const _BLADE_FOLLOW_PITCH_MAX_DEG: float = 100.0
-# Blended in with the scroll-wheel loft level (half strength at LOW, full at
-# HIGH): the loft opens the face upward to "scoop" the puck, so elevation keys
-# off the Z loft far more than the X toe-lift. Eased via _blade_elevation_blend
-# in _physics_process so it doesn't snap.
+# Blended in with the scroll-wheel loft level (a third per rung, full at HIGH):
+# the loft opens the face upward to "scoop" the puck, so elevation keys off the
+# Z loft far more than the X toe-lift. Eased via _blade_elevation_blend in
+# _physics_process so it doesn't snap.
 const _BLADE_ELEVATED_EXTRA_LOFT_DEG: float = 16.0   # about Z (handedness-signed)
 const _BLADE_ELEVATED_EXTRA_LIFT_DEG: float = 4.0    # about X (small touch of toe-lift)
 const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swing in ~0.17 s)
+# Toe-drag read. Once the shaft steepens past its lie the stick is no longer
+# reaching out at the puck — the puck has come in under the body, and the only
+# part of the blade still out on it is the toe. Onset is ~6° past the lie
+# (blade ≈ 0.78 m out from the hands at the rest hand height); full at the dig
+# clamp (≈ 0.50 m), where the blade is tucked at the feet. Two readouts share
+# the factor: the wrists roll the face CLOSED over the puck (signed against the
+# elevation scoop, so a drag visibly cups where a loft opens), and the carried
+# puck slides toward the toe (see carry_contact_drag_u).
+const _BLADE_TOE_DRAG_ONSET_DEG: float = -6.0
+const _BLADE_TOE_DRAG_FULL_DEG: float = _BLADE_FOLLOW_PITCH_MIN_DEG
+const _BLADE_TOE_DRAG_ROLL_DEG: float = 20.0         # about Z (handedness-signed)
 
 # Shoulder anchor offset from body center. The shoulder (top-hand anchor)
 # sits on the OPPOSITE side of the body from the blade: a left-handed shooter
@@ -139,6 +150,24 @@ var _face_gear_mesh: MeshInstance3D = null
 # fully on either side. Reads as the blade rising over the puck as it
 # switches sides, like a real stickhandle. Set to 0 to disable.
 @export var carry_transit_lift: float = 0.10
+# WHERE ALONG THE BLADE the carried puck rides, as a fraction of blade_length
+# from the heel (0.5 = mid-blade, the un-tell'd contact point). This is the
+# diegetic readout of the loft level: the level is fictionalized as the contact
+# point, so a defender or goalie watching the carrier's blade can read the
+# elevation intent off the puck's seat and the carrier can beat that read by
+# switching levels late. Replicated for free — every peer derives it from the
+# replicated elevation_level and blade pose, so remote views agree.
+#
+# The ladder is centered on mid-blade so the league-average carry sits where it
+# always did, and its rung spacing (~3.6 cm at the default 0.30 m blade) is
+# deliberately wider than the drag term below, so a toe drag can never fake a
+# rung. Gameplay-visible (the puck really is there) but NOT a shot-origin
+# change: releases still fire from get_blade_contact_global().
+@export var carry_contact_flat_u: float = 0.34
+@export var carry_contact_high_u: float = 0.70
+# Extra toe-ward slide at full toe drag (see _BLADE_TOE_DRAG_ONSET_DEG) — the
+# puck being drawn in on the toe rather than swept with the middle of the blade.
+@export var carry_contact_drag_u: float = 0.10
 
 # ── Arm Tuning ────────────────────────────────────────────────────────────────
 # Two-bone arm IK: shoulder → elbow → top_hand. ROM is derived from these
@@ -1068,20 +1097,52 @@ func _position_hand_markers() -> void:
 	_apply_blade_tilt()
 
 
+# How far the blade has pitched off its built-in lie, in degrees, clamped to the
+# render bounds. The blade is rigidly attached to the shaft, so it pitches by
+# (blade_lie_deg − live shaft angle): ~0 at the rest lie (blade flat on the ice),
+# POSITIVE toe-up when the stick rises (slapshot wind-up, stick lift, high
+# follow-through finish) so the blade stays on the shaft line instead of floating
+# ice-parallel at the tip of a steep shaft, NEGATIVE toe-down when the cursor
+# pulls the blade in close and the shaft steepens past its lie.
+#
+# A pure function of the current hand/blade markers, which are replicated (and
+# interpolated) on remotes — so every peer derives the same pitch, and anything
+# keyed to it agrees across the lobby without its own wire field.
+func _shaft_follow_pitch_deg() -> float:
+	if top_hand == null or blade == null:
+		return 0.0
+	var shaft: Vector3 = blade.position - top_hand.position
+	var horiz: float = Vector2(shaft.x, shaft.z).length()
+	if horiz <= 0.001 and absf(shaft.y) <= 0.001:
+		return 0.0
+	var shaft_pitch_deg: float = rad_to_deg(atan2(-shaft.y, horiz))
+	return clampf(blade_lie_deg - shaft_pitch_deg,
+			_BLADE_FOLLOW_PITCH_MIN_DEG, _BLADE_FOLLOW_PITCH_MAX_DEG)
+
+
+# 0→1 "the puck has come in under the body" factor, read off the shaft angle
+# alone (see the _BLADE_TOE_DRAG_* constants). Drives the wrist-roll pose here
+# and the toe-ward slide of the carried puck in get_carry_contact_u().
+#
+# Deliberately positional, not gestural: the drag is a fact about where the
+# stick IS, so it needs no velocity state, survives reconcile replay untouched,
+# and reads identically on a remote from the interpolated pose.
+func get_toe_drag_factor() -> float:
+	return clampf(
+			inverse_lerp(_BLADE_TOE_DRAG_ONSET_DEG, _BLADE_TOE_DRAG_FULL_DEG,
+					_shaft_follow_pitch_deg()),
+			0.0, 1.0)
+
+
 # Sets the cosmetic blade-mesh orientation — never the Blade marker the
 # puck-contact math reads (set_blade_position / get_blade_contact_global).
 # Three composed reads:
-#   1. Shaft-follow pitch: the blade is rigidly attached to the shaft, so it
-#      pitches by (blade_lie_deg − live shaft angle). At the rest lie that's
-#      ~0 (blade flat on the ice); when the stick rises (slapshot wind-up,
-#      stick lift, high follow-through finish) the blade tips toe-up and stays
-#      on the shaft line instead of floating ice-parallel at the tip of a
-#      steep shaft; when the cursor pulls the blade in close (steep shaft) it
-#      digs slightly toe-down — the toe-drag read. Clamped by the
-#      _BLADE_FOLLOW_PITCH_* bounds.
+#   1. Shaft-follow pitch (_shaft_follow_pitch_deg) — the rigid shaft attachment.
 #   2. Resting toe-lift + the scroll-loft elevation extras (about X).
 #   3. Face-open loft (about Z, handedness-signed — the forehand face is on
-#      opposite sides for L/R shots).
+#      opposite sides for L/R shots), opened by the loft level and CLOSED by the
+#      toe-drag wrist roll. The two oppose each other on purpose: a lofted blade
+#      cups under the puck, a dragged one rolls over the top of it.
 # The mesh is heel-origin (StickBladeMeshBuilder), so the rotation pivots
 # about the heel and the shaft→blade junction stays pinned at any pitch.
 # Idempotent (recomputed from identity each call, scale preserved — the
@@ -1090,20 +1151,15 @@ func _position_hand_markers() -> void:
 func _apply_blade_tilt() -> void:
 	if _blade_mesh_instance == null or not is_instance_valid(_blade_mesh_instance):
 		return
-	var follow_pitch_deg: float = 0.0
-	if top_hand != null and blade != null:
-		var shaft: Vector3 = blade.position - top_hand.position
-		var horiz: float = Vector2(shaft.x, shaft.z).length()
-		if horiz > 0.001 or absf(shaft.y) > 0.001:
-			var shaft_pitch_deg: float = rad_to_deg(atan2(-shaft.y, horiz))
-			follow_pitch_deg = clampf(blade_lie_deg - shaft_pitch_deg,
-					_BLADE_FOLLOW_PITCH_MIN_DEG, _BLADE_FOLLOW_PITCH_MAX_DEG)
+	var follow_pitch_deg: float = _shaft_follow_pitch_deg()
 	# Loft sign: opens the forehand face upward. Flipped from the usual
 	# blade_side_sign convention so the cup tilts the right way for each hand.
 	var blade_side_sign: float = 1.0 if is_left_handed else -1.0
 	var toe_lift: float = _BLADE_TOE_LIFT_DEG + follow_pitch_deg \
 			+ _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LIFT_DEG
-	var loft: float = (_BLADE_FACE_OPEN_DEG + _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LOFT_DEG) * blade_side_sign
+	var loft: float = (_BLADE_FACE_OPEN_DEG \
+			+ _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LOFT_DEG \
+			- get_toe_drag_factor() * _BLADE_TOE_DRAG_ROLL_DEG) * blade_side_sign
 	var rot: Basis = Basis.IDENTITY \
 			.rotated(Vector3.RIGHT, deg_to_rad(toe_lift)) \
 			.rotated(Vector3.BACK, deg_to_rad(loft))
@@ -1603,11 +1659,30 @@ func update_carry_side(has_puck: bool, delta: float) -> void:
 			_carry_side_smoothed, float(_carry_side), carry_side_lerp_speed * delta)
 
 
+# Where along the blade the carried puck rides, as a fraction of blade_length
+# from the heel — the contact-point tell. 0.5 (mid-blade, i.e. no offset) when
+# not carrying, so the non-carry consumers of get_carry_target_global() see the
+# plain blade contact they always did.
+#
+# Two contributions, both derived rather than stored: the loft level places the
+# puck on the heel→toe ladder (eased through _blade_elevation_blend, so a level
+# switch SLIDES the puck along the blade instead of teleporting it — that ease is
+# the deception window, since the read lands a beat after the commit), and a toe
+# drag slides it further out onto the toe.
+func get_carry_contact_u() -> float:
+	if not SkaterStateMachine.state_has_puck(current_shot_state):
+		return 0.5
+	return lerpf(carry_contact_flat_u, carry_contact_high_u, _blade_elevation_blend) \
+			+ get_toe_drag_factor() * carry_contact_drag_u
+
+
 # Where the puck pins while carrying. The blade marker is shifted to the
 # forehand/backhand side via the IK target (so the stick visibly attaches to
 # the offset blade). The puck sits at the un-offset position — adjacent to
-# the blade on the opposite face, where the cursor effectively is.
-# Pure derivation: contact − face_normal × forehand_factor × carry_blade_offset.
+# the blade on the opposite face, where the cursor effectively is — and rides
+# heel→toe ALONG the blade per get_carry_contact_u().
+# Pure derivation: contact + stick × (u − 0.5) × blade_length
+#                          − face_normal × forehand_factor × carry_blade_offset.
 # Returns get_blade_contact_global() (centered) when not carrying or when
 # the geometry is degenerate, so existing non-carry consumers are unaffected.
 #
@@ -1630,11 +1705,16 @@ func get_carry_target_global() -> Vector3:
 	if stick.length() < 0.001:
 		return contact
 	stick = stick.normalized()
+	# The blade marker is look_at'd along the horizontal shaft each tick
+	# (set_blade_position), so `stick` IS the blade's heel→toe direction — the
+	# axis the contact-point tell slides the puck along.
+	var along: Vector3 = stick * ((get_carry_contact_u() - 0.5) * blade_length)
 	# Face normal: 90° rotation around Y of the stick direction. Sign mirrors
 	# the IK-target offset applied in SkaterIKCoordinator.apply_blade_from_mouse,
 	# so subtraction here lands on the un-offset puck position.
 	var face_normal := Vector3(-stick.z, 0.0, stick.x)
-	return contact - face_normal * get_carry_forehand_factor() * carry_blade_offset
+	return contact + along \
+			- face_normal * get_carry_forehand_factor() * carry_blade_offset
 
 
 # Slapshot pin state — set by SkaterController._enter_slapper_charge when the

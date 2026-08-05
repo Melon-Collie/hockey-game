@@ -909,7 +909,10 @@ func _pin_puck_to_carrier(carrier: Skater, delta: float) -> void:
 	# the blade tip. Carry target is the un-offset contact (= cursor position on the
 	# owning client) so the puck stays under the cursor while the blade renders to
 	# the forehand or backhand side; on a remote skater the forehand factor is 0 so
-	# it cleanly reduces to the interpolated blade contact.
+	# that term drops out. The along-blade seat (Skater.get_carry_contact_u — the
+	# heel→toe loft tell) does NOT drop out on a remote, by design: it derives from
+	# the replicated elevation level and blade pose, so every peer sees the carrier's
+	# elevation intent in the same place on the blade.
 	var contact: Vector3 = carrier.get_carry_target_global()
 	contact.y = puck.ice_height
 	# SNAP ON THE SLAPSHOT PIN, don't smooth into it. Entering a slapper charge
