@@ -38,11 +38,12 @@ const _BLADE_FOLLOW_PITCH_MAX_DEG: float = 100.0
 const _BLADE_ELEVATED_EXTRA_LOFT_DEG: float = 16.0   # about Z (handedness-signed)
 const _BLADE_ELEVATED_EXTRA_LIFT_DEG: float = 4.0    # about X (small touch of toe-lift)
 const _BLADE_ELEVATION_BLEND_SPEED: float = 6.0      # blend units/sec (full swing in ~0.17 s)
-# Toe-drag read. Once the shaft steepens past its lie the stick is no longer
-# reaching out at the puck — the puck has come in under the body, and the only
-# part of the blade still out on it is the toe. Onset is ~6° past the lie
-# (blade ≈ 0.78 m out from the hands at the rest hand height); full at the dig
-# clamp (≈ 0.50 m), where the blade is tucked at the feet. Two readouts share
+# Toe-drag read. The shaft only steepens past its lie in TopHandIK's CLOSE
+# regime (the hand rising to shorten the stick's horizontal run) — in the FAR
+# regime the hand rides at rest height and the shaft holds the lie exactly, so
+# the factor is identically 0 there. Onset is ~6° past the lie (blade ≈ 0.87 m
+# from the shoulder); full at the dig clamp (≈ 0.65 m), holding full from there
+# down to the hand_y_max floor (≈ 0.28 m). Two readouts share
 # the factor, both carry-only: the wrists roll the face CLOSED over the puck
 # (signed against the elevation scoop, so a drag visibly cups where a loft
 # opens), and the carried puck slides toward the toe (see carry_contact_drag_u).
