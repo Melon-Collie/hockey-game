@@ -831,6 +831,20 @@ var show_one_timer_indicator: bool = false
 @export var block_trunk_roll_deg: float = 10.0   # ...and rolls onto it, off the extended leg
 @export var block_pose_blend_speed: float = 12.0 # snap-in speed of the body pose (the plant is committed)
 
+# ── Net Collision ─────────────────────────────────────────────────────────────
+# The stick's own reach perpendicular to the blade segment, added to the pipe
+# radius so the blade stops on the outside of the iron rather than centre-on.
+@export var net_blade_half_thickness: float = 0.012
+# How deep the twine lets the blade sink before stopping it. The mesh is
+# compliant and a real stick does bury itself in it; this is what replaces the
+# old flat exclusion box's hard invisible wall. Wants to read as "buried in the
+# mesh" while staying well short of reaching a puck on the far side.
+@export var net_mesh_give: float = 0.12
+# How far the net may push a CARRIED puck off its pin before the carry breaks.
+# Same physical story as wall_squeeze_threshold on the boards — you press, the
+# surface gives, and past a point you can't hold it any more.
+@export var carry_net_squeeze_threshold: float = 0.06
+
 # ── Goalie Body Block ─────────────────────────────────────────────────────────
 # XZ cylinder radius used to push the blade (and carried puck) away from a
 # goalie's body center. Tunable in the editor — matches roughly the goalie's
@@ -878,12 +892,14 @@ var _ik: SkaterIKCoordinator = SkaterIKCoordinator.new()
 var last_processed_host_timestamp: float = 0.0
 var has_puck: bool = false
 var is_replaying: bool = false
-# Previous-tick puck PIN (get_carry_target_global), the swept `prev` the carried-
-# puck net clamp feeds NetClampRules so it can tell a legit front-mouth occupant
-# (rides in / out) from a side/back intrusion (pushed out). Always a clamped
-# (legal) position, per NetClampRules' inductive front-entry contract. Reset when
-# the puck comes loose. See _clamp_carry_pin_from_net.
+# Previous-tick puck PIN (get_carry_target_global) — the segment START the pin's
+# net collision sweeps from, so the two-sided twine knows which face the puck is
+# pressing. A sweep input, not a history one: nothing here asks how the puck got
+# where it is. Reset when the puck comes loose. See _collide_pinned_puck_with_net.
 var _prev_carry_pin: Vector3 = Vector3.ZERO
+# Shared scratch for the pinned puck's net collision — filled per tick, never
+# escapes _collide_pinned_puck_with_net.
+var _net_pin_result := PuckGeometryCollision.Result.new()
 var _has_prev_carry_pin: bool = false
 # True on frames where a special locked-phase path posed the body itself this
 # tick — faceoff-prep blade aim, the faceoff skate-in approach, and replay
@@ -1517,7 +1533,7 @@ func _process_input(input: InputState, delta: float) -> void:
 	# clamp never validated — so a stick reaching from behind/beside could drag
 	# the pinned puck into the net even with the blade reading legal. Runs after
 	# _apply_state so it sees this tick's final blade pose.
-	_clamp_pinned_puck_from_net()
+	_collide_pinned_puck_with_net()
 	# Mirror the state machine into the replicated field on every simulated
 	# tick, AFTER _apply_state so same-tick transitions are visible to the
 	# cosmetic consumers below (gait shot stance) and to Skater._process (stick
@@ -1783,79 +1799,59 @@ func _do_release(direction: Vector3, power: float) -> void:
 	puck_release_requested.emit(direction, power, slapper)
 
 
-# Net exclusion for the CARRIED PUCK, routed to whichever pin is live. The blade
-# net-clamp keeps the BLADE out of the net, but the puck rides a pin off the
-# blade (get_carry_target_global) — a separate point that needs its own guard, so
-# that "a puck in the net got there legally" is an invariant the goal check can
-# simply trust.
+# Net COLLISION for the carried puck. The puck rides a pin off the blade
+# (get_carry_target_global), so it is a body in its own right and gets the same
+# net every other body gets — pipes hard, twine compliant. This is the only place
+# a net contact can cost you the puck; the blade's own collision
+# (SkaterIKCoordinator.resolve_blade_against_net) is pose-only.
 #
-# Which rule applies is a fact about the PIN, not about the state name: dispatch
-# on is_slapshot_pinning() rather than enumerating states, so any state that
-# adopts that pin is covered the day it does (the one-timer's retention hold
-# continues the wind-up's pin and was the case that exposed this — it inherited
-# the permissive carry rule for the length of the hold because it is not
-# SLAPPER_CHARGE_WITH_PUCK).
+# There is no legality test here and none anywhere else. A puck ends up in the
+# cage only by going through the mouth, because the mouth is the only opening and
+# every other face is now solid to both the puck and the stick. That is what lets
+# GoalDetectionRules trust a carried puck the same way it already trusts a loose
+# one — see docs/net-play-plan.md §3.
 #
-# Exactly one of the two runs per tick, which is the point: they disagree on
-# allow_front and would fight over the same pin.
-func _clamp_pinned_puck_from_net() -> void:
+# One pin or the other is live (is_slapshot_pinning dispatches on the PIN, not on
+# a state name, so any state adopting the wind-up pin is covered the day it does).
+# They no longer differ in RULE — a wind-up pin and a carry pin collide
+# identically — only in where the pin sits.
+func _collide_pinned_puck_with_net() -> void:
 	if not has_puck:
 		_has_prev_carry_pin = false
 		return
-	if skater.is_slapshot_pinning():
-		# No carry pin history survives a wind-up — re-seed on the way back out.
-		_has_prev_carry_pin = false
-		_clamp_slapshot_pin_from_net()
-		return
-	_clamp_carry_pin_from_net()
-
-
-# Fixed skater-local ice offset (the wind-up / retention pin). allow_front=false:
-# a wind-up never tucks the puck into the mouth, so ANY entry into the net box
-# knocks it loose. Stricter than the carry rule below, which must let a genuine
-# wraparound ride in.
-func _clamp_slapshot_pin_from_net() -> void:
 	var pin: Vector3 = skater.get_carry_target_global()
-	var clamped: Vector3 = NetClampRules.clamp_out_of_net(
-			pin, pin, GameRules.GOAL_LINE_Z, GameRules.NET_HALF_WIDTH,
-			GameRules.NET_POST_RADIUS, GameRules.NET_PUCK_BUFFER,
-			GameRules.NET_DEPTH, GameRules.NET_HEIGHT, false)
-	if clamped == pin:
-		return
-	var away: Vector3 = clamped - pin
-	if away.length() > 0.001:
-		# Forced dispossession, not an attempt on goal — and it fires AWAY from
-		# the net by construction, so it would rarely read as directed anyway.
-		last_release_was_shot = false
-		_do_release(away.normalized(), goalie_strip_power)
-
-
-# Ordinary carry off the blade (plain carry and wrister aim). allow_front=true:
-# a puck can be inside the net box only via a legit FRONT-mouth path — a
-# wraparound tuck rides in; a reach from behind or beside is pushed out and the
-# puck knocked loose.
-func _clamp_carry_pin_from_net() -> void:
-	var pin: Vector3 = skater.get_carry_target_global()
-	# First carry tick: no legal prior pin to induct from. Seed from the pin so a
-	# genuine front entry next tick is judged against a real position; a puck
-	# picked up already inside the net is a post-goal artifact (pickup is locked
-	# through the goal phase), so seeding it is benign.
+	# Seed the sweep from the pin itself on the first carry tick: with no prior
+	# sample there is no segment, and a stationary point classifies off its own
+	# position exactly as the loose puck's first sub-step does.
 	var prev: Vector3 = _prev_carry_pin if _has_prev_carry_pin else pin
-	var clamped: Vector3 = NetClampRules.clamp_out_of_net(
-			pin, prev, GameRules.GOAL_LINE_Z, GameRules.NET_HALF_WIDTH,
-			GameRules.NET_POST_RADIUS, GameRules.NET_PUCK_BUFFER,
-			GameRules.NET_DEPTH, GameRules.NET_HEIGHT, true)
-	if clamped != pin:
-		# The pin sat in the net off a non-front path — knock the puck loose,
-		# pushed out along the clamp offset (out of the net), like any net contact.
-		_has_prev_carry_pin = false
-		var away: Vector3 = clamped - pin
-		if away.length() > 0.001:
-			last_release_was_shot = false  # forced dispossession, see above
-			_do_release(away.normalized(), goalie_strip_power)
-		return
 	_prev_carry_pin = pin
 	_has_prev_carry_pin = true
+
+	# IRON — a wraparound that clangs the post loses the puck, and it leaves along
+	# the pipe's OWN reflection rather than a generic shove, so the rebound is the
+	# collision the puck would have had if it had never been carried. Live at
+	# POST_RESTITUTION, so a ring makes a scramble in a dangerous area.
+	if PuckGeometryCollision.resolve_posts(
+			pin, skater.velocity, GameRules.PUCK_COLLISION_RADIUS, _net_pin_result):
+		var ring: Vector3 = _net_pin_result.velocity
+		if ring.length() > 0.001:
+			_has_prev_carry_pin = false
+			last_release_was_shot = false  # forced dispossession, not an attempt
+			_do_release(ring.normalized(), ring.length())
+			return
+
+	# TWINE — compliant. Pressing the puck into the mesh is legal and holds; past
+	# carry_net_squeeze_threshold the carry breaks, the same shape as a board pin.
+	if not PuckGeometryCollision.resolve_net_panels(
+			prev, pin, skater.velocity, GameRules.PUCK_COLLISION_RADIUS, _net_pin_result):
+		return
+	var push: Vector3 = _net_pin_result.position - pin
+	if push.length() <= carry_net_squeeze_threshold:
+		return
+	_has_prev_carry_pin = false
+	last_release_was_shot = false
+	_do_release(push.normalized(), goalie_strip_power)
+
 
 # Nudge: the carrier taps the puck off the blade as a soft self-pass. The
 # released velocity is the skater's horizontal momentum plus a small push along
@@ -2568,7 +2564,7 @@ func _update_slapper_charge(delta: float) -> void:
 			skater.predicted_shot_velocity = pred.direction * pred.power
 	if show_one_timer_indicator:
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
-	# (The slapshot pin's own net exclusion lives in _clamp_pinned_puck_from_net,
+	# (The slapshot pin's own net exclusion lives in _collide_pinned_puck_with_net,
 	# which runs after _apply_state for every pin type — a carrier winding up
 	# while skating behind or across a net would otherwise drag the pinned puck
 	# straight through the mesh and over the goal line.)

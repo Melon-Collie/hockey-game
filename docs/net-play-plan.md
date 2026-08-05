@@ -1,7 +1,8 @@
 # Net Play — Design Doc
 
-Status: **PROPOSED** — nothing here is built. Part A is a spec; Part C is a
-sketch written to be argued with.
+Status: **A1 / A2 / B1 IMPLEMENTED** (one net, iron strips, legality emergent).
+**A3 and Part C outstanding.** Part C is still a sketch written to be argued
+with; §10's remaining open questions are live.
 
 Scope: everything that happens inside about two metres of the crease —
 wraparounds, jams and stuffs, behind-the-net carries, and the stick poses that
@@ -442,11 +443,11 @@ Each stage is independently shippable and independently revertible.
 
 | Stage | Content | Risk |
 |---|---|---|
-| **A1** | Shared net geometry; `NetBladeCollision` (segment vs pipes + twine); blade call sites switched | low — pose only |
-| **A2** | Buffer removed from the blade path; posts ring; iron strips the carried puck off its own reflection (§2.5) | low |
+| **A1** | ✅ Shared net geometry (`NetGeometry`); `NetBladeCollision` (segment vs pipes + twine); all four blade call sites switched | low — pose only |
+| **A2** | ✅ Buffer off the blade path; posts ring; iron strips the carried puck off its own reflection (§2.5) | low |
 | **B1** | The pinned puck becomes a swept collider; `NetClampRules` deleted whole (`allow_front`, mouth column, `_prev_carry_pin`); `if carried: return false` lifted from `GoalDetectionRules` | **medium — this is the own-goal surface**; gate on the wraparound regression battery below |
-| **A3** | Net folded into the reach cast alongside the boards | low |
-| **C1** | Jam contest | design pass; own playtest cycle |
+| **A3** | Net folded into the reach cast alongside the boards. **Deliberately held**: its whole benefit is leaving the collision less to correct, so landing it in the same change would make the A1/A2/B1 playtest harder to attribute. Cheap to add after. | low |
+| **C1** | Jam contest — not started | design pass; own playtest cycle |
 
 B1 is the one to be careful with, and it is also the one that unlocks everything
 else. It should land alone, with the regression set green, and be playtested

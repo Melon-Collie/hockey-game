@@ -43,8 +43,7 @@ static func crossed_into_net(
 		post_radius: float,
 		puck_radius: float,
 		puck_half_height: float,
-		net_depth: float,
-		carried: bool = false) -> bool:
+		net_depth: float) -> bool:
 	# Signed depth past the goal line, positive = deeper into the net.
 	var prev_depth: float = (prev_center.z - goal_z) * facing
 	var curr_depth: float = (curr_center.z - goal_z) * facing
@@ -70,20 +69,6 @@ static func crossed_into_net(
 	if point_in_mouth(cross_x, cross_y, half_width, net_height,
 			post_radius, puck_radius, puck_half_height):
 		return true
-	# A CARRIED puck stops here: it is pinned to the blade (teleported every tick,
-	# not collision-constrained), so the cavity fallback's core assumption — that
-	# the only continuous route into the cavity is through the mouth, because the
-	# panels are solid — does not hold for it. A bot's exact dangle can place the
-	# pinned puck into the cavity from a side or behind-the-net angle without its
-	# center ever crossing through the mouth opening; the endpoint-only fallback
-	# then scored it ("in from the back, on the stick"). A legitimate carried
-	# tuck / wraparound crosses the goal-line plane INSIDE the mouth and is already
-	# caught by point_in_mouth above, so requiring a real mouth crossing here costs
-	# no honest goal. (The blade net-clamp keeps the pinned puck near the mouth in
-	# the first place; this makes the detection agree rather than trusting an
-	# endpoint the clamp never vouched for.)
-	if carried:
-		return false
 	# Bent-path fallback: a post-and-in / bar-down entry is deflected by the
 	# pipe mid-flight, so the STRAIGHT prev -> curr segment can pierce the
 	# goal-line plane in the pipe band (outside the tightened mouth) even
@@ -95,14 +80,23 @@ static func crossed_into_net(
 	# once and then permanently locked out by the prev_depth freshness guard:
 	# the puck sat visibly in the net with no goal.
 	#
-	# But this endpoint-only test trusts that "the only route into the cavity is
-	# through the mouth" — true for a free puck against solid panels, but the
-	# STRAIGHT segment we sample can straddle those panels: a puck slid in from
-	# BESIDE the net (a side-netting scramble), a sharp-angle feed threaded from
-	# behind the goal line, or a bot's pin/carry curled past a post can pierce
-	# the plane far outside the frame yet land its endpoint inside the cavity —
-	# a phantom "in from the back/side" goal (usually on a bot, whose angles are
-	# exact). A genuine post-and-in / bar-down, by contrast, is in CONTACT with
+	# This applies to a CARRIED puck too, now that the pin is a collider in its own
+	# right (SkaterController._collide_pinned_puck_with_net) rather than a point
+	# teleported to a blade offset. It used to be excluded, because a pin that no
+	# surface constrained could be placed into the cavity from a side or behind-the-
+	# net angle without ever crossing the mouth, and the endpoint-only test then
+	# scored it ("in from the back, on the stick"). With the pin colliding, the
+	# premise holds for it exactly as for a free puck — and the exclusion had a real
+	# cost: a legitimate carried tuck DEFLECTED in off the post could not score,
+	# since a bent path is precisely what this fallback exists to catch.
+	#
+	# The endpoint-only test still trusts that "the only route into the cavity is
+	# through the mouth", and the STRAIGHT segment we sample can straddle the
+	# panels: a puck slid in from BESIDE the net (a side-netting scramble) or a
+	# sharp-angle feed threaded from behind the goal line can pierce the plane far
+	# outside the frame yet land its endpoint inside the cavity — a phantom
+	# "in from the back/side" goal (usually on a bot, whose angles are exact). A
+	# genuine post-and-in / bar-down, by contrast, is in CONTACT with
 	# the pipe as it crosses, so its crossing point sits within the pipe band —
 	# no farther out than the post/bar outer face plus the puck's own reach.
 	# Gate the fallback on that: a crossing beyond the band never touched the

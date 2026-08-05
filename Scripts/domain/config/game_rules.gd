@@ -93,7 +93,11 @@ const NET_BACK_HALF_WIDTH: float = 1.02  # half-width at back of net (trapezoid 
 const NET_HEIGHT: float = 1.22           # crossbar height (pipe centerline) — must match HockeyGoal.NET_HEIGHT
 const NET_CROWN_HALF_WIDTH: float = 0.815  # half-span of the crossbar / top net panel — must match HockeyGoal.CROWN_HALF_WIDTH
 const NET_TOP_DEPTH: float = 0.559       # depth of the top net panel from the goal line — must match HockeyGoal.TOP_DEPTH
-const NET_PUCK_BUFFER: float = 0.10      # exclusion zone expansion beyond the physical net boundary
+# Coarse padding for the "is this over/near the net" footprint query below. NOT a
+# collision surface: the blade and the puck both collide with the real cage
+# (NetGeometry), where an invisible 10 cm apron is exactly the lie that made the
+# area feel broken. Do not reintroduce it into a collider.
+const NET_PUCK_BUFFER: float = 0.10
 
 # Half the skater's body so the blue line keys off the body EDGE, not its
 # centre — matching real hockey. You tag up the instant any part of your body

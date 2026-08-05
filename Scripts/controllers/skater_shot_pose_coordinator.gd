@@ -76,18 +76,7 @@ func apply_slapper_blade_position() -> void:
 			_skater.shoulder.position.x - blade_side_sign * _controller.slapper_wind_up_hand_inward * wind_up_eased,
 			_controller.hand_rest_y + _controller.slapper_wind_up_hand_up * wind_up_eased + quiver * 0.5,
 			_skater.shoulder.position.z + _controller.slapper_wind_up_hand_back * wind_up_eased - _controller.slapper_wind_up_hand_forward * wind_up_eased)
-	var hand_world: Vector3 = _skater.upper_body_to_global(hand_pos)
-	var shaft: Vector3 = clamped_heel - hand_world
-	shaft.y = 0.0
-	var contact_world: Vector3 = clamped_heel
-	if shaft.length() > 0.001:
-		contact_world = clamped_heel + shaft.normalized() * _skater.blade_length * 0.5
-	var clamped_contact: Vector3 = _ik.clamp_blade_from_net(contact_world)
-	if clamped_contact != contact_world:
-		var delta: Vector3 = clamped_contact - contact_world
-		clamped_heel += delta
-		if _controller.has_puck:
-			_controller._do_release(delta.normalized(), _controller.goalie_strip_power)
+	clamped_heel += _ik.resolve_blade_against_net(clamped_heel).offset
 	if clamped_heel != blade_world:
 		pos = _skater.upper_body_to_local(clamped_heel)
 	_skater.set_top_hand_position(hand_pos)
@@ -219,8 +208,9 @@ func _apply_wrister_whip(t: float, aim_world: Vector3) -> void:
 	# is at its largest, and translating the hand by it is what threw the arm
 	# across the net. The blade stays where the clamps put it; the stick chokes up.
 	var local_target: Vector3 = _skater.clamp_blade_to_walls(intended_target)
+	var ft_heel: Vector3 = _skater.upper_body_to_global(local_target)
 	local_target = _skater.upper_body_to_local(
-			_ik.clamp_blade_from_net(_skater.upper_body_to_global(local_target)))
+			ft_heel + _ik.resolve_blade_against_net(ft_heel).offset)
 	if local_target != intended_target:
 		var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
 		hand_pos = _ik.hand_for_clamped_blade(local_target, blade_side_sign)
@@ -310,6 +300,8 @@ func apply_slapper_follow_through() -> void:
 		hand_pos.x += dir_local.x * hand_follow
 		hand_pos.z += dir_local.z * hand_follow
 	blade_pos = _skater.clamp_blade_to_walls(blade_pos)
-	blade_pos = _skater.upper_body_to_local(_ik.clamp_blade_from_net(_skater.upper_body_to_global(blade_pos)))
+	var sft_heel: Vector3 = _skater.upper_body_to_global(blade_pos)
+	blade_pos = _skater.upper_body_to_local(
+			sft_heel + _ik.resolve_blade_against_net(sft_heel).offset)
 	_skater.set_top_hand_position(hand_pos)
 	_skater.set_blade_position(blade_pos)

@@ -63,6 +63,7 @@ var last_target_blade_world: Vector3 = Vector3.ZERO
 var _cached_top_cfg: TopHandIK.Config = null
 var _cached_bottom_cfg: BottomHandIK.Config = null
 var _ik_result := TopHandIK.Result.new()
+var _net_result := NetBladeCollision.Result.new()
 # Native IK solvers (null = extension absent, GDScript fallback). Config
 # properties sync inside the cached-config builders — the same rebuild moment —
 # so invalidate_configs() covers both representations.
@@ -393,26 +394,19 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 					back = -_skater.global_transform.basis.z
 				_controller._do_release(back.normalized(), 3.0)
 
-	# Goalie body clamp (strips puck on contact) + net exclusion zone.
+	# Goalie body clamp (strips puck on contact) + the net.
 	# All work in world space; convert back once at the end.
 	var heel_world: Vector3 = _skater.upper_body_to_global(wall_clamped)
 	var clamped_heel: Vector3 = heel_world
 	if _controller.has_puck:
 		clamped_heel = clamp_blade_from_goalies(clamped_heel)
-	# Compute the puck contact point (mid-blade) and clamp that against the net,
-	# not the heel. This is geometrically correct regardless of blade angle.
-	var hand_world: Vector3 = _skater.upper_body_to_global(hand_local)
-	var shaft: Vector3 = clamped_heel - hand_world
-	shaft.y = 0.0
-	var contact_world: Vector3 = clamped_heel
-	if shaft.length() > 0.001:
-		contact_world = clamped_heel + shaft.normalized() * _skater.blade_length * 0.5
-	var clamped_contact: Vector3 = clamp_blade_from_net(contact_world)
-	if clamped_contact != contact_world:
-		var net_offset: Vector3 = clamped_contact - contact_world
-		clamped_heel += net_offset
-		if _controller.has_puck:
-			_controller._do_release(net_offset.normalized(), _controller.goalie_strip_power)
+	# The net is pure collision here — no strip, no legality. The blade stops on
+	# iron and sinks into twine; whether the PUCK survives that is the puck's own
+	# collision to resolve (SkaterController._collide_pinned_puck_with_net), which
+	# is the only place that can answer it correctly since the puck rides a pin
+	# OFF the blade. The mid-blade contact-point proxy this used to clamp is gone
+	# with it: the blade is a segment now, so heel and toe are tested directly.
+	clamped_heel += resolve_blade_against_net(clamped_heel).offset
 	if clamped_heel != heel_world:
 		wall_clamped = _skater.upper_body_to_local(clamped_heel)
 
@@ -549,31 +543,34 @@ func hand_for_clamped_blade(blade_local: Vector3, blade_side_sign: float) -> Vec
 			blade_side_sign,
 			_ik_config(blade_y_local()))
 
-# ── Net Exclusion Clamp ───────────────────────────────────────────────────────
-# Clamps `point` (either the puck contact point or the blade heel during
-# follow-through) out of the net, which NetClampRules treats as a solid object
-# with only its front face (the mouth) open. The point escapes through the
-# nearest solid face — never the front.
+# ── Net Collision ─────────────────────────────────────────────────────────────
+# Resolves the blade SEGMENT (heel → toe) against the net for a proposed heel,
+# and returns the correction to apply. Pure collision: iron stops the stick, the
+# twine lets it sink in and stops it there, and neither strips the puck — see
+# NetBladeCollision, and docs/net-play-plan.md §3 for why there is no legality
+# concept on this path any more.
 #
-# Tuck-in: while CARRYING, the front face is open, so a blade whose swept path
-# (prev contact → this contact) came IN through the mouth is left unclamped and
-# carries the puck across the line (wraparounds / jams). Entry from a side or the
-# back is still blocked — the stick can't reach through the mesh, no matter where
-# the skater's body is. Because a legal tuck leaves the contact UNCLAMPED, the
-# caller's "clamp moved the contact → auto-release" path (see apply_blade_from_
-# mouse) doesn't fire, so the puck rides in instead of being ejected. Follow-
-# through / non-carry calls pass allow_front = false and behave exactly as before.
-func clamp_blade_from_net(point: Vector3) -> Vector3:
-	return NetClampRules.clamp_out_of_net(
-			point,
+# The returned Result is shared and overwritten by the next call, like _ik_result:
+# consume it before resolving again.
+func resolve_blade_against_net(heel_world: Vector3) -> NetBladeCollision.Result:
+	NetBladeCollision.resolve(
 			_skater.get_prev_blade_contact_global(),
-			GameRules.GOAL_LINE_Z,
-			GameRules.NET_HALF_WIDTH,
-			GameRules.NET_POST_RADIUS,
-			GameRules.NET_PUCK_BUFFER,
-			GameRules.NET_DEPTH,
-			GameRules.NET_HEIGHT,
-			_controller.has_puck)
+			heel_world,
+			_blade_toe_for(heel_world),
+			_controller.net_blade_half_thickness,
+			_controller.net_mesh_give,
+			_net_result)
+	return _net_result
+
+# The blade's far end for a hypothetical heel, using the blade node's CURRENT
+# forward. Same approximation Skater.clamp_blade_to_walls makes for the boards:
+# this tick's orientation applied to the position the solve is proposing.
+func _blade_toe_for(heel_world: Vector3) -> Vector3:
+	var forward: Vector3 = -_skater.blade.global_transform.basis.z
+	forward.y = 0.0
+	if forward.length_squared() < 0.000001:
+		return heel_world
+	return heel_world + forward.normalized() * _skater.blade_length
 
 # ── Goalie Body / Butterfly Clamp ─────────────────────────────────────────────
 # Pushes blade_world out of every goalie's collision zone and strips the puck
