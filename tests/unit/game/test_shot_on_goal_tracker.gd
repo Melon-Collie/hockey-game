@@ -632,6 +632,70 @@ func test_confirmed_goal_logs_goal_outcome() -> void:
 	assert_eq(_last_event().outcome, ShotEvent.Outcome.GOAL)
 
 
+func test_goal_the_goalie_touched_is_logged_as_a_goal() -> void:
+	# The shot map's whole point is where goals come from, and a puck that goes in
+	# off the pad / glove / shoulder resolves as SAVED first (on_goalie_touch runs
+	# before the goal sensor). One shot, one event — the goal re-labels it.
+	var shooter := _add_player(10, 0)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.note_trajectory(true)
+	tracker.note_shot_origin(Vector3(2.0, 0.0, -22.0))
+	tracker.on_goalie_touch(1)              # grazed the keeper...
+	tracker.on_goal_confirmed(10)           # ...and went in
+	assert_eq(get_signal_emit_count(tracker, "shot_resolved"), 1,
+			"one shot resolves once — the goal re-labels, it doesn't re-emit")
+	assert_eq(_last_event().outcome, ShotEvent.Outcome.GOAL)
+	assert_almost_eq(_last_event().z, -22.0, 0.0001,
+			"the re-label keeps the shot's own release point")
+	assert_eq(shooter.stats.shots_on_goal, 1, "still exactly one shot on goal")
+
+
+func test_goal_with_no_tracked_release_plots_at_the_supplied_origin() -> void:
+	# A carry-in / jam-in never goes through on_shot_started, so the tracker has no
+	# release of its own. Without the caller's origin the goal lands at centre ice,
+	# which the career map drops as out-of-zone — the goal disappears.
+	_add_player(10, 0)
+	watch_signals(tracker)
+	tracker.on_pickup(10)                   # carrying clears any pending shot
+	tracker.on_goal_confirmed(10, Vector3(0.4, 0.0, -27.0))
+	var e := _last_event()
+	assert_eq(e.outcome, ShotEvent.Outcome.GOAL)
+	assert_almost_eq(e.z, -27.0, 0.0001)
+	assert_eq(e.shot_type, ShotEvent.ShotType.SHOT,
+			"no tracked shooter means no redirect — a jam-in is not a tip")
+
+
+func test_goal_events_are_always_on_net() -> void:
+	# A post carom that drops in flipped the release-time read off-net; storing
+	# that would contradict the shot on goal the same goal credits.
+	_add_player(10, 0)
+	watch_signals(tracker)
+	tracker.on_shot_started(10)
+	tracker.on_post_hit()
+	tracker.on_goal_confirmed(10)
+	assert_true(_last_event().on_net)
+
+
+func test_release_context_does_not_leak_into_the_next_shot() -> void:
+	# Pending state is per-release (see the pass-intent case). The goalie context
+	# is sampled only when a keeper resolves, so a stale one survives into a shot
+	# that never sampled its own and quietly forges that shot's release context.
+	_add_player(10, 0)
+	tracker.on_shot_started(10)
+	tracker.note_goalie_context([2, 0.5, 1.5, 0.3, 0.2, 6.0, 3.0, 4.0])
+	tracker.note_trajectory(true)
+	tracker.on_goalie_touch(1)
+	tracker.clear_pending()
+	watch_signals(tracker)
+	tracker.on_shot_started(10)             # no context noted for this one
+	tracker.note_trajectory(true)
+	tracker.on_goalie_touch(1)
+	var e := _last_event()
+	assert_eq(e.goalie_stance, -1, "unresolved goalie, not the last shot's stance")
+	assert_almost_eq(e.shooter_speed, 0.0, 0.0001)
+
+
 func test_directed_miss_recovered_by_defender_counts() -> void:
 	# Directed at net, missed wide, a defender retrieves it → a missed shot (Corsi).
 	_add_player(10, 0)

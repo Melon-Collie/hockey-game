@@ -369,7 +369,7 @@ func on_goal_scored_into(defending_team: Team) -> void:
 			assist1_name = assist_names[0] if assist_names.size() > 0 else ""
 			assist2_name = assist_names[1] if assist_names.size() > 1 else ""
 			if not is_own_goal:
-				_shot_tracker.on_goal_confirmed(scorer_id)
+				_shot_tracker.on_goal_confirmed(scorer_id, _goal_origin(record))
 			scorer_name = record.display_name()
 	_goal_log.append(Vector2i(scoring_team_id, scorer_id))
 	_shot_tracker.clear_pending()
@@ -389,6 +389,22 @@ func on_goal_scored_into(defending_team: Team) -> void:
 			scoring_team_id, _state_machine.scores[0], _state_machine.scores[1],
 			scorer_name, assist1_name, assist2_name)
 	_capture_goal_moment_frame()
+
+
+# Where a goal came from when the shot tracker has no release of its own to plot:
+# the scorer's own position at the moment the puck crossed. A carry-in, a jam-in
+# off a pickup, or a bat-in past the pending window never went through a tracked
+# release, and the scorer is standing on the spot in every one of them. Only used
+# as a fallback (on_goal_confirmed ignores it whenever a pending shot exists), so
+# a tracked shot still plots at its real release point.
+#
+# The PUCK's position is deliberately not the answer — by goal detection it is
+# past the goal line, which would plant every such goal behind the net.
+func _goal_origin(scorer: PlayerRecord) -> Vector3:
+	if scorer != null and scorer.skater != null:
+		return scorer.skater.global_position
+	var puck: Puck = _get_puck()
+	return puck.get_puck_position() if puck != null else Vector3.ZERO
 
 
 # Host: stamp the scoring goal's "flavor" counters (one_timer_goals / tip_goals)

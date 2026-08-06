@@ -20,7 +20,9 @@ extends RefCounted
 #                                     the release and after each deflection
 #   on_post_hit()                   → pipes = a miss; pending shot no longer on net
 #   on_goalie_touch(defending_tid)  → confirms SOG if eligible AND the shot was on net
-#   on_goal_confirmed(scorer_id)    → confirms SOG (non-own-goal only)
+#   on_goal_confirmed(scorer_id, origin) → confirms SOG (non-own-goal only) and
+#                                     settles the shot's outcome as GOAL, even if
+#                                     it already resolved as a save
 #   on_block(blocker_peer_id)       → credits shots_blocked if defender intercepts a pending ON-NET shot
 #   credit_assists(scorer_id)       → reads recent_carriers for 2 assists
 #   tick(delta)                     → clears pending after timeout
@@ -120,6 +122,11 @@ var _pending_ctx: Array = []
 # One-Timer achievement's goal-flavor tag. Set by on_shot_started, cleared with
 # the rest of the pending state.
 var _pending_one_timer: bool = false
+# The ShotEvent already emitted for the LIVE pending shot, held so a later goal
+# can re-label it (a shot the goalie got a piece of resolves as SAVED first —
+# see on_goal_confirmed). Listeners keep the same object, so the re-label reaches
+# the buffered log. Null whenever nothing has resolved for the pending shot.
+var _pending_event: ShotEvent = null
 
 var _registry: PlayerRegistry = null
 var _state_machine: GameStateMachine = null
@@ -183,6 +190,9 @@ func on_deflection(peer_id: int) -> void:
 		_pending_xg = 0.0                # re-armed shot; note_xg re-reads its geometry
 		_pending_origin = Vector3.ZERO   # re-armed shot; note_shot_origin re-reads
 		_pending_ctx = []                # re-armed shot; note_goalie_context re-reads
+		# The saved shot's event is finished — a goal off THIS rebound is its own
+		# event, not a re-label of the save.
+		_pending_event = null
 	_record_toucher(peer_id, false)
 
 
@@ -392,10 +402,27 @@ func on_goalie_touch(defending_team_id: int) -> void:
 
 
 # Called when the ref confirms a goal. Confirms SOG (dedup-safe via counted flag).
-# v1 edge: a goal the goalie grazed first logged its ShotEvent as SAVED via
-# on_goalie_touch (the dedup guard blocks the GOAL re-label); a clean goal (no
-# goalie touch) logs GOAL here. Minor shot-map mislabel, acceptable.
-func on_goal_confirmed(scorer_peer_id: int) -> void:
+#
+# A goal the goalie got a piece of has ALREADY resolved as SAVED — on_goalie_touch
+# fires first and its SOG credit is correct — so the dedup guard would swallow the
+# goal and leave the shot map showing a save. One shot is one event, and its
+# outcome is only final here, so re-label that event in place instead. Listeners
+# hold the same object (AdvancedStatsTracker buffers it by reference), and the
+# counters it already derived — the attempt, its xG — are unchanged by the
+# outcome, so nothing double-counts.
+#
+# `origin` is the release position to fall back on when there is NO live pending
+# shot: a carry-in, a jam-in off a pickup, or a scramble past the pending window
+# never went through a tracked release, so the tracker has no location of its own
+# and the event would plot at centre ice — which the shot map drops as
+# out-of-zone, losing the goal entirely.
+func on_goal_confirmed(scorer_peer_id: int, origin: Vector3 = Vector3.ZERO) -> void:
+	if _pending_event != null and _shot_on_goal_counted:
+		_pending_event.outcome = ShotEvent.Outcome.GOAL
+		_pending_event.on_net = true
+		return
+	if _shooter_peer_id == -1:
+		_pending_origin = origin
 	_confirm(scorer_peer_id, ShotEvent.Outcome.GOAL)
 
 
@@ -478,7 +505,9 @@ func clear_pending() -> void:
 	_pending_is_shot = true
 	_pending_xg = 0.0
 	_pending_origin = Vector3.ZERO
+	_pending_ctx = []
 	_pending_one_timer = false
+	_pending_event = null
 
 
 # Called on full game reset. Clears carrier history plus pending state, and
@@ -571,19 +600,28 @@ func _same_team(a: int, b: int) -> bool:
 # release geometry (position + xG), the outcome, and the shot type. Type is what
 # the tracker knows for free — a one-timer (the pending flag), else a redirect
 # when the credited peer differs from the original shooter (a tip), else a plain
-# shot. Period/clock come from the state machine.
+# shot. Period/clock come from the state machine. Also latches the event as the
+# pending shot's resolution, so a later goal can re-label it (on_goal_confirmed).
 func _build_event(credit_peer: int, outcome: int) -> ShotEvent:
 	var shot_type: int = ShotEvent.ShotType.SHOT
 	if _pending_one_timer:
 		shot_type = ShotEvent.ShotType.ONE_TIMER
-	elif credit_peer != _shooter_peer_id:
+	elif _shooter_peer_id != -1 and credit_peer != _shooter_peer_id:
+		# A redirect is the credited peer differing from a REAL shooter. Without
+		# the -1 guard a goal with no tracked release (carry-in / jam-in) read as
+		# a tip off nobody.
 		shot_type = ShotEvent.ShotType.TIP
 	var period: int = _state_machine.current_period if _state_machine != null else 1
 	var clock_s: float = _state_machine.time_remaining if _state_machine != null else 0.0
+	# A goal is on net by definition — the puck ended up in it. The release-time
+	# read can say otherwise (a post carom that drops in, a jam-in with no tracked
+	# release), and storing that would contradict the SOG this same goal credits.
+	var on_net: bool = _pending_on_net or outcome == ShotEvent.Outcome.GOAL
 	var e: ShotEvent = ShotEvent.make(
 			credit_peer, _registry.resolve_team_id_for_peer(credit_peer),
 			_pending_origin, _pending_xg, outcome, shot_type,
-			_pending_on_net, period, clock_s)
+			on_net, period, clock_s)
+	_pending_event = e
 	if _pending_ctx.size() == 8:
 		e.goalie_stance = _pending_ctx[0]
 		e.goalie_unset = _pending_ctx[1]
