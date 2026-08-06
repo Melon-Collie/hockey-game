@@ -3537,13 +3537,14 @@ func _fire_remote_shot(direction: Vector3, power: float, is_slapper: bool, shoot
 		NetworkManager.send_shot_to_all(shot_pos, is_slapper, shooter_peer_id)
 	if NetworkManager.is_host:
 		_start_pending_shot_from_carrier()
-		# Lag-comp the goalie reaction trigger: back-date the reaction timers
-		# by the one-way trip (now - shooter's host_timestamp) so the goalie
-		# gets the same effective reaction window the shooter perceived
-		# locally. Without this, the host's reaction starts RTT/2 after the
-		# shooter saw the puck leave the stick, eating ~28% of the arm delay
-		# on a 100ms RTT and flipping close-range saves into goals. Clamped so
-		# a forged/stale stamp (or pre-warmup zero stamp) earns no back-date.
+		# Lag-comp the goalie reaction trigger: back-date the reaction timers to
+		# the instant the shooter perceived the release (now - host_timestamp)
+		# so the goalie gets the same effective reaction window they did.
+		# Without it the goalie's reaction clock starts late by whatever separates
+		# the two — back when this was an arrival-timed RPC that was RTT/2, eating
+		# ~28% of the arm delay on a 100 ms link and flipping close-range saves
+		# into goals; off the input stream it is the input lead. Clamped so a
+		# stale stamp (or the pre-warmup zero stamp) earns no back-date.
 		var release_back_date: float = ShotReleaseRules.clamp_back_date(
 				NetworkManager.estimated_host_time(), host_timestamp)
 		for gc: GoalieController in goalie_controllers:
@@ -3621,9 +3622,19 @@ func _on_remote_derived_release(direction: Vector3, power: float, is_slapper: bo
 	if _registry.resolve_peer_id(puck.carrier) != shooter_peer_id:
 		return
 	# Origin: the host's authoritative blade contact at the release tick (not a
-	# client-sent point). Timestamp: the release input the host just processed.
+	# client-sent point).
 	var origin: Vector3 = record.skater.get_blade_contact_global()
-	var release_ts: float = record.controller.last_processed_host_timestamp
+	# Timestamp: the instant the SHOOTER perceived the release at, which is one
+	# input lead before the tick the host replays it on — the client applies an
+	# input immediately and stamps it `its estimated_host_time() + INPUT_LEAD_SEC`,
+	# while the host holds it until that stamp comes round. Anchoring at the
+	# host's own tick instead handed the goalie a release the shooter had already
+	# seen a lead ago: its reaction back-date came out ~0 and its position rewind
+	# stopped a lead short of what the shooter rendered. Fixed 33 ms, not
+	# ping-scaled — but it is 33 ms of a reaction window that is measured in
+	# tenths, on every remote shot. Same anchor as the one-timer path.
+	var release_ts: float = record.controller.last_processed_host_timestamp \
+			- NetworkManager.INPUT_LEAD_SEC
 	var rtt_ms: float = float(NetworkManager.get_peer_ping_ms(shooter_peer_id))
 	# Approximate the shooter's interpolation delay from the rtt the host already
 	# measures plus one broadcast interval — the two dominant terms of the client's
