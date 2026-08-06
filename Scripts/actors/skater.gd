@@ -201,6 +201,24 @@ var _face_gear_mesh: MeshInstance3D = null
 # blade_length), decaying to the seat at carry_catch_decay per second.
 @export var carry_catch_heel_u: float = 0.14
 @export var carry_catch_decay: float = 7.0
+# ── Pass-reception cushion (mesh-only, same channel as the catch above) ───────
+# A caught feed knocks the blade back along its own arrival line before the
+# hands re-seat it — the visible momentum absorb of the catch. Fired by each
+# machine's own attach path (trigger_reception_cushion) with the puck's
+# velocity relative to the receiver; the give scales with the SQUARE of that
+# closing speed (stopping distance under a constant absorb force ∝ v², the
+# same hands-soak model PuckReceptionRules is calibrated on), so a
+# walking-pace pickup gives essentially nothing and a full-pace feed reads as
+# a real corral. One continuous model — there is deliberately no separate
+# slow-pickup animation. Blade-mesh slide plus a wrist cup closing over the
+# puck; the marker, pin, and cursor binding are untouched.
+@export var reception_give_max: float = 0.12       # m of give at a ceiling-speed catch
+@export var reception_give_decay: float = 5.0      # blend/s back to the seat
+@export var reception_cup_deg: float = 7.0         # extra face close-over at full give
+# Closing speed (m/s, receiver frame) at which the give saturates. Mirrors the
+# any-angle deflect ceiling (Puck.deflect_min_speed) — a hotter arrival
+# deflects instead of catching, so the visual maxes out there.
+@export var reception_give_full_speed: float = 22.0
 # Commit threshold on |aim_dir · face_normal| (both unit) for the wrister
 # address flip — the aim line must sit at least ~asin(this) (~14°) off the
 # stick line before the addressed side changes, so a near-parallel aim holds
@@ -710,6 +728,12 @@ var _transit_hop: float = 0.0
 # _apply_blade_tilt only.
 var _stroke_toe_blend: float = 0.0
 var _catch_heel_blend: float = 0.0
+# Reception-cushion transient: unit arrival direction in blade-marker-local
+# space (captured at the attach instant) and its decaying amplitude. Fed by
+# trigger_reception_cushion, decayed alongside the blends above, consumed by
+# _apply_blade_tilt only.
+var _reception_give_dir: Vector3 = Vector3.ZERO
+var _reception_give_blend: float = 0.0
 # Eased 0→1 gate for the wind-up elevation seat (_aim_seat_offset_u) — 1 while
 # in WRISTER_AIM, so the seat tell slides in with the commit and back out with
 # the release instead of snapping on the state edge.
@@ -1288,7 +1312,8 @@ func _apply_blade_tilt() -> void:
 	var twist: float = (_BLADE_FACE_OPEN_DEG \
 			+ _blade_elevation_blend * _BLADE_ELEVATED_EXTRA_LOFT_DEG \
 			- drag * _BLADE_TOE_DRAG_ROLL_DEG \
-			- _heel_cradle * _BLADE_CRADLE_CUP_DEG) * blade_side_sign
+			- _heel_cradle * _BLADE_CRADLE_CUP_DEG \
+			- _reception_give_blend * reception_cup_deg) * blade_side_sign
 	var pitch_basis: Basis = Basis.IDENTITY.rotated(Vector3.RIGHT, deg_to_rad(toe_lift))
 	# Hosel axis (StickBladeMeshBuilder._add_hosel: (0, sin lie, cos lie) in
 	# blade-local space), carried through the pitch so the twist stays about
@@ -1311,12 +1336,16 @@ func _apply_blade_tilt() -> void:
 	#   catches heel-first and rolls back, and a wrister wind-up seats the
 	#   frozen puck per the loft level (_aim_seat_offset_u — the elevation
 	#   tell). Blade-mesh prosody only — the puck stays bound to the cursor.
+	# The reception cushion is the one full-vector slide on top of both axes:
+	# the blade gives along the caught puck's own arrival line (captured
+	# blade-local, so the give rides the wrists as the body keeps turning).
 	_blade_mesh_instance.position = Vector3(
 			(_address_factor - get_carry_forehand_factor()) * carry_blade_offset,
 			0.0,
 			(_stroke_toe_blend * carry_stroke_toe_u
 					- _catch_heel_blend * carry_catch_heel_u
-					+ _aim_seat_offset_u()) * blade_length)
+					+ _aim_seat_offset_u()) * blade_length) \
+			+ _reception_give_dir * (_reception_give_blend * reception_give_max)
 
 
 # (Re)generates the procedural curved blade mesh (and the tape band riding it,
@@ -1964,13 +1993,15 @@ func _update_carry_contact(delta: float) -> void:
 	var new_stroke: float = move_toward(
 			_stroke_toe_blend, stroke_toe_target, carry_gesture_ease * delta)
 	var new_catch: float = move_toward(_catch_heel_blend, 0.0, carry_catch_decay * delta)
+	var new_give: float = move_toward(
+			_reception_give_blend, 0.0, reception_give_decay * delta)
 	var aim_seat_target: float = 1.0 \
 			if current_shot_state == SkaterStateMachine.State.WRISTER_AIM else 0.0
 	var new_aim_seat: float = move_toward(
 			_aim_seat_blend, aim_seat_target, carry_gesture_ease * delta)
 	if new_drag != _toe_drag_gesture or new_cradle != _heel_cradle \
 			or new_stroke != _stroke_toe_blend or new_catch != _catch_heel_blend \
-			or new_aim_seat != _aim_seat_blend:
+			or new_give != _reception_give_blend or new_aim_seat != _aim_seat_blend:
 		# The gesture factors tilt/slide the blade mesh without moving any
 		# marker, so the render-rate rig pass can't see the change — same
 		# escape as _update_blade_elevation.
@@ -1979,8 +2010,38 @@ func _update_carry_contact(delta: float) -> void:
 	_heel_cradle = new_cradle
 	_stroke_toe_blend = new_stroke
 	_catch_heel_blend = new_catch
+	_reception_give_blend = new_give
 	_aim_seat_blend = new_aim_seat
 	_update_wrister_address(delta)
+
+
+# The attach-instant cushion: the puck's arrival momentum visibly knocks the
+# blade back along its line of travel, then the hands re-seat it (the decay in
+# _update_carry_contact). `relative_velocity` is puck − receiver at contact —
+# the same frame the receive decision judges. Cosmetic and per-machine: every
+# peer fires it from its own attach event (host detection / lag-comp grant,
+# client pickup notifies), so it needs no wire field and never replays.
+# Skipped while slapshot-pinning: a one-timer feed lands under a raised,
+# wound-up stick, and pins to the slapper zone rather than the blade — there
+# is no blade-on-puck catch to cushion.
+func trigger_reception_cushion(relative_velocity: Vector3) -> void:
+	if blade == null or is_slapshot_pinning() or reception_give_full_speed <= 0.0:
+		return
+	var horiz := Vector3(relative_velocity.x, 0.0, relative_velocity.z)
+	var speed: float = horiz.length()
+	if speed < 0.001:
+		return
+	var t: float = clampf(speed / reception_give_full_speed, 0.0, 1.0)
+	var amp: float = t * t
+	if amp <= _reception_give_blend:
+		return  # a live, larger cushion is still playing out
+	var local_dir: Vector3 = blade.global_transform.basis.inverse() * (horiz / speed)
+	local_dir.y = 0.0
+	if local_dir.length_squared() < 0.000001:
+		return
+	_reception_give_dir = local_dir.normalized()
+	_reception_give_blend = amp
+	_blade_tilt_dirty = true
 
 
 # The wrister-address pass: while the blade is frozen in a wrister aim, the
