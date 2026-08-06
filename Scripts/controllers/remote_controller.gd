@@ -342,11 +342,27 @@ func sample_state_at(host_time: float) -> SkaterNetworkState:
 	if bracket == null:
 		return null
 	if bracket.is_extrapolating:
-		# Freeze at the newest sample rather than projecting newest.position +
-		# velocity*dt like _interpolate does: this feeds contact geometry, and a
-		# projected lead at the buffer's leading edge could fabricate a false
-		# overlap the host never resolved. Holding the last KNOWN position is the
-		# conservative choice (a bounded lag, not an invented contact).
+		# `host_time` here is an INPUT STAMP (`now + input lead`), so it is always
+		# past the newest buffered snapshot — this branch is the steady state for
+		# reconcile replay, not an edge case.
+		#
+		# Intent-integrate the newest snapshot forward to the requested instant,
+		# which is what this function's contract already promised ("where the HOST
+		# had this skater at host_time"): the host resolves the input stamped T
+		# against its live bodies at T, so that is the geometry replay must
+		# reproduce. It is also the SAME primitive, decay constant and has_puck
+		# convention the live render (`_interpolate`) and the host's own hit-claim
+		# rewind (`LagCompRewind.forward_predict_skater`) use.
+		#
+		# It previously FROZE at the newest sample, on the reasoning that a
+		# projected lead "could fabricate a false overlap the host never resolved."
+		# That was sound when remotes rendered in the past — freezing was
+		# conservative relative to the screen. Since the render gained stage-3
+		# forward prediction it inverted: the live step collides against a
+		# ~host-present body while replay re-resolved the same contact against one
+		# `one_way + broadcast_interval/2` older, so replay could flip overlap, the
+		# aggressor gate, and the contact normal against both the screen AND the
+		# host. Freezing was the only one of the three parties still in the past.
 		var newest: SkaterNetworkState = bracket.to_state
 		_sample_scratch.position = newest.position
 		_sample_scratch.velocity = newest.velocity
@@ -357,6 +373,7 @@ func sample_state_at(host_time: float) -> SkaterNetworkState:
 		# replay resolved contacts against ghosted skaters the host skipped —
 		# a reconcile snap-loop for as long as the overlap persisted.
 		_sample_scratch.is_ghost = newest.is_ghost
+		_predict_sample_forward(newest, bracket.extrapolation_dt)
 	else:
 		var f: SkaterNetworkState = bracket.from_state
 		var to: SkaterNetworkState = bracket.to_state
@@ -370,6 +387,49 @@ func sample_state_at(host_time: float) -> SkaterNetworkState:
 		# mid-window ghost transition replays the way the host resolved it.
 		_sample_scratch.is_ghost = f.is_ghost
 	return _sample_scratch
+
+
+# Beyond this the buffer is too stale to project honestly and the sample holds at
+# the newest snapshot instead (the old freeze, kept as the deep-loss fallback).
+# Steady state is well inside it: the gap is `input lead + one_way +
+# broadcast_interval/2` — ~115 ms even on a poor link — so the cap only engages
+# when snapshots have genuinely stopped arriving, where inventing a third of a
+# second of skating would fabricate contacts rather than reconstruct them.
+const _SAMPLE_PREDICT_MAX_S: float = 0.15
+
+
+# Advances `_sample_scratch` from `newest` by `dt` using the shared movement
+# integration — the same primitive/decay/has_puck=false convention as
+# `_interpolate`'s stage-3 lead and `LagCompRewind.forward_predict_skater`, so all
+# three reconstruct a remote body identically. Facing is held (matching both), and
+# the intent fields come from the snapshot the wire already quantized, so no
+# re-quantization is needed here (unlike the host-side helper, which reads raw
+# analog bot intent).
+func _predict_sample_forward(newest: SkaterNetworkState, dt: float) -> void:
+	if dt <= 0.0 or dt > _SAMPLE_PREDICT_MAX_S or not is_finite(dt):
+		return
+	var ticks: int = roundi(dt * float(Constants.PHYSICS_TICK))
+	if ticks <= 0:
+		return
+	var heading: float = atan2(newest.facing.x, newest.facing.y)
+	var nm: RefCounted = native_movement()
+	if nm != null:
+		nm.integrate_forward(
+				newest.position, newest.velocity, newest.move_intent,
+				heading, false, newest.brake_intent, newest.sprint_active,
+				1.0 / float(Constants.PHYSICS_TICK), ticks,
+				Constants.FORWARD_PREDICT_INTENT_DECAY_TICKS, newest.stagger_timer, true)
+		_sample_scratch.position = nm.get_forward_position()
+		_sample_scratch.velocity = nm.get_forward_velocity()
+	else:
+		SkaterMovementRules.integrate_forward(
+				newest.position, newest.velocity, newest.move_intent,
+				heading, false, newest.brake_intent, newest.sprint_active,
+				_movement_config(), 1.0 / float(Constants.PHYSICS_TICK), ticks,
+				Constants.FORWARD_PREDICT_INTENT_DECAY_TICKS, _fp_result,
+				newest.stagger_timer, _body_check_config())
+		_sample_scratch.position = _fp_result.position
+		_sample_scratch.velocity = _fp_result.velocity
 
 func _interpolate(delta: float) -> void:
 	# Shared delay (NetworkManager) keeps the puck and other remotes on the same
