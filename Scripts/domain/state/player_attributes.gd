@@ -275,37 +275,43 @@ const _FLEX_RUNWAY_LEAN: Array[float] = [0.90, 1.00, 1.12]  # wrister full-strok
 # a set launch angle from this pattern's ladder, steeper on the open blade at
 # every rung.
 #
-# Rungs are spaced by the distance each one ROOFS from, not by even angle
-# steps. A set angle's arrival is ~d·tan(angle), so the distance a rung tops
-# the shelf from goes as 1/tan — even angle steps therefore pile most of the
-# ladder onto the doorstep and leave the slot with no rung at all. Spacing by
-# roof distance instead puts each gear's three rungs across the range its
-# shooter actually shoots from, so the level is a live choice at 3–10 m rather
-# than a single legal option. (Why one ladder can't cover everything: past
-# ~9 m only a 7.5–8.5° rung stays under the bar at full pace — that band is
-# where a set angle apexes INSIDE the cavity, so its arc cruises the top shelf
-# over a long run of distance. Steeper rungs sail. So each gear must choose
-# where its fan sits.)
+# THE LEVEL NAMES THE SHOT; THE GEAR NAMES THE RANGE. Each level targets a
+# GOALIE-POSTURE landmark — absolute heights off the ice, not fractions of the
+# net — and each gear places those same three shots at its own HOME RANGE:
 #
-# The fans, at full wrister charge (33 m/s):
-#   M88 ~4–9.5 m — the safe blade. MID roofs 6.2–9.6 m, HIGH 4.1–5.8 m, and
-#        LOW roofs NOTHING: its 7° apexes at 0.83 m, forever under the pad
-#        seam. That is the safety, not a hole — the same 7° is what keeps a
-#        max slapper's apex at crossbar-ping height, so the blade cannot sail
-#        at any pace on any rung it can reach the point with. Roofing on a
-#        wrister needs >= 7.2° and never-sailing needs <= 7.05°; M88 is the
-#        gear that takes the second side of that trade, and pays for it with
-#        no top shelf past 9.6 m.
-#   M92 ~3.5–22 m — the all-rounder, and the only ladder that spans both ends:
-#        its 8° LOW is still the textbook point snipe (and still cannot sail
-#        on a wrister — the whole arc apexes under the bar), MID roofs the
-#        slot at 5–7.5 m, HIGH the 3.5–4.5 m range. One sliver at ~8 m, which
-#        fills off MID at ~27 m/s.
-#   M28 ~3–8 m — the close blade. LOW roofs 6–8 m, MID 4–5 m, HIGH from 3 m.
-#        No top shelf from the point at any credible pace.
-# Nobody roofs the 2 m doorstep any more: that shot is rare enough that
-# spending rungs on it cost the slot its elevation, which is the trade the
-# 2026-08 retune reversed.
+#   level        target        what it beats
+#   LOW  (35%)   0.41 m        over the butterfly pad (0.28), UNDER his hands
+#   MID  (60%)   0.70 m        the armpit — OVER his committed hands (0.49)
+#   HIGH (85%)   0.99 m        upstairs — over the standing pad seam (0.86)
+#
+#   gear   home    ladder
+#   M88    8.5 m   the range blade — peaks in the high slot / long range
+#   M92    6.0 m   the all-rounder — 3 shots from the slot out to long range
+#   M28    4.5 m   the close blade — peaks in the slot, owns the crease
+#
+# (Percentages are of the 1.17 m scoring cavity, a naming convenience only —
+# what the rungs actually clear is the goalie's equipment, whose heights are
+# absolute. See GoalieAnatomy for the pad/hand/torso boxes those come from.)
+#
+# Away from home the menu slides rather than breaking: one zone out a gear
+# keeps two shots, two zones out one. Nobody gets the full menu at the point,
+# which is deliberate — a point shot only has to reach the net, not pick a
+# corner (the whole net is a 3.4° window at 19 m, so no ladder could).
+#
+# Two properties fall out of anchoring the fans close in rather than at range,
+# and both are load-bearing:
+#   · BUILD TOLERANCE. Build variance lives entirely in the gravity drop
+#     (~d²/v²), so the ±17% shot-power spread moves arrival by only ±3–12 cm
+#     at these home ranges instead of the ±60 cm it moved when bands sat at
+#     15–22 m. Every build keeps its full menu at home; the lone casualty is a
+#     weak build's M88 LOW, which lands under the pad. No normalization needed
+#     — the anchoring dissolved the problem.
+#   · THE SLAPPER NEEDS NO SEPARATE LADDER. Its extra pace costs ~5 cm of drop
+#     at home range, so the same rungs ride about one notch higher. Real, and
+#     small enough that the level still means what it means.
+# NO rung sails on a wrister, and no LOW rung sails even off a max slapper
+# (apexes 0.62 / 0.75 / 1.01 m by gear) — the flat bottom of every ladder is
+# the universally safe shot.
 #
 # The rest of the identity triangle, all lateral trades about the M92:
 #   M88 — the playmaker/point blade: best backhand, +3% slapper (a flatter
@@ -320,9 +326,9 @@ const _FLEX_RUNWAY_LEAN: Array[float] = [0.90, 1.00, 1.12]  # wrister full-strok
 # alignment bonus at the decision sites (PuckReceptionRules callers) — never
 # pickup_max_speed, so soft passes settle on every blade and the client's
 # provisional-pickup gate stays build-independent.
-const _CURVE_LOFT_LOW_DEG: Array[float] = [7.0, 8.0, 10.0]     # M88 / M92 / M28
-const _CURVE_LOFT_MID_DEG: Array[float] = [9.5, 11.0, 13.5]
-const _CURVE_LOFT_HIGH_DEG: Array[float] = [13.0, 15.5, 20.0]
+const _CURVE_LOFT_LOW_DEG: Array[float] = [5.0, 5.5, 6.4]      # M88 / M92 / M28
+const _CURVE_LOFT_MID_DEG: Array[float] = [6.9, 8.2, 10.0]
+const _CURVE_LOFT_HIGH_DEG: Array[float] = [8.9, 11.0, 13.6]
 const _CURVE_RUNWAY_LEAN: Array[float] = [1.00, 1.00, 0.90]
 const _CURVE_BACKHAND_LEAN: Array[float] = [1.08, 1.00, 0.90]
 const _CURVE_SLAP_LEAN: Array[float] = [1.03, 1.00, 0.97]

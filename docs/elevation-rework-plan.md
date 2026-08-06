@@ -19,7 +19,13 @@ Version history (full writeups in git):
   were re-derived. Playtest reported "always shooting one tick of elevation,
   not a lot of opportunities to roof it," and the arithmetic agreed: past
   ~4.5 m LOW was the only rung still under the bar at full pace, so the level
-  was not a live choice anywhere real shots come from. See §1.1.
+  was not a live choice anywhere real shots come from.
+- **v3.2 (2026-08 posture vocabulary — CURRENT)** — v3.1 aimed every rung at
+  the STANDING pad seam (0.86 m), which is the wrong target: "over the pads"
+  in play means over the LEG pads with the keeper in butterfly, and those top
+  out at 0.28 m. Re-anchored so **the level names the SHOT and the gear names
+  the RANGE** — each level clears a goalie-posture landmark, each gear places
+  the same three shots at its own home range. See §1 and §1.1.
 
 All constants below are STARTING VALUES for playtest tuning; the shapes and
 invariants are the design.
@@ -38,81 +44,88 @@ Per-gear ladders (degrees; tan enters the release math):
 | level (contact) | M88 | M92 | M28 |
 |---|---|---|---|
 | 0 FLAT (heel) | 0 | 0 | 0 |
-| 1 LOW (mid-blade) | 7 | 8 | 10 |
-| 2 MID (toe-side) | 9.5 | 11 | 13.5 |
-| 3 HIGH (toe) | 13 | 15.5 | 20 |
+| 1 LOW (mid-blade) | 5.0 | 5.5 | 6.4 |
+| 2 MID (toe-side) | 6.9 | 8.2 | 10.0 |
+| 3 HIGH (toe) | 8.9 | 11.0 | 13.6 |
 
-Top-shelf bands at full wrister charge (33 m/s), over-the-bar beyond them
-(the roof window is arrival in [0.86, 1.18] — the goalie pad seam to the
-scoring cavity's top):
+**The level names the SHOT; the gear names the RANGE.** Every level targets a
+goalie-posture landmark — absolute heights off the ice, from `GoalieAnatomy`'s
+equipment boxes, not fractions of the net:
 
-| level | M88 | M92 | M28 |
-|---|---|---|---|
-| LOW | **never roofs** (apex 0.83 m) and **never sails** (max-slap apex 1.21 m = iron at worst) | 8.5–22 m: the textbook point snipe, and still cannot sail on a wrister | 5.8–8.7 m |
-| MID | 6.2–9.6 m | 5.0–7.4 m | 3.9–5.5 m |
-| HIGH | 4.1–5.8 m | 3.3–4.6 m | 2.5–3.4 m |
+| level | target | what it beats |
+|---|---|---|
+| FLAT | ice | five-hole on a standing keeper; through traffic for tips |
+| LOW | 0.41 m | over the butterfly pad (0.28), **under** his hands (0.49) |
+| MID | 0.70 m | the armpit — **over** his committed hands, under the seam |
+| HIGH | 0.99 m | upstairs — over the standing pad seam (0.86), under the bar |
 
-Backing off the charge slides every band toward the net. The identities:
+and each gear places those same three shots at its own HOME RANGE:
 
-- **M88** — the safe blade. Its top shelf lives at 4–9.6 m and it has none
-  past that: LOW's 7° apexes under the pad seam, so from the point it is a
-  low shot for tips and rebounds. That flatness IS the safety — the same 7°
-  keeps a max slapper at crossbar-ping height, so the blade cannot put a puck
-  over the glass on any rung it can reach the point with. No clamp needed;
-  the property emerges from the table.
-- **M92** — the all-rounder, and the only ladder spanning both ends: LOW is
-  the textbook point snipe (8.5–22 m), MID owns the slot, HIGH the 3.3–4.6 m
-  range. One sliver at ~8 m, which fills off MID at ~27 m/s (0.30 s flight —
-  a shot the keeper must still respect).
-- **M28** — the steepest ladder at every rung: the close-range weapon, owning
-  2.5–8.7 m across its three rungs, with no top shelf from the point at any
-  credible pace. The worst at range, as before.
+| gear | home | identity |
+|---|---|---|
+| M88 | 8.5 m | the range blade — peaks in the high slot / long range |
+| M92 | 6.0 m | the all-rounder — three shots from the slot out to long range |
+| M28 | 4.5 m | the close blade — peaks in the slot, owns the crease |
+
+Distinct shots available per zone (counting FLAT), which is the design target
+"great in your range, competent one range away":
+
+| gear | Crease 0–3 | Slot 3–6 | High Slot 6–9 | Long 9–12 | Point 12+ |
+|---|---|---|---|---|---|
+| M28 | 2 | **4** | 3 | 2 | 2 |
+| M92 | 2 | 3 | 3 | 3 | 2 |
+| M88 | 2 | 3 | **4** | **4** | 2 |
 
 Consequences accepted deliberately:
 
-- **Nobody roofs the 2 m doorstep.** Reserving a rung for the crease is what
-  cost every blade its slot elevation, and the doorstep is a rare enough look
-  that the trade is worth reversing. The steepest rung in the game (M28 HIGH)
-  now arrives ~0.71 m from 2 m — mid-net.
-- **A max-charge point slapper at LOW sails for M92/M28** — the fully-wound
-  point bomb wants FLAT or an eased charge. Elevation at max power is the
-  risky choice; that's the language of the whole model.
-- **A mastered player still hits a learned band from a clean look.** Manual
-  elevation makes sniping earned and self-punishing under pressure; if
-  static-look snipes remain too free after playtest, the goalie's high game
-  (pre-arm read of the visible toe carry) returns as a *complement*, not a
-  competing design.
+- **Nobody roofs the 2 m doorstep**, and that is the right shape: at the crease
+  the shot you want is over the *butterfly* pad, and the M28 delivers exactly
+  that (MID 0.34 m, HIGH 0.47 m, both clearing the 0.28 m pad). The crease
+  does not need the top half of the net.
+- **The point is a put-it-on-net zone, not a menu zone.** Every gear has two
+  shots there. The whole cavity is a ~3.4° window at 19 m (§1.1), so no ladder
+  could do better.
+- **A weak build's M88 LOW lands under the pad** (0.26 m) — the one cell in
+  the whole build × gear × rung × shot-type matrix that loses a shot. The
+  range blade in the hands of the body least suited to it; accepted rather
+  than distorting the anchor.
+- **Missing high is still real** — a rung fired two zones past its home sails
+  (M28 MID from 9 m arrives 1.21 m). What changed is that greed is now a
+  rung-vs-range mistake rather than a power mistake.
 
-## 1.1 Why the rungs are spaced by roof DISTANCE, not by even angle steps
+## 1.1 Why the rungs are anchored to posture and zone
 
-A set angle's arrival is ~`d·tan(angle)`, so the distance a rung tops the
-shelf from goes as `1/tan`. Even steps in angle are therefore geometric steps
-in distance *the wrong way round*: the v3 ladder's three rungs (8/17.5/24 on
-the M92) roofed from ~15 m, ~3.5 m and ~2.4 m — two of the three rungs landed
-inside 4 m of ice while everything from 4 to 8.5 m had no rung at all. That
-gap is the slot. Playtest felt it as "always one tick": past ~4.5 m at full
-pace, MID and HIGH both sailed, so LOW was the only legal rung anywhere real
-shots come from, and LOW arrives 0.6–0.8 m there — the keeper's chest.
+Three structural facts set what any set-angle ladder can do. All three are
+consequences of arrival ≈ `d·tan θ − (g d²/2v²)·sec² θ`.
 
-Two structural facts set what any ladder can do:
+1. **The angular budget spanning the whole net shrinks as ~1/d** — 29° at 2 m,
+   10.7° at 6 m, **3.4° at the point**. So the number of distinct shot types
+   that can exist at a distance is set by physics, not tuning: many in tight,
+   essentially one at range. This is why a gear must own a zone, and why the
+   point gets no menu.
+2. **Build variance lives entirely in the gravity drop** (`~d²/v²`). The ±17%
+   shot-power spread moves arrival by ±60 cm when a band sits at 15–22 m, but
+   only ±3–12 cm at these 4.5–8.5 m home ranges. Anchoring the fans close in
+   made the system build-tolerant as a side effect — which is why no power
+   normalization is applied, and why builds change your shot without ruining
+   it. Same reason the SLAPPER needs no separate ladder: its extra pace costs
+   ~5 cm of drop at home range, so the rungs ride one notch higher and the
+   level still means what it means.
+3. **A rung is widest when its apex lands in the target band**, since the arc
+   then cruises that height over a long run of distance rather than slicing
+   through it. This is what made v3's 8° LOW a "god rung" against the standing
+   seam, and it is why v3.1's ladders — all aimed at that same seam — still
+   collapsed to one useful rung per gear.
 
-1. **A rung is wide exactly when its apex lands in the roof window.** apex =
-   `(v·sin θ)² / 2g`, so apex ∈ [0.86, 1.18] means `v·sin θ` ∈ [4.11, 4.81].
-   At 33 m/s that is only **7.2°–8.4°** — which is why the M92's 8° LOW was
-   the god rung: its whole arc cruises the top shelf, giving it a 13-metre
-   band while every steeper rung gets a ~1.5 m one.
-2. **Past ~9 m there is only one usable elevated angle at full pace.** Above
-   ~8.5° the puck sails; below ~7.2° it never reaches the seam. So no ladder
-   can give expression at long range, and a gear must choose where its fan
-   sits. That is what makes the ladder a genuine gear identity rather than a
-   ±10% scaling of one shape (which is all v3's three near-clone ladders
-   were).
-
-The v3.1 spacing follows from those: put each gear's three rungs across the
-distances its shooter actually shoots from (3–10 m), and let the gear choose
-which end of the rink it owns. The M92 at 6 m goes from `0.68 / OVER / OVER`
-to `0.68 / 1.00 / OVER`; at 4 m from `0.49 / 1.18 / OVER` to three distinct
-in-net arrivals (`0.49 / 0.70 / 1.03`).
+What v3.2 fixes over v3.1 is the TARGET, not the spacing. v3.1 aimed every
+rung at the standing pad seam (0.86 m). But the keeper is in butterfly for
+most in-tight shots, and his leg pads then top out at **0.28 m** — the pad box
+is 0.28 m wide (11", the real NHL spec) and rolls flat, which
+`GoalieAnatomy.BUTTERFLY_PAD_HALF_WIDTH_M` (0.42 = half the 0.84 long axis)
+confirms. So the shot players actually take — over the pad, under or over the
+hands — sat *below* every rung v3.1 authored, and the 0.40–0.85 m band that
+v3.1 dismissed as "the keeper's chest" is in fact the armpit seam, which
+`AIActionScoring` already models as opening when a hand is committed low.
 - Nothing in the ladder approaches 45°, so `ShotMechanics.MAX_LOFT_RATIO`
   becomes a pure anti-forgery guard and the host clamp headroom widens.
 - The flip clear is the steepest rung at soft pace — no special case.
