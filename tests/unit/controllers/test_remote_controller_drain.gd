@@ -38,20 +38,67 @@ func test_healthy_queue_is_untouched() -> void:
 	assert_eq(rc.last_processed_host_timestamp, 0.0, "ack untouched")
 
 
-func test_backlog_drains_to_target_and_advances_ack() -> void:
-	# A ~10-tick backlog (post-jitter-burst shape): everything staler than the
-	# ~1-tick target is acked-without-applying; the queue keeps the fresh tail.
+func test_steady_state_quantization_overdue_never_drains() -> void:
+	# The measured steady state on a healthy 3-peer host: a DEEP queue (the stamp
+	# lead working) whose front pops ~12 ms overdue — render-frame quantization,
+	# not lateness, since physics ticks bunch two to a frame at ~100 fps. Plus an
+	# ordinary hitch on top. The old 4-tick (33 ms) trigger fired here several
+	# times a second, and each fire cost the client a visible reconcile.
 	var rc := _controller()
 	var now: float = 10.0
 	var stamps: Array = []
 	for i: int in range(10):
-		stamps.append(now - TICK * float(10 - i))  # 10..1 ticks overdue
+		stamps.append(now - TICK * 1.5 + TICK * float(i))  # front ~12 ms overdue, 10 deep
 	_seed(rc, stamps)
 	rc._drain_backlog(now)
-	# Only entries at/after now - _DRAIN_TARGET_S survive: the 1-tick-overdue tail.
-	assert_eq(rc._input_queue.size(), 1, "drained down to the ~1-tick-overdue tail")
-	assert_almost_eq(rc.last_processed_host_timestamp, now - TICK * 2.0, 1e-6,
+	assert_eq(rc._input_queue.size(), 10, "a deep queue at quantization-scale overdue is untouched")
+	assert_eq(rc.last_processed_host_timestamp, 0.0, "ack untouched")
+
+
+func test_hitch_scale_overdue_still_does_not_drain() -> void:
+	# ~5 ticks (~42 ms) overdue: an ordinary host hitch on top of quantization.
+	# Tolerating it costs input LATENCY; draining it costs a visible correction —
+	# so the trigger deliberately sits above this band.
+	var rc := _controller()
+	var now: float = 10.0
+	var stamps: Array = []
+	for i: int in range(10):
+		stamps.append(now - TICK * 5.0 + TICK * float(i))
+	_seed(rc, stamps)
+	rc._drain_backlog(now)
+	assert_eq(rc._input_queue.size(), 10, "hitch-scale slip rides rather than dropping inputs")
+
+
+func test_backlog_drains_to_target_and_advances_ack() -> void:
+	# A genuine ratchet (front past the trigger): everything staler than the
+	# ~2-tick target is acked-without-applying; the queue keeps the fresh tail.
+	var rc := _controller()
+	var now: float = 10.0
+	var stamps: Array = []
+	for i: int in range(12):
+		stamps.append(now - TICK * float(12 - i))  # 12..1 ticks overdue
+	_seed(rc, stamps)
+	rc._drain_backlog(now)
+	# Only entries at/after now - _DRAIN_TARGET_S (2 ticks) survive.
+	assert_eq(rc._input_queue.size(), 2, "drained down to the ~2-tick-overdue tail")
+	assert_almost_eq(rc.last_processed_host_timestamp, now - TICK * 3.0, 1e-6,
 			"ack advanced through the dropped span")
+
+
+func test_drain_target_clears_the_quantization_floor() -> void:
+	# The old 1-tick target drained to ~8.3 ms — BELOW the ~12 ms quantization
+	# floor — so the very next frame read as overdue again and re-armed the
+	# trigger. The target must leave the surviving front inside the healthy band.
+	var rc := _controller()
+	var now: float = 10.0
+	var stamps: Array = []
+	for i: int in range(12):
+		stamps.append(now - TICK * float(12 - i))
+	_seed(rc, stamps)
+	rc._drain_backlog(now)
+	var front_overdue: float = now - rc._input_queue.front().host_timestamp
+	assert_lt(front_overdue, RemoteController._DRAIN_TRIGGER_S,
+			"post-drain front is clear of the trigger, so one drain settles it")
 
 
 func test_drain_always_leaves_one_input_to_apply() -> void:
