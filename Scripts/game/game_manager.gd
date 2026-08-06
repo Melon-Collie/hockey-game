@@ -2820,9 +2820,9 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 			# predated the inelastic-resolver rewrite (Δv shrank ~2×) and never fired.
 			local_player_impact.emit(impulse, clampf((impulse.length() - 0.6) / 1.5, 0.0, 1.0)))
 		NetworkManager.set_input_batch_provider(local_ctrl.fill_input_batch)
-		# Historical positions of the OTHER skaters for the reconcile replay's
-		# body-check re-resolution (Slice C) — sampled from each remote's
-		# interpolation buffer at the replayed input's host timestamp.
+		# The OTHER skaters as this client RENDERED them, for the reconcile replay's
+		# body-check re-resolution (Slice C) — so replay re-derives contact against
+		# the bodies the live step collided with, not a raw buffer sample.
 		local_ctrl.set_historical_others_provider(_sample_historical_others)
 	# AI bots release shots through the same signal as humans, but they live
 	# only on the host (record.is_local is false). Without this connection
@@ -5084,11 +5084,13 @@ func get_state_delayed(delay_seconds: float, out: WorldSnapshot = null) -> World
 	return _state_buffer_manager.get_state_at(ts, out)
 
 
-# Historical {skater, position, velocity, hit, ghost} for every skater EXCEPT
-# `exclude_skater` at `host_ts`, sampled from each remote's interpolation buffer.
-# Wired to the local player's LocalController as the reconcile replay's
-# body-check re-resolution source (Slice C) — it re-derives contact against where
-# the host actually had the others, replacing the old recorded-impulse bridge.
+# {skater, position, velocity, hit, ghost} for every skater EXCEPT
+# `exclude_skater` as this client RENDERED them at host-clock instant
+# `render_host_time` (RemoteController.sample_rendered_state_at — interpolated base
+# plus the stage-3 forward prediction, not the raw buffer). Wired to the local
+# player's LocalController as the reconcile replay's body-check re-resolution
+# source (Slice C), so replay re-derives contact against the bodies the live step
+# collided with rather than against a recorded impulse or a stale buffer sample.
 #
 # HOT PATH: called once per replayed input during a reconcile (120 Hz × unacked
 # window, worst exactly when the network is bad — the case CLAUDE.md forbids
@@ -5101,7 +5103,7 @@ func get_state_delayed(delay_seconds: float, out: WorldSnapshot = null) -> World
 var _hist_others_scratch: Array = []
 var _hist_others_pool: Array[Dictionary] = []
 
-func _sample_historical_others(exclude_skater: Skater, host_ts: float) -> Array:
+func _sample_historical_others(exclude_skater: Skater, render_host_time: float) -> Array:
 	_hist_others_scratch.clear()
 	if _registry == null:
 		return _hist_others_scratch
@@ -5113,7 +5115,7 @@ func _sample_historical_others(exclude_skater: Skater, host_ts: float) -> Array:
 		var remote: RemoteController = rec.controller as RemoteController
 		if remote == null:
 			continue
-		var state: SkaterNetworkState = remote.sample_state_at(host_ts)
+		var state: SkaterNetworkState = remote.sample_rendered_state_at(render_host_time)
 		if state == null:
 			continue
 		var idx: int = _hist_others_scratch.size()

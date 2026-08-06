@@ -833,7 +833,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 # does the positional work (exactly the "glance off, don't dead-stop" case).
 # Called AFTER this tick's integration (see the replay loop) so the geometry is
 # evaluated at the post-integration self position — matching the host's resolve
-# instant and the host_ts=T sample instant — and dvel lands on the next tick.
+# instant — and dvel lands on the next tick.
 # Runs the SAME inelastic model + aggressor gate as the live resolver, so
 # aggressor → decel/drive-through, victim → incoming knockback. Deterministic from
 # replicated data + the replayed input (local hit-commit / brace from the input
@@ -846,11 +846,20 @@ func _replay_resolve_body_checks(host_ts: float, local_hit_held: bool) -> void:
 	# Ghost gate — mirrors the live resolver (Skater._resolve_player_collisions):
 	# a ghosted skater has no body contact in either direction. Self reads the
 	# live flag (same read the live resolver makes on the host); the others read
-	# their rewound snapshot's flag so a mid-window ghost transition replays the
-	# way the host actually resolved it.
+	# the flag from the state they were RENDERED with, so the pair is skipped here
+	# exactly when the live step skipped it.
 	if skater.is_ghost:
 		return
-	var others: Array = _historical_others_provider.call(skater, host_ts)
+	# `host_ts` is the input's stamp — the SELF-view instant
+	# (LagCompRewind.self_view_time: estimated_host_time() plus the stamp lead in
+	# force when it was gathered), which is where the replayed body above now sits.
+	# The remotes it collided with that tick were rendered at the client's estimate
+	# of host PRESENT, one stamp lead earlier; the provider takes it from there
+	# (remote_view_time + the stage-3 forward prediction). Reading the current lead
+	# rather than the one this input carried costs only the servo's drift across the
+	# unacked window, which steps in fractions of a tick.
+	var render_host_time: float = host_ts - NetworkManager.get_input_lead_ms() / 1000.0
+	var others: Array = _historical_others_provider.call(skater, render_host_time)
 	for rec: Dictionary in others:
 		var other: Skater = rec["skater"]
 		if other == null or rec["ghost"]:

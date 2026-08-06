@@ -323,52 +323,77 @@ func apply_network_state(state: SkaterNetworkState, host_ts: float) -> void:
 	_state_buffer.append(buffered)
 
 
-# Where the HOST had this skater at host_time, from the interpolation buffer. The
-# local player's reconcile replay samples every OTHER skater here to re-resolve
-# body checks against the host's authoritative positions (Slice C) instead of
-# replaying a stale recorded impulse — so replay matches host authority. Returns a
-# shared scratch (read it before the next call) with position / velocity /
-# brake_intent, or null when the buffer can't bracket the time (warmup / gap), in
-# which case the caller skips the pair. Separate bracket scratch from _interpolate
-# so a reconcile-time sample can't clobber the live render bracket.
+# Where this client RENDERED this remote at host-clock instant `host_time` — the
+# identical construction _interpolate performs: an interpolated base a full
+# interp_delay in the past (LagCompRewind.remote_view_time) plus the stage-3
+# forward prediction back toward host-present. The local player's reconcile replay
+# samples every OTHER skater here, so its body-check re-resolution collides against
+# the same bodies the LIVE step (and the screen) collided against — and at the same
+# instant the host validates a hit claim at, which rewinds the victim to
+# remote_view_time and then forward-predicts by this same depth (HitClaimResolver).
+#
+# Sampling the raw buffer at the caller's timestamp instead — correct before stage 3
+# put the render on a predicted timeline — left replay a full interp_delay of travel
+# behind the live contact (~0.5 m at skating speed, against a 0.7 m contact
+# diameter), so reconcile re-derived a different contact normal, or no contact at
+# all, than the tick it was correcting.
+#
+# Returns a shared scratch (read it before the next call), or null when the buffer
+# can't bracket the time (warmup / gap), in which case the caller skips the pair.
+# Bracket and scratch are separate from _interpolate's so a reconcile-time sample
+# can't clobber the live render. Deliberately NOT reproduced: the SmoothDamp
+# residual and the knockback-lead pulse — both bounded (≤ ~0.22 m, self-zeroing) and
+# stateful per render frame, against a forward prediction that is the dominant term.
 var _sample_bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.BracketResult.new()
 var _sample_scratch: SkaterNetworkState = SkaterNetworkState.new()
+var _sample_fp_result := SkaterMovementRules.ForwardResult.new()
 
-func sample_state_at(host_time: float) -> SkaterNetworkState:
+func sample_rendered_state_at(host_time: float) -> SkaterNetworkState:
 	if _state_buffer.is_empty():
 		return null
+	var interp_delay: float = NetworkManager.get_interpolation_delay()
 	var bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.find_bracket(
-			_state_buffer, host_time, _sample_bracket)
+			_state_buffer, host_time - interp_delay, _sample_bracket)
 	if bracket == null:
 		return null
+	var to: SkaterNetworkState = bracket.to_state
 	if bracket.is_extrapolating:
-		# Freeze at the newest sample rather than projecting newest.position +
-		# velocity*dt like _interpolate does: this feeds contact geometry, and a
-		# projected lead at the buffer's leading edge could fabricate a false
-		# overlap the host never resolved. Holding the last KNOWN position is the
-		# conservative choice (a bounded lag, not an invented contact).
-		var newest: SkaterNetworkState = bracket.to_state
-		_sample_scratch.position = newest.position
-		_sample_scratch.velocity = newest.velocity
-		_sample_scratch.brake_intent = newest.brake_intent
-		_sample_scratch.hit_committed = newest.hit_committed
-		# Ghost gate for the reconcile replay's body-check re-resolution: without
-		# this the scratch held the constructor default (false) forever and the
-		# replay resolved contacts against ghosted skaters the host skipped —
-		# a reconcile snap-loop for as long as the overlap persisted.
-		_sample_scratch.is_ghost = newest.is_ghost
+		# Dead-reckon under the same cap _interpolate uses. Freezing at the newest
+		# sample (the older, more conservative choice here) would put replay back on
+		# a different timeline from the render whenever the buffer underruns — the
+		# very divergence this function exists to close.
+		var dt: float = minf(bracket.extrapolation_dt, extrapolation_max_ms / 1000.0)
+		_sample_scratch.position = to.position + to.velocity * dt
+		_sample_scratch.velocity = to.velocity
+		var extrap_fa: float = atan2(to.facing.x, to.facing.y) + to.facing_angular_velocity * dt
+		_sample_scratch.facing = Vector2(sin(extrap_fa), cos(extrap_fa))
 	else:
 		var f: SkaterNetworkState = bracket.from_state
-		var to: SkaterNetworkState = bracket.to_state
 		_sample_scratch.position = BufferedStateInterpolator.hermite(
 				f.position, f.velocity, to.position, to.velocity, bracket.t, bracket.bracket_dt)
 		_sample_scratch.velocity = f.velocity.lerp(to.velocity, bracket.t)
-		# Brace at/before host_time — a discrete flag, so take the earlier sample.
-		_sample_scratch.brake_intent = f.brake_intent
-		_sample_scratch.hit_committed = f.hit_committed
-		# Discrete like brake_intent — the at/before-host_time sample, so a
-		# mid-window ghost transition replays the way the host resolved it.
-		_sample_scratch.is_ghost = f.is_ghost
+		var interp_fa: float = BufferedStateInterpolator.hermite_angle(
+				atan2(f.facing.x, f.facing.y), f.facing_angular_velocity,
+				atan2(to.facing.x, to.facing.y), to.facing_angular_velocity,
+				bracket.t, bracket.bracket_dt)
+		_sample_scratch.facing = Vector2(sin(interp_fa), cos(interp_fa))
+	# Discrete fields take the NEWER endpoint in both branches, matching _interpolate
+	# — the live step gated its contact on exactly these values, so replay has to
+	# gate on the same ones. is_ghost decides whether the pair collides at all;
+	# stagger_timer and the intents drive the forward integration below.
+	_sample_scratch.is_ghost = to.is_ghost
+	_sample_scratch.hit_committed = to.hit_committed
+	_sample_scratch.move_intent = to.move_intent
+	_sample_scratch.brake_intent = to.brake_intent
+	_sample_scratch.sprint_active = to.sprint_active
+	_sample_scratch.stagger_timer = to.stagger_timer
+	# Stage-3 forward prediction through the shared helper — same primitive, depth
+	# and constants as _interpolate's render integration and the host's claim rewind.
+	# No-op at fraction 0, where this returns the raw interpolated past.
+	if LagCompRewind.forward_predict_skater(
+			_sample_scratch, self, interp_delay * 1000.0, _sample_fp_result):
+		_sample_scratch.position = _sample_fp_result.position
+		_sample_scratch.velocity = _sample_fp_result.velocity
 	return _sample_scratch
 
 func _interpolate(delta: float) -> void:
