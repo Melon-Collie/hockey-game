@@ -648,7 +648,7 @@ func _on_steam_lobby_joined(_lobby_id: int, owner_steam_id: int) -> void:
 
 # Disable Steam's Nagle batching so each send flushes immediately instead of
 # being coalesced up to the Nagle timer (~ms scale). Steam's default coalescing
-# clumps the steady 120 Hz world-state stream into bursts, which the client sees
+# clumps the steady 60 Hz world-state stream into bursts, which the client sees
 # as irregular arrivals → interpolation-buffer dry-outs → extrapolation snaps on
 # remote actors. Applied to both peers: the host's flag governs its world-state
 # sends, the client's governs its input-batch sends. Guarded by has_method so a

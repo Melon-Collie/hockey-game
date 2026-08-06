@@ -427,7 +427,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# timestamp-sorted (appended chronologically), so everything at or before
 	# last_processed_host_timestamp sits at the front. The previous filter()
 	# rebuilds allocated a fresh array + ran a lambda per element on every
-	# broadcast (120 Hz), even in the healthy no-reconcile case.
+	# broadcast (60 Hz), even in the healthy no-reconcile case.
 	# The trim boundary carries TS_MATCH_EPSILON slack: the ack arrives
 	# through the 0.1ms wire grid while local stamps are full-precision f64,
 	# so without it the exact acked input could survive the trim (grid value
@@ -774,7 +774,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		last_reconcile_error = (skater.global_position - server_state.position).length()
 	# Count the reconcile HERE, at the per-world-state source, not once per rendered
 	# frame in GameManager._observe_telemetry. The old deferral sampled at render
-	# rate, so a client below the ~120 Hz world-state rate coalesced multiple
+	# rate, so a client below the ~60 Hz world-state rate coalesced multiple
 	# reconciles into one and undercounted reconcile_per_sec (a 60fps client capped
 	# the metric at 60/s no matter the true rate). This runs only past the snap
 	# threshold, so it still counts real corrections only.

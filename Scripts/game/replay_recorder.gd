@@ -1,7 +1,7 @@
 class_name ReplayRecorder
 extends RefCounted
 
-# Shadows the host's 120 Hz world-state broadcast into a fixed-size in-memory
+# Shadows the host's world-state broadcast into a fixed-size in-memory
 # circular buffer so GoalReplayDriver can extract the last N seconds on demand.
 # Lives on the host only; created alongside WorldStateCodec in game_scene.gd.
 #
@@ -11,10 +11,14 @@ extends RefCounted
 # because the live signals that drive sounds (puck.puck_hit_boards et al.)
 # don't fire while physics is frozen.
 
-# ~9 s at the 120 Hz broadcast rate (covers the 8 s clip + 0.5 s post-goal
-# window). Was 360 from the 40 Hz era — at 120 Hz that held only 3 s, so goal
-# replays were silently truncated to the last ~3 seconds.
-const MEMORY_SIZE: int = 1080
+const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
+
+# 9 s of broadcast frames — covers GoalReplayDriver.CLIP_DURATION (8 s) plus the
+# 0.5 s post-goal window. DERIVED from STATE_RATE rather than hard-coded: a
+# literal frame count silently changes the seconds it buys whenever the
+# broadcast rate moves (a hard-coded 360 held 9 s at 40 Hz and only 3 s at 120,
+# which truncated goal replays), and the buffer's contract is the duration.
+const MEMORY_SIZE: int = _PhysicsConstants.STATE_RATE * 9
 const EVENT_MEMORY_SIZE: int = 720  # bursty (shots, body checks, deflections); size for headroom
 
 var _frames: Array[PackedByteArray]

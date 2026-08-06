@@ -5213,7 +5213,7 @@ func get_world_state() -> PackedByteArray:
 
 # Tee a broadcast world-state frame into the .mreplay file, throttled to
 # REPLAY_FILE_RATE. The viewer interpolates between snapshots, so the steady
-# PLAYING stream is decimated from STATE_RATE (120 Hz) to ~30 Hz — a ~4x file-
+# PLAYING stream is decimated from STATE_RATE (60 Hz) to ~30 Hz — a ~2x file-
 # size cut at no perceptible playback cost. Phase-transition frames bypass the
 # throttle (the first frame of a new phase is a keyframe — faceoff snap, the
 # resume after a movement-locked gap — and must never be dropped). The goal

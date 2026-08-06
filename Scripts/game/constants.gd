@@ -57,8 +57,8 @@ const INPUT_RATE: int = 120
 const STATE_RATE: int = 60
 # Rate at which world-state snapshots are written to the .mreplay file, well
 # below STATE_RATE: the replay viewer interpolates between snapshots (see
-# ReplayPlaybackEngine), so recording every 120 Hz broadcast is ~4x redundant on
-# disk. 30 Hz keeps playback smooth at roughly a quarter the file size. Only the
+# ReplayPlaybackEngine), so recording every 60 Hz broadcast is ~2x redundant on
+# disk. 30 Hz keeps playback smooth at roughly half the file size. Only the
 # steady PLAYING stream is throttled — phase-transition keyframes and the goal
 # moment are always recorded (GameManager._record_world_state_to_file).
 const REPLAY_FILE_RATE: int = 30

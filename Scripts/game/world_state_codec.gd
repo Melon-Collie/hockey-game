@@ -114,7 +114,7 @@ var _decoded_peers_scratch: Array[int] = []
 # The packet is sized ONCE and written at offsets, instead of the old
 # assemble-by-append that allocated a throwaway PackedByteArray per BLOCK —
 # header, per-skater id, per-skater state, puck, per-goalie, game-state — i.e.
-# ~26 per packet at 5v5 (~3.1k/s at 120 Hz). That churn lands on the host's
+# ~26 per packet at 5v5 (~1.6k/s at 60 Hz). That churn lands on the host's
 # PHYSICS thread, and host stalls are what back up the client input queue into
 # the drain → reconcile chain (a 5v5 playtest logged 73 stalls in 13 min while
 # rendering at 157 fps — the allocator-pause signature). One allocation per
