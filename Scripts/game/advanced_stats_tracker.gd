@@ -24,16 +24,25 @@ class_name AdvancedStatsTracker extends RefCounted
 ## Only ever constructed/called on the host (like ShotOnGoalTracker / HitTracker);
 ## the counters it writes are broadcast, so clients see them without running it.
 ## The event buffer is host-only (the shot list is shipped to clients / persisted
-## by GameManager at game-over).
+## by GameManager at game-over) and lives for exactly one game — see reset().
 
 var _registry: PlayerRegistry = null
-# Per-game shot log (host-only). Fresh per match (this tracker is reconstructed in
-# GameManager._wire_subsystems on every world spawn), so it starts empty.
+# Per-game shot log (host-only). A world spawn builds a fresh tracker; a REMATCH
+# reuses this one (it never respawns the world), so it is cleared through reset()
+# instead — see there for what a stale log costs.
 var _shot_events: Array[ShotEvent] = []
 
 
 func setup(registry: PlayerRegistry) -> void:
 	_registry = registry
+
+
+# Rematch: drop the finished game's shots. The log is posted to Supabase at
+# game-over stamped with the CURRENT game_id, so carrying it forward re-uploads
+# every earlier game's shots under the new game's id — a career shot map that
+# counts the first game of a session once per rematch played after it.
+func reset() -> void:
+	_shot_events.clear()
 
 
 # A resolved shot attempt (ShotOnGoalTracker.shot_resolved): Corsi always, the

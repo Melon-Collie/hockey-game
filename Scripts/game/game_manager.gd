@@ -4644,6 +4644,12 @@ func _apply_reset() -> void:
 	clock_updated.emit(_state_machine.period_duration)
 	_registry.reset_all_stats()
 	_shot_tracker.reset_all()
+	# The shot log is per-GAME, and a rematch doesn't respawn the world that built
+	# these — so clear them here or the next game-over posts this game's shots
+	# again under the rematch's game_id (and its analytics screens draw both).
+	if _advanced_stats_tracker != null:
+		_advanced_stats_tracker.reset()
+	_client_shot_events.clear()
 	if _phase_coord != null:
 		_phase_coord.reset_goal_log()
 	if _turnover_tracker != null:

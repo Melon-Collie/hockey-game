@@ -58,6 +58,19 @@ func test_events_are_buffered() -> void:
 	assert_eq(tracker.get_shot_events()[0].outcome, ShotEvent.Outcome.GOAL)
 
 
+func test_reset_drops_the_finished_games_shots() -> void:
+	# A rematch reuses this tracker (it never respawns the world). The log is
+	# posted stamped with the CURRENT game_id, so carrying it forward would
+	# re-upload the first game's shots under every rematch played after it.
+	_add_player(10, 0)
+	tracker.on_shot_resolved(_ev(10, ShotEvent.Outcome.GOAL, 0.4))
+	tracker.reset()
+	assert_eq(tracker.get_shot_events().size(), 0)
+	tracker.on_shot_resolved(_ev(10, ShotEvent.Outcome.SAVED, 0.2))
+	assert_eq(tracker.get_shot_events().size(), 1,
+			"the rematch logs only its own shots")
+
+
 func test_unknown_peer_still_buffers_but_no_crash() -> void:
 	# A stray event for a peer with no record must not crash; it's still logged.
 	tracker.on_shot_resolved(_ev(999, ShotEvent.Outcome.MISSED, 0.2))
