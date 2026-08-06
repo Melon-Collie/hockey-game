@@ -902,7 +902,10 @@ func _update_ghost_banner() -> void:
 	elif GameManager.get_rule_set() == GameRules.RuleSet.ARCADE:
 		var puck: Puck = GameManager.get_puck()
 		if puck != null:
-			var is_carrier: bool = puck.carrier == skater
+			# GameManager's resolver, not puck.carrier — the latter is host-only, so
+			# a carrying client read as puckless and could latch OFFSIDE while
+			# actually carrying the puck into the zone (carrying is never offside).
+			var is_carrier: bool = GameManager.get_puck_carrier() == skater
 			if InfractionRules.is_offside(pos.z, team_id, puck.global_position.z, is_carrier):
 				_ghost_was_offside = true
 	# Reason is derived from the local skater's position. Offside takes priority:
