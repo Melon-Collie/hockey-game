@@ -63,13 +63,28 @@ var pass_aim_error_rad: float
 # when the sample lands early enough.
 var shot_timing_error_s: float
 
-# How long after gaining possession the carrier may only CARRY before a commit
-# is allowed. Applied by release type in AIRoleCarrier via RoleContext:
-# PASS / DUMP wait the flat beat; SHOOT waits a fraction scaled by how pinned the
-# carrier is, so an unpressured look finishes at once and only a hounded one pays
-# the full settle. Reception one-timers are not gated here — the puck never
-# settles on the tape.
-var carry_settle_delay_s: float
+# SETTLE DOUBT — how much a freshly-possessed carrier discounts its own read of
+# every ACTIVE option (shoot / pass / dump) when deciding whether that option is
+# worth giving the puck up for. A fraction in [0, 1): the option's value is
+# handicapped by this much against its giveaway bar, so at 0.5 the bar it must
+# clear is effectively doubled. Decays exp(-t / settle_penalty_tau_s) from the
+# moment possession is gained.
+#
+# This is a SELECTIVITY dial, not a delay: an obvious play (a doorstep look, a
+# wide-open outlet) out-values any raised bar and fires on the first tick, while
+# a marginal one — the point shot, the feed threaded through traffic — is simply
+# not worth the puck yet and gets taken only once the doubt drains. The bot
+# visibly deliberates over close calls and is decisive on clear ones, which is
+# the shape of a human read; a flat "may not commit for N seconds" gate produced
+# the opposite (dithering on gimmes, then firing everything at once).
+#
+# The old flat gate is the frac → 1.0 limit of this, so nothing is lost by it.
+# Reception one-timers are not gated at all — the puck never settles on the tape.
+var settle_penalty_frac: float
+
+# Seconds for the settle doubt above to fall by 1/e — how long the bot takes to
+# get comfortable with the puck. ~3τ is when it is effectively gone.
+var settle_penalty_tau_s: float
 
 # PACE: extra metres the on-puck PRESSURE defender drops its cut-off line back
 # toward its own net, beyond the one-stick-length baseline. Consumed in
@@ -137,7 +152,7 @@ func _init(p_carrier_reaction_delay_s: float,
 		p_dispatch_period_ticks: int,
 		p_shot_aim_error_rad: float, p_pass_aim_error_rad: float,
 		p_shot_timing_error_s: float,
-		p_carry_settle_delay_s: float,
+		p_settle_penalty_frac: float, p_settle_penalty_tau_s: float,
 		p_pursuit_standoff_m: float, p_pass_speed_scale: float,
 		p_check_aggression: float, p_defensive_anticipation_scale: float,
 		p_reads_goalie_motion: bool, p_holds_for_developing_feeds: bool,
@@ -149,7 +164,8 @@ func _init(p_carrier_reaction_delay_s: float,
 	shot_aim_error_rad = p_shot_aim_error_rad
 	pass_aim_error_rad = p_pass_aim_error_rad
 	shot_timing_error_s = p_shot_timing_error_s
-	carry_settle_delay_s = p_carry_settle_delay_s
+	settle_penalty_frac = p_settle_penalty_frac
+	settle_penalty_tau_s = p_settle_penalty_tau_s
 	pursuit_standoff_m = p_pursuit_standoff_m
 	pass_speed_scale = p_pass_speed_scale
 	check_aggression = p_check_aggression
@@ -166,7 +182,7 @@ func _init(p_carrier_reaction_delay_s: float,
 # reaction, dispatch at the engine baseline cadence, a flat ±0.6° of execution
 # error on both releases, and 0.10 s of release slop — so the doorstep lateral
 # beat is still hunted but a window in the ~0.05–0.10 s band is a coin flip the
-# goalie sometimes robs. No settle beat, pace knobs at their no-op baseline,
+# goalie sometimes robs. No settle doubt, pace knobs at their no-op baseline,
 # every cognition gate open.
 #
 # Do NOT raise shot_aim_error_rad to trim Hard's scoring. Under the
@@ -176,7 +192,7 @@ func _init(p_carrier_reaction_delay_s: float,
 #
 # Tune carrier_reaction_delay_s UP if it matches passes too readily.
 static func hard() -> BotSkillProfile:
-	return BotSkillProfile.new(0.05, 2, 0.01, 0.01, 0.10, 0.0,
+	return BotSkillProfile.new(0.05, 2, 0.01, 0.01, 0.10, 0.0, 0.25,
 			0.0, 1.0, 1.0, 1.0,
 			true, true, true, true, true, true)
 
@@ -186,9 +202,15 @@ static func hard() -> BotSkillProfile:
 # one-timers) at a third of Hard's re-decide rate. Shot error ±1.7° ≈ ±0.35 m at
 # the net from 12 m, so a well-picked corner becomes goals AND saves AND the odd
 # wide one, and the score's spread budget stops the from-range snipes entirely;
-# pass error stays near-Hard so the passing game keeps connecting. The 0.30 s
-# pass settle makes the puck visibly arrive on the tape before the outlet fires,
-# so pressuring a fresh carrier is a real play.
+# pass error stays near-Hard so the passing game keeps connecting.
+#
+# The 0.60 settle doubt is the tier's INDECISION dial: for the first beat of a
+# possession an option must be worth ~2.5× its giveaway bar to be worth the puck
+# — a slot look or a clean outlet still goes at once, while the point shot and
+# the feed threaded past two sticks wait for the doubt to drain (τ = 0.30 s, so
+# ~1.25× by 0.3 s and gone by ~0.9 s). This is most of what stops Normal reading
+# as "Hard with extra lag": it no longer finds EVERY pass on the first touch, and
+# pressuring a fresh carrier off a marginal outlet is a real play.
 #
 # Cognition gates are ALL open, same as Hard — the two tiers are deliberately the
 # same PLAYER separated only by continuous tuning, so the gap reads as "sharper"
@@ -203,9 +225,11 @@ static func hard() -> BotSkillProfile:
 # for it first. If Normal plays like a pushover, raise the precision knobs back
 # toward Hard and let the pace knobs keep it beatable; if it still feels
 # superhuman, soften pace (standoff UP, anticipation / aggression DOWN) before
-# touching precision.
+# touching precision. If it makes plays a human wouldn't SEE (rather than plays
+# it executes too well), that is the settle doubt — raise the frac for a higher
+# bar, the τ for a longer one.
 static func normal() -> BotSkillProfile:
-	return BotSkillProfile.new(0.22, 6, 0.03, 0.015, 0.16, 0.30,
+	return BotSkillProfile.new(0.22, 6, 0.03, 0.015, 0.16, 0.60, 0.30,
 			0.75, 1.0, 0.65, 0.6,
 			true, true, true, true, true, true)
 
@@ -215,9 +239,11 @@ static func normal() -> BotSkillProfile:
 # Still plays positionally and shoots / passes — a real but soft opponent, not a
 # stationary one. Shot error ±3.2° ≈ ±0.65 m from 12 m, so even good looks
 # routinely find the goalie or the glass and the spread budget keeps it from
-# pulling the trigger except in tight or on a gaping hole. The 0.55 s pass settle
-# lets a newcomer watch it receive, gather, and THEN decide, so closing on a
-# fresh carrier reliably forces the turnover.
+# pulling the trigger except in tight or on a gaping hole. The 0.85 settle doubt
+# (τ = 0.55 s) means nothing short of a gimme is worth the puck for the first
+# half-second and the bar is still noticeably up a second later — a newcomer
+# watches it receive, gather, and THEN decide, so closing on a fresh carrier
+# reliably forces the turnover.
 #
 # Pace is low-energy across the board — defenders sag ~3 m, barely lead the play,
 # and never hunt body checks — which is most of what makes Easy feel easy.
@@ -226,7 +252,7 @@ static func normal() -> BotSkillProfile:
 # The cutback to the middle, the straight-line poke-check, and the cross-crease
 # 2-on-1 glory feed all genuinely work against it.
 static func easy() -> BotSkillProfile:
-	return BotSkillProfile.new(0.34, 9, 0.055, 0.0225, 0.24, 0.55,
+	return BotSkillProfile.new(0.34, 9, 0.055, 0.0225, 0.24, 0.85, 0.55,
 			3.0, 1.0, 0.0, 0.2,
 			false, false, false, false, false, false)
 

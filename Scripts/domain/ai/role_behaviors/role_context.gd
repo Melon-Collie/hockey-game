@@ -179,10 +179,13 @@ var check_aggression: float = 1.0
 # Multiplier on DEFENSIVE_ANTICIPATION_S — how much the backline leads a moving
 # man. 1.0 = today; lower = defenders sit a step behind (more space). lead_threat.
 var defensive_anticipation_scale: float = 1.0
-# Seconds after gaining possession during which the carrier may only CARRY —
-# no SHOOT / PASS / DUMP commit until the puck has "settled on the tape".
-# 0.0 = today's instant release. Consumed by AIRoleCarrier's settle window.
-var carry_settle_delay_s: float = 0.0
+# SETTLE DOUBT: fraction by which a freshly-possessed carrier handicaps its own
+# read of every ACTIVE option (shoot / pass / dump) against that option's
+# giveaway bar, decaying exp(-t / settle_penalty_tau_s) from the moment it gains
+# the puck. Selectivity, not delay — an obvious play clears any raised bar at
+# once; a marginal one waits. 0.0 = the perfect-bot / Hard baseline.
+var settle_penalty_frac: float = 0.0
+var settle_penalty_tau_s: float = 0.25
 # COGNITION gate: false = this bot models the goalie as always SET — the
 # unsettled re-square race is invisible to its pass / one-timer EV
 # (carrier._goalie_unsettled_at returns 0). The aim-side half of the same gate
