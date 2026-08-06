@@ -469,11 +469,12 @@ func test_missing_high_is_a_real_outcome() -> void:
 
 
 func test_flattest_ladder_never_sails() -> void:
-	# The same never-sails property as the table-level check, but driven
-	# through the real release: the M88's LOW rung off a max slapper, INCLUDING
-	# the blade's own +3% slapper lean (curve_slap_mult). That lean is the
-	# M88's alone and is exactly what a bare-40 m/s fixture used to miss, so
-	# the guard has to carry it or it is checking a shot nobody takes.
+	# DRIFT DETECTOR, not a requirement — same standing as the table-level
+	# check above (elevation doc §1.2). Its value is the WIRING, not the
+	# property: it drives a real release and carries the M88's own +3% slapper
+	# lean (curve_slap_mult), which a bare-40 m/s fixture omitted. That
+	# omission once hid the property being false at neutral build, so whatever
+	# a future ladder asserts here, it must keep the per-gear multiplier.
 	var m88 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
 	var cfg := _slapper_cfg()
 	cfg.max_slapper_power = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S \
@@ -775,10 +776,11 @@ func test_m28_flies_steeper_than_m88_on_every_rung() -> void:
 
 
 func test_no_low_rung_sails_on_any_gear_at_any_pace() -> void:
-	# The flat bottom of every ladder is the universally safe shot: LOW cannot
-	# put a puck over the bar on ANY blade, even off a max slapper — its whole
-	# arc apexes under the crossbar. No clamp anywhere; the property IS the
-	# gear table, and it is what makes LOW the rung you can always reach for.
+	# DRIFT DETECTOR, not a requirement (elevation doc §1.2). Nothing in the
+	# design asks LOW to be un-sailable — it falls out of the bottom rung being
+	# flat, and it holds today with metres of margin. If a future ladder raises
+	# LOW enough to trip this, the question is "did we mean to?", not "which
+	# invariant did we break." Do not treat it as a ceiling on LOW.
 	var max_slap: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
 	for attrs: PlayerAttributes in [
 			_m88(), PlayerAttributes.all_average(), _m28()]:
