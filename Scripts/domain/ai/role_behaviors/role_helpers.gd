@@ -1040,6 +1040,10 @@ static func has_support_behind(ctx: RoleContext) -> bool:
 #     re-planning — without it the budget only shrinks as fast as the carrier
 #     closes, so a defender re-granted a fresh step every dispatch never gets
 #     around to executing the braking half and creeps into a lunge anyway.
+#
+# The trip is priced FROM REST, and the defender's own achieved speed is not an
+# input anywhere here. That reads like an oversight and is not — see the note on
+# set_arrival_distance, which records what happens when you fix it.
 # Feasibility is monotone in `s` (a longer step costs more ground AND leaves less
 # time for it), so one bisection lands the largest one.
 #
@@ -1073,7 +1077,7 @@ static func settable_stand_depth(ctx: RoleContext, threat_pos: Vector3,
 # Can we cover a step-up of `s` and be back up to the rush's pace going the other
 # way by the time the stand — still `step_needed - s` of ice away, sweeping at
 # that pace — gets there? The pivot out of the step-up is charged off the top of
-# the budget; what's left has to pay for the trip as a set arrival.
+# the budget; what's left has to pay for the trip as a set arrival from `v0`.
 static func _step_arrives_set(s: float, step_needed: float, closing: float,
 		v_max: float, max_accel: float) -> bool:
 	var pivot_s: float = closing / maxf(
@@ -1082,15 +1086,34 @@ static func _step_arrives_set(s: float, step_needed: float, closing: float,
 			(step_needed - s) / closing - pivot_s, v_max, max_accel) >= s
 
 
-# How far a skater can travel in `t` seconds from a standing start and still
-# arrive SET — closing speed already killed. The shared home of the set-arrival
-# profile described above (the step-up clamp asks "can I be there, stopped, in
-# time?"):
+# How far a skater can travel in `t` seconds FROM A STANDING START and still
+# arrive SET — closing speed already killed.
 #   short budget — triangular: accelerate then brake to zero inside `t`; the
 #     covered ground is ½·k·t² with k = a·B/(a+B), the effective accel of an
 #     accelerate-brake round trip (B = the arrival brake decel);
 #   long budget — trapezoidal: full ramp (v²/2a) + brake run (v²/2B) + cruise
 #     for whatever time remains.
+#
+# THE STANDING START IS LOAD-BEARING, not an approximation left lying around,
+# and both attempts to "correct" it have been made and measured on the rush-gap
+# sweep (tests/unit/ai/test_rush_gap_discipline.gd):
+#
+#   Pricing the trip from the body's REAL SPEED is strictly the more accurate
+#   model and is strictly worse — worse than having no bound at all. A moving
+#   body genuinely does cover more ground and still stop, so the honest ceiling
+#   grows with the speed the last grant built; re-solved at 6 Hz with no memory
+#   of the plan it is revising, that is a ratchet, and grant feeds speed feeds
+#   grant. Meeting-point up-ice speed 2.4 -> 6.5-9.2 m/s, wander off our own net
+#   4.2 m mean -> 13-25 m.
+#
+#   Reading the achieved speed only as a VETO — withdraw the grant once he is
+#   carrying more than it can absorb, so the term can never feed the loop — is
+#   sound but does not pay: mean up-ice 2.40 -> 2.30 m/s, and mean wander 4.2 ->
+#   4.6 m (worst 10.8 -> 12.9). A branch and a concept for noise.
+#
+# So the conservatism is the design. A defender who has overrun his grant is
+# corrected by the arrival brake and by the next dispatch's shrinking budget,
+# not by this function knowing about it.
 static func set_arrival_distance(t: float, v_max: float,
 		max_accel: float) -> float:
 	if t <= 0.0:
