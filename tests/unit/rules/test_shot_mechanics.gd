@@ -451,14 +451,18 @@ func test_loft_is_direction_and_position_free() -> void:
 
 
 func test_missing_high_is_a_real_outcome() -> void:
-	# A MID (15°) at full charge from 8 m crosses the goal plane above the
-	# crossbar — the price of greed the v3 model is built on. Ease the charge
-	# and the same rung stays under the bar.
+	# A HIGH at full charge from 8 m crosses the goal plane above the crossbar —
+	# the price of greed the v3 model is built on. Ease the charge and the same
+	# rung stays under the bar.
+	# Rides HIGH rather than MID since the 2026-08 re-spacing: MID is now 11°,
+	# which at this fixture's 25 m/s apexes at 1.16 m and so cannot sail at any
+	# range. It still sails at the live 33 m/s ceiling — the rung that carries
+	# the property at fixture pace is HIGH.
 	var cfg := _wrister_cfg()
-	var full: ShotMechanics.ShotResult = _wrister_at(cfg, 2, FULL_SWEEP)
+	var full: ShotMechanics.ShotResult = _wrister_at(cfg, 3, FULL_SWEEP)
 	assert_gt(_crossing_height(full, 8.0), GameRules.NET_HEIGHT + 0.03,
-			"full-charge MID from 8 m sails over the bar")
-	var eased: ShotMechanics.ShotResult = _wrister_at(cfg, 2, 2.5)
+			"full-charge HIGH from 8 m sails over the bar")
+	var eased: ShotMechanics.ShotResult = _wrister_at(cfg, 3, 2.5)
 	assert_lt(_crossing_height(eased, 8.0), GameRules.NET_HEIGHT,
 			"an eased charge on the same rung stays under the bar")
 
@@ -671,19 +675,55 @@ func _arrive(dist: float, speed: float, tan_a: float) -> float:
 			- 9.8 * dist * dist * (1.0 + tan_a * tan_a) / (2.0 * speed * speed)
 
 
-func test_doorstep_roof_belongs_to_the_m28() -> void:
-	# From 2 m at full pace only the M28's 30° tops the shelf; the M92's 26°
-	# arrives just under it and the M88's 22° mid-net — each blade has its own
-	# roof pocket, and the crease is the toe hook's alone.
+func test_tight_in_roof_belongs_to_the_m28() -> void:
+	# The toe hook still owns the tight-in roof, but it is pinned at 3 m, not
+	# the 2 m crease: the ladders are spaced by the distance each rung roofs
+	# from, and spending rungs on the doorstep is what left the slot with no
+	# elevation at all. From 3 m only the M28's HIGH tops the shelf.
 	var m88 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
 	var m92 := PlayerAttributes.all_average()
 	var m28 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1)
-	var h88: float = _arrive(2.0, _FULL_PACE, m88.curve_loft_tan_high())
-	var h92: float = _arrive(2.0, _FULL_PACE, m92.curve_loft_tan_high())
-	var h28: float = _arrive(2.0, _FULL_PACE, m28.curve_loft_tan_high())
-	assert_lt(h88, 0.86, "M88 arrives mid-net from the crease")
-	assert_between(h28, 1.0, 1.19, "only the toe hook tops the shelf from 2 m")
-	assert_gt(h28, h92, "steeper toe, higher doorstep arrival")
+	var h88: float = _arrive(3.0, _FULL_PACE, m88.curve_loft_tan_high())
+	var h92: float = _arrive(3.0, _FULL_PACE, m92.curve_loft_tan_high())
+	var h28: float = _arrive(3.0, _FULL_PACE, m28.curve_loft_tan_high())
+	assert_lt(h88, 0.86, "M88 arrives mid-net from 3 m")
+	assert_between(h28, 1.0, 1.19, "only the toe hook tops the shelf from 3 m")
+	assert_gt(h28, h92, "steeper toe, higher tight-in arrival")
+
+
+func test_nobody_roofs_the_two_metre_doorstep() -> void:
+	# A deliberate giveaway of the 2026-08 retune: the doorstep is a rare look,
+	# and reserving a rung for it cost every blade its slot elevation. The
+	# steepest rung in the game now arrives mid-net from 2 m.
+	var m28 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1)
+	assert_lt(_arrive(2.0, _FULL_PACE, m28.curve_loft_tan_high()), 0.86,
+			"even the toe hook is under the pad seam from the crease")
+
+
+func test_the_slot_has_an_elevated_rung() -> void:
+	# The regression this retune exists to prevent. Before it, every gear's
+	# MID and HIGH sailed from 5 m out and LOW arrived under the pad seam, so
+	# from the slot there was exactly one legal rung and no way to go upstairs.
+	var m92 := PlayerAttributes.all_average()
+	var m28 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1)
+	assert_between(_arrive(6.0, _FULL_PACE, m92.curve_loft_tan_mid()), 0.86, 1.19,
+			"M92 MID tops the shelf from 6 m")
+	assert_between(_arrive(6.0, _FULL_PACE, m28.curve_loft_tan_low()), 0.86, 1.19,
+			"M28 LOW tops the shelf from 6 m")
+
+
+func test_rungs_stay_distinct_where_shots_come_from() -> void:
+	# Expression, not just reachability: at 4 m all three M92 rungs are in the
+	# net AND far enough apart to be a real choice — low, mid-net, and roofed.
+	var m92 := PlayerAttributes.all_average()
+	var lo: float = _arrive(4.0, _FULL_PACE, m92.curve_loft_tan_low())
+	var mid: float = _arrive(4.0, _FULL_PACE, m92.curve_loft_tan_mid())
+	var hi: float = _arrive(4.0, _FULL_PACE, m92.curve_loft_tan_high())
+	assert_between(lo, 0.05, 0.60, "LOW is a low shot from 4 m")
+	assert_between(mid, 0.60, 0.86, "MID is mid-net from 4 m")
+	assert_between(hi, 0.86, 1.19, "HIGH roofs from 4 m")
+	assert_gt(mid - lo, 0.15, "LOW and MID are a real choice apart")
+	assert_gt(hi - mid, 0.15, "MID and HIGH are a real choice apart")
 
 
 func test_m28_is_worse_at_range_on_every_rung() -> void:

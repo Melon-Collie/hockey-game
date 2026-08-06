@@ -509,8 +509,8 @@ const DEFAULT_QUICK_PASS_POWER_M_S: float = 14.0
 # league-average reads, unwired configs). Arrival height is emergent from
 # angle × charge × range; missing high is a real outcome.
 const DEFAULT_LOFT_TAN_LOW: float = 0.1405   # tan 8°    — saucer / point snipe
-const DEFAULT_LOFT_TAN_MID: float = 0.3153   # tan 17.5° — the slot snipe
-const DEFAULT_LOFT_TAN_HIGH: float = 0.4452  # tan 24°   — the in-tight roof
+const DEFAULT_LOFT_TAN_MID: float = 0.1944   # tan 11°   — the slot snipe (5–7.5 m)
+const DEFAULT_LOFT_TAN_HIGH: float = 0.2773  # tan 15.5° — the in-tight roof (3.5–4.5 m)
 #
 # QUICK PASSES keep the fixed vertical-speed table (ShotMechanics.loft_y —
 # pass mechanics must not solve toward a net that isn't their target):

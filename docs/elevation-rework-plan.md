@@ -15,6 +15,11 @@ Version history (full writeups in git):
   left and right." The calibration skill belongs to the PLAYER.
 - **v3 (this doc)** — four manual levels, per-gear set-angle ladders, missing
   high as a real outcome, and the levels doubling as deflect modes.
+- **v3.1 (2026-08 re-spacing)** — the model is unchanged; the ladder VALUES
+  were re-derived. Playtest reported "always shooting one tick of elevation,
+  not a lot of opportunities to roof it," and the arithmetic agreed: past
+  ~4.5 m LOW was the only rung still under the bar at full pace, so the level
+  was not a live choice anywhere real shots come from. See §1.1.
 
 All constants below are STARTING VALUES for playtest tuning; the shapes and
 invariants are the design.
@@ -33,38 +38,42 @@ Per-gear ladders (degrees; tan enters the release math):
 | level (contact) | M88 | M92 | M28 |
 |---|---|---|---|
 | 0 FLAT (heel) | 0 | 0 | 0 |
-| 1 LOW (mid-blade) | 7 | 8 | 8.5 |
-| 2 MID (toe-side) | 15.5 | 17.5 | 19 |
-| 3 HIGH (toe) | 21 | 24 | 28 |
+| 1 LOW (mid-blade) | 7 | 8 | 10 |
+| 2 MID (toe-side) | 9.5 | 11 | 13.5 |
+| 3 HIGH (toe) | 13 | 15.5 | 20 |
 
-(Retuned from the original 14/15/16 MID and 22/26/30 HIGH: HIGH came down a
-touch and MID up to chase its band end, collapsing the "awkward middle" dead
-ring just outside the doorstep to slivers that fill at honest pace. Costs:
-doorstep floors moved out to ~2.24/1.93/1.62 m, and M92's mid-range gap
-(~4.0–8.5 m) fills at slightly softer MID pace.)
-
-Top-shelf bands at full wrister charge (33 m/s), over-the-bar beyond them:
+Top-shelf bands at full wrister charge (33 m/s), over-the-bar beyond them
+(the roof window is arrival in [0.86, 1.18] — the goalie pad seam to the
+scoring cavity's top):
 
 | level | M88 | M92 | M28 |
 |---|---|---|---|
-| LOW | ~0.8–0.9 m arrival from the point — **never sails** (max-slap apex ~1.23 m = iron at worst) | ~13–21 m: the textbook point snipe | ~10–14 m; clips iron beyond ~14 |
-| MID | ~3.3–4.6 m (and from range at slapper pace) | ~2.9–4.0 m | ~2.6–3.6 m |
-| HIGH | ~2.3–3.2 m | ~2.0–2.7 m | ~1.7–2.3 m |
+| LOW | **never roofs** (apex 0.83 m) and **never sails** (max-slap apex 1.21 m = iron at worst) | 8.5–22 m: the textbook point snipe, and still cannot sail on a wrister | 5.8–8.7 m |
+| MID | 6.2–9.6 m | 5.0–7.4 m | 3.9–5.5 m |
+| HIGH | 4.1–5.8 m | 3.3–4.6 m | 2.5–3.4 m |
 
-Backing off the charge slides every band toward the net; each blade's HIGH is
-a distinct "roof pocket" rather than strictly better/worse. The identities:
+Backing off the charge slides every band toward the net. The identities:
 
-- **M88** — the flattest ladder: physically cannot put a puck over the glass
-  (its worst outcome is a crossbar ping), cannot roof the true doorstep.
-  The safe blade. No clamp needed — the safety emerges from the table.
-- **M92** — the all-rounder owns the textbook top-shelf point snipe (LOW 8°).
-- **M28** — the steepest ladder at every rung: the only blade that roofs from
-  the crease at pace (30° from 2 m arrives ~1.13 m), and the worst at range
-  (every band sits closest to the net; LOW clips the bar from the deep
-  point). The close-range weapon.
+- **M88** — the safe blade. Its top shelf lives at 4–9.6 m and it has none
+  past that: LOW's 7° apexes under the pad seam, so from the point it is a
+  low shot for tips and rebounds. That flatness IS the safety — the same 7°
+  keeps a max slapper at crossbar-ping height, so the blade cannot put a puck
+  over the glass on any rung it can reach the point with. No clamp needed;
+  the property emerges from the table.
+- **M92** — the all-rounder, and the only ladder spanning both ends: LOW is
+  the textbook point snipe (8.5–22 m), MID owns the slot, HIGH the 3.3–4.6 m
+  range. One sliver at ~8 m, which fills off MID at ~27 m/s (0.30 s flight —
+  a shot the keeper must still respect).
+- **M28** — the steepest ladder at every rung: the close-range weapon, owning
+  2.5–8.7 m across its three rungs, with no top shelf from the point at any
+  credible pace. The worst at range, as before.
 
 Consequences accepted deliberately:
 
+- **Nobody roofs the 2 m doorstep.** Reserving a rung for the crease is what
+  cost every blade its slot elevation, and the doorstep is a rare enough look
+  that the trade is worth reversing. The steepest rung in the game (M28 HIGH)
+  now arrives ~0.71 m from 2 m — mid-net.
 - **A max-charge point slapper at LOW sails for M92/M28** — the fully-wound
   point bomb wants FLAT or an eased charge. Elevation at max power is the
   risky choice; that's the language of the whole model.
@@ -73,6 +82,37 @@ Consequences accepted deliberately:
   static-look snipes remain too free after playtest, the goalie's high game
   (pre-arm read of the visible toe carry) returns as a *complement*, not a
   competing design.
+
+## 1.1 Why the rungs are spaced by roof DISTANCE, not by even angle steps
+
+A set angle's arrival is ~`d·tan(angle)`, so the distance a rung tops the
+shelf from goes as `1/tan`. Even steps in angle are therefore geometric steps
+in distance *the wrong way round*: the v3 ladder's three rungs (8/17.5/24 on
+the M92) roofed from ~15 m, ~3.5 m and ~2.4 m — two of the three rungs landed
+inside 4 m of ice while everything from 4 to 8.5 m had no rung at all. That
+gap is the slot. Playtest felt it as "always one tick": past ~4.5 m at full
+pace, MID and HIGH both sailed, so LOW was the only legal rung anywhere real
+shots come from, and LOW arrives 0.6–0.8 m there — the keeper's chest.
+
+Two structural facts set what any ladder can do:
+
+1. **A rung is wide exactly when its apex lands in the roof window.** apex =
+   `(v·sin θ)² / 2g`, so apex ∈ [0.86, 1.18] means `v·sin θ` ∈ [4.11, 4.81].
+   At 33 m/s that is only **7.2°–8.4°** — which is why the M92's 8° LOW was
+   the god rung: its whole arc cruises the top shelf, giving it a 13-metre
+   band while every steeper rung gets a ~1.5 m one.
+2. **Past ~9 m there is only one usable elevated angle at full pace.** Above
+   ~8.5° the puck sails; below ~7.2° it never reaches the seam. So no ladder
+   can give expression at long range, and a gear must choose where its fan
+   sits. That is what makes the ladder a genuine gear identity rather than a
+   ±10% scaling of one shape (which is all v3's three near-clone ladders
+   were).
+
+The v3.1 spacing follows from those: put each gear's three rungs across the
+distances its shooter actually shoots from (3–10 m), and let the gear choose
+which end of the rink it owns. The M92 at 6 m goes from `0.68 / OVER / OVER`
+to `0.68 / 1.00 / OVER`; at 4 m from `0.49 / 1.18 / OVER` to three distinct
+in-net arrivals (`0.49 / 0.70 / 1.03`).
 - Nothing in the ladder approaches 45°, so `ShotMechanics.MAX_LOFT_RATIO`
   becomes a pure anti-forgery guard and the host clamp headroom widens.
 - The flip clear is the steepest rung at soft pace — no special case.
