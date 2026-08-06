@@ -185,16 +185,18 @@ pure anti-forgery guard that never touches an honest shot.
 
 ## 6. Open items
 
-1. **The AI hole model is still 2-band**, with a floor at the standing pad
-   seam (0.86 m), so `_best_high_rung` can only ever select the HIGH rung and
-   bots play FLAT wherever a human would go over the pad or at the armpit.
-   They are under-armed, not broken (from ~6 m the HIGH rung is in band).
-   Closing it means a height-resolved cover model — see
-   `Scripts/domain/ai/CLAUDE.md` for the scope.
-2. Crossbar corner-arc collision + drill-target audit — issue #598. The
+1. The HIGH band's structural floor above the standing seam is still the
+   measured `HOLE_BAND_CORE[HIGH]` (0.40) rather than real geometry — the
+   collider list has no shoulders or arm roots, so the boxes under-represent
+   him there. Grounding it needs those added to `GoalieAnatomy` first.
+2. The keeper's stick still floors cover everywhere below the seam, though the
+   blade is 0.07 m tall and an elevated puck clears it. Narrowing it to the
+   blade's real height makes the in-tight flat shot better and moves
+   `test_goalie_low_cover.gd`, which pins measured live-keeper results.
+3. Crossbar corner-arc collision + drill-target audit — issue #598. The
    crown/post-span gap (0.815 vs 0.915) matters now that launched shots can
    cross above the bar near the posts.
-3. The goalie over-bar reaction gate: he must not save pucks that were
+4. The goalie over-bar reaction gate: he must not save pucks that were
    sailing.
-4. The goalie high-game complement (pre-arm read of the visible toe carry) if
+5. The goalie high-game complement (pre-arm read of the visible toe carry) if
    static-look snipes feel too free — issue #597.
