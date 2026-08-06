@@ -2808,7 +2808,8 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	if record.is_local:
 		var local_ctrl: LocalController = record.controller as LocalController
 		local_ctrl.set_goal_context(
-				teams[0].defended_goal, teams[1].defended_goal, _get_puck_carrier_team_id)
+				teams[0].defended_goal, teams[1].defended_goal,
+				_get_puck_carrier_team_id, get_puck_carrier)
 		local_ctrl.puck_release_requested.connect(_on_puck_release_requested)
 		local_ctrl.nudge_requested.connect(_on_nudge_requested)
 		local_ctrl.hit_received.connect(func(impulse: Vector3) -> void:
@@ -2981,16 +2982,30 @@ func _resolve_skater_team_id(skater: Skater) -> int:
 	return _registry.resolve_team_id(skater) if _registry != null else -1
 
 
-func _get_puck_carrier_team_id() -> int:
+# The puck's carrier as THIS peer sees it, or null while loose.
+#
+# `puck.carrier` is host-only — set by the server's physics callbacks and never
+# written on clients (see Scripts/networking/CLAUDE.md) — so a client has to read
+# the event-driven carrier view instead. Every presentation-side "who has it"
+# read goes through here; reaching for `puck.get_carrier()` outside host-only
+# code silently reports "loose" for the whole lobby except the host.
+#
+# The client view is consulted first because it also covers the host's own local
+# carry, so this preserves the previous local-carrier-first precedence; the two
+# sources never disagree when both resolve.
+func get_puck_carrier() -> Skater:
 	if puck_controller != null:
-		var local_carrier: Skater = puck_controller.get_local_carrier()
-		if local_carrier != null:
-			return _resolve_skater_team_id(local_carrier)
+		var viewed: Skater = puck_controller.get_client_carrier_skater()
+		if viewed != null:
+			return viewed
 	if puck != null:
-		var carrier: Skater = puck.get_carrier()
-		if carrier != null:
-			return _resolve_skater_team_id(carrier)
-	return -1
+		return puck.get_carrier()
+	return null
+
+
+func _get_puck_carrier_team_id() -> int:
+	var carrier: Skater = get_puck_carrier()
+	return _resolve_skater_team_id(carrier) if carrier != null else -1
 
 
 func _resolve_skater_peer_id(skater: Skater) -> int:
