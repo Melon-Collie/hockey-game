@@ -2804,6 +2804,7 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	# pose cache the blade clamp uses. get_goalie_data returns
 	# empty until goalies exist (tutorial dummy / test), so the block no-ops there.
 	record.skater.set_goalie_data_provider(get_goalie_data)
+	record.controller.net_peer_id = record.peer_id
 	if record.is_local:
 		var local_ctrl: LocalController = record.controller as LocalController
 		local_ctrl.set_goal_context(

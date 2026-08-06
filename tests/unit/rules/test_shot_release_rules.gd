@@ -1,8 +1,8 @@
 extends GutTest
 
-# ShotReleaseRules — host-side clamping/validation of client shot-release
-# claims. Lag comp is a privilege (forged inputs degrade to zero benefit),
-# the shot itself is not (only the one-timer range gate rejects outright).
+# ShotReleaseRules — host-side clamping/validation on the shot-release path.
+# Lag comp is a privilege (a bad timestamp degrades to zero benefit), the shot
+# itself is not (only the one-timer contact test refuses one outright).
 
 
 # ── clamp_rtt_ms ──────────────────────────────────────────────────────────────
@@ -155,6 +155,42 @@ func test_one_timer_claim_fresh_when_the_puck_has_never_been_played() -> void:
 func test_one_timer_claim_stale_once_the_puck_is_already_in_flight() -> void:
 	assert_true(ShotReleaseRules.one_timer_claim_is_stale(10.0, 10.05),
 			"someone played the puck after this swing committed — the swing missed")
+
+
+# ── one_timer_window_grace ────────────────────────────────────────────────────
+#
+# The host arms a remote carrier's one-timer window on its own pickup tick; that
+# carrier arms it one way later and releases an input lead before the host sees
+# it. The grace is what keeps the client's honest window inside the host's.
+
+const LEAD_S: float = 0.033
+const BROADCAST_S: float = 1.0 / 60.0
+
+
+func test_window_grace_covers_the_round_trip_offset() -> void:
+	# 100 ms link: 50 ms one way + 33 ms lead + one broadcast interval.
+	assert_almost_eq(
+			ShotReleaseRules.one_timer_window_grace(100.0, LEAD_S, BROADCAST_S),
+			0.05 + LEAD_S + BROADCAST_S, 0.0001,
+			"the host holds its deadline open by exactly the arming offset")
+
+func test_window_grace_is_zero_without_a_ping_sample() -> void:
+	# No sample (host player, bot, or a peer measured at 0) — nothing to cover,
+	# and the honest window is already the right one.
+	assert_almost_eq(ShotReleaseRules.one_timer_window_grace(0.0, LEAD_S, BROADCAST_S), 0.0, 0.0001)
+	assert_almost_eq(ShotReleaseRules.one_timer_window_grace(-5.0, LEAD_S, BROADCAST_S), 0.0, 0.0001)
+	assert_almost_eq(ShotReleaseRules.one_timer_window_grace(NAN, LEAD_S, BROADCAST_S), 0.0, 0.0001)
+
+func test_window_grace_is_capped() -> void:
+	# A garbage ping reading must not hold a wind-up open indefinitely.
+	assert_almost_eq(
+			ShotReleaseRules.one_timer_window_grace(9000.0, LEAD_S, BROADCAST_S),
+			ShotReleaseRules.ONE_TIMER_WINDOW_GRACE_MAX_S, 0.0001)
+
+func test_window_grace_grows_with_the_link() -> void:
+	assert_gt(ShotReleaseRules.one_timer_window_grace(200.0, LEAD_S, BROADCAST_S),
+			ShotReleaseRules.one_timer_window_grace(40.0, LEAD_S, BROADCAST_S),
+			"a worse link needs more of the host's deadline held open")
 
 
 # ── one_timer_connects ────────────────────────────────────────────────────────

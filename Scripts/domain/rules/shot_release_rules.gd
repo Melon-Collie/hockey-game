@@ -163,6 +163,35 @@ static func one_timer_claim_is_stale(claim_host_timestamp: float, puck_last_play
 	return puck_last_played_time > claim_host_timestamp
 
 
+# Extra time the HOST holds a remote carrier's caught-one-timer window open,
+# beyond `one_timer_window_duration`.
+#
+# The window is a cancel deadline, and the two sides do not arm it at the same
+# instant: the host arms it on the tick it grants the pickup, the carrier's own
+# client arms it when the grant RPC lands — one way later — and its release then
+# takes an input lead to reach the host. So the client's honest, unextended
+# window sits `one_way + input_lead` LATER in input-stamp space than the host's.
+# Without this grace the tail of it hangs past the host's deadline, where the
+# host's sim has already cancelled the wind-up back to carry: the release input
+# arrives to a skater who is no longer winding up and the shot silently never
+# happens, while the client predicted it and watches the puck snap back.
+#
+# Both sides tick the window one input per tick, so shifting the host's end by
+# exactly that offset makes the two cancel on the SAME input stamp. The
+# broadcast interval is slack against ping-estimate error, and it is deliberately
+# one-sided: too little grace eats shots, too much only leaves the host briefly
+# still holding a wind-up the client dropped, which the next broadcast settles.
+# Clamped so a garbage ping reading can't hold a wind-up open indefinitely.
+const ONE_TIMER_WINDOW_GRACE_MAX_S: float = 0.30
+
+static func one_timer_window_grace(peer_rtt_ms: float, input_lead_s: float,
+		broadcast_interval_s: float) -> float:
+	if not is_finite(peer_rtt_ms) or peer_rtt_ms <= 0.0:
+		return 0.0
+	return clampf(peer_rtt_ms / 2000.0 + input_lead_s + broadcast_interval_s,
+			0.0, ONE_TIMER_WINDOW_GRACE_MAX_S)
+
+
 # One-timer contact test: did this swing actually meet the puck?
 #
 # The blade sweeps the slapper zone at ice level at the END of the retention

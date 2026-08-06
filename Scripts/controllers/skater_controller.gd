@@ -738,7 +738,11 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # is tuned for gentle aim-tracking and lags a fast coil, which reads as a
 # half-finished wind-up.
 @export var slapper_wind_up_lerp_speed: float = 18.0
-@export var one_timer_window_duration: float = 0.45  # seconds after puck arrives to release
+# Seconds after the puck arrives to release before the wind-up cancels back to
+# carry. Every peer arms this same honest value for the carrier it is predicting;
+# only the HOST simulating a REMOTE carrier adds one_timer_window_lag_grace on
+# top, because it armed the window before that carrier could have seen the catch.
+@export var one_timer_window_duration: float = 0.45
 # Human timing window, in seconds, either side of the ideal commit. Applied
 # ALONG the puck's line (ShotReleaseRules.one_timer_connects), so it forgives
 # being early or late — never being wide.
@@ -2148,7 +2152,7 @@ func on_puck_picked_up_network() -> void:
 			# A genuine one-timer: the wind-up was already built when the feed
 			# arrived. Open the timing window — release within
 			# one_timer_window_duration to fire, or it cancels back to carry.
-			_aiming.one_timer_window_timer = one_timer_window_duration + NetworkManager.get_latest_rtt_ms() / 2000.0
+			_aiming.one_timer_window_timer = one_timer_window_duration + one_timer_window_lag_grace()
 			if show_one_timer_indicator:
 				skater.update_slapper_indicator_convergence(1.0)
 				skater.update_slapper_indicator_window(1.0)
@@ -3231,8 +3235,22 @@ func is_ai_controlled() -> bool:
 # client's predicted shot power matches the host's authoritative shot.
 var net_shot_power_sensitivity: float = 1.0
 
+# Peer this controller drives, set by GameManager at spawn. Only a host-side
+# RemoteController reads it (to look up that peer's measured ping); -1 elsewhere.
+var net_peer_id: int = -1
+
 func shot_power_sensitivity() -> float:
 	return 1.0
+
+
+# Extra time this controller holds the caught one-timer's window open (see
+# ShotReleaseRules.one_timer_window_grace). Zero for anyone whose sim shares the
+# host's clock — the host's own player, a bot, and every client predicting
+# itself, all of which arm the window the instant they see the catch.
+# RemoteController overrides it, because only the host arming a REMOTE carrier's
+# window is arming it earlier than that carrier will.
+func one_timer_window_lag_grace() -> float:
+	return 0.0
 
 # The speed signal fed to the wrister power model:
 #   - Bots AND gamepad humans (commit_wrister_power): the cursor speed equivalent

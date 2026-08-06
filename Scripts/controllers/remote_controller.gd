@@ -40,6 +40,20 @@ func sample_shooter_puck_view(input: InputState, out: SkaterController.PuckView)
 	_puck_history_provider.call(
 			input.host_timestamp - NetworkManager.INPUT_LEAD_SEC, out)
 
+
+# The host arms this carrier's caught-one-timer window on the tick it grants the
+# pickup; the carrier's own client arms it a one-way trip later and releases an
+# input lead before the host sees it. Hold the host's deadline open by that
+# offset so the client's honest window lands inside it, and the two cancel on
+# the same input stamp. See ShotReleaseRules.one_timer_window_grace.
+func one_timer_window_lag_grace() -> float:
+	if not _is_host:
+		return 0.0
+	return ShotReleaseRules.one_timer_window_grace(
+			float(NetworkManager.get_peer_ping_ms(net_peer_id)),
+			NetworkManager.INPUT_LEAD_SEC,
+			1.0 / float(Constants.STATE_RATE))
+
 @export var extrapolation_max_ms: float = 50.0
 # Critically-damped smoothing time (s) for the remote body position. Larger =
 # smoother corrections, more chase lag; smaller = snappier, jumpier.
