@@ -157,28 +157,63 @@ func test_one_timer_claim_stale_once_the_puck_is_already_in_flight() -> void:
 			"someone played the puck after this swing committed — the swing missed")
 
 
-# ── one_timer_in_range ────────────────────────────────────────────────────────
+# ── one_timer_connects ────────────────────────────────────────────────────────
+#
+# The shipped window: back = one_timer_retention_time + one_timer_leniency_time
+# (0.19 s), forward = one_timer_leniency_time (0.08 s), zone radius 0.5 m.
 
-func test_one_timer_puck_in_zone_accepted() -> void:
-	assert_true(ShotReleaseRules.one_timer_in_range(
-			Vector2(0, 0), Vector2(0.3, 0), 0.5, 0.0, 0.08))
+const BACK_S: float = 0.19
+const FWD_S: float = 0.08
+const ZONE_R: float = 0.5
 
-func test_one_timer_within_slack_accepted() -> void:
-	# Just past radius but inside the server-side slack.
-	assert_true(ShotReleaseRules.one_timer_in_range(
-			Vector2(0, 0), Vector2(1.2, 0), 0.5, 0.0, 0.08))
 
-func test_one_timer_across_rink_rejected() -> void:
-	assert_false(ShotReleaseRules.one_timer_in_range(
-			Vector2(0, 0), Vector2(15, 0), 0.5, 0.0, 0.08),
-			"forged claim with a distant puck is rejected")
+func _connects(zone: Vector2, puck: Vector2, vel: Vector2, airborne: bool = false) -> bool:
+	return ShotReleaseRules.one_timer_connects(
+			zone, ZONE_R, puck, vel, airborne, BACK_S, FWD_S)
 
-func test_one_timer_fast_puck_gets_speed_leniency() -> void:
-	# 14 m/s puck adds 14 * 0.08 = 1.12 m leniency: 0.5 + 1.12 + 1.0 slack = 2.62.
-	assert_true(ShotReleaseRules.one_timer_in_range(
-			Vector2(0, 0), Vector2(2.5, 0), 0.5, 14.0, 0.08))
-	assert_false(ShotReleaseRules.one_timer_in_range(
-			Vector2(0, 0), Vector2(2.8, 0), 0.5, 14.0, 0.08))
+
+func test_one_timer_still_puck_inside_the_zone_connects() -> void:
+	assert_true(_connects(Vector2.ZERO, Vector2(0.3, 0.0), Vector2.ZERO))
+
+func test_one_timer_still_puck_outside_the_zone_whiffs() -> void:
+	# Nothing to forgive: a stationary puck out of reach was never reachable.
+	assert_false(_connects(Vector2.ZERO, Vector2(0.7, 0.0), Vector2.ZERO))
+
+func test_one_timer_forgives_a_puck_already_past_the_zone() -> void:
+	# 20 m/s feed judged at the end of the hold: the puck sits 0.15 s (3 m) past
+	# the zone, inside the 0.19 s look-back, so the swing met it on the way
+	# through.
+	assert_true(_connects(Vector2.ZERO, Vector2(3.0, 0.0), Vector2(20.0, 0.0)))
+
+func test_one_timer_whiffs_a_puck_too_far_past_the_zone() -> void:
+	# 0.25 s (5 m) past on the same feed — the player committed late enough that
+	# the blade came down behind the puck.
+	assert_false(_connects(Vector2.ZERO, Vector2(5.0, 0.0), Vector2(20.0, 0.0)))
+
+func test_one_timer_forgives_a_puck_not_yet_arrived() -> void:
+	# 1 m short on a 20 m/s feed is 0.05 s early, inside the 0.08 s forward
+	# window; 2.5 m short is past even the window plus the zone's own radius.
+	assert_true(_connects(Vector2.ZERO, Vector2(-1.0, 0.0), Vector2(20.0, 0.0)))
+	assert_false(_connects(Vector2.ZERO, Vector2(-2.5, 0.0), Vector2(20.0, 0.0)))
+
+func test_one_timer_leniency_is_timing_only_never_width() -> void:
+	# THE regression this test file exists for: the ring the contact test
+	# replaced inflated isotropically by speed × time, so on a 20 m/s feed a
+	# puck ~4 m WIDE of the shooter connected. Along the line, 3 m is forgiven;
+	# across it, 1 m is not.
+	assert_true(_connects(Vector2.ZERO, Vector2(3.0, 0.0), Vector2(20.0, 0.0)))
+	assert_false(_connects(Vector2.ZERO, Vector2(0.0, 1.0), Vector2(20.0, 0.0)),
+			"a puck a metre off the line is unreachable at any speed")
+	assert_false(_connects(Vector2.ZERO, Vector2(3.0, 4.0), Vector2(20.0, 0.0)))
+
+func test_one_timer_across_rink_whiffs() -> void:
+	assert_false(_connects(Vector2.ZERO, Vector2(15.0, 0.0), Vector2(20.0, 0.0)))
+
+func test_one_timer_cannot_strike_an_airborne_puck() -> void:
+	# Same geometry that connects on the ice: a slapper comes down to the ice,
+	# so a puck still in the air is swung under.
+	assert_true(_connects(Vector2.ZERO, Vector2(0.3, 0.0), Vector2.ZERO, false))
+	assert_false(_connects(Vector2.ZERO, Vector2(0.3, 0.0), Vector2.ZERO, true))
 
 
 # ── one_timer_power ───────────────────────────────────────────────────────────

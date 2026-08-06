@@ -245,3 +245,8 @@ here whenever you bump, in the same format.
 #      tell. A v55 peer sends the bit always-clear and every aiming shooter
 #      would read as addressing one fixed side — a *wrong* defensive tell,
 #      worse than none, so mixed builds must be refused.
+# v57: `release_puck_one_timer` RPC removed. The one-timer is now derived from
+#      the replayed input stream on the host like every other release, so no
+#      shot RPC is left anywhere in the protocol. Godot hashes the rpc-config
+#      ordering, so dropping a method breaks cross-build RPC routing even
+#      though no remaining wire format changed — mixed builds must be refused.

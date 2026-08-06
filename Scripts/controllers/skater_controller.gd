@@ -739,7 +739,10 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # half-finished wind-up.
 @export var slapper_wind_up_lerp_speed: float = 18.0
 @export var one_timer_window_duration: float = 0.45  # seconds after puck arrives to release
-@export var one_timer_leniency_time: float = 0.08   # seconds of puck travel added to zone radius as leniency
+# Human timing window, in seconds, either side of the ideal commit. Applied
+# ALONG the puck's line (ShotReleaseRules.one_timer_connects), so it forgives
+# being early or late — never being wide.
+@export var one_timer_leniency_time: float = 0.08
 @export var one_timer_center_power_bonus: float = 0.10  # ±10%: edge of zone = −10%, dead centre = +10%
 # Minimum wind-up (seconds of slapper charge) before an arriving puck opens the
 # timed one-timer window. Below it — the "puck was already at the stick when the
@@ -2841,6 +2844,25 @@ func _apply_slapper_velocity_drag(delta: float) -> void:
 	skater.velocity.x = slapper_vel.x
 	skater.velocity.z = slapper_vel.y
 
+# The loose puck as the SHOOTER saw it at the instant their swing landed. Filled
+# by sample_shooter_puck_view; one instance per controller, reused.
+class PuckView extends RefCounted:
+	var position: Vector3 = Vector3.ZERO
+	var velocity: Vector3 = Vector3.ZERO
+
+var _one_timer_puck_view := PuckView.new()
+
+
+# Live puck: for a local player and for a bot, the sim and the puck view share
+# one clock, so "what the shooter saw" is simply the puck. RemoteController
+# overrides this — on the host a remote shooter's sim runs one input lead behind
+# the puck they aimed at, and judging the swing against the host's live puck
+# would slide their timing window by that lead.
+func sample_shooter_puck_view(_input: InputState, out: PuckView) -> void:
+	out.position = puck.global_position
+	out.velocity = puck.linear_velocity
+
+
 # Arms the committed catch-and-load hold. Called on the slap-release edge of
 # either one-timer wind-up (puck already caught mid-charge, or still inbound);
 # the state machine flips to ONE_TIMER_RETENTION and the shot fires when this
@@ -2870,14 +2892,19 @@ func _release_retained_one_timer(input: InputState) -> Dictionary:
 
 
 func _try_one_timer_release(input: InputState) -> Dictionary:
-	# Use XZ distance from the slapper zone center (ground level) — this matches
-	# the ring indicator the player sees and avoids penalising blade height since
-	# the blade is lifted during wind-up.
+	# The zone is measured at ground level in XZ — matching the ring indicator the
+	# player sees, and not penalising the blade's wind-up height. The puck's own
+	# HEIGHT is a separate question and one_timer_connects owns it.
+	sample_shooter_puck_view(input, _one_timer_puck_view)
+	var view: PuckView = _one_timer_puck_view
 	var zone_world: Vector3 = skater.get_slapper_zone_global_position()
 	var zone_xz := Vector2(zone_world.x, zone_world.z)
-	var puck_xz := Vector2(puck.global_position.x, puck.global_position.z)
-	var dist: float = zone_xz.distance_to(puck_xz)
-	if dist > _effective_one_timer_leniency():
+	var puck_xz := Vector2(view.position.x, view.position.z)
+	if not ShotReleaseRules.one_timer_connects(
+			zone_xz, slapper_zone_radius, puck_xz,
+			Vector2(view.velocity.x, view.velocity.z),
+			view.position.y > puck.ice_height + GameRules.PUCK_AIRBORNE_HEIGHT_M,
+			one_timer_contact_back_time(), one_timer_leniency_time):
 		# Whiff: no shot fires, but the state machine still commits the swing
 		# to a full follow-through — hand it the same duration/power and drop
 		# the HUD now, exactly like a connected release.
@@ -2919,20 +2946,28 @@ func _apply_block_movement(_input: InputState, delta: float) -> void:
 				skater.velocity, Vector2.ZERO, skater.rotation.y,
 				false, true, delta, block_cfg)
 
-func _effective_one_timer_leniency() -> float:
-	var puck_xz_speed: float = Vector2(puck.linear_velocity.x, puck.linear_velocity.z).length()
-	return slapper_zone_radius + puck_xz_speed * one_timer_effective_leniency_time()
-
-
-# Seconds of puck travel the leniency ring forgives. The range check now runs at
-# the END of the retention hold rather than on the button edge, so the puck has
-# already carried `one_timer_retention_time` further along its line by the time
-# it is judged: without folding the hold in, a dead-centre commit on a hard feed
-# would sail clean past the zone during the beat and read as a whiff. Public so
-# the host's authoritative gate (GameManager.on_remote_one_timer_release ->
-# ShotReleaseRules.one_timer_in_range) measures the identical ring.
-func one_timer_effective_leniency_time() -> float:
+# How far BEHIND the strike instant the contact test still looks along the puck's
+# path. The test runs at the END of the retention hold rather than on the button
+# edge, so a puck struck dead-centre at the commit has already carried
+# `one_timer_retention_time` past the zone by the time it is judged; without
+# folding the hold in, the cleanest possible one-timer would read as a whiff.
+# The forward half of the window is `one_timer_leniency_time` alone, which makes
+# the tolerance ±one_timer_leniency_time around the ideal commit.
+func one_timer_contact_back_time() -> float:
 	return one_timer_leniency_time + one_timer_retention_time
+
+
+# Would a swing landing right now connect? The HUD's ready tell (and nothing
+# else) asks this — the release path asks one_timer_connects directly with its
+# own view of the puck.
+func one_timer_would_connect() -> bool:
+	var zone_world: Vector3 = skater.get_slapper_zone_global_position()
+	return ShotReleaseRules.one_timer_connects(
+			Vector2(zone_world.x, zone_world.z), slapper_zone_radius,
+			Vector2(puck.global_position.x, puck.global_position.z),
+			Vector2(puck.linear_velocity.x, puck.linear_velocity.z),
+			puck.is_airborne(),
+			one_timer_contact_back_time(), one_timer_leniency_time)
 
 func _is_in_slapper_state() -> bool:
 	var s: SkaterStateMachine.State = _sm.get_state()

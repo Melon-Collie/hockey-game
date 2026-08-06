@@ -7,6 +7,39 @@ extends SkaterController
 func shot_power_sensitivity() -> float:
 	return net_shot_power_sensitivity
 
+# (host_time: float, out: SkaterController.PuckView) -> void — reads the host's
+# world-state buffer, leaving `out` untouched when it has no sample at that
+# time. Injected by GameManager, which owns the buffer.
+var _puck_history_provider: Callable = Callable()
+
+func set_puck_history_provider(provider: Callable) -> void:
+	_puck_history_provider = provider
+
+
+# The puck this remote shooter was aiming at, one INPUT LEAD before the tick the
+# host replays their swing on.
+#
+# The client applied this input at its own estimate of host time
+# `host_timestamp - INPUT_LEAD_SEC` while rendering the loose puck predicted to
+# that same instant (PuckController's predicted mode), and the host replays the
+# input at `host_timestamp` — so the host's live puck is a whole lead further
+# down the feed than the one the player swung at. That offset is fixed and
+# ping-independent, which is the point: it is the ONLY lag compensation the
+# one-timer needs now that the shot fires off the input stream instead of an
+# arrival-timed claim RPC.
+#
+# The base-constant lead is used rather than the client's adapted one (which
+# never rides the per-input wire). The servo only ever raises the lead, so this
+# under-rewinds slightly on a client running adapted — erring toward a tighter
+# window, never a friendlier one. Falls back to the live puck whenever the
+# buffer has no sample (warmup, or a stamp older than the buffer).
+func sample_shooter_puck_view(input: InputState, out: SkaterController.PuckView) -> void:
+	super(input, out)
+	if not _is_host or _puck_history_provider.is_null():
+		return
+	_puck_history_provider.call(
+			input.host_timestamp - NetworkManager.INPUT_LEAD_SEC, out)
+
 @export var extrapolation_max_ms: float = 50.0
 # Critically-damped smoothing time (s) for the remote body position. Larger =
 # smoother corrections, more chase lag; smaller = snappier, jumpier.
