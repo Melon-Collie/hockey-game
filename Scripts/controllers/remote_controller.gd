@@ -193,11 +193,28 @@ func receive_input_batch(batch: Array[InputState]) -> float:
 # edge flags (presses) folded into the next applied input so a press inside the
 # dropped span still fires once. The client sees one reconcile correction for
 # the dropped span — the honest cost of inputs the network delivered too late —
-# instead of a session of staleness. Trigger sits well above healthy overdue
-# (≤ one batch interval, ~8.3 ms) so ordinary jitter never trips it; target
-# restores the healthy depth rather than clamping at the trigger.
-const _DRAIN_TRIGGER_S: float = 4.0 / 120.0  # ~33 ms overdue engages the drain
-const _DRAIN_TARGET_S: float = 1.0 / 120.0   # drain back down to ~1 tick overdue
+# instead of a session of staleness.
+#
+# SIZING (measured, 3-peer 5v5 host row + the host_input_queue_depth metric):
+# the queue runs 9-10 deep — that IS the stamp-lead cushion working — while the
+# front pops ~12 ms overdue in steady state. That 12 ms is not lateness: the
+# host renders ~100-110 fps against a 120 Hz tick, so physics ticks bunch two
+# to a frame and a pop lands up to a frame after its due instant. Ordinary
+# hitches add ~15-25 ms on top.
+#
+# The old 4-tick (33 ms) trigger sat INSIDE that band, so it fired 4-12/s on a
+# perfectly healthy deep queue — and every fire discards real inputs the client
+# already predicted with, which costs it one visible reconcile. Worse, the old
+# 1-tick target drained to ~8.3 ms, BELOW the 12 ms quantization floor, so the
+# very next frame read as overdue again and re-armed the trigger.
+#
+# The trade is asymmetric and that decides the sizing: tolerating slip costs
+# input LATENCY (invisible, bounded, and corrected when it grows); draining
+# costs a visible correction. So the trigger sits above the quantization +
+# hitch band and only catches a genuine ratchet, and the target lands clear of
+# the quantization floor so one drain actually settles it.
+const _DRAIN_TRIGGER_S: float = 8.0 / 120.0  # ~67 ms overdue engages the drain
+const _DRAIN_TARGET_S: float = 2.0 / 120.0   # drain back to ~17 ms, clear of the ~12 ms floor
 # A LONE input this stale is a phase-resume artifact (parked across a goal
 # replay / intermission), not the freshest available intent — drop-and-ack it
 # (fallback covers the tick) instead of applying seconds-old held state. Its
