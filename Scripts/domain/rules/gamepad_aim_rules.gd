@@ -18,8 +18,13 @@ class_name GamepadAimRules
 ##     makes the shot go exactly where the stick points — a held aim, decoupled
 ##     from motion and from camera zoom — and what makes the stick's bearing the
 ##     shot line's bearing, so the swing-chirality forehand/backhand read needs no
-##     gamepad branch. Power is committed separately from the stick magnitude, so
-##     shooting needs no flick, drag timing, or travel gate.
+##     gamepad branch. Power rides the TRIGGER's analog travel (below), not the
+##     stick, so shooting needs no flick, drag timing, or travel gate.
+##
+## ONE THUMB, ONE JOB. Aim and power were both on the right stick (bearing and
+## push magnitude); a thumb cannot hold a bearing to a corner while metering a
+## magnitude, so every precise shot cost the other axis. Splitting power onto the
+## trigger — a separate digit with its own travel — makes the two independent.
 
 # Radial deadzone with edge rescale. Below `deadzone` the stick reads dead-zero
 # (so a resting stick holds the cursor and can't drift it); from the deadzone edge
@@ -42,3 +47,48 @@ static func apply_radial_deadzone(stick: Vector2, deadzone: float) -> Vector2:
 # the rim in the stick direction (shot aim).
 static func absolute_cursor(anchor: Vector2, stick_dz: Vector2, radius_px: float) -> Vector2:
 	return anchor + stick_dz * radius_px
+
+# Schmitt trigger for an analog pull (raw 0..1 axis) used as a button: engages at
+# `press`, disengages only back below `release`. A single threshold chatters when
+# the pull rests on it — trigger noise is ~0.01-0.02, but a finger holding a
+# trigger *at* the shot point is not steady, and each spurious edge would fire a
+# shot. `press` sits low (see the caller) because everything above it is the
+# power band, and travel spent reaching the press point is travel you can't shoot
+# with.
+static func trigger_held(depth: float, was_held: bool, press: float, release: float) -> bool:
+	if was_held:
+		return depth > release
+	return depth >= press
+
+# Analog pull → shot power fraction (0..1) over the USABLE travel. The band runs
+# from `press` (the shot is already committed by the time it registers, so that
+# pull is 0 power, not the minimum-power floor plus a step) to `full`.
+#
+# `full` sits SHORT of 1.0 on purpose: pads differ in how close to the mechanical
+# stop they actually report, and several never reach 1.0 at all. Topping the band
+# out at the stop would put the last few percent of power in travel that some
+# hardware cannot physically produce — so a full rip would be unavailable on that
+# pad, silently. Everything at or past `full` is a full rip.
+static func trigger_power_t(depth: float, press: float, full: float) -> float:
+	if full <= press:
+		return 1.0
+	return clampf((depth - press) / (full - press), 0.0, 1.0)
+
+# Is the trigger SPRINGING BACK (finger leaving) rather than being dialled down?
+#
+# The shot fires on trigger release, so power has to be read from the pull the
+# player was HOLDING — but a trigger sweeps its whole travel on the way out, and
+# the last sample before it drops under the release point is a low one. Latching
+# that turns every shot into a dribbler.
+#
+# The two motions separate cleanly by RATE, not by magnitude: a return spring
+# unloads the trigger in ~40 ms (~15-25 units/s), while a deliberate ease-off is
+# a muscle movement an order of magnitude slower (~1-3 units/s). So the latch
+# follows the pull except while it is falling faster than any thumb dials, which
+# preserves an exact held power on release AND leaves a slow ease-off free to
+# genuinely soften the shot. `delta`-based so it reads the same at any tick rate.
+static func trigger_is_springing_back(
+		depth: float, prev_depth: float, delta: float, release_rate: float) -> bool:
+	if delta <= 0.0:
+		return false
+	return (depth - prev_depth) / delta <= -release_rate

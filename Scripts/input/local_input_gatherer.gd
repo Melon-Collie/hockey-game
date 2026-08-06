@@ -29,8 +29,22 @@ const AIM_RADIUS_PX: float = 480.0
 const REST_WORLD_DIST: float = 0.55
 const REST_RETURN_RATE: float = 10.0
 const AIM_DEADZONE: float = 0.15
-# Analog-trigger pull that counts as a press for the wrister / slapshot.
-const TRIGGER_THRESHOLD: float = 0.5
+# Analog-trigger pull that engages the wrister / slapshot, and the lower pull it
+# has to fall back under to disengage (GamepadAimRules.trigger_held). PRESS is
+# XInput's conventional button point (30/255) rather than a half pull: everything
+# above it is the wrister's POWER band, so a high press point would spend half the
+# trigger's travel just arming the shot. RELEASE trails it to stop a trigger held
+# right at the shot point from chattering out extra shots.
+const TRIGGER_PRESS: float = 0.12
+const TRIGGER_RELEASE: float = 0.08
+# Pull that reads as a full-power rip — see GamepadAimRules.trigger_power_t for
+# why the band tops out short of the mechanical stop.
+const TRIGGER_FULL: float = 0.92
+# Pull-units per second above which a FALLING trigger is the return spring, not
+# the player easing off — the gate that keeps the release sweep from overwriting
+# the held power (GamepadAimRules.trigger_is_springing_back). Sits an order of
+# magnitude above a deliberate ease-off and below a spring return.
+const TRIGGER_SPRING_RATE: float = 6.0
 
 var _camera: Camera3D
 # The local player's own skater — the on-screen anchor for the gamepad cursor and
@@ -63,21 +77,22 @@ var _last_mouse_screen_pos: Vector2 = Vector2.ZERO
 # frame (or after a pad reconnect) so it starts on the player.
 var _pad_cursor: Vector2 = Vector2.ZERO
 var _pad_cursor_valid: bool = false
-# Committed wrister power (0..1) = how hard the right stick is pushed, latched while
-# RT is held so the shot reads the held power even on the release frame. Aim is the
-# stick DIRECTION, power the MAGNITUDE. _prev_gather_rt keeps commit_wrister_power
-# true for that one release frame (RT already read as up) so the shot fired on RT-up
-# still routes through the committed-power / origin→cursor-aim path.
+# Committed wrister power (0..1) = how far RT is pulled, latched while RT is held so
+# the shot reads the held power on the release frame. Aim is the right stick's
+# DIRECTION; power is the TRIGGER's travel — separate digits, so neither costs the
+# other (see GamepadAimRules' "one thumb, one job"). _prev_gather_rt keeps
+# commit_wrister_power true for that one release frame (RT already read as up) so the
+# shot fired on RT-up still routes through the committed-power / origin→cursor-aim
+# path.
 #
-# The latch HOLDS on a centered stick, exactly like the aim does: a stick inside the
-# deadzone carries no aim and no power, so re-sampling it there would collapse a
-# lined-up shot to the 10 m/s floor. That fires on the thumb relaxing a tick before
-# (or with) the trigger — the same digit-independent release that should have ripped
-# it — and on the "just pull RT" shot, which used to be a dribbler in a stale
-# direction. Seeded full at the press edge so a shot taken with no stick input at
-# all is a full rip along the held aim, not the softest shot in the game.
+# The latch tracks the pull except while the trigger is springing back, which is what
+# makes the power the one the player was HOLDING rather than a sample off the release
+# sweep. Because it is the trigger's own travel, the stick is free to sit anywhere —
+# a centered stick holds the aim and no longer touches the power at all.
 var _committed_wrister_power: float = 1.0
 var _prev_gather_rt: bool = false
+# Previous frame's raw RT pull, for the spring-back rate read above.
+var _prev_rt_depth: float = 0.0
 # World point the SHOT cursor is anchored to, PINNED at the trigger edge (the blade
 # contact point, flattened to the ice). The sim pins the same point one physics tick
 # later as the wrister's aim origin (SkaterAimingBehavior.wrister_origin_world), and
@@ -94,8 +109,14 @@ var _pad_shot_anchor_valid: bool = false
 # Previous-frame pad edge state. The pad is read directly (not through the action
 # system), so there is no built-in just_pressed here — we bridge the physics-tick /
 # input-frame cadence with the same pending-flag latch the mouse actions use.
-var _prev_pad_shoot: bool = false
-var _prev_pad_slap: bool = false
+#
+# The two trigger flags are also the AUTHORITATIVE held state (they carry the
+# hysteresis, which a stateless per-call read cannot), sampled once per frame in
+# _accumulate_gamepad_edges and read back by gather. Sampling them there rather than
+# per physics tick is what catches a trigger tap shorter than a tick, and it is where
+# the pad's other buttons already live.
+var _pad_shoot_held: bool = false
+var _pad_slap_held: bool = false
 var _prev_pad_stick_lift: bool = false
 var _prev_pad_quick_pass: bool = false
 var _prev_pad_elev_up: bool = false
@@ -149,7 +170,7 @@ func _process(delta: float) -> void:
 	if GameManager.is_input_blocked():
 		return
 	if _gamepad_active():
-		_accumulate_gamepad_edges()
+		_accumulate_gamepad_edges(delta)
 		_update_pad_cursor(delta)
 		return
 	if Input.is_action_just_pressed("shoot"):
@@ -168,24 +189,38 @@ func _process(delta: float) -> void:
 		_pending_quick_pass_pressed = true
 
 # Rising-edge detection for the pad's press-type inputs, mirroring the mouse
-# action just_pressed latch above. Triggers (wrister/slapshot) edge on crossing
-# TRIGGER_THRESHOLD; the bound loft buttons step the loft mode in place.
-func _accumulate_gamepad_edges() -> void:
-	var shoot_now: bool = _pad_trigger(JOY_AXIS_TRIGGER_RIGHT)
-	if shoot_now and not _prev_pad_shoot:
+# action just_pressed latch above. Triggers (wrister/slapshot) edge on the
+# TRIGGER_PRESS/RELEASE hysteresis; the bound loft buttons step the loft mode in
+# place. Also where RT's travel commits the wrister power.
+func _accumulate_gamepad_edges(delta: float) -> void:
+	var rt: float = _pad_axis(JOY_AXIS_TRIGGER_RIGHT)
+	var shoot_now: bool = GamepadAimRules.trigger_held(
+			rt, _pad_shoot_held, TRIGGER_PRESS, TRIGGER_RELEASE)
+	if shoot_now and not _pad_shoot_held:
 		_pending_shoot_pressed = true
-		# Fresh stroke: default to a full rip. The latch only moves again while the
-		# stick is live, so a shot aimed and fired without ever dialling the
-		# magnitude back is a real shot rather than the min-power floor.
-		_committed_wrister_power = 1.0
 		_pin_shot_anchor()
-	elif not shoot_now and _prev_pad_shoot:
+	elif not shoot_now and _pad_shoot_held:
 		_pad_shot_anchor_valid = false
-	_prev_pad_shoot = shoot_now
-	var slap_now: bool = _pad_trigger(JOY_AXIS_TRIGGER_LEFT)
-	if slap_now and not _prev_pad_slap:
+	# Power = how far RT is pulled, held through the release sweep. No press-edge
+	# seed is needed: the pull that crossed TRIGGER_PRESS is a RISE, so the latch
+	# takes it immediately and then rides the trigger up. A digital-shoulder pad
+	# (Switch Pro and friends, where SDL maps ZR onto this axis as a bare 0/1) lands
+	# on exactly 1.0 at the edge and holds it — every shot a full rip, which is the
+	# only honest reading of a trigger with no travel to meter.
+	if shoot_now and not GamepadAimRules.trigger_is_springing_back(
+			rt, _prev_rt_depth, delta, TRIGGER_SPRING_RATE):
+		# Snapped to the wire grid HERE, not at send: we predict locally on this same
+		# object, so an unquantized latch would have us predict a power the host can't
+		# reproduce from the u8 it receives (see InputState.quantize_power_t).
+		_committed_wrister_power = InputState.quantize_power_t(
+				GamepadAimRules.trigger_power_t(rt, TRIGGER_PRESS, TRIGGER_FULL))
+	_pad_shoot_held = shoot_now
+	_prev_rt_depth = rt
+	var slap_now: bool = GamepadAimRules.trigger_held(
+			_pad_axis(JOY_AXIS_TRIGGER_LEFT), _pad_slap_held, TRIGGER_PRESS, TRIGGER_RELEASE)
+	if slap_now and not _pad_slap_held:
 		_pending_slap_pressed = true
-	_prev_pad_slap = slap_now
+	_pad_slap_held = slap_now
 	var lift_now: bool = _pad_held("stick_lift")
 	if lift_now and not _prev_pad_stick_lift:
 		_pending_stick_lift_pressed = true
@@ -242,8 +277,8 @@ func gather() -> InputState:
 		# pos puts both signals in the same frame for the tracker.
 		state.mouse_screen_pos = -state.mouse_screen_pos
 	if pad:
-		state.shoot_held = _pad_trigger(JOY_AXIS_TRIGGER_RIGHT)
-		state.slap_held = _pad_trigger(JOY_AXIS_TRIGGER_LEFT)
+		state.shoot_held = _pad_shoot_held
+		state.slap_held = _pad_slap_held
 		state.brake = _pad_held("brake")
 		state.sprint_held = _pad_held("sprint")
 		state.block_held = _pad_held("block")
@@ -251,19 +286,9 @@ func gather() -> InputState:
 		state.hit_held = _pad_held("hit")
 		# COMMITTED WRISTER: aim comes from the cursor position (parked in the stick
 		# direction in _update_pad_cursor → origin→cursor is the shot line), power from
-		# how hard the stick is pushed (its magnitude) — no flick, no drag timing, no
-		# travel gate. Latch the power while RT is held and keep commit true one frame
-		# into the release so the shot (fired on RT-up) reads the held power.
-		# A stick inside the deadzone HOLDS the latch (see _committed_wrister_power) —
-		# the same hold the aim gets, so aim and pace can't be knocked out by the
-		# thumb coming home.
-		# Snapped to the wire grid HERE, not at send: we predict locally on this
-		# same object, so an unquantized latch would have us predict a power the
-		# host can't reproduce from the u8 it receives (see InputState.quantize_power_t).
-		if state.shoot_held:
-			var power_stick: Vector2 = _pad_right_stick_dz()
-			if not power_stick.is_zero_approx():
-				_committed_wrister_power = InputState.quantize_power_t(power_stick.length())
+		# RT's travel (latched in _accumulate_gamepad_edges) — no flick, no drag timing,
+		# no travel gate. Keep commit true one frame into the release so the shot (fired
+		# on RT-up) reads the held power.
 		state.commit_wrister_power = state.shoot_held or _prev_gather_rt
 		state.bot_wrister_power_t = _committed_wrister_power
 		_prev_gather_rt = state.shoot_held
@@ -325,15 +350,16 @@ func _screen_cursor(pad: bool) -> Vector2:
 #   * SHOOT (RT held): the cursor is parked at the reach radius in the stick
 #     DIRECTION, from the PUCK's anchor — see _shot_anchor_screen. The shot line is
 #     origin→cursor (the frozen blade toward the cursor), so anchoring the cursor on
-#     the puck is what makes that line the stick direction. Power is how hard the
-#     stick is pushed (committed in gather).
+#     the puck is what makes that line the stick direction. Power is RT's own
+#     travel (latched in _accumulate_gamepad_edges), so the stick carries no power
+#     signal here at all — only bearing.
 func _update_pad_cursor(delta: float) -> void:
 	var anchor: Vector2 = _aim_anchor_screen()
 	if not _pad_cursor_valid:
 		_pad_cursor = anchor
 		_pad_cursor_valid = true
 	var stick := _pad_right_stick_dz()
-	if _pad_trigger(JOY_AXIS_TRIGGER_RIGHT):
+	if _pad_shoot_held:
 		# Aim = stick direction only (a full radius out). A centered stick during RT
 		# holds the last aim so a shot already lined up doesn't drift to center.
 		if not stick.is_zero_approx():
@@ -426,8 +452,10 @@ func _screen_to_world(camera: Camera3D, screen: Vector2) -> Vector3:
 	var t: float = -ray_origin.y / ray_dir.y
 	return ray_origin + ray_dir * t
 
-func _pad_trigger(axis: int) -> bool:
-	return Input.get_joy_axis(_pad_device, axis) >= TRIGGER_THRESHOLD
+# Raw analog pull of a trigger axis (0..1, rest at 0 — unlike the sticks' -1..1).
+# A pad whose shoulders are digital reports this axis as a bare 0 or 1.
+func _pad_axis(axis: int) -> float:
+	return Input.get_joy_axis(_pad_device, axis)
 
 # Held state of a REBINDABLE pad button, resolved through the player's gamepad
 # binds (PlayerPrefs.pad_button) so an Options rebind applies live with no respawn.
