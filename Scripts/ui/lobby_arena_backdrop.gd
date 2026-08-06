@@ -171,11 +171,13 @@ func _build_dummy(meshes: Dictionary, mats: Dictionary) -> Node3D:
 # Static two-segment arm from the skater's shared meshes: tapered bone prisms
 # shoulder→elbow→hand, an elbow-pad ball, and a gloved fist gripping toward
 # the stick. Radii mirror the live rig (arm 0.065, elbow 0.082, glove 0.064).
+# Upper and lower segments wear their own kit materials, elbow ball reads as
+# the lower-arm cuff — same split as SkaterUniformCoordinator.apply_uniform.
 func _add_dummy_arm(d: Node3D, mats: Dictionary,
 		shoulder: Vector3, elbow: Vector3, hand: Vector3) -> void:
-	_add_bone(d, mats.arms, shoulder, elbow)
-	_add_bone(d, mats.arms, elbow, hand)
-	_add_part(d, SkaterMeshBuilder.shared_joint_ball(), mats.arms, elbow,
+	_add_bone(d, mats.arm_upper, shoulder, elbow)
+	_add_bone(d, mats.arm_lower, elbow, hand)
+	_add_part(d, SkaterMeshBuilder.shared_joint_ball(), mats.elbow, elbow,
 			Basis.from_scale(Vector3.ONE * 0.082))
 	# Glove fist: local +Y points back toward the elbow, same convention the
 	# live rig orients it with.
@@ -240,8 +242,9 @@ func _dummy_meshes() -> Dictionary:
 
 # Dress the dummy in the real kit (colors.uniform), not flat team colors:
 # striped jersey with the yoke on the torso's top cap, the shoulder pads'
-# own color, striped socks, solid pants base. Stripe textures come from
-# SkaterUniformCoordinator.make_h_stripes_texture so the bands land exactly
+# own color, striped arms (upper/lower segments each), striped socks, solid
+# pants base. Stripe textures come from SkaterUniformCoordinator's
+# make_h_stripes_texture / make_arm_stripes_texture so the bands land exactly
 # where the in-game skater's do. Pants keep the base color only — the
 # in-game vertical side stripe would ring the dummy's horizontally-rotated
 # thigh cylinder the wrong way. Roughness values mirror the coordinator's
@@ -250,6 +253,8 @@ func _dummy_materials(colors: Dictionary) -> Dictionary:
 	var uniform: Dictionary = colors.uniform
 	var jersey_block: Dictionary = uniform.jersey
 	var socks_block: Dictionary = uniform.socks
+	var arms_upper: Dictionary = uniform.arms.upper
+	var arms_lower: Dictionary = uniform.arms.lower
 
 	var jersey_mat := StandardMaterial3D.new()
 	jersey_mat.albedo_texture = SkaterUniformCoordinator.make_h_stripes_texture(
@@ -266,18 +271,34 @@ func _dummy_materials(colors: Dictionary) -> Dictionary:
 		socks_mat.roughness = 0.9
 
 	return {
-		"jersey":   jersey_mat,
-		"shoulder": _matte(uniform.shoulders.color),
-		"helmet":   _matte(uniform.helmet, 0.28),
-		"pants":    _matte(uniform.pants.base),
-		"socks":    socks_mat,
-		"skate":    _matte(Color(0.08, 0.08, 0.08), 0.42),
-		"steel":    _matte(SkaterMeshBuilder.BLADE_STEEL_COLOR, 0.25),
-		"arms":     _matte(uniform.arms.upper.base),
-		"gloves":   _matte(uniform.gloves),
-		"skin":     _matte(SkinToneRegistry.color_for(SkinToneRegistry.DEFAULT_INDEX)),
-		"stick":    _matte(Color(0.06, 0.06, 0.07), 0.4),
+		"jersey":    jersey_mat,
+		"shoulder":  _matte(uniform.shoulders.color),
+		"helmet":    _matte(uniform.helmet, 0.28),
+		"pants":     _matte(uniform.pants.base),
+		"socks":     socks_mat,
+		"skate":     _matte(Color(0.08, 0.08, 0.08), 0.42),
+		"steel":     _matte(SkaterMeshBuilder.BLADE_STEEL_COLOR, 0.25),
+		"arm_upper": _arm_material(arms_upper),
+		"arm_lower": _arm_material(arms_lower),
+		"elbow":     _matte(arms_lower.base),
+		"gloves":    _matte(uniform.gloves),
+		"skin":      _matte(SkinToneRegistry.color_for(SkinToneRegistry.DEFAULT_INDEX)),
+		"stick":     _matte(Color(0.06, 0.06, 0.07), 0.4),
 	}
+
+
+# One arm segment's material — striped like the in-game arm bones (the shared
+# bone mesh carries cylinder-convention UVs, and make_arm_stripes_texture
+# applies the coordinator's arm-vs-sock band scale), solid when the kit
+# authors no arm stripes.
+func _arm_material(segment: Dictionary) -> StandardMaterial3D:
+	if segment.stripes.is_empty():
+		return _matte(segment.base)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = SkaterUniformCoordinator.make_arm_stripes_texture(
+			segment.base, segment.stripes)
+	mat.roughness = 0.9
+	return mat
 
 
 func _matte(c: Color, roughness: float = 0.9) -> StandardMaterial3D:

@@ -314,16 +314,26 @@ func _paint_cylinder_h(part: int, segment: Dictionary) -> void:
 	if segment.stripes.is_empty():
 		_skater.set_upper_surface_material(part, _make_solid_mat(segment.base))
 		return
-	var scaled: Array[Dictionary] = _scale_stripes_about_center(segment.stripes, _ARM_STRIPE_SCALE)
-	var tex: ImageTexture = make_h_stripes_texture(segment.base, scaled)
+	var tex: ImageTexture = make_arm_stripes_texture(segment.base, segment.stripes)
 	_skater.set_upper_surface_material(part, _make_texture_material(tex))
+
+
+# Arm variant of make_h_stripes_texture: pre-shrinks the pattern about its
+# center by _ARM_STRIPE_SCALE so authored fractions render at the same
+# physical band height on the longer arm bones as on the socks. Public static
+# for the same reason as make_h_stripes_texture — the lobby's bench dummies
+# wear the same arm meshes and must not re-derive the correction.
+static func make_arm_stripes_texture(base: Color, stripes: Array[Dictionary]) -> ImageTexture:
+	return make_h_stripes_texture(
+			base, _scale_stripes_about_center(stripes, _ARM_STRIPE_SCALE))
 
 
 # Returns a copy of `stripes` with each band's width and its offset from the
 # region center (0.5) multiplied by `scale`, shrinking the whole pattern about
 # its center while keeping it centered. Runs on uniform apply, not per tick, so
 # the fresh array is not a hot-path concern.
-func _scale_stripes_about_center(stripes: Array[Dictionary], scale: float) -> Array[Dictionary]:
+static func _scale_stripes_about_center(
+		stripes: Array[Dictionary], scale: float) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for s: Dictionary in stripes:
 		out.append({
