@@ -66,6 +66,17 @@ static func resolve(
 	var reach: float = GameRules.NET_DEPTH + half_thickness + 1.0
 	if absf(heel.z - end_z) > reach and absf(toe.z - end_z) > reach:
 		return false
+	# Same in x, which the depth test above cannot stand in for: the cage is
+	# NET_BACK_HALF_WIDTH across at its widest, so a stick out by the boards is
+	# touching nothing however close to the goal line it is. The bound is the
+	# cage's own footprint plus this caller's clearance — a stick within the give
+	# is sunk in compliant mesh, one beyond it never crossed anything — and it is
+	# what stops a blade in the corner from being claimed by a face whose plane
+	# happens to run past it. Tested on the blade's x-INTERVAL rather than end by
+	# end, so a segment lying across the cage still resolves.
+	var lateral: float = GameRules.NET_BACK_HALF_WIDTH + half_thickness + mesh_give
+	if minf(heel.x, toe.x) > lateral or maxf(heel.x, toe.x) < -lateral:
+		return false
 
 	# ── Pipes first: iron wins, and a post hit is the terminal answer ─────────
 	# Resolved before twine so a blade wedged at the post reports the pipe (which
@@ -172,7 +183,8 @@ static func _twine_offset(
 	# reaching in from BESIDE the cage (in front of the back plane, but laterally
 	# outside) is mistaken for one pressing the back mesh and gets shoved along the
 	# slant instead of stopping in the side twine.
-	if NetGeometry.back_plane_distance(prev) >= 0.0:
+	if NetGeometry.back_plane_distance(prev) >= 0.0 \
+			and NetGeometry.within_back_panel(point.x, give):
 		# Behind the back twine, pressing on it. Ejected along the mesh's own
 		# leaning normal, so the stick stops on the VISIBLE twine at its own height
 		# rather than being pulled through into the cavity.

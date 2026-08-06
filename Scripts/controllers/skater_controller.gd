@@ -1923,7 +1923,8 @@ func _collide_pinned_puck_with_net() -> void:
 	# reach through, not something that confiscates. (Losing the puck for brushing
 	# the back of the net was the single most irritating thing about the old
 	# clamp, and there is no physical reading of a net that justifies it. Reach is
-	# bounded before this instead — see SkaterIKCoordinator._net_reach_limit.)
+	# bounded before this instead — see SkaterIKCoordinator._board_reach_limit,
+	# which folds the net into the same cast that bounds reach at the boards.)
 	var resolved: Vector3 = raw
 	if PuckGeometryCollision.resolve_net_panels(
 			prev, raw, skater.velocity, GameRules.PUCK_COLLISION_RADIUS, _net_pin_result):

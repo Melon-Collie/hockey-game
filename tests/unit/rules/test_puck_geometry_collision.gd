@@ -344,6 +344,67 @@ func test_scored_puck_entering_through_mouth_still_plays_interior() -> void:
 	assert_lt(absf(res.position.z), back_z, "held inside the cavity")
 
 
+# ── Containment sweep: the mouth is the only way in ───────────────────────────
+# The single-step tests above each pin one face. This walks the puck the way the
+# sim does — small sub-steps, each one's resolved position feeding the next as
+# `prev` — because the leak was never in one face's arithmetic. It was in which
+# face got asked: rounding the cage's back corner, the puck sat behind the back
+# mesh's PLANE while being laterally past the mesh itself, so the back face
+# claimed the contact and the side face, the one that had to stop it, was never
+# reached that step. A few of those in a row and it was inside.
+
+func _inside_cavity(p: Vector3) -> bool:
+	var az: float = absf(p.z)
+	return p.y < GameRules.NET_HEIGHT and az > GameRules.GOAL_LINE_Z \
+			and az < GameRules.GOAL_LINE_Z + _twine_depth(p.y) \
+			and absf(p.x) < NetGeometry.cavity_half_width()
+
+
+# Walk from `from` toward `to` in ≤4 cm steps, resolving each one and feeding the
+# result forward. Returns true if the puck ever ends a step inside the cavity.
+func _walk_ends_up_inside(from: Vector3, to: Vector3) -> bool:
+	var res := PuckGeometryCollision.Result.new()
+	var span: Vector3 = to - from
+	var steps: int = int(ceilf(span.length() / 0.04))
+	var prev: Vector3 = from
+	var p: Vector3 = from
+	for i: int in steps:
+		var want: Vector3 = p + span / float(steps)
+		if PuckGeometryCollision.resolve_net_panels(
+				prev, want, span.normalized() * 4.0, R, res):
+			want = res.position
+		prev = want
+		p = want
+		if _inside_cavity(p):
+			return true
+	return false
+
+
+func test_a_puck_dragged_around_the_cage_never_ends_up_inside_it() -> void:
+	# Every approach that circles the net without crossing the mouth plane: around
+	# the back corner, along the side twine, in from behind at an angle. All of
+	# them stayed outside before the corner case existed; the diagonal is the one
+	# that got in.
+	var gl: float = GameRules.GOAL_LINE_Z
+	var y: float = 0.0175
+	for path: Array in [
+			[Vector3(1.6, y, gl + 1.5), Vector3(0.0, y, gl + 0.5)],   # around the back corner
+			[Vector3(1.6, y, gl + 1.3), Vector3(0.0, y, gl + 0.3)],   # tighter diagonal
+			[Vector3(1.5, y, gl + 0.9), Vector3(-1.5, y, gl + 0.9)],  # straight across the cage
+			[Vector3(1.4, y, gl + 0.2), Vector3(0.0, y, gl + 0.8)],   # in from beside the post
+			[Vector3(0.6, y, gl + 2.0), Vector3(0.6, y, gl + 0.2)]]:  # straight in from behind
+		assert_false(_walk_ends_up_inside(path[0], path[1]),
+				"a puck worked in from %s toward %s stays out of the cage" % [path[0], path[1]])
+
+
+func test_the_mouth_is_still_open_to_a_puck_that_uses_it() -> void:
+	# The guard above must not seal the only opening — this is a goal.
+	var gl: float = GameRules.GOAL_LINE_Z
+	assert_true(
+			_walk_ends_up_inside(Vector3(0.0, 0.0175, gl - 0.5), Vector3(0.0, 0.0175, gl + 0.6)),
+			"straight through the mouth still ends up in the net")
+
+
 # ── The wedge above the slant is OUTSIDE the cage ─────────────────────────────
 # The interior clamp is the slanted twine (shallow at the top shelf) but the
 # exterior face used to be a vertical wall at the full NET_DEPTH, so the wedge

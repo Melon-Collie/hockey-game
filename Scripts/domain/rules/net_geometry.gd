@@ -30,6 +30,21 @@ static func near_end_z(z: float) -> float:
 static func cavity_half_width() -> float:
 	return GameRules.NET_HALF_WIDTH
 
+# The back mesh is a finite rectangle spanning the cavity's width, not the
+# infinite plane its distance function describes. Anything reading that plane has
+# to establish the body is within the panel first — a plane equation on its own
+# answers "which side of it am I on" for the whole rink, and both ends of the ice
+# are behind it. Skipping this let the back face claim contacts that were never
+# its own: it pinned a stick out by the corner boards to a surface metres away,
+# and it answered for a puck rounding the cage's back corner, whose contact
+# belonged to the SIDE mesh — so the side mesh never got asked and the puck kept
+# creeping in.
+#
+# `slack` is the caller's own reach — a puck radius, a blade half-thickness plus
+# the mesh give — so a body grazing the panel's edge still counts as on it.
+static func within_back_panel(x: float, slack: float) -> bool:
+	return absf(x) <= cavity_half_width() + slack
+
 # Goal-line-relative depth of the slanted back mesh at height `y`.
 static func back_depth_at_height(y: float) -> float:
 	var t: float = clampf(y / GameRules.NET_HEIGHT, 0.0, 1.0)

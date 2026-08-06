@@ -12,6 +12,15 @@ extends RefCounted
 
 const State = SkaterStateMachine.State
 
+# Every pose in this file is AUTHORED — hand and blade placed from tunables
+# rather than solved against each other — so nothing in the placement keeps them
+# a stick-length apart, and the rendered shaft is exactly that distance
+# (Skater.update_stick_mesh). The slapper finish drew 2.00 m of a 1.30 m stick at
+# its peak with nothing in the way, and any obstacle clamp added its whole
+# correction on top. So every pose here runs through `_ik.rigid_stick` twice:
+# once on what it authored, once on what the clamps left. Where length has to
+# come off, it comes off the REACH — see TopHandIK.enforce_rigid_stick.
+
 # ── References ────────────────────────────────────────────────────────────────
 var _skater: Skater = null
 var _sm: SkaterStateMachine = null
@@ -61,11 +70,6 @@ func apply_slapper_blade_position() -> void:
 			_controller.slapper_wind_up_height,
 			wind_up_t) + quiver
 	var pos := Vector3(blade_x, current_blade_y, blade_z)
-	pos = _skater.clamp_blade_to_walls(pos)
-	var blade_world: Vector3 = _skater.upper_body_to_global(pos)
-	var clamped_heel: Vector3 = blade_world
-	if _controller.has_puck:
-		clamped_heel = _ik.clamp_blade_from_goalies(clamped_heel)
 	# Lift the top hand and push it forward in upper-body-local space. The
 	# forward push (negative local Z) rides the torso coil — for an LHS player
 	# the body rotates CCW so local -Z maps to world upper-left in top-down
@@ -76,11 +80,19 @@ func apply_slapper_blade_position() -> void:
 			_skater.shoulder.position.x - blade_side_sign * _controller.slapper_wind_up_hand_inward * wind_up_eased,
 			_controller.hand_rest_y + _controller.slapper_wind_up_hand_up * wind_up_eased + quiver * 0.5,
 			_skater.shoulder.position.z + _controller.slapper_wind_up_hand_back * wind_up_eased - _controller.slapper_wind_up_hand_forward * wind_up_eased)
+	var rigid: TopHandIK.Result = _ik.rigid_stick(hand_pos, pos, blade_side_sign)
+	hand_pos = rigid.hand
+	pos = _skater.clamp_blade_to_walls(rigid.blade)
+	var blade_world: Vector3 = _skater.upper_body_to_global(pos)
+	var clamped_heel: Vector3 = blade_world
+	if _controller.has_puck:
+		clamped_heel = _ik.clamp_blade_from_goalies(clamped_heel)
 	clamped_heel += _ik.resolve_blade_against_net(clamped_heel).offset
 	if clamped_heel != blade_world:
 		pos = _skater.upper_body_to_local(clamped_heel)
-	_skater.set_top_hand_position(hand_pos)
-	_skater.set_blade_position(pos)
+	rigid = _ik.rigid_stick(hand_pos, pos, blade_side_sign)
+	_skater.set_top_hand_position(rigid.hand)
+	_skater.set_blade_position(rigid.blade)
 
 # ── Shot-Block Pose ───────────────────────────────────────────────────────────
 # Choreographed "stick down" block: the blade lies flat on the ice extended
@@ -97,13 +109,16 @@ func apply_block_blade_position() -> void:
 	var blade_z: float = _skater.shoulder.position.z - _controller.block_blade_reach
 	var blade_y: float = _ik.blade_y_lean_corrected(blade_x, blade_z)
 	var blade_local := Vector3(blade_x, blade_y, blade_z)
-	blade_local = _skater.clamp_blade_to_walls(blade_local)
 	var hand_pos := Vector3(
 			_skater.shoulder.position.x + blade_side_sign * _controller.block_hand_x,
 			_controller.block_hand_y,
 			_skater.shoulder.position.z - _controller.block_hand_forward)
-	_skater.set_top_hand_position(hand_pos)
-	_skater.set_blade_position(blade_local)
+	var rigid: TopHandIK.Result = _ik.rigid_stick(hand_pos, blade_local, blade_side_sign)
+	hand_pos = rigid.hand
+	blade_local = _skater.clamp_blade_to_walls(rigid.blade)
+	rigid = _ik.rigid_stick(hand_pos, blade_local, blade_side_sign)
+	_skater.set_top_hand_position(rigid.hand)
+	_skater.set_blade_position(rigid.blade)
 
 # ── Goal Celebration Pose ─────────────────────────────────────────────────────
 # Cosmetic raised-stick celebration for the scorer: top hand punches up with
@@ -128,9 +143,17 @@ func apply_celebration_pose(t: float) -> void:
 			_skater.shoulder.position.x + blade_side_sign * 0.18,
 			hand_pos.y + _controller.celebration_stick_rise * ramp,
 			_skater.shoulder.position.z - 0.28)
-	blade_pos = _skater.clamp_blade_to_walls(blade_pos)
-	_skater.set_top_hand_position(hand_pos)
-	_skater.set_blade_position(blade_pos)
+	# The rigid pass reads the same here as anywhere, and it is why the raised
+	# stick survives it: this pose holds the blade well inside a stick-length of
+	# the hand, so the correction is inert until a board clamp actually moves the
+	# blade — and then it slides the hand rather than redrawing the arm from
+	# scratch, which is what keeps the stick overhead where the celebration wants it.
+	var rigid: TopHandIK.Result = _ik.rigid_stick(hand_pos, blade_pos, blade_side_sign)
+	hand_pos = rigid.hand
+	blade_pos = _skater.clamp_blade_to_walls(rigid.blade)
+	rigid = _ik.rigid_stick(hand_pos, blade_pos, blade_side_sign)
+	_skater.set_top_hand_position(rigid.hand)
+	_skater.set_blade_position(rigid.blade)
 	# Off hand: fist pump on the free side (normally it rides the shaft —
 	# this override runs after update_bottom_hand, so it wins the tick).
 	_skater.set_bottom_hand_position(Vector3(
@@ -189,8 +212,10 @@ func _apply_wrister_whip(t: float, aim_world: Vector3) -> void:
 			axis, _skater.upper_body.global_transform.basis)
 	if local_dir.length_squared() < 0.0001:
 		return
-	# Hand near the shoulder + a forward carry (arm length = carry, so it can't
-	# stretch); blade one stick-length ahead along the shot line, at ice + lift.
+	# Hand near the shoulder + a forward carry, blade one stick-length ahead along
+	# the shot line at ice + lift. This is the shared finish shape — the slapper's
+	# is the same pose reached a different way (see _place_finish).
+	var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
 	var carry: float = env * _controller.wrister_follow_through_reach
 	var hand_pos: Vector3 = _skater.shoulder.position + local_dir * carry
 	hand_pos.y = _controller.hand_rest_y + env * _controller.wrister_follow_through_hand_y
@@ -200,22 +225,9 @@ func _apply_wrister_whip(t: float, aim_world: Vector3) -> void:
 	var drop: float = hand_pos.y - blade_y
 	var horiz: float = sqrt(maxf(
 			_controller.stick_length * _controller.stick_length - drop * drop, 0.0001))
-	var intended_target: Vector3 = hand_pos + local_dir * horiz
-	intended_target.y = blade_y
-	# Wall + net clamps, identical to the tracked path — including how the arm is
-	# rebuilt afterwards. A finish that runs the blade into the boards or around a
-	# post is where the stick is furthest from the body, so the clamp correction
-	# is at its largest, and translating the hand by it is what threw the arm
-	# across the net. The blade stays where the clamps put it; the stick chokes up.
-	var local_target: Vector3 = _skater.clamp_blade_to_walls(intended_target)
-	var ft_heel: Vector3 = _skater.upper_body_to_global(local_target)
-	local_target = _skater.upper_body_to_local(
-			ft_heel + _ik.resolve_blade_against_net(ft_heel).offset)
-	if local_target != intended_target:
-		var blade_side_sign: float = -1.0 if _skater.is_left_handed else 1.0
-		hand_pos = _ik.hand_for_clamped_blade(local_target, blade_side_sign)
-	_skater.set_top_hand_position(hand_pos)
-	_skater.set_blade_position(local_target)
+	var blade_pos: Vector3 = hand_pos + local_dir * horiz
+	blade_pos.y = blade_y
+	_place_finish(hand_pos, blade_pos, blade_side_sign)
 
 # ── Slapper Follow-Through ────────────────────────────────────────────────────
 # A real swing in two phases. Downswing (the first slapper_follow_through_
@@ -299,9 +311,29 @@ func apply_slapper_follow_through() -> void:
 		var hand_follow: float = reach * _controller.slapper_follow_through_hand_follow
 		hand_pos.x += dir_local.x * hand_follow
 		hand_pos.z += dir_local.z * hand_follow
-	blade_pos = _skater.clamp_blade_to_walls(blade_pos)
-	var sft_heel: Vector3 = _skater.upper_body_to_global(blade_pos)
-	blade_pos = _skater.upper_body_to_local(
-			sft_heel + _ik.resolve_blade_against_net(sft_heel).offset)
-	_skater.set_top_hand_position(hand_pos)
-	_skater.set_blade_position(blade_pos)
+	_place_finish(hand_pos, blade_pos, blade_side_sign)
+
+
+# ── The finish, shared ────────────────────────────────────────────────────────
+# Both finishes end here: make the pose rigid, run it past the boards and the
+# net, make it rigid again. They differ in how they GET here — the wrister's is a
+# whip from the hands out along the shot line (rigid by construction, so the
+# first pass is inert), the slapper's a swing whose blade arcs from the contact
+# point (which is not, and never was: it drew 2.00 m of a 1.30 m stick at the
+# peak of the finish, so the arc now costs the reach it cannot afford).
+#
+# The clamps sit BETWEEN the two passes on purpose. Correcting first means the
+# boards and the net see the pose the body can actually hold, rather than one
+# reaching through them; correcting again after means a clamp that moves the
+# blade cannot buy its correction in stick length.
+func _place_finish(hand_pos: Vector3, blade_pos: Vector3, blade_side_sign: float) -> void:
+	var rigid: TopHandIK.Result = _ik.rigid_stick(hand_pos, blade_pos, blade_side_sign)
+	var hand: Vector3 = rigid.hand
+	var blade: Vector3 = _skater.clamp_blade_to_walls(rigid.blade)
+	var heel: Vector3 = _skater.upper_body_to_global(blade)
+	var offset: Vector3 = _ik.resolve_blade_against_net(heel).offset
+	if offset != Vector3.ZERO:
+		blade = _skater.upper_body_to_local(heel + offset)
+	rigid = _ik.rigid_stick(hand, blade, blade_side_sign)
+	_skater.set_top_hand_position(rigid.hand)
+	_skater.set_blade_position(rigid.blade)
