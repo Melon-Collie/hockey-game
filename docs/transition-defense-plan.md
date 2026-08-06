@@ -552,9 +552,13 @@ A body straddling the blue line to pressure the point is not a broken structure.
 - The crease-top retreat floor.
 
 **Survived, contrary to the original plan**
-- `has_support_behind` and `settable_stand_depth` — still `PRESSURE`'s own last-man
-  step-up discipline once the zone is gained. The rush side no longer needs them because
-  the gap ladder is bounded by construction, but the in-zone cut-off still is not.
+- `has_support_behind` and `settable_stand_depth` — `PRESSURE`'s last-man step-up
+  discipline once the zone is gained, and RUSH_D1's on the rush side. The plan expected
+  the rush side not to need them, on the theory that the gap ladder is bounded by
+  construction; the ladder bounds the gap's SIZE but says nothing about the TRIP to it,
+  so a D already home with the rush still in neutral ice was charging a stand 10-18 m
+  up-ice and getting walked (`AIRoleRushD._settable_gap`,
+  `tests/unit/ai/test_rush_gap_discipline.gd`).
 
 **Reused as-is**
 - The soonest-to-arrive election machinery + hysteresis, both files.

@@ -9,14 +9,27 @@ const OUR_NET_Z: float = 26.65
 const STICK: float = 2.0
 
 
+# `support_behind` puts a teammate home between us and our net. It is ON by
+# default because it makes the LAST-MAN STEP-UP BOUND inert
+# (AIRoleRushD._settable_gap), and every case below except the one that pins
+# that bound is about the ladder, the numbers rungs, or the angling — one
+# variable each, per this file's premise. Without it the fixtures read the
+# bound instead: they place the D 9-16 m goal-side of the stand he is being
+# asked to take, which is a step-up no body arrives at set, so the bound
+# legitimately dominates the reading and the ladder underneath is invisible.
 func _ctx(self_pos: Vector3, skaters: Array, carrier_pid: int,
 		numbers: int = AIRushRead.Numbers.EVEN_OR_UP,
-		backpressure: float = INF) -> RoleContext:
+		backpressure: float = INF, support_behind: bool = true) -> RoleContext:
 	var snap := WorldSnapshot.new()
 	var s := SkaterNetworkState.new()
 	s.position = self_pos
 	snap.skater_states[1] = s
 	var team_map: Dictionary = {1: TEAM_ID}
+	if support_behind:
+		var home := SkaterNetworkState.new()
+		home.position = Vector3(0.0, 0.0, OUR_NET_Z - 2.0)
+		snap.skater_states[2] = home
+		team_map[2] = TEAM_ID
 	for e: Array in skaters:
 		var sk := SkaterNetworkState.new()
 		sk.position = e[2]
@@ -156,6 +169,51 @@ func test_backpressure_lets_the_d_stand_up() -> void:
 			"a backchecker on his hip lets the D tighten and stand up")
 
 
+# ── The last-man step-up bound ───────────────────────────────────────────────
+# The ladder says where the stand IS; it does not authorize the trip to it. A D
+# already home with the rush still in neutral ice is being asked for a 10-18 m
+# step-up, and taking it means meeting the carrier with a full stride of up-ice
+# momentum — he gets walked and trails the play home. So the last man may only
+# step up as far as he can arrive SET (AIRoleHelpers.settable_stand_depth).
+
+func test_the_last_man_does_not_take_a_step_up_he_cannot_arrive_set_at() -> void:
+	var carrier := Vector3(0.0, 0.0, 0.0)      # red line, coming at pace
+	var vel := Vector3(0.0, 0.0, 7.0)
+	var alone: RoleContext = _ctx(Vector3(0.0, 0.0, 20.0),
+			[[10, 1, carrier, vel]], 10, AIRushRead.Numbers.DOWN_ONE, INF, false)
+	var layered: RoleContext = _ctx(Vector3(0.0, 0.0, 20.0),
+			[[10, 1, carrier, vel]], 10, AIRushRead.Numbers.DOWN_ONE, INF, true)
+	var bounded: float = _gap(
+			AIRoleRushD.decide(alone, AIRoleSlots.Slot.RUSH_D1), carrier, vel)
+	var free: float = _gap(
+			AIRoleRushD.decide(layered, AIRoleSlots.Slot.RUSH_D1), carrier, vel)
+	assert_gt(bounded, free,
+			"the last man holds ice he cannot cover set; got %.2f vs %.2f"
+			% [bounded, free])
+	# And the bound is a hold, not a retreat: it never asks him to give up depth
+	# he already owns (he stands 18 m goal-side of the led carrier).
+	assert_lte(bounded, 18.1,
+			"the bound may hold the stand, never push it back; got %.2f" % bounded)
+
+
+func test_a_properly_gapped_last_man_is_not_bounded_at_all() -> void:
+	# Inert where it should be: a D already holding his gap is asking for no
+	# step-up, so the bound returns the ladder untouched whether or not anyone
+	# is home behind him.
+	var carrier := Vector3(0.0, 0.0, 0.0)
+	var vel := Vector3(0.0, 0.0, 7.0)
+	var led: Vector3 = _led(carrier, vel)
+	var stand_z: float = led.z + AIRoleRushD.ladder_gap_m(led, 1.0, STICK, 7.0)
+	var alone: RoleContext = _ctx(Vector3(0.0, 0.0, stand_z),
+			[[10, 1, carrier, vel]], 10, AIRushRead.Numbers.DOWN_ONE, INF, false)
+	var layered: RoleContext = _ctx(Vector3(0.0, 0.0, stand_z),
+			[[10, 1, carrier, vel]], 10, AIRushRead.Numbers.DOWN_ONE, INF, true)
+	assert_almost_eq(
+			_gap(AIRoleRushD.decide(alone, AIRoleSlots.Slot.RUSH_D1), carrier, vel),
+			_gap(AIRoleRushD.decide(layered, AIRoleSlots.Slot.RUSH_D1), carrier, vel),
+			0.05, "a gapped D reads the same bounded or not")
+
+
 # ── Gap up ───────────────────────────────────────────────────────────────────
 
 func test_gap_up_when_the_carrier_has_no_speed() -> void:
@@ -185,10 +243,13 @@ func test_no_gap_up_when_outnumbered_by_two() -> void:
 
 
 func test_gap_up_against_a_carrier_pinned_to_the_wall() -> void:
+	# No support behind on purpose: the gap-up is exempt from the last-man
+	# step-up bound, because a carrier with no outside left cannot beat the
+	# challenge with the pace that bound exists to respect.
 	var carrier := Vector3(GameRules.INNER_HALF_WIDTH - 1.0, 0.0, 2.0)
 	var ctx: RoleContext = _ctx(Vector3(6.0, 0.0, 16.0),
 			[[10, 1, carrier, Vector3(0.0, 0.0, 7.0)]], 10,
-			AIRushRead.Numbers.DOWN_ONE)
+			AIRushRead.Numbers.DOWN_ONE, INF, false)
 	var d: RoleDecision = AIRoleRushD.decide(ctx, AIRoleSlots.Slot.RUSH_D1)
 	assert_lt(_gap(d, carrier, Vector3(0.0, 0.0, 7.0)), 1.6 * STICK,
 			"a carrier with no outside left gets challenged")

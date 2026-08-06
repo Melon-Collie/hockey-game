@@ -992,10 +992,11 @@ static func self_race_vmax(ctx: RoleContext) -> float:
 
 
 # ── Last-man step-up discipline ──────────────────────────────────────────────
-# PRESSURE's last-man step-up bound. RUSH_D1 no longer uses it — the rush gap
-# is the ladder now (AIRoleRushD), which is bounded by design rather than by a
-# rendezvous clamp — so this is the in-zone pressurer's own discipline: don't
-# lunge a cut-off you cannot arrive at set.
+# The last-man step-up bound, shared by the two roles that own a carrier:
+# PRESSURE's cut-off and RUSH_D1's gap stand (AIRoleRushD._settable_gap). The
+# ladder sizes RUSH_D1's gap but says nothing about the trip to it, so a
+# defender deeper than his own stand needs this the same way the in-zone
+# pressurer does: don't lunge a stand you cannot arrive at set.
 #
 # True when a teammate is home BEHIND us — deeper toward our net (larger
 # own_goal_dir * z) than we are — i.e. there's a safety layer that can pick the

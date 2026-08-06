@@ -48,11 +48,11 @@ class_name AIRolePressure
 # One bound on that pressure: when NOBODY is home behind us (we are the last man
 # back, the normal case once a rush gains the zone and the markers are still
 # recovering), the cut-off is only taken as fast as it can be taken SET — the
-# last-man rendezvous clamp (AIRoleHelpers.settable_stand_depth). Note the rush
-# side of the blue line no longer uses it: RUSH_D1's gap comes from the ladder
-# (AIRoleRushD), which is bounded by construction. A lunge into a rush at pace ends
-# with the pressurer's momentum pointing the wrong way and the carrier walking
-# around him, which is worse than the space the clamp concedes.
+# last-man rendezvous clamp (AIRoleHelpers.settable_stand_depth). RUSH_D1 bounds
+# its own gap stand with the same read — the ladder sizes the gap, not the trip
+# to it. A lunge into a rush at pace ends with the pressurer's momentum pointing
+# the wrong way and the carrier walking around him, which is worse than the space
+# the clamp concedes.
 
 # Engaged/closing boundary: within ~1.5 search steps of the cut-off the
 # argmax runs the full polar ring incl. half-step samples (fine corrections
