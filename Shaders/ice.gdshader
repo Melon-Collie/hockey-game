@@ -64,7 +64,10 @@ uniform vec4 hud_stroke_col = vec4(0.04, 0.07, 0.15, 0.85);
 // convergence ring's scale within it (0 = ring hidden).
 // slapper_dir: world XZ unit vector the arrow points along. It orients the whole
 // indicator, not just the arrow — the ring's gap sits on the shaft's tail — so
-// it is live whenever the indicator is, and slapper_arrow gates the strokes.
+// it is live whenever any of it draws.
+// slapper_active gates the reticle + convergence ring; slapper_arrow gates the
+// aim arrow. INDEPENDENT gates: a carried slapshot charge is arrow-only, a
+// puckless one-timer wind-up shows both.
 uniform vec4 slapper_zone = vec4(0.0);
 uniform vec2 slapper_dir = vec2(0.0, 1.0);
 uniform bool slapper_active = false;
@@ -230,16 +233,19 @@ void fragment() {
 	// size; working directly in metres here means those counter-scales simply do
 	// not exist. Geometry constants are the unit-space ones multiplied by the
 	// zone radius, so the shape is the one SkaterHUDCoordinator authored.
-	if (slapper_active) {
+	if (slapper_active || slapper_arrow) {
 		vec2 rel = ice_xz - slapper_zone.xy;
 		float zone_r = max(slapper_zone.z, 0.0001);
 		float half_t = hud_line_thin * 0.5;
-		// Centre crosshair: two bars, fixed world size regardless of the zone.
-		float cross = min(
-				max(abs(rel.x) - reticle_half_len, abs(rel.y) - half_t),
-				max(abs(rel.x) - half_t, abs(rel.y) - reticle_half_len));
-		float aa_c = max(fwidth(cross), 0.0001);
-		float mark = 1.0 - smoothstep(-aa_c, aa_c, cross);
+		float mark = 0.0;
+		if (slapper_active) {
+			// Centre crosshair: two bars, fixed world size regardless of the zone.
+			float cross = min(
+					max(abs(rel.x) - reticle_half_len, abs(rel.y) - half_t),
+					max(abs(rel.x) - half_t, abs(rel.y) - reticle_half_len));
+			float aa_c = max(fwidth(cross), 0.0001);
+			mark = 1.0 - smoothstep(-aa_c, aa_c, cross);
+		}
 
 		// Indicator frame: +Y of this basis is the aim direction (the node rig's
 		// local +Z), +X its right. The node rig parented the ring UNDER the arrow
@@ -256,8 +262,9 @@ void fragment() {
 			float shoulder_y = tip_y - ARROW_HEAD_LEN * zone_r;
 			float head_w = ARROW_HEAD_HALF_W * zone_r;
 			// The shaft starts where it clears the convergence ring, so the two
-			// never overlap — the same sqrt the node rig used.
-			float base_y = (ring_r > w) ? sqrt(ring_r * ring_r - w * w) : 0.0;
+			// never overlap — the same sqrt the node rig used. Arrow-only (no
+			// reticle/ring drawn): run from the centre; ring_r is stale then.
+			float base_y = (slapper_active && ring_r > w) ? sqrt(ring_r * ring_r - w * w) : 0.0;
 			float d = 1e9;
 			if (base_y < shoulder_y) {
 				d = min(d, seg_dist(q, vec2(-w, base_y), vec2(-w, shoulder_y)));
@@ -274,7 +281,7 @@ void fragment() {
 
 		// Convergence ring: an annulus with a gap where the arrow shaft leaves
 		// it, so the tail reads as continuous with the stroke.
-		if (ring_r > w + hud_line_thin) {
+		if (slapper_active && ring_r > w + hud_line_thin) {
 			float gap_half = asin(clamp(w / ring_r, -1.0, 1.0));
 			// Angle measured from the shaft (+Y) so the gap sits on the tail.
 			float ang = abs(atan(q.x, q.y));
