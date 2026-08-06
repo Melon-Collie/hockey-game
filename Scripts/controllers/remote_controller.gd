@@ -110,6 +110,7 @@ func _render_pose_update(delta: float) -> void:
 	if skater == null or _self_posing:
 		return
 	_skating.apply(delta)
+	_apply_knockdown_fall()
 	if _is_host:
 		_pose.apply_head_tracking_aim(_current_aim_world, delta)
 	else:
@@ -606,10 +607,14 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# steady on everyone else's screen.
 	stagger_timer = state.stagger_timer
 	# Knockdown mirrors stagger onto client-rendered remotes: the controller value
-	# and the skater flag so the down pose (later) and any is_knocked_down read
-	# reflect a checked opponent on every machine, not just the host.
+	# and the skater flag so the down pose and any is_knocked_down read reflect a
+	# checked opponent on every machine, not just the host. The meta sync seeds
+	# the fall (direction + tip rate) from the replicated slide velocity stamped
+	# above, so the remote body falls the way the hit actually shoved it.
+	var prev_kd: float = knockdown_timer
 	knockdown_timer = state.knockdown_timer
 	skater.is_knocked_down = knockdown_timer > 0.0
+	_sync_knockdown_meta(prev_kd)
 	# Bottom hand is purely reactive to top_hand + blade and needs no network
 	# state of its own; it's posed once per rendered frame in _render_pose_update
 	# (Skater._process) along with the gait, not here.

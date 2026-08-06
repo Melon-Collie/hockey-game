@@ -85,3 +85,45 @@ func test_far_net_ejects_with_sign_preserved() -> void:
 func test_far_net_front_untouched() -> void:
 	var r: Vector2 = GameRules.push_out_of_net(Vector2(0.0, -26.0))
 	assert_almost_eq(r.y, -26.0, TOL, "far crease untouched")
+
+# ── net_proximity ─────────────────────────────────────────────────────────────
+# The board_proximity analog for the net footprint: away-from-net normal scaled
+# by closeness (0 at `probe` away → 1 against a panel), Euclidean closest-point,
+# open mouth reports nothing.
+
+func test_proximity_zero_far_from_net() -> void:
+	assert_eq(GameRules.net_proximity(Vector2(0.0, 0.0), 2.0), Vector2.ZERO,
+			"center ice — no net within probe")
+
+func test_proximity_zero_in_front_of_the_mouth() -> void:
+	assert_eq(GameRules.net_proximity(Vector2(0.0, 26.0), 2.0), Vector2.ZERO,
+			"the mouth is open — a crease skater gets no report at any range")
+
+func test_proximity_beside_the_net_points_away_laterally() -> void:
+	# 1.0 m off the +x side panel with a 2.0 m probe → closeness 0.5, pure +x.
+	var p: Vector2 = GameRules.net_proximity(Vector2(BACK_HW + 1.0, 27.0), 2.0)
+	assert_almost_eq(p.x, 0.5, TOL, "half-probe from the side panel → closeness 0.5, +x")
+	assert_almost_eq(p.y, 0.0, TOL, "pure lateral — no z component beside the panel")
+
+func test_proximity_behind_the_net_points_out_back() -> void:
+	# 0.5 m behind the back panel with a 2.0 m probe → closeness 0.75, +z.
+	var p: Vector2 = GameRules.net_proximity(Vector2(0.0, GOAL_Z + DEPTH + 0.5), 2.0)
+	assert_almost_eq(p.x, 0.0, TOL, "no lateral component dead behind the net")
+	assert_almost_eq(p.y, 0.75, TOL, "quarter-probe gap → closeness 0.75, away out back")
+
+func test_proximity_corner_is_euclidean() -> void:
+	# Diagonally off the back corner: 0.6 right of the side, 0.8 past the back →
+	# 1.0 m Euclidean. A face-distance box would report each axis separately.
+	var p: Vector2 = GameRules.net_proximity(
+			Vector2(BACK_HW + 0.6, GOAL_Z + DEPTH + 0.8), 2.0)
+	assert_almost_eq(p.length(), 0.5, TOL, "1.0 m Euclidean on a 2.0 m probe → closeness 0.5")
+	assert_almost_eq(p.angle(), Vector2(0.6, 0.8).angle(), TOL,
+			"direction is the true corner diagonal")
+
+func test_proximity_far_net_mirrors_sign() -> void:
+	var p: Vector2 = GameRules.net_proximity(Vector2(0.0, -(GOAL_Z + DEPTH + 0.5)), 2.0)
+	assert_almost_eq(p.y, -0.75, TOL, "far-net report points away in -z")
+
+func test_proximity_zero_probe_is_silent() -> void:
+	assert_eq(GameRules.net_proximity(Vector2(0.0, 28.0), 0.0), Vector2.ZERO,
+			"zero probe never reports")

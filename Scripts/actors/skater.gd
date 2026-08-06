@@ -2267,6 +2267,30 @@ func set_lower_body_lean(lean_x: float, lean_z: float) -> void:
 	lower_body.rotation.z = lean_z
 
 
+# ── Knockdown Fall ────────────────────────────────────────────────────────────
+# Whole-rig tilt of the knockdown fall: rotates MeshRoot about its own origin —
+# the ice-level point between the skates — so the body tips like a felled tree
+# while the gameplay body (collider, slide, capsule position) stays upright
+# underneath. `axis` is the horizontal rotation axis in body-local space
+# (perpendicular to the fall direction), `tilt` in radians. MeshRoot's basis has
+# exactly this one writer (visual_offset owns its position), so the write is
+# absolute; the zero↔zero early-out keeps the upright hot path free.
+var _knockdown_fall_tilt: float = 0.0
+
+
+func set_knockdown_fall(axis: Vector3, tilt: float) -> void:
+	if tilt == 0.0 and _knockdown_fall_tilt == 0.0:
+		return
+	_knockdown_fall_tilt = tilt
+	# MeshRoot is an ancestor of the Blade marker — the contact memo must not
+	# serve a pre-tilt point (same rule as the visual_offset write).
+	_blade_contact_dirty = true
+	if tilt == 0.0 or axis.length_squared() < 0.000001:
+		mesh_root.basis = Basis.IDENTITY
+		return
+	mesh_root.basis = Basis(axis.normalized(), tilt)
+
+
 # Head yaw, onto the helmet bone. `helmet.rotation.y = angle` meant "read the
 # euler, change Y, write it back", so the scene's authored X/Z survived —
 # _helmet_base_euler carries them.

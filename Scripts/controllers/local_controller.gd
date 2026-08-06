@@ -579,9 +579,14 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	stagger_timer = server_state.stagger_timer
 	# Knockdown rides the same rail — snap to the host value, replay re-derives the
 	# per-tick decay + lock. is_knocked_down follows so the replay's _apply_movement
-	# gates correctly from the first replayed tick.
+	# gates correctly from the first replayed tick. The meta sync covers the
+	# unpredicted case (host knocked us down, prediction didn't): the rising edge
+	# seeds the fall off the snapped slide velocity; a predicted knockdown keeps
+	# its impulse-seeded metadata (timer extension only grows the window total).
+	var prev_kd: float = knockdown_timer
 	knockdown_timer = server_state.knockdown_timer
 	skater.is_knocked_down = knockdown_timer > 0.0
+	_sync_knockdown_meta(prev_kd)
 	# Snap facing for replay accuracy — facing drives the direction of travel,
 	# so the replay must start from the server's facing to reproduce the trajectory.
 	_pose.facing = server_state.facing

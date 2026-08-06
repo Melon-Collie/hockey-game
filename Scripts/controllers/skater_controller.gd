@@ -130,8 +130,10 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Directional recoil: on top of the wobble, the whole torso reels the way the
 # hit shoved it (pitch + roll), easing out as stagger_timer decays — a body
 # absorbing the check, not just shaking. Direction is the transfer impulse
-# (stagger_recoil_dir); remotes recoil generically backward (they get the timer
-# off the wire, not the direction). Applied in SkaterPoseCoordinator._apply_lean.
+# (stagger_recoil_dir); remotes recoil generically backward for plain staggers
+# (they get the timer off the wire, not the direction), but a knockdown entry
+# re-derives the true direction from the replicated slide velocity
+# (_sync_knockdown_meta). Applied in SkaterPoseCoordinator._apply_lean.
 @export var stagger_recoil_deg: float = 13.0  # peak torso recoil lean at full stagger
 # ── Knockdown Tuning ──────────────────────────────────────────────────────────
 # The top of the stagger continuum: a hit whose victim impulse exceeds
@@ -154,15 +156,34 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var knockdown_min_seconds: float = 0.7     # down time of a just-barely knockdown
 @export var knockdown_max_seconds: float = 1.5     # down time of a maximal hit
 @export var knockdown_friction: float = 8.0        # m/s² the downed body sheds speed while sliding
-# Knockdown pose (cosmetic): a downed player crumples — the body drops toward the
-# ice, the legs go limp, and the torso reels hard in the hit direction (an
-# amplified stagger recoil). All driven off the replicated knockdown_timer, so it
-# renders identically on every machine and through reconcile, like the stagger
-# stumble. knockdown_getup_seconds is the tail window over which the pose eases back
-# up (the get-up) — the pose holds full while more than this much time remains.
-@export var knockdown_pose_drop_m: float = 0.85    # how far the body sinks while down
-@export var knockdown_fold_deg: float = 50.0       # peak torso reel (added onto the recoil) while down
+# Knockdown pose (cosmetic): a downed player FALLS — the knees buckle (the gait's
+# drop + limp legs), the whole cosmetic rig tips about the skates in the hit
+# direction under a tipping-body model (KnockdownFallRules, applied to MeshRoot
+# via Skater.set_knockdown_fall), bounces off the ice, and lies flat until the
+# get-up eases it back upright. A torso fold rides on top so the body reads as
+# crumpled rather than a plank. All driven off the replicated knockdown_timer
+# (elapsed down-time = _knockdown_total − timer), so it renders identically on
+# every machine and through reconcile, like the stagger stumble.
+# knockdown_getup_seconds is the tail window over which the whole pose eases back
+# up (the get-up) — it holds full while more than this much time remains.
+@export var knockdown_pose_drop_m: float = 0.3     # buckle sink — the tilt does the lying-down
+@export var knockdown_fold_deg: float = 20.0       # torso curl layered onto the whole-body tilt
 @export var knockdown_getup_seconds: float = 0.4   # tail over which the down pose eases back up
+# Fall model tunables (KnockdownFallRules.Config — units and physical
+# justifications live on the fields there).
+@export var knockdown_fall_buckle_seconds: float = 0.1
+@export var knockdown_fall_accel: float = 6.0
+@export var knockdown_fall_settle_deg: float = 84.0
+@export var knockdown_fall_restitution: float = 0.3
+@export var knockdown_fall_rest_omega: float = 0.7
+@export var knockdown_fall_com_height_m: float = 0.95
+@export var knockdown_fall_max_entry_omega: float = 4.2
+# Head-ward extent of the tipped body (height + a little stick/arm slack): both
+# the obstacle probe distance and the reach the deflection budgets against
+# (KnockdownFallRules.wall_safe_fall_dir), so a fall near the glass or the goal
+# net lies along the obstacle instead of through it.
+@export var knockdown_fall_body_reach_m: float = 1.9
+@export var knockdown_brace_in_seconds: float = 0.15  # arms pull into the brace over this
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
 # How fast facing drifts toward the cursor during normal play. Lower = more
 # skating lag before the body re-orients (more backskate/crossover time).
@@ -971,11 +992,24 @@ var stagger_timer: float = 0.0
 # knockdown threshold; while > 0 the skater is down (no input, sliding, no puck).
 # Replicated / snapped / decayed exactly like stagger_timer.
 var knockdown_timer: float = 0.0
+# Down-window metadata for the knockdown fall pose: total seconds of the current
+# window (so elapsed down-time = _knockdown_total − knockdown_timer) and the
+# horizontal shove speed at entry (seeds the fall's tip rate). Captured by
+# whichever path observes the entry — from the transfer impulse on the
+# simulating side (_set_knockdown_from_impulse), from the replicated velocity on
+# receive-side rising edges (_sync_knockdown_meta) — and extended, not reset, by
+# follow-up hits so the elapsed clock never restarts mid-fall. Cosmetic, like
+# stagger_recoil_dir below: the replicated timer that gates the pose is the
+# deterministic rail.
+var _knockdown_total: float = 0.0
+var _knockdown_entry_speed: float = 0.0
 # Body-frame direction the last check shoved this skater (x = right, y = forward
-# in the (x, z) plane). Drives the recoil lean in SkaterPoseCoordinator; set on
-# the local victim / host from the transfer impulse, left at the default (0, 1 =
-# straight back) for remotes, which only receive the timer. Cosmetic, so it does
-# not need replicating or reconciling — the timer that gates it already does.
+# in the (x, z) plane). Drives the recoil lean in SkaterPoseCoordinator and the
+# knockdown fall direction; set on the local victim / host from the transfer
+# impulse, and re-derived from the replicated slide velocity on receive-side
+# knockdown entries (_sync_knockdown_meta) so remote falls tip the way the hit
+# actually shoved. Cosmetic, so it does not need replicating or reconciling —
+# the timer that gates it already does.
 var stagger_recoil_dir: Vector2 = Vector2(0.0, 1.0)
 # Resolved sprint-boost state for this tick. Written in _apply_movement (which
 # runs before _pose.apply_facing in _process_input) and read by the pose
@@ -1494,9 +1528,9 @@ func _on_body_check_received(impulse: Vector3) -> void:
 		if skater.is_local_skater:
 			stagger_timer = maxf(stagger_timer,
 					BodyCheckRules.stagger_seconds_from_impulse(impulse_magnitude, cfg))
-			knockdown_timer = maxf(knockdown_timer, knockdown_add)
+			_set_knockdown_from_impulse(knockdown_add, impulse)
 		return
-	knockdown_timer = maxf(knockdown_timer, knockdown_add)
+	_set_knockdown_from_impulse(knockdown_add, impulse)
 	var add: float = BodyCheckRules.stagger_seconds_from_impulse(impulse_magnitude, cfg)
 	# Only extend (never shorten) the stagger window, and only bite stamina when
 	# this hit is harder than the residual — incremental_stamina_drain handles the
@@ -1505,6 +1539,49 @@ func _on_body_check_received(impulse: Vector3) -> void:
 		return
 	stamina = maxf(stamina - BodyCheckRules.incremental_stamina_drain(stagger_timer, impulse_magnitude, cfg), 0.0)
 	stagger_timer = add
+
+
+# Extend-never-shorten knockdown write for the impulse path (host + local-victim
+# prediction), keeping the fall metadata coherent: a fresh entry seeds the fall
+# from the transfer impulse's horizontal shove speed (the recoil direction was
+# captured from the same vector by the caller); a follow-up hit that extends an
+# in-flight window grows the total by the timer delta, so the elapsed clock
+# (_knockdown_total − knockdown_timer) never restarts mid-fall.
+func _set_knockdown_from_impulse(add_seconds: float, impulse: Vector3) -> void:
+	var prev: float = knockdown_timer
+	knockdown_timer = maxf(knockdown_timer, add_seconds)
+	if knockdown_timer <= prev:
+		return
+	if prev <= 0.0:
+		_knockdown_total = knockdown_timer
+		_knockdown_entry_speed = Vector2(impulse.x, impulse.z).length()
+	else:
+		_knockdown_total += knockdown_timer - prev
+
+
+# Same bookkeeping for every path that writes knockdown_timer from a received
+# state (reconcile snap, wire apply, goal replay) — call with the pre-write
+# timer AFTER skater.velocity has been stamped from the same state. A rising
+# edge seeds the fall from the replicated slide velocity: the post-hit slide IS
+# the shove, so every machine derives the same fall direction and tip rate with
+# zero new wire state. Mid-window, the total only grows when the written timer
+# exceeds anything seen this window — a received value can lag the local decay
+# (a reconcile baseline is an RTT old), so a plain greater-than-previous check
+# would inflate the total, and with it the elapsed clock, on every snap.
+func _sync_knockdown_meta(prev_timer: float) -> void:
+	if knockdown_timer <= 0.0:
+		return
+	if prev_timer <= 0.0:
+		_knockdown_total = knockdown_timer
+		var shove := Vector2(skater.velocity.x, skater.velocity.z)
+		_knockdown_entry_speed = shove.length()
+		if _knockdown_entry_speed > 0.1:
+			var local_shove: Vector3 = skater.global_transform.basis.inverse() \
+					* Vector3(shove.x, 0.0, shove.y)
+			stagger_recoil_dir = Vector2(local_shove.x, local_shove.z).normalized()
+	elif knockdown_timer > _knockdown_total:
+		# An unseen follow-up hit grew the window — preserve elapsed continuity.
+		_knockdown_total = maxf(_knockdown_total - prev_timer, 0.0) + knockdown_timer
 
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
@@ -1635,6 +1712,15 @@ func _process_input(input: InputState, delta: float) -> void:
 			if cel_state == SkaterStateMachine.State.SKATING_WITH_PUCK \
 					or cel_state == SkaterStateMachine.State.SKATING_WITHOUT_PUCK:
 				_shot_pose.apply_celebration_pose(1.0 - _celebration_timer / _celebration_total)
+		# Knockdown brace: a downed player's arms pull in instead of holding the
+		# dangle the states just placed. Blends the tick's IK result toward the
+		# brace, so the handoff back to live IK through the get-up is continuous
+		# (at blend 0 the pose is exactly what the tick computed). Real ticks
+		# only, like the celebration override above — the wire then carries the
+		# braced pose to spectating machines for free, and blade interactions
+		# are already gated by is_knocked_down so the moved blade feeds nothing.
+		if knockdown_timer > 0.0:
+			_apply_knockdown_brace()
 
 
 # Render-rate cosmetic pose pass, registered on the skater and invoked once per
@@ -1648,11 +1734,76 @@ func _render_pose_update(delta: float) -> void:
 	if skater == null or _self_posing:
 		return
 	_skating.apply(delta)
+	_apply_knockdown_fall()
 	_pose.apply_head_tracking_aim(_current_aim_world, delta)
 	# During a goal celebration the physics tick places the off-hand fist pump
 	# (apply_celebration_pose); yield so the base grip IK doesn't clobber it.
 	if _celebration_timer <= 0.0:
 		_ik.update_bottom_hand()
+
+
+# Render-rate knockdown fall: tip the whole cosmetic rig about the skates in the
+# recoil direction, off the tipping-body solve. Reads only replicated /
+# re-derived state (timer, window total, entry shove, recoil dir), so every
+# machine renders the same fall while the gameplay body underneath keeps its
+# deterministic slide. Cheap while upright — Skater.set_knockdown_fall
+# early-outs at zero↔zero tilt.
+func _apply_knockdown_fall() -> void:
+	var kd_t: float = clampf(
+			knockdown_timer / maxf(knockdown_getup_seconds, 0.001), 0.0, 1.0)
+	var tilt: float = 0.0
+	if kd_t > 0.0:
+		var elapsed: float = maxf(_knockdown_total - knockdown_timer, 0.0)
+		tilt = KnockdownFallRules.tilt_at(elapsed, _knockdown_entry_speed, _fall_config()) \
+				* KnockdownFallRules.getup_scale(kd_t)
+	# Fall direction is the recoil direction (body frame); the tilt axis is its
+	# horizontal perpendicular, so positive tilt tips the head the way the hit
+	# shoved. Falling backward lands face-up, forward face-down — the read
+	# emerges from direction vs facing with no face-up/down logic of its own.
+	# The wall deflection runs in WORLD space (the rink is world geometry) on the
+	# capsule's live position each frame: the capsule keeps sliding while down,
+	# so a body that goes down near the glass sweeps onto the wall line as it
+	# slides in — the crumple-down-the-boards read — instead of resolving once at
+	# entry and clipping through as the slide closes the gap.
+	var dir_world: Vector3 = skater.global_transform.basis \
+			* Vector3(stagger_recoil_dir.x, 0.0, stagger_recoil_dir.y)
+	# Boards and the goal net both report the same proximity shape; the stronger
+	# (nearer) obstacle wins the deflection. In the band behind the net where
+	# both are within reach, the per-frame re-resolve self-corrects: a tangent
+	# that slides toward the other obstacle raises its closeness next frame and
+	# the deflection re-picks.
+	var pos_xz := Vector2(skater.global_position.x, skater.global_position.z)
+	var obstacle: Vector2 = BoardPlayRules.board_proximity(
+			pos_xz, knockdown_fall_body_reach_m)
+	var net_prox: Vector2 = GameRules.net_proximity(pos_xz, knockdown_fall_body_reach_m)
+	if net_prox.length_squared() > obstacle.length_squared():
+		obstacle = net_prox
+	var safe_dir: Vector2 = KnockdownFallRules.wall_safe_fall_dir(
+			Vector2(dir_world.x, dir_world.z), obstacle)
+	var d: Vector3 = skater.global_transform.basis.inverse() \
+			* Vector3(safe_dir.x, 0.0, safe_dir.y)
+	skater.set_knockdown_fall(Vector3.UP.cross(d), tilt)
+
+
+# The braced-arm targets for a downed player, in upper-body-local space (so they
+# lie down with the tilted rig): hands in front of the chest, stick low across
+# the body — the guarded curl of a player riding out a hit.
+func _apply_knockdown_brace() -> void:
+	var kd_t: float = clampf(
+			knockdown_timer / maxf(knockdown_getup_seconds, 0.001), 0.0, 1.0)
+	var elapsed: float = maxf(_knockdown_total - knockdown_timer, 0.0)
+	var brace_t: float = KnockdownFallRules.brace_at(
+			elapsed, kd_t, knockdown_brace_in_seconds)
+	if brace_t <= 0.001:
+		return
+	var side: float = -1.0 if skater.is_left_handed else 1.0
+	var hand_target := Vector3(skater.shoulder.position.x,
+			hand_rest_y * 0.8, skater.shoulder.position.z - 0.18)
+	var blade_target := Vector3(skater.shoulder.position.x + side * 0.35,
+			0.05, skater.shoulder.position.z - 0.5)
+	blade_target = skater.clamp_blade_to_walls(blade_target)
+	skater.set_top_hand_position(skater.get_top_hand_position().lerp(hand_target, brace_t))
+	skater.set_blade_position(skater.get_blade_position().lerp(blade_target, brace_t))
 
 
 # Aim-only blade update for FACEOFF_PREP: drives the blade target from the
@@ -1781,8 +1932,12 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	# bit so replayed sprints stride like live ones.
 	sprint_active = state.sprint_active
 	stagger_timer = state.stagger_timer
+	var prev_kd: float = knockdown_timer
 	knockdown_timer = state.knockdown_timer
 	skater.is_knocked_down = knockdown_timer > 0.0
+	# Fall metadata off the recorded velocity (stamped above), so a replayed
+	# knockdown falls the way the live one did.
+	_sync_knockdown_meta(prev_kd)
 	skater.set_facing(state.facing)
 	skater.set_upper_body_rotation(state.upper_body_rotation_y)
 	skater.set_top_hand_position(state.top_hand_position)
@@ -1797,6 +1952,7 @@ func apply_replay_state(state: SkaterNetworkState, delta: float) -> void:
 	# the replay's virtual-clock advance this frame (slow-mo-scaled, 0 on a paused
 	# scrub) so the stride cadence tracks the visible motion rather than wall time.
 	_skating.apply(delta)
+	_apply_knockdown_fall()
 	# Lower-body yaw channels the gait publishes (hockey-stop skid, hip-to-travel
 	# alignment, wrist-shot hip coil). On the simulating machine the pose
 	# coordinator writes these in apply_facing, which never runs on this path —
@@ -2033,6 +2189,12 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	stagger_timer = 0.0
 	knockdown_timer = 0.0
 	skater.is_knocked_down = false
+	_knockdown_total = 0.0
+	_knockdown_entry_speed = 0.0
+	# The render pass only clears the tilt while it runs, and it's
+	# visibility-gated — stand the rig up explicitly so a teleport out of a
+	# mid-fall body can't leave an off-screen skater lying down.
+	skater.set_knockdown_fall(Vector3.RIGHT, 0.0)
 	# A faceoff / slot-swap teleport mid-windup must cancel any in-progress shot
 	# charge. Otherwise the slapper charge timer keeps ticking across the
 	# respawn and the player drops into the faceoff already charged.
@@ -2975,6 +3137,23 @@ func _body_check_config() -> BodyCheckRules.Config:
 		_cached_body_check_cfg.min_knockdown_seconds = knockdown_min_seconds
 		_cached_body_check_cfg.max_knockdown_seconds = knockdown_max_seconds
 	return _cached_body_check_cfg
+
+# Knockdown-fall config is flat (not attribute-scaled) — lazily built once for
+# the controller's lifetime, same pattern as the body-check config above. Read
+# every rendered frame while a skater is down (_apply_knockdown_fall).
+var _cached_fall_cfg: KnockdownFallRules.Config = null
+
+func _fall_config() -> KnockdownFallRules.Config:
+	if _cached_fall_cfg == null:
+		_cached_fall_cfg = KnockdownFallRules.Config.new()
+		_cached_fall_cfg.buckle_seconds = knockdown_fall_buckle_seconds
+		_cached_fall_cfg.fall_accel = knockdown_fall_accel
+		_cached_fall_cfg.settle_angle = deg_to_rad(knockdown_fall_settle_deg)
+		_cached_fall_cfg.restitution = knockdown_fall_restitution
+		_cached_fall_cfg.rest_omega = knockdown_fall_rest_omega
+		_cached_fall_cfg.com_height = knockdown_fall_com_height_m
+		_cached_fall_cfg.max_entry_omega = knockdown_fall_max_entry_omega
+	return _cached_fall_cfg
 
 # Cached — _update_wrister_charge reads it every aim tick (120 Hz, replayed
 # again per input through reconcile), so a per-call .new() is hot-path churn.

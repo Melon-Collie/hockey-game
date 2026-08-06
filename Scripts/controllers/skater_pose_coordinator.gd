@@ -182,11 +182,13 @@ func _apply_lean() -> void:
 	var recoil_roll: float = 0.0
 	var recoil_t: float = clampf(
 			_controller.stagger_timer / maxf(_controller.stagger_max_seconds, 0.001), 0.0, 1.0)
-	# Knockdown reels the torso far harder than a stagger — the fold that sells being
-	# floored. It rides the SAME recoil direction (fall the way you were hit) and the
-	# same deterministic/replicated timer, layered on top of the stagger recoil. kd_t
-	# holds full while more than knockdown_getup_seconds remains, then eases to 0 (the
-	# get-up). Remotes reel generically backward (default recoil dir), like stagger.
+	# Knockdown adds a torso curl on top of the whole-body fall tilt (the tilt
+	# itself lives on MeshRoot — SkaterController._apply_knockdown_fall), so the
+	# downed body reads as crumpled rather than a plank. It rides the SAME recoil
+	# direction (fall the way you were hit — re-derived from the replicated slide
+	# on remote entries) and the same deterministic/replicated timer, layered on
+	# top of the stagger recoil. kd_t holds full while more than
+	# knockdown_getup_seconds remains, then eases to 0 (the get-up).
 	var kd_t: float = clampf(
 			_controller.knockdown_timer / maxf(_controller.knockdown_getup_seconds, 0.001), 0.0, 1.0)
 	var mag: float = deg_to_rad(_controller.stagger_recoil_deg) * recoil_t \
@@ -211,9 +213,13 @@ func _apply_lean() -> void:
 
 func apply_facing(input: InputState, delta: float) -> void:
 	var s: SkaterStateMachine.State = _sm.get_state()
+	# A downed body doesn't steer: facing freezes while the knockdown timer runs
+	# (the fall pose tips about this frozen frame). Deterministic — the timer
+	# decays in _apply_movement earlier this tick and is reconcile-snapped, so
+	# every machine and replay freezes over the identical window.
 	if not (s == State.WRISTER_AIM or s == State.SLAPPER_CHARGE_WITH_PUCK
 			or s == State.SLAPPER_CHARGE_WITHOUT_PUCK or s == State.SHOT_BLOCKING
-			or s == State.ONE_TIMER_RETENTION):
+			or s == State.ONE_TIMER_RETENTION) and _controller.knockdown_timer <= 0.0:
 		var prev_angle: float = _skater.rotation.y
 		var mouse_world: Vector3 = input.mouse_world_pos
 		var to_mouse: Vector2 = Vector2(
@@ -461,14 +467,17 @@ func apply_head_tracking(input: InputState, delta: float) -> void:
 # render-rate cosmetic pass (Skater.render_pose_update), which has no input
 # frame, off the controller's last-seen aim world position.
 func apply_head_tracking_aim(aim_world: Vector3, delta: float) -> void:
-	var mouse_local: Vector3 = _skater.upper_body_to_local(aim_world)
-	mouse_local.y = 0.0
 	var target_angle: float = 0.0
-	if mouse_local.length() > 0.01:
-		target_angle = clampf(
-			atan2(mouse_local.x, -mouse_local.z),
-			-deg_to_rad(_controller.head_track_max_deg),
-			deg_to_rad(_controller.head_track_max_deg))
+	# A downed head lolls to neutral instead of tracking the cursor across the
+	# ice (the existing lerp carries it there and back smoothly).
+	if _controller.knockdown_timer <= 0.0:
+		var mouse_local: Vector3 = _skater.upper_body_to_local(aim_world)
+		mouse_local.y = 0.0
+		if mouse_local.length() > 0.01:
+			target_angle = clampf(
+				atan2(mouse_local.x, -mouse_local.z),
+				-deg_to_rad(_controller.head_track_max_deg),
+				deg_to_rad(_controller.head_track_max_deg))
 	head_angle = lerpf(head_angle, target_angle, _controller.head_track_speed * delta)
 	_skater.set_head_angle(head_angle)
 

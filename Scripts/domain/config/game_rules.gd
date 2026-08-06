@@ -265,6 +265,36 @@ static func push_out_of_net(world_xz: Vector2, radius: float = 0.0) -> Vector2:
 		return Vector2(-max_x, world_xz.y)
 	return Vector2(max_x, world_xz.y)
 
+# Away-from-net normal scaled by closeness, for a skater at `pos_xz` — the
+# net-box analog of BoardPlayRules.board_proximity (same 0 → 1 closeness
+# semantics: zero at `probe` away, 1 against the panel). Computed as the
+# Euclidean closest point on the net footprint box rather than through
+# push_out_of_net's face-eject — the eject picks the least-penetrated face of a
+# probe-EXPANDED box, and at a body-length probe that is routinely the un-inset
+# open-mouth face even for a skater standing beside the post, which would report
+# the net as pushing toward center ice. The closest-point form is exact at the
+# corners as a bonus. A point whose closest feature is the front face reports
+# ZERO: the mouth is open, so nothing deflects off it — the side and back panels
+# are the solid geometry this serves. Handles both net ends (|z|).
+static func net_proximity(pos_xz: Vector2, probe: float) -> Vector2:
+	if probe <= 0.0:
+		return Vector2.ZERO
+	var az: float = absf(pos_xz.y)
+	var x: float = pos_xz.x
+	if az <= GOAL_LINE_Z and absf(x) < NET_BACK_HALF_WIDTH:
+		return Vector2.ZERO
+	var d := Vector2(
+			x - clampf(x, -NET_BACK_HALF_WIDTH, NET_BACK_HALF_WIDTH),
+			az - clampf(az, GOAL_LINE_Z, GOAL_LINE_Z + NET_DEPTH))
+	var dist: float = d.length()
+	# Inside the footprint is degenerate (movement clamps keep body centers out
+	# of the cage) — report nothing rather than a garbage direction.
+	if dist >= probe or dist < 0.0001:
+		return Vector2.ZERO
+	var away: Vector2 = d / dist
+	away.y *= signf(pos_xz.y)
+	return away * ((probe - dist) / probe)
+
 # ── Goalie body containment (analytic skater block) ─────────────────────────
 # Base goalie footprint for the analytic skater body-block, like the boards/net.
 # Two footprints by stance: a cylinder while standing/RVH, a wide-
