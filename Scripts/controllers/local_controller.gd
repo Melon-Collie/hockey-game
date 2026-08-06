@@ -713,14 +713,14 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# pre-release state, since the host has not processed the slap-release input
 	# yet — applying it re-arms a wind-up the player already let go of (and the
 	# held button can't re-fire the rising-edge entry) or ejects the swing to
-	# skating. Ahead: FOLLOW_THROUGH, which silently EATS the shot — the client
-	# skips its own release, so the puckless one-timer's claim is never sent and
-	# the host cannot fire it either (one_timer_release_requested is deliberately
-	# disconnected for remote controllers). The ahead case should be unreachable
-	# — the client applies inputs immediately while the host gates consumption on
+	# skating. Ahead: FOLLOW_THROUGH, which skips the client's own release — the
+	# host still fires the one-timer off the input stream, so the shot survives,
+	# but this client never seeds its prediction and watches its own shot arrive
+	# a round trip late. The ahead case should be unreachable — the client
+	# applies inputs immediately while the host gates consumption on
 	# host_timestamp, so the client leads by the input lead and its hold always
-	# expires first — but the failure is invisible when it isn't, so don't bet the
-	# shot on it.
+	# expires first — but the failure is invisible when it isn't, so don't bet
+	# the shot on it.
 	#
 	# Real progressions are unaffected: a stoppage cancels the swing through
 	# teleport_to -> _cancel_active_charge, which does not route through here.
@@ -917,7 +917,7 @@ func _update_one_timer_indicator() -> void:
 		# the release. A plain carry → slapshot charge has no window, so it keeps
 		# only the aim arrow (set in _enter_slapper_charge) and shows no reticle.
 		if _aiming.one_timer_window_timer > 0.0:
-			var full_window: float = one_timer_window_duration + NetworkManager.get_latest_rtt_ms() / 2000.0
+			var full_window: float = one_timer_window_duration + one_timer_window_lag_grace()
 			var t: float = clampf(_aiming.one_timer_window_timer / full_window, 0.0, 1.0)
 			skater.update_slapper_indicator_window(t)
 		else:
@@ -926,9 +926,13 @@ func _update_one_timer_indicator() -> void:
 		var zone_world: Vector3 = skater.get_slapper_zone_global_position()
 		var zone_xz := Vector2(zone_world.x, zone_world.z)
 		var puck_xz := Vector2(puck.global_position.x, puck.global_position.z)
-		var dist: float = zone_xz.distance_to(puck_xz)
-		skater.set_slapper_indicator_ready(dist <= _effective_one_timer_leniency())
-		skater.update_slapper_indicator_convergence(clampf(dist / slapper_zone_radius, 0.0, 1.0))
+		# READY is the honest answer to "would a swing landing now connect" — the
+		# same test the release runs, so the tell can't promise a shot the swing
+		# won't make. Convergence stays a plain distance ramp: it is the ring
+		# closing on the puck, not a verdict.
+		skater.set_slapper_indicator_ready(one_timer_would_connect())
+		skater.update_slapper_indicator_convergence(
+				clampf(zone_xz.distance_to(puck_xz) / slapper_zone_radius, 0.0, 1.0))
 	else:
 		# No slapper aim active — force BOTH HUD elements down. The arrow is
 		# normally cleared by _hide_slapshot_hud on every deliberate exit, but a

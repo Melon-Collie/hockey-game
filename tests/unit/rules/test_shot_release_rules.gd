@@ -1,8 +1,8 @@
 extends GutTest
 
-# ShotReleaseRules — host-side clamping/validation of client shot-release
-# claims. Lag comp is a privilege (forged inputs degrade to zero benefit),
-# the shot itself is not (only the one-timer range gate rejects outright).
+# ShotReleaseRules — host-side clamping/validation on the shot-release path.
+# Lag comp is a privilege (a bad timestamp degrades to zero benefit), the shot
+# itself is not (only the one-timer contact test refuses one outright).
 
 
 # ── clamp_rtt_ms ──────────────────────────────────────────────────────────────
@@ -157,28 +157,99 @@ func test_one_timer_claim_stale_once_the_puck_is_already_in_flight() -> void:
 			"someone played the puck after this swing committed — the swing missed")
 
 
-# ── one_timer_in_range ────────────────────────────────────────────────────────
+# ── one_timer_window_grace ────────────────────────────────────────────────────
+#
+# The host arms a remote carrier's one-timer window on its own pickup tick; that
+# carrier arms it one way later and releases an input lead before the host sees
+# it. The grace is what keeps the client's honest window inside the host's.
 
-func test_one_timer_puck_in_zone_accepted() -> void:
-	assert_true(ShotReleaseRules.one_timer_in_range(
-			Vector2(0, 0), Vector2(0.3, 0), 0.5, 0.0, 0.08))
+const LEAD_S: float = 0.033
+const BROADCAST_S: float = 1.0 / 60.0
 
-func test_one_timer_within_slack_accepted() -> void:
-	# Just past radius but inside the server-side slack.
-	assert_true(ShotReleaseRules.one_timer_in_range(
-			Vector2(0, 0), Vector2(1.2, 0), 0.5, 0.0, 0.08))
 
-func test_one_timer_across_rink_rejected() -> void:
-	assert_false(ShotReleaseRules.one_timer_in_range(
-			Vector2(0, 0), Vector2(15, 0), 0.5, 0.0, 0.08),
-			"forged claim with a distant puck is rejected")
+func test_window_grace_covers_the_round_trip_offset() -> void:
+	# 100 ms link: 50 ms one way + 33 ms lead + one broadcast interval.
+	assert_almost_eq(
+			ShotReleaseRules.one_timer_window_grace(100.0, LEAD_S, BROADCAST_S),
+			0.05 + LEAD_S + BROADCAST_S, 0.0001,
+			"the host holds its deadline open by exactly the arming offset")
 
-func test_one_timer_fast_puck_gets_speed_leniency() -> void:
-	# 14 m/s puck adds 14 * 0.08 = 1.12 m leniency: 0.5 + 1.12 + 1.0 slack = 2.62.
-	assert_true(ShotReleaseRules.one_timer_in_range(
-			Vector2(0, 0), Vector2(2.5, 0), 0.5, 14.0, 0.08))
-	assert_false(ShotReleaseRules.one_timer_in_range(
-			Vector2(0, 0), Vector2(2.8, 0), 0.5, 14.0, 0.08))
+func test_window_grace_is_zero_without_a_ping_sample() -> void:
+	# No sample (host player, bot, or a peer measured at 0) — nothing to cover,
+	# and the honest window is already the right one.
+	assert_almost_eq(ShotReleaseRules.one_timer_window_grace(0.0, LEAD_S, BROADCAST_S), 0.0, 0.0001)
+	assert_almost_eq(ShotReleaseRules.one_timer_window_grace(-5.0, LEAD_S, BROADCAST_S), 0.0, 0.0001)
+	assert_almost_eq(ShotReleaseRules.one_timer_window_grace(NAN, LEAD_S, BROADCAST_S), 0.0, 0.0001)
+
+func test_window_grace_is_capped() -> void:
+	# A garbage ping reading must not hold a wind-up open indefinitely.
+	assert_almost_eq(
+			ShotReleaseRules.one_timer_window_grace(9000.0, LEAD_S, BROADCAST_S),
+			ShotReleaseRules.ONE_TIMER_WINDOW_GRACE_MAX_S, 0.0001)
+
+func test_window_grace_grows_with_the_link() -> void:
+	assert_gt(ShotReleaseRules.one_timer_window_grace(200.0, LEAD_S, BROADCAST_S),
+			ShotReleaseRules.one_timer_window_grace(40.0, LEAD_S, BROADCAST_S),
+			"a worse link needs more of the host's deadline held open")
+
+
+# ── one_timer_connects ────────────────────────────────────────────────────────
+#
+# The shipped window: back = one_timer_retention_time + one_timer_leniency_time
+# (0.19 s), forward = one_timer_leniency_time (0.08 s), zone radius 0.5 m.
+
+const BACK_S: float = 0.19
+const FWD_S: float = 0.08
+const ZONE_R: float = 0.5
+
+
+func _connects(zone: Vector2, puck: Vector2, vel: Vector2, airborne: bool = false) -> bool:
+	return ShotReleaseRules.one_timer_connects(
+			zone, ZONE_R, puck, vel, airborne, BACK_S, FWD_S)
+
+
+func test_one_timer_still_puck_inside_the_zone_connects() -> void:
+	assert_true(_connects(Vector2.ZERO, Vector2(0.3, 0.0), Vector2.ZERO))
+
+func test_one_timer_still_puck_outside_the_zone_whiffs() -> void:
+	# Nothing to forgive: a stationary puck out of reach was never reachable.
+	assert_false(_connects(Vector2.ZERO, Vector2(0.7, 0.0), Vector2.ZERO))
+
+func test_one_timer_forgives_a_puck_already_past_the_zone() -> void:
+	# 20 m/s feed judged at the end of the hold: the puck sits 0.15 s (3 m) past
+	# the zone, inside the 0.19 s look-back, so the swing met it on the way
+	# through.
+	assert_true(_connects(Vector2.ZERO, Vector2(3.0, 0.0), Vector2(20.0, 0.0)))
+
+func test_one_timer_whiffs_a_puck_too_far_past_the_zone() -> void:
+	# 0.25 s (5 m) past on the same feed — the player committed late enough that
+	# the blade came down behind the puck.
+	assert_false(_connects(Vector2.ZERO, Vector2(5.0, 0.0), Vector2(20.0, 0.0)))
+
+func test_one_timer_forgives_a_puck_not_yet_arrived() -> void:
+	# 1 m short on a 20 m/s feed is 0.05 s early, inside the 0.08 s forward
+	# window; 2.5 m short is past even the window plus the zone's own radius.
+	assert_true(_connects(Vector2.ZERO, Vector2(-1.0, 0.0), Vector2(20.0, 0.0)))
+	assert_false(_connects(Vector2.ZERO, Vector2(-2.5, 0.0), Vector2(20.0, 0.0)))
+
+func test_one_timer_leniency_is_timing_only_never_width() -> void:
+	# THE regression this test file exists for: the ring the contact test
+	# replaced inflated isotropically by speed × time, so on a 20 m/s feed a
+	# puck ~4 m WIDE of the shooter connected. Along the line, 3 m is forgiven;
+	# across it, 1 m is not.
+	assert_true(_connects(Vector2.ZERO, Vector2(3.0, 0.0), Vector2(20.0, 0.0)))
+	assert_false(_connects(Vector2.ZERO, Vector2(0.0, 1.0), Vector2(20.0, 0.0)),
+			"a puck a metre off the line is unreachable at any speed")
+	assert_false(_connects(Vector2.ZERO, Vector2(3.0, 4.0), Vector2(20.0, 0.0)))
+
+func test_one_timer_across_rink_whiffs() -> void:
+	assert_false(_connects(Vector2.ZERO, Vector2(15.0, 0.0), Vector2(20.0, 0.0)))
+
+func test_one_timer_cannot_strike_an_airborne_puck() -> void:
+	# Same geometry that connects on the ice: a slapper comes down to the ice,
+	# so a puck still in the air is swung under.
+	assert_true(_connects(Vector2.ZERO, Vector2(0.3, 0.0), Vector2.ZERO, false))
+	assert_false(_connects(Vector2.ZERO, Vector2(0.3, 0.0), Vector2.ZERO, true))
 
 
 # ── one_timer_power ───────────────────────────────────────────────────────────
