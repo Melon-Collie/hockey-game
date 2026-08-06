@@ -28,8 +28,17 @@ var opponents: PackedVector3Array = PackedVector3Array()
 # Non-ghost opposing positions EXCLUDING the puck carrier — the backdoor depth cap
 # asks about the weak-side one-timer threat, which by definition is not the passer.
 var off_puck_opponents: PackedVector3Array = PackedVector3Array()
-# EVERY non-ghost skater, both teams — a defenceman screens his own goalie just as
-# effectively as an opponent does.
+# Every non-ghost skater who is not in the shot-block stance, both teams — a
+# defenceman screens his own goalie just as effectively as an opponent does.
+#
+# The blocker exclusion is deliberate. A body dropping into the lane is a
+# DECLARED, coordinated commitment: the goalie can see it happen, knows which lane
+# it is taking, and plays around it — that is the whole point of blocking in front
+# of your own keeper. The same body is already priced against the shot as a block
+# cylinder (Skater.get_body_block_radius), so counting it a second time as a blind
+# made a teammate who helps into a teammate who hurts, and the pairing that
+# followed — block cylinder plus a saturated screen delay — was the single most
+# reliable way to score through traffic.
 var screeners: PackedVector3Array = PackedVector3Array()
 
 # Distance from the puck to the nearest non-ghost OPPOSING skater, INF if none.
@@ -80,7 +89,8 @@ func ensure(frame: int, skaters: Array, team_id: int, puck_pos: Vector3,
 			nearest_opponent_dist_any = minf(nearest_opponent_dist_any, dist)
 		if skater.is_ghost:
 			continue   # ghosted players can't play the puck
-		screeners.append(skater.global_position)
+		if skater.current_shot_state != SkaterStateMachine.State.SHOT_BLOCKING:
+			screeners.append(skater.global_position)
 		if opposing:
 			opponents.append(skater.global_position)
 			if skater != carrier:

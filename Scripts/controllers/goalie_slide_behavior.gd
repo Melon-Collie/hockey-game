@@ -132,22 +132,24 @@ func can_commit_slide() -> bool:
 			and drop_progress >= 1.0 \
 			and event_lockout <= 0.0
 
+# Shortest committed path worth taking. Below this the slide would be a
+# stationary re-drop on a seal the goalie is already sitting in.
+const MIN_COMMIT_TRAVEL_M: float = 0.05
+
 # Commit a new slide toward `target_x`. Captures arc endpoints + push-off
 # direction. Post-seal depth scaling: more extreme lateral targets pull the
 # goalie deeper so the sealing pad presses the post (backdoor coverage).
+#
+# Returns false — committing nothing — when he is ALREADY at the destination.
+# That test is 2D on purpose: a goalie beaten in tight is often within a few
+# centimetres of the seal's lateral spot while still a full stride out in DEPTH,
+# and the seal he owes is the retreat to the post, not the sidestep. Measuring
+# the lateral leg alone (the caller's old guard) declared that slide redundant
+# and left him parked out at challenge depth with the tuck open — the same
+# lateral-only reasoning about a 2D path that `advance_slide` documents.
 func commit_slide(current_x: float, current_depth: float, target_x: float, net_half_width: float,
-		coil_end_x: float, coil_end_depth: float) -> void:
+		coil_end_x: float, coil_end_depth: float) -> bool:
 	var commit_dir: float = signf(target_x - current_x)
-	# Start in COIL phase: body lerps from (current_x, current_depth) — captured
-	# as coil_start_* — to (coil_end_x, coil_end_depth) as it rotates around the
-	# pivot foot. The slide phase then translates from (coil_end_x, coil_end_depth)
-	# — which is also start_x/start_depth — to the seal target. Push-off velocity
-	# is applied in advance_slide() when coil_timer hits zero.
-	velocity_x = 0.0
-	coil_timer = coil_duration
-	coil_start_x = current_x
-	coil_start_depth = current_depth
-	cooldown_timer = 0.0
 	# Extremity is measured against the SLIDE CLAMP LIMIT (the puck-side
 	# post-pad-edge, where target_x is already clamped to), not the post
 	# position. The old normalization (absf(target_x) / net_half_width) capped
@@ -160,6 +162,19 @@ func commit_slide(current_x: float, current_depth: float, target_x: float, net_h
 	var clamp_limit: float = maxf(net_half_width - pad_edge_extent, 0.001)
 	var x_extremity: float = clampf(absf(target_x) / clamp_limit, 0.0, 1.0)
 	var depth_target: float = lerpf(coil_end_depth, post_seal_depth, x_extremity)
+	if absf(target_x - current_x) < MIN_COMMIT_TRAVEL_M \
+			and absf(depth_target - current_depth) < MIN_COMMIT_TRAVEL_M:
+		return false
+	# Start in COIL phase: body lerps from (current_x, current_depth) — captured
+	# as coil_start_* — to (coil_end_x, coil_end_depth) as it rotates around the
+	# pivot foot. The slide phase then translates from (coil_end_x, coil_end_depth)
+	# — which is also start_x/start_depth — to the seal target. Push-off velocity
+	# is applied in advance_slide() when coil_timer hits zero.
+	velocity_x = 0.0
+	coil_timer = coil_duration
+	coil_start_x = current_x
+	coil_start_depth = current_depth
+	cooldown_timer = 0.0
 	dir = commit_dir
 	arc_t = 0.0
 	# Slide phase begins where the coil left off — the body has already
@@ -169,6 +184,7 @@ func commit_slide(current_x: float, current_depth: float, target_x: float, net_h
 	start_depth = coil_end_depth
 	end_x = target_x
 	end_depth = depth_target
+	return true
 
 # Tick the COILING phase. Body lerps from (coil_start_x, coil_start_depth) to
 # (start_x, start_depth) — the post-pivot-rotation position — as the coil

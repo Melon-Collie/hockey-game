@@ -523,10 +523,12 @@ func test_clear_forward_flips_for_other_goal() -> void:
 	assert_gt(vel.z, 0.0)
 
 # ── screen_occlusion_delay ────────────────────────────────────────────────────
-# Puck (shooter) at origin, goalie 10m down +Z, shot flying +Z at 10 m/s so a
-# screener's delay = its along-shot distance / 10. Defaults: radius 0.6,
-# min_along 0.6. A screener hides the puck until the puck reaches its along-shot
-# position, so a NET-FRONT (doorstep) body hides longest, a shooter-side body least.
+# Puck (shooter) at origin, goalie 10m down +Z, shot flying +Z at 10 m/s so for a
+# body ON that line the delay = its along-shot distance / 10. Defaults: radius
+# 0.6, min_along 0.6. Two halves to the model: the RELEASE has to be hidden (a
+# release the goalie saw is a read he keeps), and the occlusion ends when the puck
+# leaves the body's shadow — which for a dead-on shot is when it draws level with
+# it, so a NET-FRONT (doorstep) body hides longest and a shooter-side body least.
 
 func _screen_cfg() -> GoalieBehaviorRules.ScreenConfig:
 	var cfg := GoalieBehaviorRules.ScreenConfig.new()
@@ -548,11 +550,40 @@ func test_screen_dead_on_midway() -> void:
 	assert_almost_eq(d, 0.5, 0.001)
 
 func test_screen_off_to_the_side_clears() -> void:
-	# perp 1.0 > radius 0.6 → not on the sightline → no occlusion.
+	# 1.0 m off the eye→release line at half range (shadow half-width there is
+	# 0.6·5/10 = 0.3) → the goalie sees the release → no occlusion.
 	var d: float = GoalieBehaviorRules.screen_occlusion_delay(
 		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10),
 		PackedVector3Array([Vector3(1.0, 0, 5)]), _screen_cfg())
 	assert_eq(d, 0.0)
+
+func test_screen_needs_the_release_hidden_not_the_flight_path() -> void:
+	# Shot from the origin aimed 2 m wide of the goalie, with a body sitting
+	# exactly ON that flight path 6 m along — but 1.18 m off the goalie's
+	# eye→release line, so he watched the puck leave the blade in the clear. He
+	# HAS the trajectory; a body it flies behind afterwards cannot take the read
+	# back. The old shot-line test charged him 0.6 s for this.
+	var vel: Vector3 = Vector3(2, 0, 10).normalized() * 10.0
+	var on_path: Vector3 = vel.normalized() * 6.0
+	var d: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, vel, Vector3(0, 0, 10),
+		PackedVector3Array([on_path]), _screen_cfg())
+	assert_eq(d, 0.0, "a release the goalie saw is a read he keeps")
+
+func test_screen_angled_shot_leaves_the_shadow_early() -> void:
+	# Screener dead in front of the goalie (0, 8) with the shooter behind him at
+	# the origin — the release IS hidden. But the shot is angled 1.5 m across, so
+	# the puck slides out of the body's silhouette before it ever draws level
+	# with him: shorter blind window than the same screen taken dead-on.
+	var vel: Vector3 = (Vector3(1.5, 0, 10) - Vector3.ZERO).normalized() * 10.0
+	var angled: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, vel, Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0, 0, 8)]), _screen_cfg())
+	var dead_on: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0, 0, 8)]), _screen_cfg())
+	assert_gt(angled, 0.0, "the release was hidden, so there is a real delay")
+	assert_lt(angled, dead_on, "angling off the sightline clears the screen sooner")
 
 func test_screen_behind_goalie_clears() -> void:
 	# Body past the goalie (along 12 >= goalie_along 10) can't hide an incoming puck.
@@ -732,11 +763,12 @@ func test_reachable_distance_zero_accel_is_instant_speed() -> void:
 	assert_almost_eq(GoalieBehaviorRules.reachable_lateral_distance(3.8, 0.0, 0.5), 1.9, 0.0001)
 
 # ── is_beaten_wide ────────────────────────────────────────────────────────────
-# Race to the tuck point (the post on the side the carrier drives toward):
-# beaten when the goalie's pad can't reach the seal spot before the PUCK's
-# lateral progress gets there — and only once the puck is past the goalie's
+# Race to the tuck point (the post on the side the PUCK is being taken):
+# beaten when the goalie's pad can't reach the seal spot before the puck's own
+# lateral travel gets there — and only once the puck is past the goalie's
 # standing sealing reach (the point of no return; a trailing puck commits
-# nothing). Goal at z=+26.6 → direction_sign −1.
+# nothing). Every velocity below is the PUCK's lateral velocity, not the
+# carrier's body. Goal at z=+26.6 → direction_sign −1.
 
 func _beaten_cfg() -> GoalieBehaviorRules.BeatenWideConfig:
 	var cfg := GoalieBehaviorRules.BeatenWideConfig.new()
@@ -748,17 +780,27 @@ func _beaten_cfg() -> GoalieBehaviorRules.BeatenWideConfig:
 	return cfg
 
 func test_beaten_by_fast_crease_cut_with_puck_leading() -> void:
-	# Carrier at (0, 25.3) driving across at 6 m/s with the puck LED out at
-	# (0.9, 25.5) — past the centred goalie's 0.42 seal edge, essentially at
+	# Carrier at (0, 25.3) with the puck LED out at (0.9, 25.5) travelling
+	# across at 6 m/s — past the centred goalie's 0.42 seal edge, essentially at
 	# the post. The goalie needs ~1.55m of travel with no time left: the
 	# genuine reach-around tuck in progress → sell out pads-first.
 	assert_true(GoalieBehaviorRules.is_beaten_wide(
 			Vector3(0.0, 0, 25.3), Vector3(0.9, 0, 25.5), 6.0,
 			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
 
+func test_beaten_by_forehand_backhand_on_a_straight_rush() -> void:
+	# THE move this rule exists for, and the one a body-velocity read missed
+	# entirely: the shooter drives STRAIGHT at the net (body barely moving
+	# laterally) and pulls the puck forehand→backhand across the goalie at
+	# 5 m/s. Nothing about the body says "drive"; the puck is past the sealing
+	# reach and going around him, which is the only thing that scores.
+	assert_true(GoalieBehaviorRules.is_beaten_wide(
+			Vector3(0.1, 0, 25.4), Vector3(-0.7, 0, 25.6), -5.0,
+			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
+
 func test_puck_trailing_drive_is_not_beaten() -> void:
-	# THE forehand-drag drive (the playtest exploit): body cuts across at
-	# 4 m/s but the puck trails on the far side at (−0.8). The wrap/cut-back
+	# THE forehand-drag drive (the playtest exploit): the whole play cuts across
+	# at 4 m/s but the puck trails on the far side at (−0.8). The wrap/cut-back
 	# is still free — the goalie must stay up and shuffle across, not sell
 	# out to the body.
 	assert_false(GoalieBehaviorRules.is_beaten_wide(
@@ -766,8 +808,8 @@ func test_puck_trailing_drive_is_not_beaten() -> void:
 			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
 
 func test_not_beaten_below_drive_speed() -> void:
-	# Puck past the seal edge but the body is only shuffling (2.0 < 2.5 m/s
-	# drive floor) — a wide carry, not a committed drive; stay up.
+	# Puck past the seal edge but barely drifting across (2.0 < 2.5 m/s floor) —
+	# a wide carry, not a puck being taken around him; stay up.
 	assert_false(GoalieBehaviorRules.is_beaten_wide(
 			Vector3(0.0, 0, 25.3), Vector3(0.9, 0, 25.5), 2.0,
 			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
@@ -787,11 +829,23 @@ func test_beaten_by_reach_around_in_tight() -> void:
 			Vector3(0.3, 0, 25.6), Vector3(0.8, 0, 25.8), 3.5,
 			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
 
-func test_stationary_dangle_does_not_drop_goalie() -> void:
-	# Lateral velocity below the drive floor — stay up, force the release,
-	# even with the puck dangled out wide.
+func test_parked_wide_puck_does_not_drop_goalie() -> void:
+	# Puck held out wide but not going anywhere (0.5 < 2.5 m/s) — stay up and
+	# force the release. Note what does NOT protect him here: a dangle that
+	# swings the puck across FAST does satisfy this rule, by design. Being
+	# un-committed against a stickhandle is the caller's quiet-eye window
+	# (lateral_commit_confirm_s), not a velocity floor — see the rule header.
 	assert_false(GoalieBehaviorRules.is_beaten_wide(
 			Vector3(0.3, 0, 25.6), Vector3(0.9, 0, 25.7), 0.5,
+			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
+
+func test_puck_inside_sealing_reach_is_not_beaten() -> void:
+	# The transient a deke produces every time it starts: the puck is moving
+	# fast across but is still inside the goalie's standing sealing reach
+	# (0.3 < 0.42). Nothing has been taken around him yet — the point of no
+	# return is what stops the first move of a stickhandle from committing him.
+	assert_false(GoalieBehaviorRules.is_beaten_wide(
+			Vector3(0.3, 0, 25.6), Vector3(0.3, 0, 25.7), 6.0,
 			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
 
 func test_fast_cut_far_from_goal_is_not_beaten() -> void:

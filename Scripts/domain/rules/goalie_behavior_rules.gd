@@ -598,22 +598,37 @@ static func puck_resting_on_goalie(
 # A body between the shooter and the goalie hides the puck: the goalie can't start
 # their read until they SEE the puck leave the shadow of the screener. This returns
 # that pickup delay in SECONDS, built from geometry + shot speed rather than a flat
-# "screened → +X ms" fudge. The grounding: the puck starts at the shooter (behind
-# the screen) and flies toward the net; the goalie can't see it until it passes the
-# screener. A body planted at the NET FRONT (doorstep) hides the puck until it has
-# flown almost the whole way in — the deadly screen — while a body up near the
-# shooter is passed early and barely delays the read. Longer flight to reach the
-# screener = longer the puck is hidden, so the delay is grounded, not a curve.
+# "screened → +X ms" fudge.
 #
-# Evaluated in the XZ plane (bodies + shots live on the ice). A screener at S
-# occludes the puck while the puck is still farther from the net than S; the puck
-# emerges — and the goalie picks it up — once it reaches S's along-shot position,
-# so that screener's delay is (release→S along-shot distance) / shot speed. It only
-# counts if S sits ON the sightline (within `screener_radius` of the shot line) and
-# BETWEEN the shooter and the goalie. The worst (longest-hiding) screener wins; the
-# shooter self-excludes (it sits at the release point, along ≈ 0 < min_along). The
-# caller clamps the result to a cap (and to the flight time). Returns 0 for a clean
-# look. No allocation (scalar loop over the caller-owned positions array).
+# ── The shadow, solved from the goalie's eye ─────────────────────────────────
+# A screen is a fact about ONE line: goalie → puck. A body of half-width
+# `screener_radius` standing on that line casts a shadow, and the puck is hidden
+# for exactly as long as it stays inside it. Two consequences fall out, and they
+# are the whole model:
+#
+#   THE RELEASE HAS TO BE HIDDEN. If the goalie saw the puck leave the blade, he
+#   has the trajectory; a body it flies past afterwards can obscure it but cannot
+#   un-read it. Only a shooter who is himself behind the screen costs the goalie
+#   the pickup. (Testing against the SHOT line instead — the old model — charged
+#   the goalie for every body that happened to sit near the flight path, including
+#   ones nowhere near his eyeline, and simultaneously let a body standing DEAD IN
+#   FRONT OF HIM off for a shot aimed at a post, because the flight path diverges
+#   from the sightline by more than a body width over 10 m.)
+#
+#   IT ENDS WHEN THE PUCK LEAVES THE SHADOW, not when it draws level with the
+#   body. A shot angled away from the screener clears his silhouette early; only
+#   one fired straight down the sightline stays hidden the whole way in. That is
+#   the difference between the deadly dead-on net-front screen and traffic the
+#   goalie can see around, and it is geometry rather than a tuned curve.
+#
+# Evaluated in the XZ plane (bodies + shots live on the ice), in the goalie's
+# frame: `p` is the release point relative to his eye, the puck rides
+# `d(s) = p + s·v̂`, and the screener sits at `w`. Occlusion is
+# |w × d(s)| < radius·|d(s)| — a quadratic in `s`, so the exit distance is a root
+# solve, no stepping. The worst (longest-hiding) screener wins; the shooter
+# self-excludes via `min_along`. The caller clamps the result to a cap (and to the
+# flight time). Returns 0 for a clean look. No allocation (scalar loop over the
+# caller-owned positions array).
 class ScreenConfig:
 	var screener_radius: float = 0.6   # m — body half-width that blocks the sightline
 	var min_along: float = 0.6         # m — exclude the shooter / bodies right on the puck
@@ -630,25 +645,59 @@ static func screen_occlusion_delay(
 	var vhx: float = puck_velocity.x / speed
 	var vhz: float = puck_velocity.z / speed
 	var radius: float = maxf(cfg.screener_radius, 0.0001)
-	# How far along the shot the goalie sits — a screener must be nearer than this
-	# (a body level with or behind the goalie can't hide an incoming puck).
-	var goalie_along: float = (goalie_position.x - puck_position.x) * vhx \
-			+ (goalie_position.z - puck_position.z) * vhz
+	var r_sq: float = radius * radius
+	# Release point in the goalie's frame, and how far along the shot he sits — a
+	# screener must be nearer than that (a body level with or behind the goalie
+	# can't hide an incoming puck).
+	var px: float = puck_position.x - goalie_position.x
+	var pz: float = puck_position.z - goalie_position.z
+	var p_len_sq: float = px * px + pz * pz
+	var pv: float = px * vhx + pz * vhz
+	var goalie_along: float = -pv
 	if goalie_along <= cfg.min_along:
 		return 0.0
 	var worst: float = 0.0
-	for s in screener_positions:
-		var relx: float = s.x - puck_position.x
-		var relz: float = s.z - puck_position.z
-		# Along-shot distance to the screener, and perpendicular distance to the
-		# shot line (perp basis of (vhx, vhz) is (-vhz, vhx)).
-		var along: float = relx * vhx + relz * vhz
+	for body in screener_positions:
+		# Along-shot distance from the release to this body. Excludes the shooter
+		# (along ≈ 0) and anything level with or behind the goalie.
+		var along: float = (body.x - puck_position.x) * vhx + (body.z - puck_position.z) * vhz
 		if along <= cfg.min_along or along >= goalie_along:
 			continue
-		var perp: float = absf(relx * -vhz + relz * vhx)
-		if perp >= radius:
+		var wx: float = body.x - goalie_position.x
+		var wz: float = body.z - goalie_position.z
+		# Is the RELEASE hidden? The body must lie within `radius` of the eye→release
+		# line (cross product over |p|) and between the two along it.
+		var cross_p: float = wx * pz - wz * px
+		if cross_p * cross_p >= r_sq * p_len_sq:
 			continue
-		var delay: float = along / speed
+		var w_dot_p: float = wx * px + wz * pz
+		if w_dot_p <= 0.0 or w_dot_p >= p_len_sq:
+			continue
+		# Exit: smallest s > 0 solving |w × d(s)|² = radius²·|d(s)|², i.e.
+		# (B²−r²)s² + 2(AB − r²·pv)s + (A² − r²|p|²) = 0. The constant term is
+		# negative (the release is hidden), so the puck starts inside and the first
+		# positive root is where it comes out.
+		var cross_v: float = wx * vhz - wz * vhx
+		var a2: float = cross_v * cross_v - r_sq
+		var a1: float = 2.0 * (cross_p * cross_v - r_sq * pv)
+		var a0: float = cross_p * cross_p - r_sq * p_len_sq
+		var exit_s: float = along
+		if absf(a2) < 0.000001:
+			if a1 > 0.0:
+				exit_s = minf(exit_s, -a0 / a1)
+		else:
+			var disc: float = a1 * a1 - 4.0 * a2 * a0
+			if disc > 0.0:
+				var root_d: float = sqrt(disc)
+				var s1: float = (-a1 - root_d) / (2.0 * a2)
+				var s2: float = (-a1 + root_d) / (2.0 * a2)
+				var first: float = INF
+				if s1 > 0.0:
+					first = s1
+				if s2 > 0.0 and s2 < first:
+					first = s2
+				exit_s = minf(exit_s, first)
+		var delay: float = exit_s / speed
 		if delay > worst:
 			worst = delay
 	return worst
@@ -731,12 +780,37 @@ static func puck_play_race_clear(
 # the goalie's standing sealing reach on the drive side. Beyond that line the
 # attacker has genuinely spent the play — bringing the puck back means the
 # full trip around the body from deep — so committing there is safe by
-# geometry, not by guessing intent. The race clock runs from the puck too
-# (its lateral distance to the post at the drive speed), since the puck's
-# arrival at the tuck point is what scores.
+# geometry, not by guessing intent.
+#
+# The CLOCK is the puck's too, and for the same reason. The puck's arrival at
+# the tuck point is what scores, so its own lateral rate is what the goalie is
+# racing — not the carrier's body. Reading the body instead missed the move
+# this rule exists for: a forehand→backhand beat on a rush is a shooter driving
+# STRAIGHT AT the net (almost no lateral body velocity) who moves the PUCK
+# across the crease faster than the goalie can push. The body read scored that
+# as "not a drive" and left him standing while the puck went around him. Dividing
+# the puck's distance-to-post by the body's speed also just mixed two objects'
+# kinematics in one race.
+#
+# The dangle protection is not the velocity term, it is the point-of-no-return
+# gate above plus the caller's quiet-eye confirmation window: a stickhandle that
+# swings the puck past the sealing reach and pulls it back does not HOLD the
+# verdict, so it never commits him. Baiting the drop with a wide pull and
+# cutting back is the intended counter, not a bug.
+#
+# ONSET AND PERSISTENCE ARE DIFFERENT QUESTIONS, which is why there are two
+# functions. `is_beaten_wide` is the onset: it needs the puck genuinely moving
+# across, because a puck that is not going anywhere has not beaten anybody yet.
+# `beaten_wide_holds` is what keeps the verdict alive afterwards, and it drops
+# the velocity term entirely — the beat is a fact about GEOMETRY, and a puck
+# that decelerates once it is around the goalie does not un-beat him. Asking the
+# onset question every tick instead is self-cancelling: the verdict turns off at
+# the exact moment the move completes and the puck settles wide, which is when
+# the seal is most needed. Only bringing the puck back inside the sealing reach
+# (or out of the in-tight zone) releases it.
 #
 # Deliberately NOT triggered by: the puck trailing the drive (above), slow
-# lateral movement (min_lateral_speed — a drive, not a dangle's shuffle; stay
+# lateral movement (min_lateral_speed — genuine puck travel, not a jitter; stay
 # up and force the release), threats outside max_threat_distance (a fast cut
 # at the top of the slot has too many options to commit against), or threats
 # behind the goal line (RVH's job).
@@ -744,45 +818,75 @@ class BeatenWideConfig:
 	var goalie_lateral_speed: float = 0.0  # m/s — standing T-push cap
 	var goalie_lateral_accel: float = 0.0  # m/s² — push-off ramp from rest
 	var reach_half_width: float = 0.0      # m — standing pad coverage half-extent
-	var min_lateral_speed: float = 0.0     # m/s — carrier must be genuinely driving
+	var min_lateral_speed: float = 0.0     # m/s — the puck must genuinely be moving across
 	var max_threat_distance: float = 0.0   # m — Euclidean threat→goal in-tight gate
 
 static func is_beaten_wide(
 		threat_position: Vector3,
 		puck_position: Vector3,
-		threat_velocity_x: float,
+		puck_velocity_x: float,
 		goalie_position: Vector3,
 		goal_line_z: float,
 		goal_center_x: float,
 		direction_sign: int,
 		net_half_width: float,
 		cfg: BeatenWideConfig) -> bool:
+	if absf(puck_velocity_x) < cfg.min_lateral_speed:
+		return false
+	var drive_sign: float = signf(puck_velocity_x)
+	if not beaten_wide_holds(threat_position, puck_position, drive_sign,
+			goalie_position, goal_line_z, goal_center_x, direction_sign,
+			net_half_width, cfg):
+		return false
+	# The race, on the puck's own clock: its arrival at the tuck point against
+	# the goalie's accel-ramped push to the seal spot.
+	var post_x: float = goal_center_x + drive_sign * net_half_width
+	var t_arrive: float = maxf((post_x - puck_position.x) / puck_velocity_x, 0.0)
+	return tuck_point_travel(goalie_position, post_x, goal_line_z, cfg) \
+			> reachable_lateral_distance(
+					cfg.goalie_lateral_speed, cfg.goalie_lateral_accel, t_arrive)
+
+
+# The coverage half of the verdict, with no clock in it: is the puck around him,
+# on the `drive_sign` side, in a place he still cannot cover? See the header for
+# why persistence asks this and onset asks more.
+static func beaten_wide_holds(
+		threat_position: Vector3,
+		puck_position: Vector3,
+		drive_sign: float,
+		goalie_position: Vector3,
+		goal_line_z: float,
+		goal_center_x: float,
+		direction_sign: int,
+		net_half_width: float,
+		cfg: BeatenWideConfig) -> bool:
+	if drive_sign == 0.0:
+		return false
 	# In front of the goal line only — behind-net drives are RVH's job.
 	if (threat_position.z - goal_line_z) * direction_sign <= 0.0:
 		return false
 	if threat_distance_to_goal(threat_position, goal_line_z, goal_center_x) \
 			> cfg.max_threat_distance:
 		return false
-	if absf(threat_velocity_x) < cfg.min_lateral_speed:
-		return false
-	var drive_sign: float = signf(threat_velocity_x)
 	# Point of no return: the PUCK must already be past the goalie's standing
 	# sealing reach on the drive side. Trailing puck → the cut-back is free →
 	# stay up and shuffle with the play (see the header).
 	var seal_edge_x: float = goalie_position.x + drive_sign * cfg.reach_half_width
 	if (puck_position.x - seal_edge_x) * drive_sign <= 0.0:
 		return false
-	# Tuck point: the post on the side the carrier is driving toward. The race
-	# clock runs from the PUCK — its arrival at the tuck point is what scores.
 	var post_x: float = goal_center_x + drive_sign * net_half_width
-	var t_arrive: float = maxf((post_x - puck_position.x) / threat_velocity_x, 0.0)
+	return tuck_point_travel(goalie_position, post_x, goal_line_z, cfg) > 0.0
+
+
+# Metres the goalie still has to travel to seal the tuck point: the true 2D
+# distance from where he actually is to the post spot, less his pad reach. Being
+# out on the arc is exactly what makes the reach-around work, so the retreat
+# counts. <= 0 means the pad already covers it.
+static func tuck_point_travel(goalie_position: Vector3, post_x: float,
+		goal_line_z: float, cfg: BeatenWideConfig) -> float:
 	var dx: float = post_x - goalie_position.x
 	var dz: float = goal_line_z - goalie_position.z
-	var needed: float = sqrt(dx * dx + dz * dz) - cfg.reach_half_width
-	if needed <= 0.0:
-		return false  # pad already covers the tuck point
-	return needed > reachable_lateral_distance(
-			cfg.goalie_lateral_speed, cfg.goalie_lateral_accel, t_arrive)
+	return sqrt(dx * dx + dz * dz) - cfg.reach_half_width
 
 
 # ── Rush retreat (speed-matched backflow) ────────────────────────────────────
