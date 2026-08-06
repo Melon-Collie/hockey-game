@@ -182,17 +182,21 @@ func _apply_lean() -> void:
 	var recoil_roll: float = 0.0
 	var recoil_t: float = clampf(
 			_controller.stagger_timer / maxf(_controller.stagger_max_seconds, 0.001), 0.0, 1.0)
-	# Knockdown adds a torso curl on top of the whole-body fall tilt (the tilt
-	# itself lives on MeshRoot — SkaterController._apply_knockdown_fall), so the
-	# downed body reads as crumpled rather than a plank. It rides the SAME recoil
-	# direction (fall the way you were hit — re-derived from the replicated slide
-	# on remote entries) and the same deterministic/replicated timer, layered on
-	# top of the stagger recoil. kd_t holds full while more than
-	# knockdown_getup_seconds remains, then eases to 0 (the get-up).
+	# Knockdown adds a torso fold on top of the whole-body fall tilt (the tilt
+	# itself lives on MeshRoot — SkaterController._apply_knockdown_fall): a
+	# reflexive curl while airborne that resolves to the ground-plane complement
+	# as the body reaches the ice (KnockdownFallRules.fold_at), so the landed
+	# torso lies IN the ice plane instead of curling through it or propping up
+	# as a plank. It rides the SAME recoil direction (fall the way you were hit
+	# — re-derived from the replicated slide on remote entries) and the same
+	# deterministic/replicated timer, layered on top of the stagger recoil.
+	# kd_t holds full while more than knockdown_getup_seconds remains, then
+	# eases to 0 (the get-up).
 	var kd_t: float = clampf(
 			_controller.knockdown_timer / maxf(_controller.knockdown_getup_seconds, 0.001), 0.0, 1.0)
-	var mag: float = deg_to_rad(_controller.stagger_recoil_deg) * recoil_t \
-			+ deg_to_rad(_controller.knockdown_fold_deg) * kd_t
+	var mag: float = deg_to_rad(_controller.stagger_recoil_deg) * recoil_t
+	if kd_t > 0.0:
+		mag += _controller.knockdown_fold_rad() * kd_t
 	if mag > 0.0:
 		var d: Vector2 = _controller.stagger_recoil_dir
 		recoil_pitch = mag * d.y

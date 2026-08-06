@@ -1607,6 +1607,10 @@ func set_leg_swing(left_pitch: float, left_roll: float, left_knee: float,
 		left_yaw: float = 0.0, right_yaw: float = 0.0) -> void:
 	var base_l: Vector3 = _leg_shin_base_euler[0]
 	var base_r: Vector3 = _leg_shin_base_euler[1]
+	_gait_leg_l = Vector3(left_pitch, left_yaw, left_roll)
+	_gait_leg_r = Vector3(right_pitch, right_yaw, right_roll)
+	_gait_knee_l = left_knee
+	_gait_knee_r = right_knee
 	# Yaw rides the hip pivot's free Y slot: YXZ euler order puts it outermost,
 	# so the leg externally rotates about vertical and the shin + boot carry it
 	# — the mohawk open hip. Defaults keep the pre-yaw callers unchanged.
@@ -1618,6 +1622,36 @@ func set_leg_swing(left_pitch: float, left_roll: float, left_knee: float,
 			Vector3(right_pitch, right_yaw, right_roll))
 	_pose_leg_pivot(SkaterMeshBuilder.LegBone.SHIN_R,
 			Vector3(right_knee, base_r.y, base_r.z))
+
+
+# Last gait-authored leg pose (hip pivot euler (pitch, yaw, roll) + knee fold
+# per leg), cached so the knockdown sprawl can compose ON TOP of whatever the
+# gait wrote this frame instead of guessing it: the gait's own crumple blend
+# keeps easing underneath the overlay through the get-up, so the handoff back
+# to the live stride stays continuous at both ends.
+var _gait_leg_l: Vector3 = Vector3.ZERO
+var _gait_leg_r: Vector3 = Vector3.ZERO
+var _gait_knee_l: float = 0.0
+var _gait_knee_r: float = 0.0
+
+
+# Knockdown leg sprawl: re-poses the leg pivots as the cached gait pose plus
+# `weight` of the sprawl overlay (SkaterController._apply_knockdown_fall calls
+# this right after the gait, only while a skater is down). Weight rides the
+# same get-up envelope as the fall tilt.
+func apply_knockdown_leg_overlay(pose: KnockdownFallRules.SprawlPose, weight: float) -> void:
+	if weight <= 0.001:
+		return
+	var base_l: Vector3 = _leg_shin_base_euler[0]
+	var base_r: Vector3 = _leg_shin_base_euler[1]
+	_pose_leg_pivot(SkaterMeshBuilder.LegBone.LEG_L,
+			_gait_leg_l + Vector3(pose.l_pitch, 0.0, pose.l_roll) * weight)
+	_pose_leg_pivot(SkaterMeshBuilder.LegBone.SHIN_L,
+			Vector3(_gait_knee_l + pose.l_knee * weight, base_l.y, base_l.z))
+	_pose_leg_pivot(SkaterMeshBuilder.LegBone.LEG_R,
+			_gait_leg_r + Vector3(pose.r_pitch, 0.0, pose.r_roll) * weight)
+	_pose_leg_pivot(SkaterMeshBuilder.LegBone.SHIN_R,
+			Vector3(_gait_knee_r + pose.r_knee * weight, base_r.y, base_r.z))
 
 
 func _pose_leg_pivot(bone: int, euler: Vector3) -> void:

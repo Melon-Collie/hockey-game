@@ -78,6 +78,13 @@ var _settled: bool = false
 # segments; the knee ANGLES are ratio-derived and stay build-independent.
 var leg_scale: float = 1.0
 
+
+# This build's (thigh, shin) segment lengths in metres — the knockdown sprawl
+# solve (SkaterController._apply_knockdown_fall) shares the leg geometry the
+# crouch solve uses, served from the one place that owns it.
+func leg_segment_lengths() -> Vector2:
+	return Vector2(_THIGH_LEN, _SHIN_LEN) * leg_scale
+
 # ── Runtime State ─────────────────────────────────────────────────────────────
 var stride_phase: float = 0.0
 # Per-stride trunk texture, written onto the cosmetic torso/helmet/shoulder
