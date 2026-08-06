@@ -250,3 +250,11 @@ here whenever you bump, in the same format.
 #      shot RPC is left anywhere in the protocol. Godot hashes the rpc-config
 #      ordering, so dropping a method breaks cross-build RPC routing even
 #      though no remaining wire format changed — mixed builds must be refused.
+# v58: `receive_final_stats` RPC added — the game's settled counters, sent once
+#      at the horn, doubling as a client's cue to run its end-of-game stat
+#      sweep. Clients previously swept on the world-state phase byte, which is
+#      unreliable_ordered and unordered against the reliable stats channel, so
+#      a buzzer-beater goal or a last hit could still be in flight and miss
+#      the achievements, Steam stats, and career row. Adding an @rpc method
+#      shifts the rpc-config ordering both peers hash, so mixed builds must be
+#      refused even though no existing wire format changed.

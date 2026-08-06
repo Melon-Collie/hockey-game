@@ -76,6 +76,9 @@ signal offside_called_received
 signal faceoff_positions_received(positions: Array)
 signal game_reset_received(new_game_id: String)
 signal stats_received(data: Array)
+# The game's final stats, sent once at the horn — a client's cue that its own
+# counters are settled and its end-of-game sweep can run. See receive_final_stats.
+signal final_stats_received(data: Array)
 # The host's per-game shot log, pushed once at game-over (analytics B1) so a
 # client can render its own post-game shot map. Payload is ShotEvent.encode_list.
 signal shot_events_received(data: Array)
@@ -2117,6 +2120,25 @@ func send_stats_to_all(data: Array) -> void:
 @rpc("authority", "call_remote", "reliable")
 func receive_stats(data: Array) -> void:
 	stats_received.emit(data)
+
+# The game's FINAL stats, sent once at the horn. Identical payload to
+# receive_stats — what it adds is the promise that nothing will change again, so
+# a client can run its end-of-game stat sweep (achievements, Steam career stats,
+# the Supabase career row) off it.
+#
+# Clients otherwise learn a game ended from the world-state phase byte, which is
+# unreliable_ordered and shares no ordering with this reliable channel: a stats
+# packet still in flight at the horn (a buzzer-beater goal, the last hit) would
+# lose its retransmit race and be missing from everything the client uploads.
+# Sending the stats WITH the end-of-game signal, rather than a marker after them,
+# is what makes that independent of delivery order.
+func send_final_stats_to_all(data: Array) -> void:
+	for peer_id in connected_peer_ids():
+		receive_final_stats.rpc_id(peer_id, data)
+
+@rpc("authority", "call_remote", "reliable")
+func receive_final_stats(data: Array) -> void:
+	final_stats_received.emit(data)
 
 # The game's shot log (analytics B1), shipped once at game-over. Only the host
 # accumulates it (AdvancedStatsTracker), so clients need it pushed to render
