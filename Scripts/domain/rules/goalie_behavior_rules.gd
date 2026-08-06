@@ -601,10 +601,10 @@ static func puck_resting_on_goalie(
 # "screened → +X ms" fudge.
 #
 # ── The shadow, solved from the goalie's eye ─────────────────────────────────
-# A screen is a fact about ONE line: goalie → puck. A body of half-width
-# `screener_radius` standing on that line casts a shadow, and the puck is hidden
-# for exactly as long as it stays inside it. Two consequences fall out, and they
-# are the whole model:
+# A screen is a fact about ONE line: goalie → puck. A body standing on that line
+# casts a shadow the width of its own silhouette, and the puck is hidden for
+# exactly as long as it stays inside it. Two consequences fall out, and they are
+# the whole model:
 #
 #   THE RELEASE HAS TO BE HIDDEN. If the goalie saw the puck leave the blade, he
 #   has the trajectory; a body it flies past afterwards can obscure it but cannot
@@ -621,17 +621,56 @@ static func puck_resting_on_goalie(
 #   the difference between the deadly dead-on net-front screen and traffic the
 #   goalie can see around, and it is geometry rather than a tuned curve.
 #
+# A BODY IS NOT A COLUMN, AND THAT IS WHERE THE SIGHT COMES FROM. The silhouette
+# that matters is the one at the height the sightline actually passes through him,
+# and the sightline to a puck on the ice runs DOWNWARD from the goalie's eye: it
+# crosses a near screener at chest height (wide — the full torso) and a distant
+# one down at the skates (narrow, with daylight between the legs). That is exactly
+# the difference between the doorstep screen you cannot see through and the slot
+# traffic you find the puck under, and it is why a goalie drops to find a puck in
+# a crowd — going down lowers his eye, which drops the whole sightline into the
+# leg band. One silhouette function, three measurements, no screening curve.
+#
 # Evaluated in the XZ plane (bodies + shots live on the ice), in the goalie's
 # frame: `p` is the release point relative to his eye, the puck rides
 # `d(s) = p + s·v̂`, and the screener sits at `w`. Occlusion is
 # |w × d(s)| < radius·|d(s)| — a quadratic in `s`, so the exit distance is a root
-# solve, no stepping. The worst (longest-hiding) screener wins; the shooter
-# self-excludes via `min_along`. The caller clamps the result to a cap (and to the
-# flight time). Returns 0 for a clean look. No allocation (scalar loop over the
-# caller-owned positions array).
+# solve, no stepping. The half-width is taken once per screener, from the sightline
+# height at the RELEASE: that is the moment that decides whether the goalie ever
+# had the puck, and holding it fixed keeps the exit a closed-form root rather than
+# a march. The worst (longest-hiding) screener wins; the shooter self-excludes via
+# `min_along`. The caller clamps the result to a cap (and to the flight time).
+# Returns 0 for a clean look. No allocation (scalar loop over the caller-owned
+# positions array).
+# NO OVER-THE-HEAD CLEARANCE, deliberately. The obvious companion rule — a
+# sightline passing above the screener's helmet is clean — would be read off two
+# rigs that were never authored against each other (the goalie's head sits at
+# 1.79 in GoalieAnatomy; the skater's helmet mesh is a shade over 1.5), and with
+# those numbers a STANDING goalie looks straight over every body in the slot and
+# the doorstep screen stops existing. That is a coincidence of two independent
+# authorings, not a fact about the game, so the silhouette runs to the top.
 class ScreenConfig:
-	var screener_radius: float = 0.6   # m — body half-width that blocks the sightline
-	var min_along: float = 0.6         # m — exclude the shooter / bodies right on the puck
+	var eye_height: float = 1.79        # m — where the goalie is sighting FROM (stance-dependent)
+	var torso_half_width: float = 0.35  # m — silhouette at and above the hips
+	var leg_half_width: float = 0.16    # m — at the ice: a shin, not the stance's full span
+	var hip_height: float = 0.85        # m — Skater.tscn's origin: feet ~0.85 below it
+	var min_along: float = 0.6          # m — exclude the shooter / bodies right on the puck
+	# How far PAST tangency a peek steps. A sightline grazing a shoulder is not a
+	# look, and stepping to exactly the edge leaves the read hostage to the body
+	# drifting a centimetre — a real goalie steps until he SEES it. Also absorbs
+	# the peek solve's linearisation (the screener's fraction along the line shifts
+	# slightly as he moves).
+	var peek_clearance: float = 0.05    # m
+
+
+# The screener's opaque half-width at the world height a sightline crosses him.
+# Linear from a shin at the ice to the full torso at the hips, because that is
+# roughly how a standing body widens.
+static func screener_half_width_at(sight_y: float, cfg: ScreenConfig) -> float:
+	if sight_y >= cfg.hip_height:
+		return cfg.torso_half_width
+	return lerpf(cfg.leg_half_width, cfg.torso_half_width,
+			clampf(sight_y / maxf(cfg.hip_height, 0.001), 0.0, 1.0))
 
 static func screen_occlusion_delay(
 		puck_position: Vector3,
@@ -644,8 +683,6 @@ static func screen_occlusion_delay(
 		return 0.0
 	var vhx: float = puck_velocity.x / speed
 	var vhz: float = puck_velocity.z / speed
-	var radius: float = maxf(cfg.screener_radius, 0.0001)
-	var r_sq: float = radius * radius
 	# Release point in the goalie's frame, and how far along the shot he sits — a
 	# screener must be nearer than that (a body level with or behind the goalie
 	# can't hide an incoming puck).
@@ -656,6 +693,7 @@ static func screen_occlusion_delay(
 	var goalie_along: float = -pv
 	if goalie_along <= cfg.min_along:
 		return 0.0
+	var eye_y: float = goalie_position.y + cfg.eye_height
 	var worst: float = 0.0
 	for body in screener_positions:
 		# Along-shot distance from the release to this body. Excludes the shooter
@@ -665,13 +703,17 @@ static func screen_occlusion_delay(
 			continue
 		var wx: float = body.x - goalie_position.x
 		var wz: float = body.z - goalie_position.z
-		# Is the RELEASE hidden? The body must lie within `radius` of the eye→release
-		# line (cross product over |p|) and between the two along it.
-		var cross_p: float = wx * pz - wz * px
-		if cross_p * cross_p >= r_sq * p_len_sq:
-			continue
 		var w_dot_p: float = wx * px + wz * pz
 		if w_dot_p <= 0.0 or w_dot_p >= p_len_sq:
+			continue
+		# Silhouette at the height the eye→release line crosses him.
+		var sight_y: float = eye_y + (w_dot_p / p_len_sq) * (puck_position.y - eye_y)
+		var radius: float = screener_half_width_at(sight_y, cfg)
+		var r_sq: float = radius * radius
+		# Is the RELEASE hidden? The body must lie within `radius` of the eye→release
+		# line (cross product over |p|).
+		var cross_p: float = wx * pz - wz * px
+		if cross_p * cross_p >= r_sq * p_len_sq:
 			continue
 		# Exit: smallest s > 0 solving |w × d(s)|² = radius²·|d(s)|², i.e.
 		# (B²−r²)s² + 2(AB − r²·pv)s + (A² − r²|p|²) = 0. The constant term is
@@ -701,6 +743,90 @@ static func screen_occlusion_delay(
 		if delay > worst:
 			worst = delay
 	return worst
+
+
+# ── Fighting for sight (the peek) ────────────────────────────────────────────
+# A screened goalie does not stand still and accept being blind. The first thing
+# taught is to get the eyes around the body — step off the line just far enough
+# that the shooter reappears past the screener's shoulder — and it is a genuine
+# TRADE, not a free save: every centimetre of peek is a centimetre off the angle,
+# so the side he steps away from opens. The model prices the step; the caller's
+# cap decides how much net he is willing to sell for the look.
+#
+# Geometry, and it is the same lever the occlusion solve uses, read backwards. The
+# sightline pivots about the RELEASE POINT, so a step `Δ` at the goalie's end
+# moves the line by `Δ·(1−f)` where `f` is the screener's fraction of the way to
+# the puck: a body at his doorstep is shoved out of the way by almost the whole
+# step, a body standing on the shooter cannot be stepped around at all (f→1). Only
+# the component of a lateral step perpendicular to the sightline does any work,
+# hence the `|vhz|` — against a shot from straight out to the side, stepping in x
+# barely turns the line and the peek correctly reports "no".
+#
+# TWO REFUSALS, and they are the reason this cannot become a free buff:
+#   * A screen he cannot clear inside `max_offset` returns ZERO. Half a peek buys
+#     no sight and still costs the angle. If you cannot get your eyes around it,
+#     stay square and block it — which is exactly what the block-or-react model
+#     then does with the undiminished screen delay.
+#   * Bodies on BOTH sides return zero too. Bracketed, there is no side to step
+#     to; stepping either way trades one screen for another.
+#
+# CALL THIS WITH THE SQUARE (angle-solve) POSITION, not his live one. The peek is
+# an offset FROM his angle, so feeding back his already-peeked position would let
+# him step, see, un-step, be blinded, and oscillate at the tick rate. Asking "from
+# where I want to stand, what is hidden?" makes the input independent of the
+# output. Returns a signed world-X offset. No allocation.
+static func screen_peek_offset(
+		square_position: Vector3,
+		puck_position: Vector3,
+		screener_positions: PackedVector3Array,
+		cfg: ScreenConfig,
+		max_offset: float) -> float:
+	if max_offset <= 0.0:
+		return 0.0
+	var px: float = puck_position.x - square_position.x
+	var pz: float = puck_position.z - square_position.z
+	var p_len: float = sqrt(px * px + pz * pz)
+	if p_len <= cfg.min_along:
+		return 0.0
+	var vhx: float = px / p_len
+	var vhz: float = pz / p_len
+	var eye_y: float = square_position.y + cfg.eye_height
+	# Worst clearable step on each side. Both sides occupied → bracketed → no peek.
+	var need_pos: float = 0.0
+	var need_neg: float = 0.0
+	for body in screener_positions:
+		var wx: float = body.x - square_position.x
+		var wz: float = body.z - square_position.z
+		var along: float = wx * vhx + wz * vhz
+		if along <= cfg.min_along or along >= p_len:
+			continue
+		var f: float = along / p_len
+		var sight_y: float = eye_y + f * (puck_position.y - eye_y)
+		var radius: float = screener_half_width_at(sight_y, cfg)
+		# Signed perpendicular offset of the body from the sightline; already past
+		# `radius` means the shooter is visible around this one.
+		var perp: float = wx * -vhz + wz * vhx
+		if absf(perp) >= radius:
+			continue
+		var lever: float = absf(vhz) * (1.0 - f)
+		if lever < 0.001:
+			return 0.0   # this sightline cannot be turned by stepping sideways
+		var need: float = (radius + cfg.peek_clearance - absf(perp)) / lever
+		if need > max_offset:
+			return 0.0   # cannot get the eyes around it — stay square and block
+		# Step AWAY from the body: +x moves the line's perp coordinate by −vhz per
+		# metre, so clearing a body on the +perp side means stepping with vhz's sign.
+		if perp > 0.0:
+			need_pos = maxf(need_pos, need)
+		else:
+			need_neg = maxf(need_neg, need)
+	if need_pos > 0.0 and need_neg > 0.0:
+		return 0.0
+	if need_pos > 0.0:
+		return need_pos * signf(vhz)
+	if need_neg > 0.0:
+		return -need_neg * signf(vhz)
+	return 0.0
 
 
 # ── Standing push kinematics ─────────────────────────────────────────────────

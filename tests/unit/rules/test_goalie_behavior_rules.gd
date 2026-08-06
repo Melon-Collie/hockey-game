@@ -524,16 +524,20 @@ func test_clear_forward_flips_for_other_goal() -> void:
 
 # ── screen_occlusion_delay ────────────────────────────────────────────────────
 # Puck (shooter) at origin, goalie 10m down +Z, shot flying +Z at 10 m/s so for a
-# body ON that line the delay = its along-shot distance / 10. Defaults: radius
-# 0.6, min_along 0.6. Two halves to the model: the RELEASE has to be hidden (a
-# release the goalie saw is a read he keeps), and the occlusion ends when the puck
-# leaves the body's shadow — which for a dead-on shot is when it draws level with
-# it, so a NET-FRONT (doorstep) body hides longest and a shooter-side body least.
+# body ON that line the delay = its along-shot distance / 10. Two halves to the
+# model: the RELEASE has to be hidden (a release the goalie saw is a read he
+# keeps), and the occlusion ends when the puck leaves the body's shadow — which
+# for a dead-on shot is when it draws level with it, so a NET-FRONT (doorstep)
+# body hides longest and a shooter-side body least.
 
 func _screen_cfg() -> GoalieBehaviorRules.ScreenConfig:
 	var cfg := GoalieBehaviorRules.ScreenConfig.new()
-	cfg.screener_radius = 0.6
+	cfg.eye_height = 1.79
+	cfg.torso_half_width = 0.35
+	cfg.leg_half_width = 0.16
+	cfg.hip_height = 0.85
 	cfg.min_along = 0.6
+	cfg.peek_clearance = 0.05
 	return cfg
 
 func test_screen_no_bodies_is_clear() -> void:
@@ -637,6 +641,87 @@ func test_screen_stationary_puck_no_delay() -> void:
 		Vector3.ZERO, Vector3.ZERO, Vector3(0, 0, 10),
 		PackedVector3Array([Vector3(0, 0, 5)]), _screen_cfg())
 	assert_eq(d, 0.0)
+
+# ── The silhouette: a body is not a column ───────────────────────────────────
+
+func test_silhouette_narrows_toward_the_ice() -> void:
+	var cfg := _screen_cfg()
+	assert_eq(GoalieBehaviorRules.screener_half_width_at(1.4, cfg), 0.35,
+			"chest height sees the whole body")
+	assert_eq(GoalieBehaviorRules.screener_half_width_at(0.85, cfg), 0.35,
+			"the hips are where it stops narrowing")
+	assert_eq(GoalieBehaviorRules.screener_half_width_at(0.0, cfg), 0.16,
+			"at the ice it is a shin")
+	assert_between(GoalieBehaviorRules.screener_half_width_at(0.425, cfg), 0.16, 0.35)
+
+func test_a_goalie_who_goes_down_sees_through_traffic() -> void:
+	# Same shot, same body, two eye heights. Standing, the sightline to a puck on
+	# the ice crosses a mid-slot screener up at chest height and he is blind
+	# behind the full torso; dropped, the whole line falls into the shin band and
+	# the body stops covering the release. This is "get low and find it", and it
+	# is the one thing the blocking drop buys back for what it concedes.
+	var body := PackedVector3Array([Vector3(0.26, 0, 4.0)])
+	var standing := _screen_cfg()
+	var down := _screen_cfg()
+	down.eye_height = 0.97
+	var up_d: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10), body, standing)
+	var down_d: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10), body, down)
+	assert_gt(up_d, 0.0, "standing, the torso hides the release")
+	assert_lt(down_d, up_d, "dropping drops the eyeline into the legs")
+
+# ── screen_peek_offset ───────────────────────────────────────────────────────
+# Stepping off the angle to get the eyes around a body. Same frame as above:
+# goalie at (0, 10), release at the origin, so the sightline runs along −Z and a
+# lateral step turns it at full leverage.
+
+func test_peek_steps_away_from_the_screener() -> void:
+	# Body 0.2 m to the +x side of the sightline, halfway along. The line has to
+	# be pushed 0.20 m further at its range (0.35 torso − 0.20 already clear, plus
+	# 0.05 of daylight), and a step at the goalie's end moves it by half that far
+	# — so 0.4 m, taken to −x, away from the body.
+	var d: float = GoalieBehaviorRules.screen_peek_offset(
+		Vector3(0, 0, 10), Vector3.ZERO,
+		PackedVector3Array([Vector3(0.2, 0, 5)]), _screen_cfg(), 0.5)
+	assert_almost_eq(d, -0.4, 0.02)
+
+func test_peek_declines_a_screen_it_cannot_clear() -> void:
+	# Dead-on doorstep body with only 0.1 m of licence: half a peek buys no sight
+	# and still costs the angle, so he stays square and blocks it instead.
+	var d: float = GoalieBehaviorRules.screen_peek_offset(
+		Vector3(0, 0, 10), Vector3.ZERO,
+		PackedVector3Array([Vector3(0.0, 0, 8)]), _screen_cfg(), 0.1)
+	assert_eq(d, 0.0)
+
+func test_peek_declines_when_bracketed() -> void:
+	# Traffic on both sides of the line — there is no side to step to.
+	var d: float = GoalieBehaviorRules.screen_peek_offset(
+		Vector3(0, 0, 10), Vector3.ZERO,
+		PackedVector3Array([Vector3(0.2, 0, 5), Vector3(-0.2, 0, 6)]),
+		_screen_cfg(), 0.5)
+	assert_eq(d, 0.0)
+
+func test_peek_is_zero_with_a_clean_look() -> void:
+	var d: float = GoalieBehaviorRules.screen_peek_offset(
+		Vector3(0, 0, 10), Vector3.ZERO,
+		PackedVector3Array([Vector3(2.0, 0, 5)]), _screen_cfg(), 0.5)
+	assert_eq(d, 0.0)
+
+func test_peek_actually_clears_the_screen_it_solved_for() -> void:
+	# The whole point, closed loop: take the offset the solve returns, put the
+	# goalie there, and ask the occlusion model whether he can see the release.
+	var body := PackedVector3Array([Vector3(0.2, 0, 5)])
+	var square := Vector3(0, 0, 10)
+	var blind: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), square, body, _screen_cfg())
+	assert_gt(blind, 0.0, "square, the body hides the release")
+	var peek: float = GoalieBehaviorRules.screen_peek_offset(
+		square, Vector3.ZERO, body, _screen_cfg(), 0.5)
+	var peeked: Vector3 = square + Vector3(peek, 0, 0)
+	var after: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, peeked - Vector3.ZERO, peeked, body, _screen_cfg())
+	assert_eq(after, 0.0, "stepped off the angle, he has his eyes on it")
 
 # ── unset_fraction / movement_read_penalty ────────────────────────────────────
 # A set (stopped) goalie reads at the base delay; a moving / scrambling one reads

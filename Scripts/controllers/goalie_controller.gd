@@ -218,16 +218,20 @@ extends Node
 # hidden; re-checking mid-flight would hand the time back). Host-only like all
 # goalie AI, so it costs nothing on the wire and never diverges on clients.
 #
-# `screener_radius` is a MEASUREMENT, not a feel dial: half the width of a player
-# in gear, which is what the occlusion solve needs to size the shadow. It sat at
-# 0.6 (a 1.2 m body) while the occlusion test was measured against the SHOT line
-# rather than the goalie's eyeline — a too-wide body partly compensating for
-# testing the wrong line, and the two errors landed in different places, so the
-# goalie was blinded by traffic he could see around while a body planted dead in
-# front of him registered as nothing. With the sightline solve in place the width
-# has to be honest or every screen over-reads.
+# The silhouette values are MEASUREMENTS, not feel dials — they size the shadow,
+# and the shadow is geometry. They mirror Scenes/Skater.tscn (origin at the hips,
+# feet ~0.85 below it). Sight is taken at the height the eyeline crosses the body,
+# so the same screener is a torso to a standing goalie and a pair of shins to a
+# goalie who has gone down looking for the puck.
 @export var screen_max_extra_delay: float = 0.30  # s — CAP on the screen-occlusion pickup delay
-@export var screener_radius: float = 0.35         # m — body half-width in gear, blocks sight
+@export var screener_torso_half_width: float = 0.35  # m — a body in gear, at and above the hips
+@export var screener_leg_half_width: float = 0.16    # m — a shin, at the ice
+@export var screener_hip_height: float = 0.85        # m — where the silhouette stops narrowing
+# How far off his angle he will step to get his eyes around a body. Feel, not
+# geometry: the STEP is solved (GoalieBehaviorRules.screen_peek_offset), this is
+# only how much net he is willing to sell for the look. A screen he cannot clear
+# inside it buys him nothing and he stays square, which is the intended failure.
+@export var screen_peek_max_offset: float = 0.35     # m
 
 # ── Caught moving ─────────────────────────────────────────────────────────────
 # A goalie is only sharp when SET — square and stopped. Being unset costs him
@@ -1517,7 +1521,9 @@ func _build_rule_configs() -> void:
 	_universal_shot_cfg.low_shot_threshold = low_shot_threshold
 	_universal_shot_cfg.elevated_threshold = elevated_threshold
 	_screen_cfg = GoalieBehaviorRules.ScreenConfig.new()
-	_screen_cfg.screener_radius = screener_radius
+	_screen_cfg.torso_half_width = screener_torso_half_width
+	_screen_cfg.leg_half_width = screener_leg_half_width
+	_screen_cfg.hip_height = screener_hip_height
 	_move_read_cfg = GoalieBehaviorRules.MovementReadConfig.new()
 	_move_read_cfg.reference_speed = move_read_reference_speed
 	_move_read_cfg.speed_delay = move_read_speed_delay
@@ -2862,16 +2868,11 @@ func _sweep_anim_progress() -> float:
 func _opposing_shooter_near_puck(loose_puck_radius: float) -> bool:
 	# The per-tick memo this used to carry is gone: GoalieWorldView is already
 	# frame-stamped, so the shared scan does the memoising for every reader.
-	#
-	# NOTE the loose-puck distance comes from `nearest_opponent_dist_any`, which
-	# INCLUDES ghosted players — see the quirk documented on GoalieWorldView. Kept
-	# bit-identical to the pre-extraction behaviour and flagged there, rather than
-	# silently corrected inside a refactor.
 	var carrier: Skater = puck.get_carrier()
 	if carrier != null:
 		return team_id == -1 or carrier.get_team_id() != team_id
 	_ensure_view()
-	return _view.nearest_opponent_dist_any < loose_puck_radius
+	return _view.nearest_opponent_dist < loose_puck_radius
 
 func _enter_butterfly() -> void:
 	_beaten_wide_confirm_timer = 0.0
@@ -3293,6 +3294,13 @@ func _move_along_arc(delta: float) -> Vector2:
 		current.x = _reaction_drift_x(delta, current.x)
 		return current
 	var target_xz: Vector2 = _arc_target_xz()
+	# Fight for sight before anything else adjusts the target: if traffic is hiding
+	# the puck, step off the angle far enough to see around it. Applied to the
+	# SQUARE target rather than his live position so the read can't chase its own
+	# output (see GoalieBehaviorRules.screen_peek_offset), and overridden outright
+	# by a cross-crease push below — a pass already in flight is a coverage problem,
+	# not a sight problem.
+	target_xz.x += _screen_peek_x(target_xz)
 	# Cross-crease "push on feet": after the read delay (handled in
 	# _update_cross_crease), a detected pass overrides the lateral target toward
 	# the projected crossing and the goalie commits a hard T-push toward the far
@@ -3371,6 +3379,29 @@ func _arc_target_xz() -> Vector2:
 	return GoalieBehaviorRules.target_arc_position(
 			_tracked_threat_position, _goal_line_z, _goal_center_x,
 			_direction_sign, _current_depth, _arc_cfg)
+
+
+# Lateral step off the angle that gets his eyes around the traffic, 0 when there
+# is nothing to see around (or nothing he can step around — the solve refuses
+# half-measures). Host-only; clients render the broadcast pose.
+#
+# Sighted on the PUCK, not the tracked threat: the quiet-eye lerp is a positioning
+# smoother and this is a question about a real object's real line. Only while
+# upright and not already reading a shot in flight — a goalie mid-freeze has
+# already spent his read, and one in the butterfly is not stepping anywhere.
+func _screen_peek_x(square_xz: Vector2) -> float:
+	if not is_server or screen_peek_max_offset <= 0.0:
+		return 0.0
+	if not _sm.is_upright() or _reaction.reacting:
+		return 0.0
+	_ensure_view()
+	if _view.screeners.is_empty():
+		return 0.0
+	_screen_cfg.eye_height = _sight_height()
+	return GoalieBehaviorRules.screen_peek_offset(
+			Vector3(square_xz.x, goalie.global_position.y, square_xz.y),
+			puck.global_position, _view.screeners, _screen_cfg,
+			screen_peek_max_offset)
 
 # Advance the caught-moving drift one tick and return the new lateral position.
 # A goalie caught mid-push at the release does not stop dead to make the save —
@@ -4249,10 +4280,21 @@ func _screen_delay(shot_velocity: Vector3) -> float:
 	_ensure_view()
 	if _view.screeners.is_empty():
 		return 0.0
+	_screen_cfg.eye_height = _sight_height()
 	var delay: float = GoalieBehaviorRules.screen_occlusion_delay(
 			puck.global_position, shot_velocity, goalie.global_position,
 			_view.screeners, _screen_cfg)
 	return minf(delay, screen_max_extra_delay)
+
+
+# Where he is looking FROM. Head height by stance family — and the difference is
+# load-bearing rather than cosmetic: dropping takes the eyeline from over the
+# traffic's shoulders down into its shins, which is precisely why a goalie goes
+# down to find a puck in a crowd. The silhouette model turns that into shorter
+# screen delays for a down goalie without any rule saying so.
+func _sight_height() -> float:
+	return GoalieAnatomy.HEAD_CENTER_Y_BUTTERFLY_M if _sm.is_down() \
+			else GoalieAnatomy.HEAD_CENTER_Y_STANDING_M
 
 
 # How unset the goalie is right now, 0..1. Planar speed (lateral + depth motion)

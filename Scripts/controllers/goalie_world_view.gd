@@ -42,18 +42,10 @@ var off_puck_opponents: PackedVector3Array = PackedVector3Array()
 var screeners: PackedVector3Array = PackedVector3Array()
 
 # Distance from the puck to the nearest non-ghost OPPOSING skater, INF if none.
+# One definition for every reader: a ghosted (offside / icing) player cannot
+# legally touch the puck, so he is not pressure, not a shooter, and not a reason
+# to seal anything.
 var nearest_opponent_dist: float = INF
-# Same, but INCLUDING ghosted players.
-#
-# ⚠️ BEHAVIOUR QUIRK, PRESERVED DELIBERATELY. Five of the six original scans
-# excluded ghosts; `_compute_opposing_shooter_near_puck` did not. So a ghosted
-# (offside / icing) player currently counts as "a shooter is near the puck" for the
-# slide trigger, the active-blade intent, the standing / paddle sweep and the
-# lunge — but not for crease jams, sweep lanes, screens or the backdoor cap. A
-# ghosted player cannot legally play the puck, so sealing the back door for one
-# looks wrong; this is kept bit-identical here so the extraction is behaviour-
-# neutral, and flagged for a separate decision rather than silently changed.
-var nearest_opponent_dist_any: float = INF
 # Distance from the puck to the nearest non-ghost TEAMMATE, INF if none. Answers
 # "is the carrier contested?" for the crease-jam seal.
 var nearest_teammate_dist: float = INF
@@ -78,17 +70,14 @@ func ensure(frame: int, skaters: Array, team_id: int, puck_pos: Vector3,
 	off_puck_opponents.clear()
 	screeners.clear()
 	nearest_opponent_dist = INF
-	nearest_opponent_dist_any = INF
 	nearest_teammate_dist = INF
 	for skater: Skater in skaters:
 		if skater == null:
 			continue
-		var opposing: bool = team_id == -1 or skater.get_team_id() != team_id
-		var dist: float = skater.global_position.distance_to(puck_pos)
-		if opposing:
-			nearest_opponent_dist_any = minf(nearest_opponent_dist_any, dist)
 		if skater.is_ghost:
 			continue   # ghosted players can't play the puck
+		var opposing: bool = team_id == -1 or skater.get_team_id() != team_id
+		var dist: float = skater.global_position.distance_to(puck_pos)
 		if skater.current_shot_state != SkaterStateMachine.State.SHOT_BLOCKING:
 			screeners.append(skater.global_position)
 		if opposing:
