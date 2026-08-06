@@ -89,6 +89,27 @@ func test_zero_speed_still_falls() -> void:
 			0.0001, "gravity alone completes the fall from a standstill hit")
 
 
+# ── entry_ramp ────────────────────────────────────────────────────────────────
+
+func test_entry_ramp_develops_over_the_buckle_window() -> void:
+	assert_almost_eq(KnockdownFallRules.entry_ramp(0.0, _cfg), 0.0, 0.0001,
+			"the crumple no longer lands in one frame")
+	assert_almost_eq(KnockdownFallRules.entry_ramp(_cfg.buckle_seconds * 0.5, _cfg),
+			0.5, 0.0001, "smoothstep midpoint at half the window")
+	assert_almost_eq(KnockdownFallRules.entry_ramp(_cfg.buckle_seconds, _cfg),
+			1.0, 0.0001, "fully developed at the end of the buckle")
+	assert_almost_eq(KnockdownFallRules.entry_ramp(5.0, _cfg), 1.0, 0.0001,
+			"and held for the rest of the down window")
+
+
+func test_entry_ramp_is_monotonic() -> void:
+	var prev: float = 0.0
+	for i in range(1, 21):
+		var r: float = KnockdownFallRules.entry_ramp(i * 0.005, _cfg)
+		assert_true(r >= prev, "the entry ease never reverses")
+		prev = r
+
+
 # ── first_impact_time ─────────────────────────────────────────────────────────
 
 func test_first_impact_matches_the_tilt_solve() -> void:

@@ -326,6 +326,7 @@ int64_t NativeSkaterGait::apply(
 		double shot_charge,
 		double stagger_timer,
 		double knockdown_timer,
+		double knockdown_elapsed,
 		double celebr_p,
 		int64_t flags) {
 	if (delta <= 0.0) {
@@ -939,9 +940,17 @@ int64_t NativeSkaterGait::apply(
 		trunk_roll_add += -bank_mag * centri_x;
 	}
 
-	// Stagger stumble / knockdown factor.
-	const double kd_t = CLAMP(
+	// Stagger stumble / knockdown factor. The entry end ramps over the buckle
+	// window (mirrors KnockdownFallRules.entry_ramp — kd_t alone is 1 on the
+	// first down frame).
+	double kd_t = CLAMP(
 			knockdown_timer / MAX(cfg.knockdown_getup_seconds, 0.001), 0.0, 1.0);
+	if (kd_t > 0.0) {
+		const double buckle_t = CLAMP(
+				knockdown_elapsed / MAX(cfg.knockdown_fall_buckle_seconds, 0.001),
+				0.0, 1.0);
+		kd_t *= buckle_t * buckle_t * (3.0 - 2.0 * buckle_t);
+	}
 	const double stagger_t = CLAMP(
 			stagger_timer / MAX(cfg.stagger_max_seconds, 0.001), 0.0, 1.0);
 	double stagger_pitch = 0.0;
@@ -1055,7 +1064,7 @@ void NativeSkaterGait::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("apply",
 			"delta", "velocity", "basis", "move_intent", "shot_state",
 			"shot_charge", "stagger_timer", "knockdown_timer",
-			"celebration_progress", "flags"),
+			"knockdown_elapsed", "celebration_progress", "flags"),
 			&NativeSkaterGait::apply);
 
 	ClassDB::bind_method(D_METHOD("get_l_pitch"), &NativeSkaterGait::get_l_pitch);

@@ -139,6 +139,7 @@ func _native_step() -> void:
 			_skater.global_transform.basis, _skater.move_intent,
 			_skater.current_shot_state, _skater.shot_charge,
 			_controller.stagger_timer, _controller.knockdown_timer,
+			_controller.knockdown_elapsed(),
 			_controller.celebration_progress(), flags)
 	if code != 0:
 		return

@@ -60,6 +60,17 @@ static func tilt_at(elapsed: float, entry_speed: float, cfg: Config) -> float:
 	return cfg.settle_angle
 
 
+# Entry ramp of the whole down pose: the crumple (gait drop, buckle, fold)
+# develops over the buckle window instead of landing in one frame — the get-up
+# factor kd_t is built for the tail and is already 1 on the first down frame.
+# Closed-form in elapsed down-time rather than an eased state, so a replay
+# scrub lands on the exact pose. 1 for the rest of the down window; the native
+# gait kernel inlines the same expression (parity-gated).
+static func entry_ramp(elapsed: float, cfg: Config) -> float:
+	var t: float = clampf(elapsed / maxf(cfg.buckle_seconds, 0.001), 0.0, 1.0)
+	return t * t * (3.0 - 2.0 * t)
+
+
 # Elapsed down-time of the first ice contact — the buckle delay plus the
 # closed-form flight time to the settle plane, from the same seeded tip rate as
 # tilt_at. This is when the loose limbs start to scatter (sprawl_into): during

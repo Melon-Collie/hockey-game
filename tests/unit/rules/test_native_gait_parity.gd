@@ -164,6 +164,7 @@ func _step(delta: float, label: String) -> bool:
 			_skater.global_transform.basis, _skater.move_intent,
 			_skater.current_shot_state, _skater.shot_charge,
 			_controller.stagger_timer, _controller.knockdown_timer,
+			_controller.knockdown_elapsed(),
 			_controller.celebration_progress(), flags)
 	_step_count += 1
 
@@ -228,6 +229,7 @@ func _quiet_pose() -> void:
 	_controller.sprint_active = false
 	_controller.stagger_timer = 0.0
 	_controller.knockdown_timer = 0.0
+	_controller._knockdown_total = 0.0
 	_controller._celebration_timer = 0.0
 	_state.faceoff_prep = false
 
@@ -372,7 +374,10 @@ func test_shot_and_contact_paths_match() -> void:
 		_controller.stagger_timer = maxf(_controller.stagger_timer - DELTA, 0.0)
 		if not _step(DELTA, "stagger"):
 			return
+	# The window total feeds knockdown_elapsed(), which drives the entry ramp —
+	# maintained here the way apply_knockdown/_sync_knockdown_meta would.
 	_controller.knockdown_timer = 1.2
+	_controller._knockdown_total = 1.2
 	for i: int in 120:
 		_controller.stagger_timer = maxf(_controller.stagger_timer - DELTA, 0.0)
 		_controller.knockdown_timer = maxf(_controller.knockdown_timer - DELTA, 0.0)
@@ -461,6 +466,7 @@ func test_chaos_fuzz_matches() -> void:
 			_controller.stagger_timer = _rng.randf_range(0.2, 1.5)
 		if _rng.randf() < 0.05:
 			_controller.knockdown_timer = _rng.randf_range(0.2, 1.2)
+			_controller._knockdown_total = _controller.knockdown_timer
 		if _rng.randf() < 0.08:
 			var dir := Vector3(_rng.randf_range(-1, 1), 0.0, _rng.randf_range(-1, 1))
 			var hit: float = _rng.randf_range(0.2, 1.0)

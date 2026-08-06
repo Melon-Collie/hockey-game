@@ -1796,11 +1796,25 @@ func _apply_knockdown_fall() -> void:
 	if _sprawl_scratch == null:
 		_sprawl_scratch = KnockdownFallRules.SprawlPose.new()
 	var legs: Vector2 = _skating.leg_segment_lengths()
-	var elapsed: float = maxf(_knockdown_total - knockdown_timer, 0.0)
+	var elapsed: float = knockdown_elapsed()
+	# The buckle is solved from the RAMPED drop so the boots stay planted at
+	# every point of the entry ease (the gait's sink carries the same ramp;
+	# angle-scaling the solved pose instead would not track it — the drop is
+	# 1 − cos of the angle).
+	var eased_drop: float = knockdown_pose_drop_m \
+			* KnockdownFallRules.entry_ramp(elapsed, _fall_config())
 	KnockdownFallRules.sprawl_into(_sprawl_scratch, elapsed, _knockdown_entry_speed,
-			stagger_recoil_dir, knockdown_pose_drop_m, legs.x, legs.y, _fall_config())
+			stagger_recoil_dir, eased_drop, legs.x, legs.y, _fall_config())
 	skater.apply_knockdown_leg_overlay(
 			_sprawl_scratch, KnockdownFallRules.getup_scale(kd_t))
+
+
+# Elapsed down-time of the current knockdown (0 when upright) — the fall clock
+# every knockdown pose channel keys off. _knockdown_total is maintained through
+# entry, extension, reconcile snaps, and replay sync (_sync_knockdown_meta), so
+# this is as replicated-deterministic as the timer itself.
+func knockdown_elapsed() -> float:
+	return maxf(_knockdown_total - knockdown_timer, 0.0)
 
 
 # Current whole-body fall tilt (radians): the tipping-body solve scaled by the
@@ -1812,18 +1826,20 @@ func knockdown_fall_tilt() -> float:
 			knockdown_timer / maxf(knockdown_getup_seconds, 0.001), 0.0, 1.0)
 	if kd_t <= 0.0:
 		return 0.0
-	var elapsed: float = maxf(_knockdown_total - knockdown_timer, 0.0)
-	return KnockdownFallRules.tilt_at(elapsed, _knockdown_entry_speed, _fall_config()) \
+	return KnockdownFallRules.tilt_at(
+			knockdown_elapsed(), _knockdown_entry_speed, _fall_config()) \
 			* KnockdownFallRules.getup_scale(kd_t)
 
 
 # Waist-fold magnitude for the current fall instant: the reflexive airborne
 # curl resolving to the lie-flat complement as the body reaches the ice
-# (KnockdownFallRules.fold_at). SkaterPoseCoordinator scales it by kd_t and
-# decomposes it along the recoil direction.
+# (KnockdownFallRules.fold_at), developing through the same entry ramp as the
+# gait's crumple. SkaterPoseCoordinator scales it by kd_t and decomposes it
+# along the recoil direction.
 func knockdown_fold_rad() -> float:
 	return KnockdownFallRules.fold_at(knockdown_fall_tilt(),
-			deg_to_rad(knockdown_fold_deg), _fall_config())
+			deg_to_rad(knockdown_fold_deg), _fall_config()) \
+			* KnockdownFallRules.entry_ramp(knockdown_elapsed(), _fall_config())
 
 
 # The braced-arm targets for a downed player, in upper-body-local space (so they
@@ -1835,9 +1851,8 @@ func knockdown_fold_rad() -> float:
 func _apply_knockdown_brace() -> void:
 	var kd_t: float = clampf(
 			knockdown_timer / maxf(knockdown_getup_seconds, 0.001), 0.0, 1.0)
-	var elapsed: float = maxf(_knockdown_total - knockdown_timer, 0.0)
 	var brace_t: float = KnockdownFallRules.brace_at(
-			elapsed, kd_t, knockdown_brace_in_seconds)
+			knockdown_elapsed(), kd_t, knockdown_brace_in_seconds)
 	if brace_t <= 0.001:
 		return
 	var side: float = -1.0 if skater.is_left_handed else 1.0
