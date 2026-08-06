@@ -24,13 +24,22 @@ extends GutTest
 #
 # Thresholds are coarse on purpose (the harness's assertion philosophy) — they
 # bound the pathology, not the tuning. Reference readings over the 35-start
-# sweep, before and after the rendezvous bound:
+# sweep, for the unbounded ladder, the step-up PLAN that first bounded it, and
+# the approach-SPEED limit that replaced the plan:
 #
-#                              charging ladder    rendezvous-bounded
-#   mean up-ice speed at meet      4.2 m/s              2.4 m/s
-#   starts meeting at >3 m/s        27/35                12/35
-#   mean excursion off own net     10.9 m                4.2 m
-#   worst single excursion         28.5 m               10.8 m
+#                              charging   step-up plan   approach limit
+#   mean up-ice speed at meet   4.2 m/s      2.4 m/s        2.2 m/s
+#   starts meeting at >3 m/s     27/35        12/35          12/35
+#   mean excursion off own net   10.9 m       4.2 m          5.1 m
+#   worst single excursion       28.5 m      10.8 m          9.2 m
+#   separation at the meet       0.69 m      0.57 m         0.84 m
+#
+# The limit trades ~1 m of mean wander for the best worst case and the best
+# terminal speed, and its per-start spread is far tighter — a properly-gapped D
+# now reads 0.0-0.9 m/s at the meet where the plan read 1.0-3.0. That shape is
+# the point: a speed limit is negative feedback (closing shrinks the spare
+# depth, which lowers the cap), where the plan it replaced was re-derived from
+# scratch each dispatch and could wind itself up.
 
 const Duel := preload("res://tests/unit/ai/duel_harness.gd")
 

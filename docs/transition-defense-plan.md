@@ -560,6 +560,13 @@ A body straddling the blue line to pressure the point is not a broken structure.
   up-ice and getting walked (`AIRoleRushD._settable_gap`,
   `tests/unit/ai/test_rush_gap_discipline.gd`).
 
+  `settable_stand_depth` itself has since been re-derived: it was a step-up PLAN
+  ("the largest step I could still arrive set at", bisected fresh every dispatch) and is
+  now an approach SPEED LIMIT solved in closed form, with the returned stand acting as
+  the brake trigger that enforces it. A plan re-derived at 6 Hz with no memory of the one
+  it revises can ratchet — each grant builds speed the next grant ignores — and the limit
+  cannot, because closing on the rush shrinks the spare depth and lowers the cap.
+
 **Reused as-is**
 - The soonest-to-arrive election machinery + hysteresis, both files.
 - `AIZoneCoverage` soft-lock + boundary release — extended up-ice into transition lanes.

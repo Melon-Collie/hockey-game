@@ -174,7 +174,8 @@ func test_backpressure_lets_the_d_stand_up() -> void:
 # already home with the rush still in neutral ice is being asked for a 10-18 m
 # step-up, and taking it means meeting the carrier with a full stride of up-ice
 # momentum — he gets walked and trails the play home. So the last man may only
-# step up as far as he can arrive SET (AIRoleHelpers.settable_stand_depth).
+# close as fast as the rendezvous leaves room for, and the stand he is given is
+# the one that enforces that speed (AIRoleHelpers.settable_stand_depth).
 
 func test_the_last_man_does_not_take_a_step_up_he_cannot_arrive_set_at() -> void:
 	var carrier := Vector3(0.0, 0.0, 0.0)      # red line, coming at pace

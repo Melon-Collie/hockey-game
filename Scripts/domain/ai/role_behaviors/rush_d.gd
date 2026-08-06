@@ -175,13 +175,12 @@ static func _decide_d1(ctx: RoleContext) -> RoleDecision:
 	d.target_position = _clamp_to_house(ctx, stand)
 	# A stand sweeping toward us at the rush's own pace is not a station: braking
 	# at it parks us short and the rush arrives while we are still stopped, so a
-	# RETREAT is paced. A step-UP is the opposite errand, and the rendezvous bound
-	# above only granted it on the promise of a SET arrival (set_arrival_distance
-	# is literally "accelerate, then brake to zero, inside the budget") — pacing
-	# through it spends the budget and keeps the momentum the bound exists to
-	# prevent, which is how the step-up creeps back into a lunge one dispatch at a
-	# time. The gap-up is the deliberate exception: against a carrier who has no
-	# speed to beat us with, driving through the stand IS the attack.
+	# RETREAT is paced. A step-UP is the opposite errand, and the approach bound
+	# above placed that stand precisely as the brake trigger for the speed it will
+	# allow — pacing through it disarms the actuator the bound was counting on and
+	# the step-up creeps back into a lunge. The gap-up is the deliberate
+	# exception: against a carrier who has no speed to beat us with, driving
+	# through the stand IS the attack.
 	d.arrive_at_speed = gapping_up or not stepping_up
 	return d
 
@@ -281,16 +280,16 @@ static func _should_gap_up(ctx: RoleContext, read: AIRushRead,
 # unbounded ladder met the rush at 4.2 m/s of up-ice speed having wandered a
 # mean 10.9 m (worst 28.5 m) off its own net.
 #
-# So the step-up is bounded by the RENDEZVOUS — the read PRESSURE's last man
-# already makes (AIRoleHelpers.settable_stand_depth): cover only the ice you can
-# cover and still be travelling WITH the rush by the time the sweeping stand
-# meets you there. That is the perception the ladder was missing rather than a
+# So the step-up is bounded by the APPROACH SPEED the rendezvous leaves room for
+# — the same limit PRESSURE's last man runs (AIRoleHelpers.settable_stand_depth):
+# close on the rush no faster than you can still be travelling WITH it by the
+# time it arrives. That is the perception the ladder was missing rather than a
 # cap on it, and it is inert wherever it should be — a defender already at his
-# gap asks for no step, a stalled or regrouping carrier leaves the budget
-# unbounded so the gap-up still closes right up, and the granted step grows
-# every dispatch as the rush closes, so the stand converges back onto the ladder
-# exactly as the ice between them runs out. What it removes is the charge at a
-# stand this body cannot arrive at.
+# gap has no approach to make, and a stalled or regrouping carrier lifts the
+# limit to his own top speed so the gap-up still closes right up. What it removes
+# is the charge at a stand this body cannot arrive at, and because the limit
+# falls as the spare depth does, the stand settles onto the ladder as the ice
+# between them runs out instead of being overrun.
 #
 # Skipped with a layer home behind us: a beaten challenge is then a scoring
 # chance rather than a breakaway, which is what licenses D1 to step into the

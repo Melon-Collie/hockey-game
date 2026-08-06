@@ -1026,106 +1026,81 @@ static func has_support_behind(ctx: RoleContext) -> bool:
 # own pace. A defender who charges the stand as it is TODAY arrives where the
 # rush already was, carrying up-ice momentum into a carrier closing head-on, and
 # the reversal costs him the rush — he gets walked around and trails the play
-# home from behind. So the step-up is bounded by the RENDEZVOUS: cover only what
-# can be covered and still be TRAVELLING WITH THE RUSH by the time the sweeping
-# stand meets us there. A step-up of `s` leaves the stand `step_needed - s` of
-# ice to cover at `closing`, and the budget that buys is charged twice:
-#   • the trip itself, priced as a set arrival (set_arrival_distance — up to
-#     speed and back down, since a stand overrun at pace is no stand);
-#   • the PIVOT out of it, `closing / accel` — the time to spin the body back up
-#     to the rush's own speed going the other way. Being merely stopped when the
-#     carrier arrives is not gap control: a stationary defender is beaten by any
-#     lateral cut, so the posture the step-up has to leave time for is matching
-#     his pace goal-side. Charging it is also what makes the bound stable under
-#     re-planning — without it the budget only shrinks as fast as the carrier
-#     closes, so a defender re-granted a fresh step every dispatch never gets
-#     around to executing the braking half and creeps into a lunge anyway.
+# home from behind.
 #
-# The trip is priced FROM REST, and the defender's own achieved speed is not an
-# input anywhere here. That reads like an oversight and is not — see the note on
-# set_arrival_distance, which records what happens when you fix it.
-# Feasibility is monotone in `s` (a longer step costs more ground AND leaves less
-# time for it), so one bisection lands the largest one.
+# THE BOUND IS A SPEED LIMIT, expressed as the stand that enforces it. What it
+# caps is the APPROACH — how fast the last man may be closing on the rush — and
+# the geometry that sets the limit is measured in the THREAT-RELATIVE frame,
+# where the defender's depth shrinks at `v + closing` because the carrier is
+# eating the same ice from the other side. Becoming rush-matched from an
+# approach speed `v` therefore costs him
 #
-# The shape falls out at both ends by construction: a stalled or regrouping
-# carrier's stand isn't going anywhere, so the budget is unbounded and the
-# defender closes right up (gapping up); a carrier flying in leaves almost no
-# budget, so the defender holds his ground and makes the rush come to him.
-# Returns `desired_depth` unchanged whenever no bound applies — a stand already
-# goal-side of us is a retreat, which costs no reversal.
+#     consumed(v) = v²/2B  +  closing·v/B  +  closing²/2a
+#                   \_____/    \________/     \_________/
+#                   braking    the rush's     the PIVOT: spinning back up to
+#                   distance   share of it    his pace going the other way
+#
+# and that must fit in the depth he has to spare, `self_along - desired_depth`.
+# Being merely stopped when the carrier arrives is not gap control — a stationary
+# defender is beaten by any lateral cut — which is what the pivot term buys.
+# Solving `consumed(v) = spare` for v is a quadratic, so the cap is closed form,
+# and the stand that produces it is the point at which a body travelling at the
+# cap would just begin braking (v²/2B ahead of him): inside it he brakes, outside
+# it he builds, at it he holds. The existing arrival brake is the actuator; this
+# only has to place its trigger.
+#
+# WHY A LIMIT AND NOT A PLAN. The cap is a function of the ICE (spare depth and
+# the rush's pace) and not of the defender's own speed, so it is state feedback
+# and cannot wind itself up. Its predecessor asked the other question — "what is
+# the largest step-up I could still arrive set at?" — and answered it afresh at
+# 6 Hz with no memory of the plan it was revising, which is a structure that
+# ratchets: every grant builds speed and the next grant is computed as though
+# the body were parked. That version had to price its trip FROM REST to stay
+# stable at all, and pricing it honestly instead (from the body's real speed)
+# measured worse than having no bound whatsoever — meeting-point up-ice speed
+# 2.4 -> 6.5-9.2 m/s, wander off our own net 4.2 m mean -> 13-25 m, on the sweep
+# in tests/unit/ai/test_rush_gap_discipline.gd. A speed limit has no such
+# failure mode to be conservative about: closing on the rush shrinks the spare
+# depth, which lowers the cap, which is negative feedback by construction.
+#
+# The shape falls out at both ends: a stalled or regrouping carrier makes
+# `closing` nil, so there is no rendezvous to lose, the cap goes to the body's
+# own top speed and the defender closes right up (gapping up); a carrier flying
+# in drives the cap to zero and he holds his ground and makes the rush come to
+# him. Returns `desired_depth` unchanged whenever no bound applies — a stand
+# already goal-side of us is a retreat, which costs no reversal.
 static func settable_stand_depth(ctx: RoleContext, threat_pos: Vector3,
 		dir_net: Vector3, desired_depth: float, closing: float) -> float:
 	var self_along: float = (ctx.self_pos.x - threat_pos.x) * dir_net.x \
 			+ (ctx.self_pos.z - threat_pos.z) * dir_net.z
-	var step_needed: float = self_along - desired_depth
-	if step_needed <= 0.0 or closing <= 0.01:
+	var spare: float = self_along - desired_depth
+	if spare <= 0.0 or closing <= 0.01:
 		return desired_depth
-	var v_max: float = self_race_vmax(ctx)
-	if _step_arrives_set(step_needed, step_needed, closing, v_max, ctx.self_max_accel):
-		return desired_depth
-	var lo: float = 0.0
-	var hi: float = step_needed
-	for _i: int in 6:
-		var mid: float = (lo + hi) * 0.5
-		if _step_arrives_set(mid, step_needed, closing, v_max, ctx.self_max_accel):
-			lo = mid
-		else:
-			hi = mid
-	return self_along - lo
+	var v_cap: float = approach_speed_cap(
+			spare, closing, self_race_vmax(ctx), ctx.self_max_accel)
+	# The stand IS the brake trigger for that speed: a body at the cap begins
+	# braking v²/2B short of its target, so putting the target exactly there
+	# regulates him onto the cap instead of past it.
+	var brake_lead: float = v_cap * v_cap \
+			/ (2.0 * AISteering.ARRIVAL_BRAKE_DECEL_M_S2)
+	return maxf(desired_depth, self_along - brake_lead)
 
 
-# Can we cover a step-up of `s` and be back up to the rush's pace going the other
-# way by the time the stand — still `step_needed - s` of ice away, sweeping at
-# that pace — gets there? The pivot out of the step-up is charged off the top of
-# the budget; what's left has to pay for the trip as a set arrival from `v0`.
-static func _step_arrives_set(s: float, step_needed: float, closing: float,
-		v_max: float, max_accel: float) -> bool:
-	var pivot_s: float = closing / maxf(
-			max_accel * AIActionScoring.RAMP_EFFICIENCY, 0.001)
-	return set_arrival_distance(
-			(step_needed - s) / closing - pivot_s, v_max, max_accel) >= s
-
-
-# How far a skater can travel in `t` seconds FROM A STANDING START and still
-# arrive SET — closing speed already killed.
-#   short budget — triangular: accelerate then brake to zero inside `t`; the
-#     covered ground is ½·k·t² with k = a·B/(a+B), the effective accel of an
-#     accelerate-brake round trip (B = the arrival brake decel);
-#   long budget — trapezoidal: full ramp (v²/2a) + brake run (v²/2B) + cruise
-#     for whatever time remains.
-#
-# THE STANDING START IS LOAD-BEARING, not an approximation left lying around,
-# and both attempts to "correct" it have been made and measured on the rush-gap
-# sweep (tests/unit/ai/test_rush_gap_discipline.gd):
-#
-#   Pricing the trip from the body's REAL SPEED is strictly the more accurate
-#   model and is strictly worse — worse than having no bound at all. A moving
-#   body genuinely does cover more ground and still stop, so the honest ceiling
-#   grows with the speed the last grant built; re-solved at 6 Hz with no memory
-#   of the plan it is revising, that is a ratchet, and grant feeds speed feeds
-#   grant. Meeting-point up-ice speed 2.4 -> 6.5-9.2 m/s, wander off our own net
-#   4.2 m mean -> 13-25 m.
-#
-#   Reading the achieved speed only as a VETO — withdraw the grant once he is
-#   carrying more than it can absorb, so the term can never feed the loop — is
-#   sound but does not pay: mean up-ice 2.40 -> 2.30 m/s, and mean wander 4.2 ->
-#   4.6 m (worst 10.8 -> 12.9). A branch and a concept for noise.
-#
-# So the conservatism is the design. A defender who has overrun his grant is
-# corrected by the arrival brake and by the next dispatch's shrinking budget,
-# not by this function knowing about it.
-static func set_arrival_distance(t: float, v_max: float,
+# The fastest a last man may be closing on a rush that is `spare` metres of his
+# own depth away and coming at `closing` m/s — the positive root of
+# `consumed(v) = spare` (see settable_stand_depth for the terms). Capped at the
+# body's own top speed, and floored at zero: a defender with less spare depth
+# than the pivot alone costs has no approach left to make and holds.
+static func approach_speed_cap(spare: float, closing: float, v_max: float,
 		max_accel: float) -> float:
-	if t <= 0.0:
-		return 0.0
-	var v: float = maxf(v_max, 1.0)
 	var brake_decel: float = AISteering.ARRIVAL_BRAKE_DECEL_M_S2
 	var a_net: float = maxf(max_accel * AIActionScoring.RAMP_EFFICIENCY, 0.001)
-	var t_tri_max: float = v / a_net + v / brake_decel
-	if t <= t_tri_max:
-		return 0.5 * (a_net * brake_decel / (a_net + brake_decel)) * t * t
-	return v * v / (2.0 * a_net) + v * v / (2.0 * brake_decel) \
-			+ v * (t - t_tri_max)
+	# v² + 2·closing·v + B·(closing²/a - 2·spare) = 0
+	var disc: float = closing * closing * (1.0 - brake_decel / a_net) \
+			+ 2.0 * brake_decel * spare
+	if disc <= 0.0:
+		return 0.0
+	return clampf(sqrt(disc) - closing, 0.0, maxf(v_max, 0.0))
 
 
 # A station's home post has to be meaningfully deeper than the stand it is
