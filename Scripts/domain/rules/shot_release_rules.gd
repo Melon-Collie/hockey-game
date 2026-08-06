@@ -13,9 +13,17 @@ class_name ShotReleaseRules
 # Design rule: lag compensation is a privilege, the shot itself is not. A
 # stale or forged timestamp earns zero back-date / zero RTT advance rather
 # than rejecting the shot — a legit client during NTP warmup stamps 0 and must
-# still be able to shoot. Only the one-timer range gate (in GameManager) can
+# still be able to shoot. Only the one-timer contact gate (in GameManager) can
 # reject a shot outright, because firing one requires the puck to actually be
 # near the shooter.
+#
+# Second design rule, and it is what separates a one-timer from an FPS hitscan:
+# compensation may decide WHETHER a shot connects, but it may never move the
+# puck. The puck is a shared object every player is watching, so a claim that
+# resolves in the shooter's past has to fire from where the puck is NOW —
+# dragging it back onto the blade reads as a teleport on every other screen and
+# scales with the shooter's ping. Hence one_timer_within_reach: the compensation
+# is bounded by a stick's actual reach, not by the rewind window.
 
 # Mirrors PickupClaimResolver.MAX_CLAIM_AGE_S — a release timestamp older than
 # this earns no lag-comp benefits.
@@ -42,11 +50,6 @@ const RTT_MEASURED_SLACK_MS: float = 30.0
 # ~0.707. 0.75 leaves headroom for float noise while still blocking
 # near-vertical forged directions.
 const MAX_DIRECTION_Y: float = 0.75
-
-# Slack added to the one-timer range gate: covers shooter drift between the
-# client's stamp and host processing, plus interpolation error on the rewound
-# puck. Generous on purpose — the client already enforced the tight check.
-const ONE_TIMER_RANGE_SLACK_M: float = 1.0
 
 # Maximum horizontal distance a shot origin may sit from the shooter's body
 # center — roughly full stick + arm reach. The client sends its true release
@@ -170,25 +173,85 @@ static func one_timer_claim_is_stale(claim_host_timestamp: float, puck_last_play
 	return puck_last_played_time > claim_host_timestamp
 
 
-# One-timer range gate: the (rewound) puck the shooter saw must be within the
-# slapper zone radius plus speed leniency — the same formula the client's
-# `_effective_one_timer_leniency` uses — plus server-side slack.
-static func one_timer_in_range(zone_xz: Vector2, puck_xz: Vector2,
-		zone_radius: float, puck_speed: float, leniency_time: float) -> bool:
-	var max_dist: float = zone_radius + puck_speed * leniency_time + ONE_TIMER_RANGE_SLACK_M
-	return zone_xz.distance_to(puck_xz) <= max_dist
+# ── One-timer contact ─────────────────────────────────────────────────────────
+# A one-timer is judged in the SHOOTER'S OWN FRAME: the puck's offset from the
+# slapper-zone centre when the swing committed, and the same offset when the
+# blade arrives at the end of the retention hold. Relative offsets, so a shooter
+# who carries the zone along with them costs nothing to model.
+#
+# The beat asks one question — did the puck cross the blade's zone while the
+# stick was coming down — which is the distance from the zone centre to the
+# SEGMENT joining those two offsets. Two properties fall out of that, and the
+# old test (a ring of `zone_radius + puck_speed * beat + slack`, ~6 m wide around
+# a 0.5 m marker on a 25 m/s feed) had neither:
+#
+#   - The ring that counts is the ring the player is shown. Timing tolerance
+#     comes from the LENGTH OF THE BEAT — the hold, plus the puck's own dwell
+#     inside the zone, ~150 ms of commit window on a hard feed — which is a real
+#     quantity, rather than from inflating the target.
+#   - It is one-sided, as the physics is. A commit made before the feed is
+#     anywhere near still whiffs, because the segment never reaches the zone; a
+#     symmetric ring rewarded firing 5 m early exactly as much as firing on time.
+static func one_timer_contact_distance(commit_offset: Vector2, release_offset: Vector2) -> float:
+	if not commit_offset.is_finite() or not release_offset.is_finite():
+		return INF
+	var seg: Vector2 = release_offset - commit_offset
+	var seg_len_sq: float = seg.length_squared()
+	if seg_len_sq < 0.000001:
+		return release_offset.length()
+	var t: float = clampf(-commit_offset.dot(seg) / seg_len_sq, 0.0, 1.0)
+	return (commit_offset + seg * t).length()
+
+
+static func one_timer_contact(commit_offset: Vector2, release_offset: Vector2,
+		zone_radius: float) -> bool:
+	return one_timer_contact_distance(commit_offset, release_offset) <= zone_radius
+
+
+# Physical ceiling on how far the puck can travel THROUGH THE SHOOTER'S FRAME
+# during one retention hold: the hardest shot in the game (40 m/s, plus headroom
+# for attribute scaling) closing head-on with a sprinting skater (~10 m/s). The
+# two offsets are client-authoritative — the claimant's own view of its own blade
+# zone, the same class of thing the pickup / poke claims' blade geometry is — so
+# this is the bound that stops a forged pair sweeping a rink-long segment
+# through the zone centre and passing the contact test from anywhere.
+const ONE_TIMER_MAX_BEAT_CLOSING_SPEED: float = 60.0
+
+static func one_timer_beat_plausible(commit_offset: Vector2, release_offset: Vector2,
+		beat_s: float) -> bool:
+	if not commit_offset.is_finite() or not release_offset.is_finite():
+		return false
+	return commit_offset.distance_to(release_offset) \
+			<= ONE_TIMER_MAX_BEAT_CLOSING_SPEED * maxf(beat_s, 0.0)
+
+
+# The host's own, live-geometry half of the gate. Lag compensation decides
+# WHETHER the shooter connected with the puck they saw; it may never conjure a
+# stick onto a puck that is nowhere near one now. Unlike a hitscan, a one-timer
+# moves a shared object every player is watching, so the compensation has to stay
+# inside something physical — the shooter's fully-extended reach
+# (AISkaterCaps.max_blade_reach), measured against the host's LIVE puck at the
+# instant the claim is applied. Beyond it the swing whiffs rather than dragging
+# the puck back onto the blade from where the link left it.
+# `max_reach <= 0` (no caps entry for the peer) skips the bound, the same
+# graceful convention the claim resolvers' reach clamp uses.
+static func one_timer_within_reach(puck_xz: Vector2, body_xz: Vector2, max_reach: float) -> bool:
+	if max_reach <= 0.0:
+		return true
+	return body_xz.distance_to(puck_xz) <= max_reach
 
 
 # One-timer power: max slapper power scaled by a center-proximity bonus — a puck
 # struck dead-center in the slapper zone gets +center_bonus, one at the edge gets
-# -center_bonus, lerping linearly through 0 at half-radius. Shared by the client's
-# local prediction (_try_one_timer_release) and the host's authoritative re-derive
-# (on_remote_one_timer_release) so both compute the identical power from their
-# respective puck reads — host authority over the shot, one source of truth for
-# the formula.
+# -center_bonus, lerping linearly through 0 at half-radius. `contact_distance` is
+# the beat's closest approach (one_timer_contact_distance), i.e. how squarely the
+# blade actually met the puck. Shared by the client's local prediction
+# (_try_one_timer_release) and the host's authoritative re-derive
+# (on_remote_one_timer_release) so both compute the identical power — host
+# authority over the shot, one source of truth for the formula.
 static func one_timer_power(base_power: float, center_bonus: float,
-		zone_xz: Vector2, puck_xz: Vector2, zone_radius: float) -> float:
+		contact_distance: float, zone_radius: float) -> float:
 	if zone_radius <= 0.0:
 		return base_power
-	var proximity: float = clampf(1.0 - zone_xz.distance_to(puck_xz) / zone_radius, 0.0, 1.0)
+	var proximity: float = clampf(1.0 - contact_distance / zone_radius, 0.0, 1.0)
 	return base_power * (1.0 + center_bonus * (2.0 * proximity - 1.0))

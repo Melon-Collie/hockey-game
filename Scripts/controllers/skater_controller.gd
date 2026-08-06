@@ -739,7 +739,6 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # half-finished wind-up.
 @export var slapper_wind_up_lerp_speed: float = 18.0
 @export var one_timer_window_duration: float = 0.45  # seconds after puck arrives to release
-@export var one_timer_leniency_time: float = 0.08   # seconds of puck travel added to zone radius as leniency
 @export var one_timer_center_power_bonus: float = 0.10  # ±10%: edge of zone = −10%, dead centre = +10%
 # Minimum wind-up (seconds of slapper charge) before an arriving puck opens the
 # timed one-timer window. Below it — the "puck was already at the stick when the
@@ -752,12 +751,27 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # A real one-timer is not instant — the blade travels down onto the puck, the
 # shaft loads against it, and the shot comes off the recoil. This is that beat:
 # the shooter is locked in (no cancel), the shaft bows to full load, and the
-# release + range check fire at the END of it. Sized to the slapper
+# release + contact check fire at the END of it. Sized to the slapper
 # follow-through's own downswing (slapper_follow_through_duration ×
 # slapper_follow_through_contact_frac ≈ 0.11 s) so the puck leaves on the beat
 # the finish animation already treats as blade contact, instead of a tenth of a
 # second before the stick gets there.
+#
+# It is also the window the contact test sweeps (ShotReleaseRules.
+# one_timer_contact): lengthening the beat widens the commit timing tolerance,
+# because the puck has longer to cross the zone while the blade comes down.
 @export var one_timer_retention_time: float = 0.11
+
+# The committed swing's contact geometry, both in the shooter's OWN frame (puck
+# minus slapper-zone centre): where the puck sat when the swing committed, and
+# where it sat when the blade arrived. Latched here rather than pushed through
+# one_timer_release_requested because they are evidence for the host's claim
+# arbitration, not part of "a shot happened" — GameManager reads them straight
+# after the emit to build the release RPC. The commit offset rides the reconcile
+# save/restore rail with the retention timer (LocalController), or replay
+# re-anchors it to the live puck and the swept segment collapses.
+var one_timer_commit_offset: Vector2 = Vector2.ZERO
+var one_timer_contact_offset: Vector2 = Vector2.ZERO
 
 var show_one_timer_indicator: bool = false
 
@@ -1990,9 +2004,10 @@ var last_release_stroke_travel: float = -1.0
 # Cost of trusting the control scheme, also symmetric: sniping with the pass
 # button loses an attempt when it misses the net entirely.
 var last_release_was_shot: bool = false
-# Fired when the player releases slap while the puck is nearby but not yet
-# carried — the leniency one-timer. GameManager acquires + releases the puck;
-# the controller transitions to follow-through immediately.
+# Fired when the committed swing connects with a puck it never possessed — the
+# redirect one-timer. GameManager acquires + releases the puck (and reads
+# one_timer_commit_offset / one_timer_contact_offset for the claim); the
+# controller transitions to follow-through immediately.
 signal one_timer_release_requested(direction: Vector3, power: float)
 
 func _do_release(direction: Vector3, power: float) -> void:
@@ -2124,7 +2139,7 @@ func on_puck_picked_up_network() -> void:
 		# The feed landed during the committed hold — the swing caught it. Pin it
 		# to the slapper spot (same setup as the wind-up entry, or the puck snaps
 		# up to the raised blade) and let the hold run out; the release at the end
-		# is now the carried slapshot rather than the leniency redirect. Arm the
+		# is now the carried slapshot rather than the loose redirect. Arm the
 		# window if the wind-up didn't already, so the graded centre bonus applies
 		# to a catch made during the hold exactly as to one made during the charge.
 		skater.set_slapper_zone(false)
@@ -2164,7 +2179,7 @@ func on_puck_released_network() -> void:
 	if _sm.get_state() == State.ONE_TIMER_RETENTION:
 		# Poked/lifted off the blade mid-hold. The swing is already committed, so
 		# don't snap out of it — let the hold run down and whiff through the full
-		# follow-through, the same read a missed leniency one-timer gives.
+		# follow-through, the same read a missed redirect one-timer gives.
 		return
 	_transition_to_skating()
 
@@ -2669,18 +2684,18 @@ func _fire_slapper_shot(input: InputState) -> bool:
 			cfg,
 			locked_dir_3d)
 	# One-timer (puck arrived mid-charge → window armed): apply the SAME graded
-	# centre-timing bonus the leniency-release path uses, so the ±10% is one
+	# centre-timing bonus the redirect-release path uses, so the ±10% is one
 	# mechanic on both release paths — reachable however the shot fires, graded
 	# by how centred the puck is. A one-timer that attaches on the pinned zone
 	# spot is a clean, well-timed catch and earns it; a normal carried slapshot
 	# has no window armed and is untouched.
 	if _aiming.one_timer_window_timer > 0.0:
 		var zone_world: Vector3 = skater.get_slapper_zone_global_position()
-		var zone_xz := Vector2(zone_world.x, zone_world.z)
-		var puck_xz := Vector2(puck.global_position.x, puck.global_position.z)
 		result.power = ShotReleaseRules.one_timer_power(
 				result.power, one_timer_center_power_bonus,
-				zone_xz, puck_xz, slapper_zone_radius)
+				Vector2(zone_world.x, zone_world.z).distance_to(
+						Vector2(puck.global_position.x, puck.global_position.z)),
+				slapper_zone_radius)
 	_sm.shot_dir = result.direction
 	_do_release(result.direction, result.power)
 	return true
@@ -2849,11 +2864,17 @@ func _apply_slapper_velocity_drag(delta: float) -> void:
 # release — the catch that earned it already happened.
 func _enter_one_timer_retention() -> void:
 	_aiming.one_timer_retention_timer = one_timer_retention_time
+	# Near end of the swept contact test. Taken in the skater's own frame so the
+	# segment describes the puck's path RELATIVE to the blade zone — a shooter
+	# skating with the feed and one standing still are then the same geometry.
+	var zone_world: Vector3 = skater.get_slapper_zone_global_position()
+	one_timer_commit_offset = Vector2(
+			puck.global_position.x - zone_world.x, puck.global_position.z - zone_world.z)
 
 
 # End of the hold: fire whichever one-timer path the puck's actual whereabouts
 # select. Caught (pinned on the blade through the beat) fires the ordinary
-# carried slapshot; still loose fires the leniency redirect. Both were already
+# carried slapshot; still loose fires the swept-contact redirect. Both were already
 # the two one-timer releases — retention only moved WHEN they run.
 func _release_retained_one_timer(input: InputState) -> Dictionary:
 	if not has_puck:
@@ -2870,14 +2891,19 @@ func _release_retained_one_timer(input: InputState) -> Dictionary:
 
 
 func _try_one_timer_release(input: InputState) -> Dictionary:
-	# Use XZ distance from the slapper zone center (ground level) — this matches
-	# the ring indicator the player sees and avoids penalising blade height since
-	# the blade is lifted during wind-up.
+	# Far end of the swept contact test — XZ offsets from the slapper-zone centre
+	# at ground level, which is the ring the player is shown, and which doesn't
+	# penalise blade height (the blade is lifted through the wind-up).
 	var zone_world: Vector3 = skater.get_slapper_zone_global_position()
-	var zone_xz := Vector2(zone_world.x, zone_world.z)
-	var puck_xz := Vector2(puck.global_position.x, puck.global_position.z)
-	var dist: float = zone_xz.distance_to(puck_xz)
-	if dist > _effective_one_timer_leniency():
+	one_timer_contact_offset = Vector2(
+			puck.global_position.x - zone_world.x, puck.global_position.z - zone_world.z)
+	var contact_dist: float = ShotReleaseRules.one_timer_contact_distance(
+			one_timer_commit_offset, one_timer_contact_offset)
+	# The slapper blade comes down onto the ice, so it plays the ice: the same
+	# blade-plane rule that lets a saucer pass fly over a stationary grounded
+	# stick refuses to let this one pluck a puck out of the air.
+	if not PuckReceptionRules.blade_can_interact(false, puck.is_airborne()) \
+			or contact_dist > slapper_zone_radius:
 		# Whiff: no shot fires, but the state machine still commits the swing
 		# to a full follow-through — hand it the same duration/power and drop
 		# the HUD now, exactly like a connected release.
@@ -2891,7 +2917,7 @@ func _try_one_timer_release(input: InputState) -> Dictionary:
 			blade_world, input.mouse_world_pos,
 			_elevation_level, _aiming.slapper_charge_timer, cfg, locked_dir_3d)
 	result.power = ShotReleaseRules.one_timer_power(
-			result.power, one_timer_center_power_bonus, zone_xz, puck_xz, slapper_zone_radius)
+			result.power, one_timer_center_power_bonus, contact_dist, slapper_zone_radius)
 	if not is_replaying:
 		last_release_was_shot = true  # a one-timer is a shot
 		one_timer_release_requested.emit(result.direction, result.power)
@@ -2919,20 +2945,21 @@ func _apply_block_movement(_input: InputState, delta: float) -> void:
 				skater.velocity, Vector2.ZERO, skater.rotation.y,
 				false, true, delta, block_cfg)
 
-func _effective_one_timer_leniency() -> float:
-	var puck_xz_speed: float = Vector2(puck.linear_velocity.x, puck.linear_velocity.z).length()
-	return slapper_zone_radius + puck_xz_speed * one_timer_effective_leniency_time()
-
-
-# Seconds of puck travel the leniency ring forgives. The range check now runs at
-# the END of the retention hold rather than on the button edge, so the puck has
-# already carried `one_timer_retention_time` further along its line by the time
-# it is judged: without folding the hold in, a dead-centre commit on a hard feed
-# would sail clean past the zone during the beat and read as a whiff. Public so
-# the host's authoritative gate (GameManager.on_remote_one_timer_release ->
-# ShotReleaseRules.one_timer_in_range) measures the identical ring.
-func one_timer_effective_leniency_time() -> float:
-	return one_timer_leniency_time + one_timer_retention_time
+# The wind-up indicator's "commit now and you connect" tell. Runs the SAME swept
+# contact test the release will run, against the segment the puck is about to
+# travel through this skater's frame over one retention hold — so what lights up
+# is a prediction of the actual gate, not a separate ring with its own tolerance.
+# Straight-line extrapolation: ice friction takes ~1 % off a hard feed over the
+# beat, well inside the zone radius, and the puck is not steering.
+func _one_timer_would_connect() -> bool:
+	var zone_world: Vector3 = skater.get_slapper_zone_global_position()
+	var offset := Vector2(
+			puck.global_position.x - zone_world.x, puck.global_position.z - zone_world.z)
+	var relative_vel := Vector2(
+			puck.linear_velocity.x - skater.velocity.x,
+			puck.linear_velocity.z - skater.velocity.z)
+	return ShotReleaseRules.one_timer_contact(
+			offset, offset + relative_vel * one_timer_retention_time, slapper_zone_radius)
 
 func _is_in_slapper_state() -> bool:
 	var s: SkaterStateMachine.State = _sm.get_state()

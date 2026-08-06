@@ -65,7 +65,7 @@ signal remote_skater_spawn_requested(peer_id: int, team_slot: int, team_id: int,
 signal existing_players_synced(player_data: Array)
 signal local_puck_pickup_confirmed
 signal local_puck_stolen(was_stick_lift: bool)
-signal one_timer_release_received(direction: Vector3, power: float, peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3)
+signal one_timer_release_received(direction: Vector3, power: float, peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, commit_offset: Vector2, contact_offset: Vector2)
 signal carrier_puck_dropped
 signal remote_carrier_changed(new_carrier_peer_id: int)
 signal ghost_state_received(peer_id: int, is_ghost: bool)
@@ -2018,22 +2018,29 @@ func notify_puck_stolen(event_seq: int, was_stick_lift: bool) -> void:
 				local_puck_stolen.emit(wsl),
 		[event_seq, was_stick_lift], true)
 
-func send_one_timer_release(direction: Vector3, power: float, origin: Vector3) -> void:
+# `commit_offset` / `contact_offset` are the swing's contact geometry in the
+# shooter's OWN frame (puck minus slapper-zone centre, at the two ends of the
+# retention hold) — client-authoritative aim in the same sense the pickup / poke
+# claims' blade geometry is, and bounded host-side the same way. No shot ORIGIN
+# rides along: the host fires from its own live puck, because compensation that
+# repositions a shared object reads as a teleport on every other screen.
+func send_one_timer_release(direction: Vector3, power: float,
+		commit_offset: Vector2, contact_offset: Vector2) -> void:
 	# Adapted interp delay (get_interpolation_delay), the value that actually
-	# positioned the rendered puck — the host rewinds to it (remote_view_time) for
-	# the "did I connect with the puck I saw" range gate. Matches the pickup / poke /
-	# stick-lift / hit claim sends; target would lead it mid-jitter.
+	# positioned the rendered goalie — the host rewinds to it (remote_view_time)
+	# for fair release geometry. Matches the pickup / poke / stick-lift / hit
+	# claim sends; target would lead it mid-jitter.
 	release_puck_one_timer.rpc_id(1, direction, power,
 			estimated_host_time(), get_latest_rtt_ms(),
-			get_interpolation_delay() * 1000.0, origin)
+			get_interpolation_delay() * 1000.0, commit_offset, contact_offset)
 
 @rpc("any_peer", "reliable")
-func release_puck_one_timer(direction: Vector3, power: float, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
+func release_puck_one_timer(direction: Vector3, power: float, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, commit_offset: Vector2, contact_offset: Vector2) -> void:
 	var sender: int = multiplayer.get_remote_sender_id()
 	NetworkSimManager.send(
-		func(d: Vector3, p: float, ts: float, rtt: float, idms: float, org: Vector3, sid: int) -> void:
-			one_timer_release_received.emit(d, p, sid, ts, rtt, idms, org),
-		[direction, power, host_timestamp, rtt_ms, interp_delay_ms, client_origin, sender], true)
+		func(d: Vector3, p: float, ts: float, rtt: float, idms: float, co: Vector2, ko: Vector2, sid: int) -> void:
+			one_timer_release_received.emit(d, p, sid, ts, rtt, idms, co, ko),
+		[direction, power, host_timestamp, rtt_ms, interp_delay_ms, commit_offset, contact_offset, sender], true)
 
 func notify_goal_to_all(scoring_team_id: int, score0: int, score1: int, scorer_name: String, assist1_name: String, assist2_name: String) -> void:
 	for peer_id in connected_peer_ids():

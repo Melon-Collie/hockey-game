@@ -537,6 +537,12 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# inside the replay loop, so without save/restore each reconcile drains the
 	# unconfirmed window again and the one-timer fires ahead of its own hold.
 	var pre_one_timer_retention_timer: float = _aiming.one_timer_retention_timer
+	# The near end of the swept contact test, pinned on the retention ENTRY edge
+	# from the puck's live position. A replay that re-crosses that edge re-anchors
+	# it to where the puck is NOW — the segment collapses toward a point and a
+	# connected one-timer starts reading as a whiff — so it rides the same rail as
+	# the timer it belongs to.
+	var pre_one_timer_commit_offset: Vector2 = one_timer_commit_offset
 	# slapper_charge_timer ticks inside _update_slapper_charge during replay; without
 	# save/restore each reconcile re-ticks the unconfirmed inputs and the timer
 	# inflates O(N) per broadcast, popping the blade above slapper_wind_up_height.
@@ -678,6 +684,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	_sm.shot_dir = pre_shot_dir
 	_aiming.one_timer_window_timer = pre_one_timer_window_timer
 	_aiming.one_timer_retention_timer = pre_one_timer_retention_timer
+	one_timer_commit_offset = pre_one_timer_commit_offset
 	_aiming.slapper_charge_timer = pre_slapper_charge_timer
 	_aiming.swing_rotation = pre_charge_swing_rotation
 	_aiming.cursor_speed_ema = pre_charge_cursor_speed
@@ -926,7 +933,7 @@ func _update_one_timer_indicator() -> void:
 		var zone_xz := Vector2(zone_world.x, zone_world.z)
 		var puck_xz := Vector2(puck.global_position.x, puck.global_position.z)
 		var dist: float = zone_xz.distance_to(puck_xz)
-		skater.set_slapper_indicator_ready(dist <= _effective_one_timer_leniency())
+		skater.set_slapper_indicator_ready(_one_timer_would_connect())
 		skater.update_slapper_indicator_convergence(clampf(dist / slapper_zone_radius, 0.0, 1.0))
 	else:
 		# No slapper aim active — force BOTH HUD elements down. The arrow is

@@ -4180,7 +4180,7 @@ func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_p
 	# (dropping slap_held) fires through the controller's own paths: puck
 	# attached mid-charge → the one-timer window → release_slapper with the
 	# centre-timing bonus; puck at the zone but not attached →
-	# try_one_timer_release's leniency buffer.
+	# try_one_timer_release's swept contact test over the retention beat.
 	#
 	# The old wrister hold could never fire here: on_puck_picked_up_network
 	# forces SKATING_WITH_PUCK for every state EXCEPT the slapper charge, so
@@ -4272,8 +4272,8 @@ func _state_one_timer_pressed(input: InputState, snapshot: WorldSnapshot, self_p
 
 	if _puck_at_slapper_zone(snapshot, self_pos):
 		# On the CENTRE beat but not attached (a puck slipping through the zone) —
-		# drop the button and let the controller's release buffer sweep the
-		# leniency zone. Clean feeds attach a hair earlier (the have_puck branch
+		# drop the button and let the committed beat sweep the puck through the
+		# slapper zone. Clean feeds attach a hair earlier (the have_puck branch
 		# above) and fire the with-puck release instead; both earn the same graded
 		# centre-timing bonus. Releasing here on the centre beat (not at blade
 		# reach, ~1.5 m early) is what stops the old −10%/whiff on the salvage.
@@ -4442,7 +4442,7 @@ func _slapper_zone_center(self_pos: Vector3) -> Vector3:
 
 # Release trigger for a wound-up one-timer: is the puck (projected one tick) right
 # AT the slapper zone centre? This fires the release on the CENTRE beat — a human
-# releases "on the beat" and the leniency buffer covers the swing. The old
+# releases "on the beat" and the swept contact test covers the swing. The old
 # trigger released the instant the puck entered blade reach (~2 m out, ~1.5 m
 # from the zone centre): far too early, which scored the −10% end of the
 # centre-timing bonus and whiffed slower feeds outright. Sized INSIDE the pickup

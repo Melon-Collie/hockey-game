@@ -157,55 +157,125 @@ func test_one_timer_claim_stale_once_the_puck_is_already_in_flight() -> void:
 			"someone played the puck after this swing committed — the swing missed")
 
 
-# ── one_timer_in_range ────────────────────────────────────────────────────────
+# ── one_timer_contact ─────────────────────────────────────────────────────────
+# Offsets are puck-minus-zone-centre in the shooter's own frame: the near end
+# sampled when the swing committed, the far end when the blade arrived.
 
-func test_one_timer_puck_in_zone_accepted() -> void:
-	assert_true(ShotReleaseRules.one_timer_in_range(
-			Vector2(0, 0), Vector2(0.3, 0), 0.5, 0.0, 0.08))
+const ZONE_R: float = 0.5
 
-func test_one_timer_within_slack_accepted() -> void:
-	# Just past radius but inside the server-side slack.
-	assert_true(ShotReleaseRules.one_timer_in_range(
-			Vector2(0, 0), Vector2(1.2, 0), 0.5, 0.0, 0.08))
+func test_one_timer_contact_when_the_puck_sits_in_the_zone_all_beat() -> void:
+	assert_true(ShotReleaseRules.one_timer_contact(
+			Vector2(0.3, 0), Vector2(0.3, 0), ZONE_R),
+			"a stationary puck inside the ring connects")
 
-func test_one_timer_across_rink_rejected() -> void:
-	assert_false(ShotReleaseRules.one_timer_in_range(
-			Vector2(0, 0), Vector2(15, 0), 0.5, 0.0, 0.08),
-			"forged claim with a distant puck is rejected")
+func test_one_timer_contact_when_the_feed_crosses_during_the_hold() -> void:
+	# Commit while the feed is still 2 m out; it runs clean through the zone and
+	# is 1.5 m past by the time the blade lands. The beat is what forgives this.
+	assert_true(ShotReleaseRules.one_timer_contact(
+			Vector2(-2.0, 0), Vector2(1.5, 0), ZONE_R),
+			"the puck crossed the ring while the stick was coming down")
 
-func test_one_timer_fast_puck_gets_speed_leniency() -> void:
-	# 14 m/s puck adds 14 * 0.08 = 1.12 m leniency: 0.5 + 1.12 + 1.0 slack = 2.62.
-	assert_true(ShotReleaseRules.one_timer_in_range(
-			Vector2(0, 0), Vector2(2.5, 0), 0.5, 14.0, 0.08))
-	assert_false(ShotReleaseRules.one_timer_in_range(
-			Vector2(0, 0), Vector2(2.8, 0), 0.5, 14.0, 0.08))
+func test_one_timer_early_commit_whiffs() -> void:
+	# Committed so early the feed is still a metre short when the blade arrives —
+	# the old symmetric ring rewarded this exactly as much as good timing.
+	assert_false(ShotReleaseRules.one_timer_contact(
+			Vector2(-4.0, 0), Vector2(-1.0, 0), ZONE_R),
+			"the segment never reaches the zone")
+
+func test_one_timer_late_commit_whiffs() -> void:
+	assert_false(ShotReleaseRules.one_timer_contact(
+			Vector2(1.0, 0), Vector2(4.0, 0), ZONE_R),
+			"the puck was already through before the swing committed")
+
+func test_one_timer_contact_misses_a_fast_puck_that_passes_wide() -> void:
+	# Travels the full length of the beat but a metre off the blade's line.
+	assert_false(ShotReleaseRules.one_timer_contact(
+			Vector2(-3.0, 1.0), Vector2(3.0, 1.0), ZONE_R),
+			"a wide feed is a wide feed however fast it goes")
+
+func test_one_timer_contact_distance_is_the_closest_approach() -> void:
+	assert_almost_eq(ShotReleaseRules.one_timer_contact_distance(
+			Vector2(-3.0, 0.2), Vector2(3.0, 0.2)), 0.2, 0.001,
+			"perpendicular distance to the segment, not to either endpoint")
+
+func test_one_timer_contact_distance_clamps_to_the_endpoints() -> void:
+	# The zone centre is behind the near end: the closest point is that endpoint,
+	# not the infinite line's foot.
+	assert_almost_eq(ShotReleaseRules.one_timer_contact_distance(
+			Vector2(1.0, 0), Vector2(4.0, 0)), 1.0, 0.001)
+
+func test_one_timer_contact_distance_of_a_degenerate_segment() -> void:
+	assert_almost_eq(ShotReleaseRules.one_timer_contact_distance(
+			Vector2(0.4, 0.3), Vector2(0.4, 0.3)), 0.5, 0.001,
+			"zero-length beat falls back to the offset itself")
+
+func test_one_timer_contact_distance_rejects_non_finite_offsets() -> void:
+	assert_eq(ShotReleaseRules.one_timer_contact_distance(
+			Vector2(NAN, 0), Vector2(0, 0)), INF)
+
+
+# ── one_timer_beat_plausible ──────────────────────────────────────────────────
+
+func test_one_timer_beat_plausible_for_a_hard_feed() -> void:
+	# 30 m/s closing over a 0.11 s beat = 3.3 m through the shooter's frame.
+	assert_true(ShotReleaseRules.one_timer_beat_plausible(
+			Vector2(-2.0, 0), Vector2(1.3, 0), 0.11))
+
+func test_one_timer_beat_implausible_for_a_forged_sweep() -> void:
+	# A segment long enough to sweep the zone centre from anywhere on the rink.
+	assert_false(ShotReleaseRules.one_timer_beat_plausible(
+			Vector2(-40.0, 0), Vector2(40.0, 0), 0.11),
+			"no puck moves 80 m in a tenth of a second")
+
+func test_one_timer_beat_implausible_when_non_finite() -> void:
+	assert_false(ShotReleaseRules.one_timer_beat_plausible(
+			Vector2(INF, 0), Vector2.ZERO, 0.11))
+
+
+# ── one_timer_within_reach ────────────────────────────────────────────────────
+
+func test_one_timer_within_reach_of_the_live_puck() -> void:
+	assert_true(ShotReleaseRules.one_timer_within_reach(
+			Vector2(1.5, 0), Vector2(0, 0), 2.5))
+
+func test_one_timer_out_of_reach_rejected() -> void:
+	# Lag comp said the shooter connected, but the puck has since travelled well
+	# past any stick — the swing whiffs rather than dragging the puck back.
+	assert_false(ShotReleaseRules.one_timer_within_reach(
+			Vector2(4.0, 0), Vector2(0, 0), 2.5))
+
+func test_one_timer_reach_bound_no_ops_without_a_caps_entry() -> void:
+	assert_true(ShotReleaseRules.one_timer_within_reach(
+			Vector2(40.0, 0), Vector2(0, 0), 0.0),
+			"no measured reach for the peer — lean on the other gates")
 
 
 # ── one_timer_power ───────────────────────────────────────────────────────────
+# Graded by the beat's closest approach (one_timer_contact_distance).
 
 func test_one_timer_power_dead_center_gets_full_bonus() -> void:
-	# Puck on the zone center: proximity 1 → base * (1 + bonus).
+	# Struck through the zone centre: proximity 1 → base * (1 + bonus).
 	assert_almost_eq(ShotReleaseRules.one_timer_power(
-			40.0, 0.15, Vector2(0, 0), Vector2(0, 0), 0.5), 40.0 * 1.15, 0.001)
+			40.0, 0.15, 0.0, 0.5), 40.0 * 1.15, 0.001)
 
 func test_one_timer_power_edge_gets_full_penalty() -> void:
-	# Puck at the radius edge: proximity 0 → base * (1 - bonus).
+	# Grazed the ring edge: proximity 0 → base * (1 - bonus).
 	assert_almost_eq(ShotReleaseRules.one_timer_power(
-			40.0, 0.15, Vector2(0, 0), Vector2(0.5, 0), 0.5), 40.0 * 0.85, 0.001)
+			40.0, 0.15, 0.5, 0.5), 40.0 * 0.85, 0.001)
 
 func test_one_timer_power_half_radius_is_neutral() -> void:
 	# proximity 0.5 → 2*0.5 - 1 = 0 → no bonus or penalty.
 	assert_almost_eq(ShotReleaseRules.one_timer_power(
-			40.0, 0.15, Vector2(0, 0), Vector2(0.25, 0), 0.5), 40.0, 0.001)
+			40.0, 0.15, 0.25, 0.5), 40.0, 0.001)
 
 func test_one_timer_power_beyond_radius_clamps_to_full_penalty() -> void:
 	# Past the radius proximity clamps to 0 (not negative) → base * (1 - bonus).
 	assert_almost_eq(ShotReleaseRules.one_timer_power(
-			40.0, 0.15, Vector2(0, 0), Vector2(2.0, 0), 0.5), 40.0 * 0.85, 0.001)
+			40.0, 0.15, 2.0, 0.5), 40.0 * 0.85, 0.001)
 
 func test_one_timer_power_zero_radius_returns_base() -> void:
 	assert_almost_eq(ShotReleaseRules.one_timer_power(
-			40.0, 0.15, Vector2(0, 0), Vector2(0, 0), 0.0), 40.0, 0.001)
+			40.0, 0.15, 0.0, 0.0), 40.0, 0.001)
 
 
 # ── clamp_origin ──────────────────────────────────────────────────────────────
