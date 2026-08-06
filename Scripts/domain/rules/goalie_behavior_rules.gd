@@ -866,6 +866,28 @@ static func travel_time_from_rest(dist: float, max_speed: float, accel: float) -
 	return t_ramp + (dist - d_ramp) / max_speed
 
 
+# Soonest a defender `dist` from a body can get a stick on him, starting FROM
+# REST. Shares the behind-net trip's travel primitive, and the direction of
+# conservatism is the whole reason it is not GoalieSaveSelection.contest_time.
+#
+# Both answer "when can a stick reach that", but they are used for opposite
+# purposes and so must lean opposite ways. `contest_time` prices a THREAT — a
+# body that might touch the puck and ruin the read — so it assumes instant full
+# speed and over-states the danger. This prices a FAVOUR: the goalie's own
+# coverage, which he is about to trade net position for. Assuming instant full
+# speed there credits him coverage nobody can deliver — measured, it read a
+# defender 5 m off the backdoor man as arriving in 0.43 s, enough to talk the
+# goalie into challenging and the bots out of a genuinely open cross-seam feed.
+# A body accelerates; making it start from rest is what separates "my D is ON
+# him" from "my D is in the vicinity".
+static func defender_arrival_time(dist: float, stick_reach: float,
+		max_speed: float, accel: float) -> float:
+	var gap: float = dist - stick_reach
+	if gap <= 0.0:
+		return 0.0          # already within a stick of him
+	return travel_time_from_rest(gap, max_speed, accel)
+
+
 # Can the goalie be at the stop point, SET, before the rim arrives? A stop the
 # goalie reaches late is a deflection risk, not a stop — no-go.
 static func can_beat_puck_to_stop(
@@ -1142,6 +1164,28 @@ static func cross_crease_race_lost(
 # result only ever *repositions* — the actual cross-crease save still runs the
 # honest react/push race, so respecting the backdoor opens the carrier's
 # direct-shot angle instead of buffing the goalie into a wall.
+#
+# ── HE HAS DEFENCEMEN, AND THEY WERE INVISIBLE ───────────────────────────────
+# The cap priced every weak-side body as a free one-timer man whether or not one
+# of the goalie's own was standing on him, which is the opposite of the most
+# taught read in the sport: on a 2-on-1 you TAKE THE SHOOTER and trust your D to
+# take the pass. Backing off for a covered man gave away the carrier's angle for
+# nothing, and — worse — meant a defenceman doing his job bought his goalie
+# nothing at all.
+#
+# Coverage enters in the model's own currency, TIME, and as a race like
+# everything else: `defender_arrival_time` is how long until the nearest
+# defender's stick can reach the reception point. A defender who is ALREADY
+# there disputes the feed for the puck's whole flight, so the play needs the
+# flight twice over; one who arrives exactly as the puck does adds nothing; one
+# who is late is worth nothing and never shortens the play. No threshold, no
+# "is covered" boolean — the credit is `t_pass − t_defender`, floored at zero
+# and naturally capped at the flight itself.
+#
+# This is a positioning trade, not a save buff, and it cuts both ways: the
+# goalie challenges harder when the back door is covered and gives up more if
+# the feed still gets through, and he retreats the moment his D leaves. Bad
+# coverage now costs, which is the point.
 class BackdoorThreatConfig:
 	var pass_speed: float = 0.0            # m/s — assumed feed pace (puck flight)
 	var release_time: float = 0.0          # s — receiver's one-timer swing
@@ -1157,6 +1201,7 @@ static func backdoor_depth_cap(
 		goal_line_z: float,
 		goal_center_x: float,
 		direction_sign: int,
+		defender_arrival_time: float,
 		cfg: BackdoorThreatConfig) -> float:
 	# Live one-timer option only: in front of the goal line (no shooting angle
 	# from behind it) and inside the scoring area.
@@ -1181,8 +1226,11 @@ static func backdoor_depth_cap(
 	var pdx: float = shooter_position.x - puck_position.x
 	var pdz: float = shooter_position.z - puck_position.z
 	var pass_dist: float = sqrt(pdx * pdx + pdz * pdz)
-	var move_time: float = pass_dist / maxf(cfg.pass_speed, 0.001) \
-			+ cfg.release_time - cfg.react_delay
+	var t_pass: float = pass_dist / maxf(cfg.pass_speed, 0.001)
+	# How long a defender has been disputing the reception when the puck lands.
+	# Already there → the whole flight; arriving with it → nothing; late → nothing.
+	var coverage: float = clampf(t_pass - defender_arrival_time, 0.0, t_pass)
+	var move_time: float = t_pass + cfg.release_time + coverage - cfg.react_delay
 	var coverable: float = reachable_lateral_distance(
 			cfg.goalie_lateral_speed, cfg.goalie_lateral_accel, move_time)
 	return coverable / sin_theta

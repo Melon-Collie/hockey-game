@@ -2621,7 +2621,8 @@ static func resolve_feed_keeper(
 		receiver_pos: Vector3,
 		carrier_pos: Vector3,
 		pose_hands: Vector4 = Vector4.INF,
-		pass_speed_m_s: float = -1.0) -> bool:
+		pass_speed_m_s: float = -1.0,
+		defender_positions: Array[Vector3] = []) -> bool:
 	var dir_sign: int = int(-signf(attacking_goal.z))
 	# The cap must be priced at the feed actually being scored: the callers
 	# fire expected_pass_speed (charged for long cross-seam feeds), and a
@@ -2630,9 +2631,30 @@ static func resolve_feed_keeper(
 	# callers with no speed in scope.
 	_backdoor_cfg_planning.pass_speed = pass_speed_m_s \
 			if pass_speed_m_s > 0.0 else GameRules.DEFAULT_QUICK_PASS_POWER_M_S
+	# AI MIRROR: the live keeper discounts a weak-side man his own defence is
+	# standing on (backdoor_depth_cap), so the planning keeper has to see the same
+	# coverage or the bots feed against a goalie parked metres deeper than the one
+	# they actually face. `defender_positions` is whoever wears the modelled
+	# goalie's colours — the opposing D when scoring a feed at THEIR net, our own
+	# when weighing a threat at ours. Empty (nobody in scope) restores the
+	# uncovered read exactly.
+	var d_nearest_sq: float = INF
+	for d in defender_positions:
+		var ddx: float = d.x - receiver_pos.x
+		var ddz: float = d.z - receiver_pos.z
+		var d_sq: float = ddx * ddx + ddz * ddz
+		if d_sq < d_nearest_sq:
+			d_nearest_sq = d_sq
+	var d_arrival: float = INF
+	if not is_inf(d_nearest_sq):
+		d_arrival = GoalieBehaviorRules.defender_arrival_time(
+				sqrt(d_nearest_sq), GameRules.DEFAULT_STICK_LENGTH_M,
+				GameRules.DEFAULT_SKATER_MAX_SPEED_M_S,
+				GameRules.DEFAULT_SKATER_THRUST_M_S2)
 	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			carrier_pos, carrier_pos, receiver_pos,
-			attacking_goal.z, attacking_goal.x, dir_sign, _backdoor_cfg_planning)
+			attacking_goal.z, attacking_goal.x, dir_sign, d_arrival,
+			_backdoor_cfg_planning)
 	if cap >= INF:
 		feed_keeper_pos = predict_goalie_pos(
 				goalie_now, attacking_goal, release_time_s, receiver_pos)

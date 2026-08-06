@@ -971,19 +971,19 @@ func test_backdoor_shooter_caps_challenge_depth() -> void:
 	# perpendicular lines → cap ≈ 1.13, well under the 1.75 aggressive chart.
 	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
-			26.6, 0.0, -1, _backdoor_cfg())
+			26.6, 0.0, -1, INF, _backdoor_cfg())
 	assert_almost_eq(cap, 1.131, 0.02)
 
 func test_no_cap_without_live_shooter_behind_goal_line() -> void:
 	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 27.2),
-			26.6, 0.0, -1, _backdoor_cfg())
+			26.6, 0.0, -1, INF, _backdoor_cfg())
 	assert_true(is_inf(cap), "shooter behind the goal line can't one-time — no cap")
 
 func test_no_cap_for_shooter_outside_scoring_area() -> void:
 	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(0, 0, 15.0),
-			26.6, 0.0, -1, _backdoor_cfg())
+			26.6, 0.0, -1, INF, _backdoor_cfg())
 	assert_true(is_inf(cap), "shooter 11.6m out is not a backdoor threat")
 
 func test_no_cap_for_shooter_on_same_shot_line() -> void:
@@ -991,7 +991,7 @@ func test_no_cap_for_shooter_on_same_shot_line() -> void:
 	# to goal→(−4,23)): challenging the carrier already covers him.
 	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(-2, 0, 24.8),
-			26.6, 0.0, -1, _backdoor_cfg())
+			26.6, 0.0, -1, INF, _backdoor_cfg())
 	assert_true(is_inf(cap), "same-angle shooter needs no re-square — no cap")
 
 func test_doorstep_criss_cross_pins_goalie_deep() -> void:
@@ -999,18 +999,18 @@ func test_doorstep_criss_cross_pins_goalie_deep() -> void:
 	# (1.2, 25.2). 2.7m pass → goalie still ramping → cap ≈ 0.35.
 	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-1.5, 0, 25.3), Vector3(-1.5, 0, 25.3), Vector3(1.2, 0, 25.2),
-			26.6, 0.0, -1, _backdoor_cfg())
+			26.6, 0.0, -1, INF, _backdoor_cfg())
 	assert_almost_eq(cap, 0.348, 0.02)
 
 func test_faster_assumed_pass_caps_deeper() -> void:
 	var slow_cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
-			26.6, 0.0, -1, _backdoor_cfg())
+			26.6, 0.0, -1, INF, _backdoor_cfg())
 	var fast_cfg: GoalieBehaviorRules.BackdoorThreatConfig = _backdoor_cfg()
 	fast_cfg.pass_speed = 20.0
 	var fast_cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
-			26.6, 0.0, -1, fast_cfg)
+			26.6, 0.0, -1, INF, fast_cfg)
 	assert_lt(fast_cap, slow_cap)
 
 func test_unwinnable_race_caps_to_zero() -> void:
@@ -1020,14 +1020,80 @@ func test_unwinnable_race_caps_to_zero() -> void:
 	cfg.react_delay = 0.5
 	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-1.5, 0, 25.3), Vector3(-1.5, 0, 25.3), Vector3(1.2, 0, 25.2),
-			26.6, 0.0, -1, cfg)
+			26.6, 0.0, -1, INF, cfg)
 	assert_almost_eq(cap, 0.0, 0.0001)
 
 func test_backdoor_cap_symmetric_for_minus_z_goal() -> void:
 	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-4, 0, -23), Vector3(-4, 0, -23), Vector3(1.2, 0, -25.2),
-			-26.6, 0.0, 1, _backdoor_cfg())
+			-26.6, 0.0, 1, INF, _backdoor_cfg())
 	assert_almost_eq(cap, 1.131, 0.02)
+
+# ── Coverage: he has defencemen ──────────────────────────────────────────────
+# The 2-on-1 rule — take the shooter, trust your D to take the pass. A defender
+# already disputing the reception buys the goalie time in the model's own
+# currency, so he challenges further out; one arriving with the puck buys
+# nothing; one who is late never shortens the play.
+
+func test_covered_backdoor_man_lets_him_challenge_further() -> void:
+	var free_cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, INF, _backdoor_cfg())
+	# A defender whose stick is already on the receiver disputes the feed for
+	# its whole flight.
+	var covered_cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, 0.0, _backdoor_cfg())
+	assert_gt(covered_cap, free_cap,
+			"a covered one-timer man is not a reason to give up the carrier's angle")
+
+func test_a_defender_arriving_with_the_puck_buys_nothing() -> void:
+	# 5.65 m feed at 14 m/s = 0.40 s of flight. A defender who gets there at
+	# exactly that moment has disputed nothing.
+	var free_cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, INF, _backdoor_cfg())
+	var late_cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, 0.404, _backdoor_cfg())
+	assert_almost_eq(late_cap, free_cap, 0.02)
+
+func test_a_late_defender_never_shortens_the_play() -> void:
+	# Arriving a full second after the puck is worth zero, not negative — the
+	# credit floors rather than penalising the goalie for bad coverage.
+	var free_cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, INF, _backdoor_cfg())
+	var very_late: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, 5.0, _backdoor_cfg())
+	assert_almost_eq(very_late, free_cap, 0.0001)
+
+func test_defender_arrival_starts_from_rest() -> void:
+	# The asymmetry that makes this NOT contest_time: coverage is a favour the
+	# goalie is about to trade net position for, so a body has to actually
+	# accelerate to earn it. On him → free. Five metres off → most of a second,
+	# not the 0.4 s an instant-full-speed read would have credited.
+	var stick: float = GameRules.DEFAULT_STICK_LENGTH_M
+	var v: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
+	var a: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
+	assert_eq(GoalieBehaviorRules.defender_arrival_time(1.0, stick, v, a), 0.0,
+			"already within a stick of him")
+	var five_m: float = GoalieBehaviorRules.defender_arrival_time(5.2, stick, v, a)
+	assert_gt(five_m, 0.6, "a body five metres off is not covering anybody yet")
+	assert_gt(five_m, GoalieSaveSelection.contest_time(5.2, stick, v),
+			"the credit read is strictly more conservative than the threat read")
+
+func test_coverage_credit_is_capped_by_the_pass_flight() -> void:
+	# Nothing is gained by a defender being there "even earlier" — the most he
+	# can dispute is the flight itself, so the credit saturates.
+	var on_him: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, 0.0, _backdoor_cfg())
+	var glued: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, -3.0, _backdoor_cfg())
+	assert_almost_eq(glued, on_him, 0.0001)
 
 # ── rush_retreat (speed-matched backflow) ─────────────────────────────────────
 

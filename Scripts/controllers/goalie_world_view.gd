@@ -25,6 +25,10 @@ extends RefCounted
 # Non-ghost OPPOSING skater positions — the sweep-lane model and the behind-net
 # trip's pressure scan.
 var opponents: PackedVector3Array = PackedVector3Array()
+# Non-ghost skaters on the GOALIE'S OWN team — his defensive coverage. The
+# backdoor depth cap asks, per weak-side threat, whether one of these is on him;
+# a covered one-timer man is not the same play as a free one.
+var teammates: PackedVector3Array = PackedVector3Array()
 # Non-ghost opposing positions EXCLUDING the puck carrier — the backdoor depth cap
 # asks about the weak-side one-timer threat, which by definition is not the passer.
 var off_puck_opponents: PackedVector3Array = PackedVector3Array()
@@ -68,6 +72,7 @@ func ensure(frame: int, skaters: Array, team_id: int, puck_pos: Vector3,
 	_frame = frame
 	opponents.clear()
 	off_puck_opponents.clear()
+	teammates.clear()
 	screeners.clear()
 	nearest_opponent_dist = INF
 	nearest_teammate_dist = INF
@@ -86,4 +91,5 @@ func ensure(frame: int, skaters: Array, team_id: int, puck_pos: Vector3,
 				off_puck_opponents.append(skater.global_position)
 			nearest_opponent_dist = minf(nearest_opponent_dist, dist)
 		else:
+			teammates.append(skater.global_position)
 			nearest_teammate_dist = minf(nearest_teammate_dist, dist)

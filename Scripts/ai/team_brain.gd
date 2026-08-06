@@ -402,6 +402,12 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		# Pre-armed feed keeper: our goalie's backdoor depth cap already
 		# guards this man, so the threat partition weighs him at the
 		# merely-strong danger the real keeper concedes.
+		#
+		# Deliberately WITHOUT the coverage term the other three callers pass.
+		# Coverage is what this scan is SOLVING FOR — feeding the current marker
+		# positions back in would make a covered man read as less dangerous, free
+		# his marker, raise his danger, and pull the marker back. The partition
+		# reads raw danger; who covers whom is its output, not its input.
 		var g_state: GoalieNetworkState = snapshot.goalie_states.get(team_id)
 		AIActionScoring.resolve_feed_keeper(
 				our_goalie_pos, our_net, feed_flight, mp, carrier_pos,
