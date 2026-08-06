@@ -48,7 +48,8 @@ namespace mitts {
 	X(hockey_stop_blend_speed) X(hockey_stop_edge_deg) X(hockey_stop_effort) \
 	X(hockey_stop_max_yaw_deg) X(hockey_stop_min_speed) X(hockey_stop_split_deg) \
 	X(hockey_stop_stance) X(hockey_stop_trunk_roll_deg) X(intent_signal_speed) \
-	X(knockdown_getup_seconds) X(knockdown_pose_drop_m) X(max_speed) \
+	X(knockdown_fall_buckle_seconds) X(knockdown_getup_seconds) \
+	X(knockdown_pose_drop_m) X(max_speed) \
 	X(pivot_band_hi_deg) X(pivot_band_lo_deg) X(pivot_blend_speed) \
 	X(pivot_commit_time) X(pivot_depth_ramp_deg) X(pivot_min_speed) \
 	X(pivot_mohawk_deg) X(pivot_rate_min) X(pivot_stance) \
@@ -216,6 +217,7 @@ public:
 			double shot_charge,
 			double stagger_timer,
 			double knockdown_timer,
+			double knockdown_elapsed,
 			double celebration_progress,
 			int64_t flags);
 

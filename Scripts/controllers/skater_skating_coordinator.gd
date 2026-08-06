@@ -78,6 +78,13 @@ var _settled: bool = false
 # segments; the knee ANGLES are ratio-derived and stay build-independent.
 var leg_scale: float = 1.0
 
+
+# This build's (thigh, shin) segment lengths in metres — the knockdown sprawl
+# solve (SkaterController._apply_knockdown_fall) shares the leg geometry the
+# crouch solve uses, served from the one place that owns it.
+func leg_segment_lengths() -> Vector2:
+	return Vector2(_THIGH_LEN, _SHIN_LEN) * leg_scale
+
 # ── Runtime State ─────────────────────────────────────────────────────────────
 var stride_phase: float = 0.0
 # Per-stride trunk texture, written onto the cosmetic torso/helmet/shoulder
@@ -1357,9 +1364,16 @@ func apply(delta: float) -> void:
 	# Knockdown pose factor: holds full while more than knockdown_getup_seconds
 	# remains on the timer, then eases to 0 over that tail (the get-up). Derived FROM
 	# the replicated knockdown_timer, so it renders identically everywhere and through
-	# reconcile — same discipline as the stagger stumble below.
+	# reconcile — same discipline as the stagger stumble below. The entry end is
+	# ramped over the buckle window (KnockdownFallRules.entry_ramp — kd_t alone
+	# is 1 on the first down frame, which landed the whole crumple in one frame);
+	# the smoothstep is inlined here because the native port mirrors this body.
 	var kd_t: float = clampf(
 			_controller.knockdown_timer / maxf(_controller.knockdown_getup_seconds, 0.001), 0.0, 1.0)
+	if kd_t > 0.0:
+		var buckle_t: float = clampf(_controller.knockdown_elapsed()
+				/ maxf(_controller.knockdown_fall_buckle_seconds, 0.001), 0.0, 1.0)
+		kd_t *= buckle_t * buckle_t * (3.0 - 2.0 * buckle_t)
 
 	# The wobble is kept OUT of the summed texture and added after the inertia
 	# filter at the publish tail — a stumble is supposed to shake, and the
@@ -1504,6 +1518,7 @@ func _apply_native(delta: float) -> void:
 			_skater.global_transform.basis, _skater.move_intent,
 			_skater.current_shot_state, _skater.shot_charge,
 			_controller.stagger_timer, _controller.knockdown_timer,
+			_controller.knockdown_elapsed(),
 			_controller.celebration_progress(), flags)
 	_settled = code != 0
 	if code == 2:

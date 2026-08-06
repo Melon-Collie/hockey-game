@@ -16,6 +16,8 @@ func before_each() -> void:
 	_cfg.rest_omega = 0.7
 	_cfg.com_height = 0.95
 	_cfg.max_entry_omega = 4.2
+	_cfg.sprawl_in_seconds = 0.25
+	_cfg.sprawl_splay = 0.31
 
 
 # ── tilt_at ───────────────────────────────────────────────────────────────────
@@ -85,6 +87,145 @@ func test_entry_omega_cap() -> void:
 func test_zero_speed_still_falls() -> void:
 	assert_almost_eq(KnockdownFallRules.tilt_at(10.0, 0.0, _cfg), _cfg.settle_angle,
 			0.0001, "gravity alone completes the fall from a standstill hit")
+
+
+# ── entry_ramp ────────────────────────────────────────────────────────────────
+
+func test_entry_ramp_develops_over_the_buckle_window() -> void:
+	assert_almost_eq(KnockdownFallRules.entry_ramp(0.0, _cfg), 0.0, 0.0001,
+			"the crumple no longer lands in one frame")
+	assert_almost_eq(KnockdownFallRules.entry_ramp(_cfg.buckle_seconds * 0.5, _cfg),
+			0.5, 0.0001, "smoothstep midpoint at half the window")
+	assert_almost_eq(KnockdownFallRules.entry_ramp(_cfg.buckle_seconds, _cfg),
+			1.0, 0.0001, "fully developed at the end of the buckle")
+	assert_almost_eq(KnockdownFallRules.entry_ramp(5.0, _cfg), 1.0, 0.0001,
+			"and held for the rest of the down window")
+
+
+func test_entry_ramp_is_monotonic() -> void:
+	var prev: float = 0.0
+	for i in range(1, 21):
+		var r: float = KnockdownFallRules.entry_ramp(i * 0.005, _cfg)
+		assert_true(r >= prev, "the entry ease never reverses")
+		prev = r
+
+
+# ── first_impact_time ─────────────────────────────────────────────────────────
+
+func test_first_impact_matches_the_tilt_solve() -> void:
+	for speed in [0.0, 3.0, 6.0]:
+		var t_i: float = KnockdownFallRules.first_impact_time(speed, _cfg)
+		assert_almost_eq(KnockdownFallRules.tilt_at(t_i, speed, _cfg),
+				_cfg.settle_angle, 0.0001,
+				"the closed-form impact time lands exactly on the settle plane")
+		assert_true(KnockdownFallRules.tilt_at(t_i - 0.02, speed, _cfg)
+				< _cfg.settle_angle - 0.0001,
+				"and nothing touches the ice before it (speed=%f)" % speed)
+
+
+# ── fold_at ───────────────────────────────────────────────────────────────────
+
+func test_fold_is_the_reflexive_curl_in_the_air() -> void:
+	assert_almost_eq(KnockdownFallRules.fold_at(0.0, 0.35, _cfg), 0.35, 0.0001,
+			"an upright body holds the airborne curl")
+
+
+func test_fold_resolves_to_the_ground_plane_at_settle() -> void:
+	assert_almost_eq(KnockdownFallRules.fold_at(_cfg.settle_angle, 0.35, _cfg),
+			PI / 2.0 - _cfg.settle_angle, 0.0001,
+			"the landed fold is exactly the complement that lays the torso flat")
+
+
+func test_torso_never_folds_through_the_ice() -> void:
+	# The regression this model exists for: a fixed airborne curl held through
+	# the landing put tilt + fold past π/2 on a full fall — head under the ice.
+	for speed in [0.0, 3.0, 6.0]:
+		for i in range(400):
+			var tilt: float = KnockdownFallRules.tilt_at(i * 0.01, speed, _cfg)
+			var fold: float = KnockdownFallRules.fold_at(tilt, 0.35, _cfg)
+			assert_true(tilt + fold <= PI / 2.0 + 0.01,
+					"tilt + fold stays at/above the ground plane (t=%f)" % (i * 0.01))
+
+
+# ── buckle_angles ─────────────────────────────────────────────────────────────
+
+func test_buckle_deficit_matches_the_drop() -> void:
+	var b: Vector2 = KnockdownFallRules.buckle_angles(0.3, 0.31, 0.45)
+	assert_almost_eq((0.31 + 0.45) * (1.0 - cos(b.x)), 0.3, 0.0001,
+			"the collapse angle's leg-length deficit equals the crumple drop")
+	assert_almost_eq(b.y, -2.0 * b.x, 0.0001,
+			"the knee folds back by thigh + shin from vertical")
+
+
+func test_zero_drop_stands_straight() -> void:
+	var b: Vector2 = KnockdownFallRules.buckle_angles(0.0, 0.31, 0.45)
+	assert_almost_eq(b.x, 0.0, 0.0001, "no drop, no buckle")
+	assert_almost_eq(b.y, 0.0, 0.0001, "no drop, no knee fold")
+
+
+# ── sprawl_into ───────────────────────────────────────────────────────────────
+
+func _sprawl(elapsed: float, speed: float, dir: Vector2) -> KnockdownFallRules.SprawlPose:
+	var out := KnockdownFallRules.SprawlPose.new()
+	KnockdownFallRules.sprawl_into(out, elapsed, speed, dir, 0.3, 0.31, 0.45, _cfg)
+	return out
+
+
+# Elapsed at which the scatter has fully developed for this entry speed.
+func _settled_sprawl_time(speed: float) -> float:
+	return KnockdownFallRules.first_impact_time(speed, _cfg) \
+			+ _cfg.sprawl_in_seconds + 0.1
+
+
+func test_sprawl_is_pure_buckle_before_first_impact() -> void:
+	var p: KnockdownFallRules.SprawlPose = _sprawl(0.05, 3.0, Vector2(1, 0))
+	var buckle: Vector2 = KnockdownFallRules.buckle_angles(0.3, 0.31, 0.45)
+	assert_almost_eq(p.l_pitch, buckle.x, 0.0001, "in flight the body falls as one rod")
+	assert_almost_eq(p.r_pitch, buckle.x, 0.0001, "both legs hold the same buckle")
+	assert_almost_eq(p.l_roll, 0.0, 0.0001, "no scatter before the impact")
+	assert_almost_eq(p.l_knee, p.r_knee, 0.0001, "symmetric until the limbs land")
+
+
+func test_sprawl_scatters_after_impact_and_frees_the_top_leg() -> void:
+	# Falling toward +X lands on the right side — the LEFT leg is on top, free
+	# to extend; the right stays pinned under the body and folds deeper.
+	var t: float = _settled_sprawl_time(3.0)
+	var p: KnockdownFallRules.SprawlPose = _sprawl(t, 3.0, Vector2(1, 0))
+	var buckle: Vector2 = KnockdownFallRules.buckle_angles(0.3, 0.31, 0.45)
+	assert_true(absf(p.l_knee) < absf(buckle.y) - 0.01, "the free leg straightens")
+	assert_true(absf(p.r_knee) > absf(buckle.y) + 0.01, "the pinned leg folds deeper")
+	assert_true(p.l_roll < -0.01, "the free left leg splays outward (−X)")
+
+
+func test_sprawl_side_follows_the_fall_lean() -> void:
+	var t: float = _settled_sprawl_time(3.0)
+	var right_free: KnockdownFallRules.SprawlPose = _sprawl(t, 3.0, Vector2(-1, 0))
+	assert_true(right_free.r_roll > 0.01, "falling toward −X frees the right leg (+X splay)")
+	assert_true(absf(right_free.l_knee) > absf(right_free.r_knee),
+			"and pins the left one")
+
+
+func test_harder_hits_sprawl_wider() -> void:
+	var soft: KnockdownFallRules.SprawlPose = _sprawl(_settled_sprawl_time(1.0), 1.0, Vector2(1, 0))
+	var hard: KnockdownFallRules.SprawlPose = _sprawl(_settled_sprawl_time(6.0), 6.0, Vector2(1, 0))
+	assert_true(absf(hard.l_roll) > absf(soft.l_roll) + 0.01,
+			"the splay scales with the entry tip rate")
+
+
+func test_sprawl_knees_only_fold_backward() -> void:
+	for speed in [0.0, 2.0, 6.0]:
+		for i in range(40):
+			var p: KnockdownFallRules.SprawlPose = _sprawl(i * 0.1, speed, Vector2(0.7, 0.7))
+			assert_true(p.l_knee <= 0.0001 and p.r_knee <= 0.0001,
+					"a knee never hyper-extends forward (t=%f)" % (i * 0.1))
+
+
+func test_sprawl_is_deterministic() -> void:
+	var a: KnockdownFallRules.SprawlPose = _sprawl(1.2, 3.0, Vector2(1, 0))
+	var b: KnockdownFallRules.SprawlPose = _sprawl(1.2, 3.0, Vector2(1, 0))
+	assert_eq(a.l_pitch, b.l_pitch, "same inputs, same pose — replay-safe")
+	assert_eq(a.l_roll, b.l_roll, "same inputs, same pose — replay-safe")
+	assert_eq(a.r_knee, b.r_knee, "same inputs, same pose — replay-safe")
 
 
 # ── getup_scale ───────────────────────────────────────────────────────────────
