@@ -21,7 +21,14 @@ const VERSION: String = "dev"
 #   - The legal RANGE of an existing field, even at the same wire type. An older
 #     peer coerces the new value back into its own range and then simulates
 #     different physics than the host, diverging prediction.
-const PROTOCOL_VERSION: int = 56
+#   - The MEANING of an existing field's values, at the same wire type AND the
+#     same range. Both peers decode the byte identically and agree on every
+#     bound, then simulate different physics from it — which prediction cannot
+#     reconcile and no size or range check can catch. A shot-elevation level is
+#     the worked example: still 0..3, still two bits, but the ANGLE each level
+#     fires at is gear tuning, so two builds with different ladders fly
+#     different arcs from byte-identical input.
+const PROTOCOL_VERSION: int = 57
 
 
 func _ready() -> void:

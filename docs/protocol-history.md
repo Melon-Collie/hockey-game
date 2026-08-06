@@ -245,3 +245,12 @@ here whenever you bump, in the same format.
 #      tell. A v55 peer sends the bit always-clear and every aiming shooter
 #      would read as addressing one fixed side — a *wrong* defensive tell,
 #      worse than none, so mixed builds must be refused.
+# v57: shot-elevation ladder retuned (docs/elevation-rework-plan.md §1). The
+#      wire is untouched — elevation_level is still the same two bits over the
+#      same 0..3 range — but each level is a SET LAUNCH ANGLE looked up from
+#      the shooter's blade ladder, and those angles moved. A v56 peer decodes
+#      the identical level and then flies a different arc from it, so client
+#      prediction diverges from host authority on every elevated shot with
+#      nothing in the wire format to flag it. First bump made for MEANING
+#      rather than layout or range; the rule it exercises is now listed in
+#      build_info.gd.
