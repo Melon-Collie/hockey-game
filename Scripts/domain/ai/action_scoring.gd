@@ -248,8 +248,16 @@ const GOALIE_ARM_DEPLOY_S: float = 0.09   # reaction ramp width — time to exte
 
 # Per-band reaction delay (legs fast, arms slow) — the difficulty-synced read
 # latencies (see set_goalie_profile below).
-static func _band_delay(band: int) -> float:
-	return goalie_arm_delay_s if band == HOLE_BAND_HIGH else goalie_leg_delay_s
+static func _delay_at_height(arrival_y: float, goalie_down: bool) -> float:
+	# Which limb has to answer decides the latency, and that is a question about
+	# the puck's HEIGHT against his current pad top — not about a band index.
+	# Standing, the pad column runs to the seam, so everything under it is legs
+	# and everything over it is arms: exactly the old LOW/HIGH split. Down, the
+	# pads collapse to 0.28 m and the answer changes — an over-the-pad puck is
+	# the HANDS' problem now, and it pays the slower arm read.
+	if arrival_y <= GoalieAnatomy.pad_span(goalie_down).y:
+		return goalie_leg_delay_s
+	return goalie_arm_delay_s
 
 # ── HIGH-band viability under the angle ladder ────────────────────────────────
 # The four loft levels are SET ANGLES from the shooter's blade ladder
@@ -291,18 +299,33 @@ static func _best_high_rung(dist: float, shot_speed_m_s: float,
 		loft_tans: Vector3 = DEFAULT_LOFT_TANS, goalie_dist: float = -1.0,
 		goalie_down: bool = false) -> int:
 	var best_level: int = ShotMechanics.ELEVATION_FLAT
-	var best_arrive: float = -INF
+	var best_cover: float = INF
+	# The floor is HIS PAD TOP, not a fixed seam: a rung arriving under the
+	# pads is the pad column's business, which the flat holes already model.
+	# Standing that is the 0.86 m seam — identical to the old constant — but
+	# once he is down the pads collapse to 0.28 m and the rungs between become
+	# real targets. No puck inset here: eligibility is "is he pad there", and
+	# the cover model below charges whatever actually is at that height.
+	var floor_y: float = GoalieAnatomy.pad_span(goalie_down).y
 	for i: int in 3:
 		var tan_a: float = loft_tans[i]
 		var arrive: float = _arrival_height(dist, shot_speed_m_s, tan_a)
-		if arrive < GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M \
-				or arrive > HIGH_BAND_CEILING_M:
+		if arrive <= floor_y or arrive > HIGH_BAND_CEILING_M:
 			continue
 		if goalie_dist > 0.0 and not goalie_down and _arrival_height(
 				goalie_dist, shot_speed_m_s, tan_a) < GoalieStickRules.PADDLE_HEIGHT_M:
 			continue
-		if arrive > best_arrive:
-			best_arrive = arrive
+		# SHAPE picks the rung: the height where the least of him is in the
+		# way. The race (hands, push, his read budget) is not consulted here —
+		# it needs a pace that needs a rung, and resolving that circularity by
+		# guessing would make the choice depend on its own answer. A shooter
+		# reads posture; whether the shot beats him is _cover_at_height's
+		# question. Ties keep the FLATTER rung — the easier contact, and the
+		# same preference LOFT_TIE_FRAC applies between holes.
+		var cover: float = GoalieAnatomy.structural_cover_half_width_at(
+				arrive, goalie_down)
+		if cover < best_cover:
+			best_cover = cover
 			best_level = ShotMechanics.ELEVATION_LOW + i
 	return best_level
 
@@ -325,6 +348,37 @@ static func _high_band_pace(dist: float, shot_speed_m_s: float,
 # structurally closed), FLAT bands the committed full pace. The five-hole
 # rides the LOW band. Divides the shooter→goalie gap for the reach budget
 # (t_reach).
+# The rung a hole's shot flies: FLAT along the ice for the low bands, the
+# posture-picked rung for a HIGH hole (ELEVATION_FLAT there means the band is
+# structurally closed — no rung clears his pads without missing high). Callers
+# read this ONCE and derive pace, arrival height and cover from it, so the
+# score, the loft and the aim cannot describe different shots.
+static func _hole_rung(band: int, dist: float, shot_speed_m_s: float,
+		loft_tans: Vector3, goalie_dist: float, goalie_down: bool) -> int:
+	if band != HOLE_BAND_HIGH:
+		return ShotMechanics.ELEVATION_FLAT
+	return _best_high_rung(dist, shot_speed_m_s, loft_tans, goalie_dist, goalie_down)
+
+
+# Horizontal pace of a release on `level` — a lofted arc spends pace on the
+# climb, a flat shot keeps all of it.
+static func _rung_pace(level: int, shot_speed_m_s: float,
+		loft_tans: Vector3) -> float:
+	if level == ShotMechanics.ELEVATION_FLAT:
+		return maxf(shot_speed_m_s, 1.0)
+	var tan_a: float = loft_tans[level - ShotMechanics.ELEVATION_LOW]
+	return shot_speed_m_s / sqrt(1.0 + tan_a * tan_a)
+
+
+# Height that rung crosses the net line at. FLAT rides the ice.
+static func _rung_arrival(level: int, dist: float, shot_speed_m_s: float,
+		loft_tans: Vector3) -> float:
+	if level == ShotMechanics.ELEVATION_FLAT:
+		return 0.0
+	return _arrival_height(dist, shot_speed_m_s,
+			loft_tans[level - ShotMechanics.ELEVATION_LOW])
+
+
 static func _band_pace(band: int, dist: float, shot_speed_m_s: float,
 		loft_tans: Vector3 = DEFAULT_LOFT_TANS, goalie_dist: float = -1.0,
 		goalie_down: bool = false) -> float:
@@ -373,11 +427,18 @@ static func _pad_half_extent(roll: float) -> float:
 	return GoalieBehaviorRules.PAD_BOX_WIDTH_M * 0.5
 
 
-static func _band_cover(band: int, t_read: float, goalie_down: bool,
+static func _cover_at_height(arrival_y: float, t_read: float, goalie_down: bool,
 		side: int = 0, goalie_hands: Vector4 = Vector4.INF,
 		goalie_pads: Vector4 = Vector4.INF) -> float:
-	var t_move: float = maxf(0.0, t_read - _band_delay(band))
+	# Height-resolved cover: which of his parts are actually AT the puck's
+	# arrival height, each still raced against the read budget exactly as the
+	# two-band model raced them. The shape comes from GoalieAnatomy; the race
+	# is this function's job (see _best_high_rung for the other half of that
+	# split — shape picks the rung, the race scores it).
+	var t_move: float = maxf(0.0, t_read - _delay_at_height(arrival_y, goalie_down))
 	var push: float = goalie_lateral_reach(t_move)
+	var pads_top: float = GoalieAnatomy.pad_span(goalie_down).y
+	var band: int = HOLE_BAND_LOW if arrival_y <= pads_top else HOLE_BAND_HIGH
 	# The puck's own radius rides on the cover edge: a puck whose CENTER
 	# passes within a radius of the pad/glove edge is clipped — the exact
 	# mirror of the clean-entry inset the post side already charges. Without
@@ -385,17 +446,27 @@ static func _band_cover(band: int, t_read: float, goalie_down: bool,
 	# angle phantom in miniature).
 	var edge: float = GameRules.PUCK_COLLISION_RADIUS + push
 	if band == HOLE_BAND_HIGH:
-		# ── Hole-model v3: the HIGH cover reads the side's REAL hand ─────
+		# ── Above his pads: STRUCTURE plus whatever the hands win ────────
+		# The structural floor is the trunk/head actually at this height
+		# (GoalieAnatomy), not a single declared core — which is the whole
+		# point of resolving height. Above the standing seam it is floored by
+		# the legacy HIGH core: 0.40 was measured for that band and the raw
+		# box list under-represents it there (shoulders and arm roots are not
+		# colliders), so replacing it outright would be a calibration change
+		# dressed as a refactor. Below the seam — the over-the-pad and armpit
+		# heights the two-band model could not express — the geometry stands
+		# on its own.
+		var structural: float = GoalieAnatomy.structural_cover_half_width_at(
+				arrival_y, goalie_down)
+		if arrival_y >= GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M:
+			structural = maxf(structural, HOLE_BAND_CORE[HOLE_BAND_HIGH])
 		# With the replicated pose in scope (goalie_hands finite, a signed
 		# hole side), the reaction race STARTS where the hand actually is
-		# instead of at a declared stance core: a READY hand (parked in the
-		# band at ~the torso edge) reproduces the legacy deploy, a hand
-		# committed LOW (butterfly, gloves at pad height) must LIFT to the
-		# band floor before its lateral coverage counts, and a hand caught
-		# on the wrong side contributes nothing this side beyond the torso.
-		# The armpit / above-pad seam therefore EMERGES exactly when a hand
-		# is genuinely elsewhere — never as a static hole the resting
-		# stance covers (the phantom the old model refused to add).
+		# instead of at a declared stance core: a READY hand (parked at ~the
+		# torso edge) reproduces the legacy deploy, a hand committed LOW
+		# (butterfly, gloves at pad height) must LIFT to the puck's height
+		# before its lateral coverage counts, and a hand caught on the wrong
+		# side contributes nothing this side beyond the structure.
 		if side != 0 and goalie_hands.is_finite():
 			var arm_speed: float = HOLE_BAND_EXT[HOLE_BAND_HIGH] \
 					/ maxf(goalie_arm_deploy_s, 0.001)
@@ -411,25 +482,25 @@ static func _band_cover(band: int, t_read: float, goalie_down: bool,
 				hand_lat = dx_b
 				hand_y = goalie_hands.w
 			var t_arm: float = t_move
-			# Below the band floor the hand covers nothing HIGH until it
-			# has risen to the pad-top seam (the same boundary the arrival
-			# honesty uses) — the lift spends read budget at the arm's pace.
-			if hand_y < GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M:
-				t_arm = maxf(0.0, t_arm
-						- (GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M - hand_y)
-								/ arm_speed)
+			# A hand below the PUCK covers nothing until it has risen to it —
+			# the lift spends read budget at the arm's pace. Racing to the
+			# puck's own height rather than to a fixed seam is what makes the
+			# armpit a real target: a keeper whose gloves are sealed at 0.49 m
+			# has to travel to 0.70 m, and often cannot in the time given.
+			var reach_y: float = arrival_y - GoalieAnatomy.hand_vertical_half_extent()
+			if hand_y < reach_y:
+				t_arm = maxf(0.0, t_arm - (reach_y - hand_y) / arm_speed)
 				if t_arm <= 0.0:
-					# Hand still below the band at release — torso only.
-					return HOLE_BAND_CORE[HOLE_BAND_HIGH] + edge
+					# Hand still below the puck at arrival — structure only.
+					return structural + edge
 			# A hand caught on the WRONG side (negative side-ward offset)
 			# pays the cross-over distance — it starts from where it is.
 			var start_lat: float = clampf(hand_lat, -cap, cap)
 			var hand_cover: float = clampf(start_lat + arm_speed * t_arm, 0.0, cap)
-			return maxf(HOLE_BAND_CORE[HOLE_BAND_HIGH], hand_cover) + edge
+			return maxf(structural, hand_cover) + edge
 		var deploy: float = 0.0 if goalie_down \
 				else clampf(t_move / goalie_arm_deploy_s, 0.0, 1.0)
-		return HOLE_BAND_CORE[HOLE_BAND_HIGH] \
-				+ HOLE_BAND_EXT[HOLE_BAND_HIGH] * deploy + edge
+		return structural + HOLE_BAND_EXT[HOLE_BAND_HIGH] * deploy + edge
 	# ── Hole-model v3: the LOW cover reads the side's REAL pad ───────────
 	# With the replicated pads in scope, the side's cover starts at the
 	# MEASURED pad edge — the pad's rotated-box x-extent (box half-width
@@ -1599,14 +1670,16 @@ static func _hole_aim_x(
 	var kind: int = HOLE_KIND[i]
 	var side: int = HOLE_SIDE[i]
 	var band: int = HOLE_BAND[i]
-	# Same per-band pace the opening was scored with (_hole_margin), so aim and
-	# score read the same reaction-gated cover — the keeper-plane clearance
-	# included. A chosen hole is never band-unreachable (its opening would have
-	# scored 0), so the fallback to full pace is belt-and-braces.
-	var pace: float = _band_pace(band, shooter.distance_to(attacking_goal),
-			shot_speed_m_s, loft_tans, _xz_dist(shooter, goalie_pos), goalie_down)
-	if pace <= 0.0:
-		pace = maxf(shot_speed_m_s, 1.0)
+	# Same rung the opening was scored with (_hole_margin), so aim and score
+	# read the same arrival height and the same reaction-gated cover. A chosen
+	# hole is never band-unreachable (its opening would have scored 0), so the
+	# FLAT fallback on a HIGH hole is belt-and-braces.
+	var dist_to_goal: float = shooter.distance_to(attacking_goal)
+	var level: int = _hole_rung(band, dist_to_goal, shot_speed_m_s, loft_tans,
+			_xz_dist(shooter, goalie_pos), goalie_down)
+	var pace: float = _rung_pace(level, shot_speed_m_s, loft_tans)
+	var arrival_y: float = _rung_arrival(level, dist_to_goal, shot_speed_m_s,
+			loft_tans)
 	var net_z: float = attacking_goal.z
 	var post_lo_x: float = attacking_goal.x - net_half_width
 	var post_hi_x: float = attacking_goal.x + net_half_width
@@ -1642,8 +1715,8 @@ static func _hole_aim_x(
 	var t_reach: float = sqrt(u * u + dv * dv) / pace
 	var t_read: float = t_reach - screen_dist_m / pace \
 			- clampf(unsettled, 0.0, 1.0) * UNSETTLE_READ_PENALTY_S
-	var cover: float = _band_cover(band, t_read, goalie_down, side, goalie_hands,
-			goalie_pads)
+	var cover: float = _cover_at_height(arrival_y, t_read, goalie_down, side,
+			goalie_hands, goalie_pads)
 	var cov_lo_x: float = post_hi_x
 	var cov_hi_x: float = post_lo_x
 	if dv >= 0.001:
@@ -1750,13 +1823,17 @@ static func _hole_margin(
 	var kind: int = HOLE_KIND[i]
 	var side: int = HOLE_SIDE[i]
 	var band: int = HOLE_BAND[i]
-	# Per-band pace: HIGH holes fly the full-pace contact-point arc (the arc
-	# must physically reach the top band — see _band_pace); 0 = the band is
-	# structurally closed, so the hole isn't a target at all.
-	var pace: float = _band_pace(band, shooter.distance_to(attacking_goal),
-			shot_speed_m_s, loft_tans, _xz_dist(shooter, goalie_pos), goalie_down)
-	if pace <= 0.0:
+	# One rung read, shared by the pace, the arrival height and the cover, so
+	# the score and the aim describe a single shot. A HIGH hole with no legal
+	# rung is structurally closed — not a target at all.
+	var dist_to_goal: float = shooter.distance_to(attacking_goal)
+	var level: int = _hole_rung(band, dist_to_goal, shot_speed_m_s, loft_tans,
+			_xz_dist(shooter, goalie_pos), goalie_down)
+	if band == HOLE_BAND_HIGH and level == ShotMechanics.ELEVATION_FLAT:
 		return HOLE_STRUCTURALLY_CLOSED_RAD
+	var pace: float = _rung_pace(level, shot_speed_m_s, loft_tans)
+	var arrival_y: float = _rung_arrival(level, dist_to_goal, shot_speed_m_s,
+			loft_tans)
 	# Reach budget: the puck crosses the goalie's reach envelope at HIS body —
 	# the shooter→goalie gap at the band's pace — not at the goal line. This is
 	# what range genuinely buys him; in tight it's a fraction of the flight, and
@@ -1854,7 +1931,7 @@ static func _hole_margin(
 			var gap: float = goalie_five_hole_m
 			if not goalie_down:
 				var seal: float = clampf(
-						(t_read - _band_delay(HOLE_BAND_LOW))
+						(t_read - _delay_at_height(0.0, goalie_down))
 							/ goalie_butterfly_drop_s,
 						0.0, 1.0)
 				gap *= 1.0 - seal
@@ -1884,19 +1961,18 @@ static func _hole_margin(
 		# lateness is already inside t_read).
 		var proxy_gap: float = FIVE_GAP_M
 		var proxy_seal: float = clampf(
-				(t_read - _band_delay(HOLE_BAND_LOW)) / goalie_butterfly_drop_s,
+				(t_read - _delay_at_height(0.0, goalie_down)) / goalie_butterfly_drop_s,
 				0.0, 1.0)
 		proxy_gap *= 1.0 - proxy_seal
 		return _five_hole_margin(proxy_gap * centrality, dist)
 
-	# Band cover raced against the read budget (t_reach less screen occlusion
-	# and caught-moving lateness) — standing pad column widened by the
-	# butterfly drop LOW, reaction-gated glove/blocker extension HIGH, the
-	# real lateral push on both, with the butterfly's defining trade (a DOWN
-	# goalie seals the ice and concedes the top band's extension) — see
-	# _band_cover.
-	var cover: float = _band_cover(band, t_read, goalie_down, side, goalie_hands,
-			goalie_pads)
+	# Cover at the height this shot actually arrives at, raced against the read
+	# budget (t_reach less screen occlusion and caught-moving lateness) — pad
+	# column widened by the butterfly drop where the pads still are, structure
+	# plus a reaction-gated hand where they no longer reach, the real lateral
+	# push throughout — see _cover_at_height.
+	var cover: float = _cover_at_height(arrival_y, t_read, goalie_down, side,
+			goalie_hands, goalie_pads)
 
 	# Net posts and the goalie's cover, all as bearings from the shooter's eye.
 	var post_lo_x: float = attacking_goal.x - net_half_width

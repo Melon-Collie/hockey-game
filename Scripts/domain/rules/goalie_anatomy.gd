@@ -84,3 +84,94 @@ static func resting_hand_outer_half_width() -> float:
 # Furthest the high band can ever cover — a fully deployed glove.
 static func deployed_hand_half_width() -> float:
 	return GLOVE_MAX_X_OUTWARD_M
+
+
+# ── Vertical profile ─────────────────────────────────────────────────────────
+# Everything above answers "how wide", at an unstated height. That was enough
+# while the shot model had two bands (along the ice, and above the standing pad
+# seam) — but the elevation ladder now aims rungs at POSTURE landmarks between
+# those two (docs/elevation-rework-plan.md §1), and "how wide is he at 0.70 m
+# with the pads down" has no answer in a lateral-only model.
+#
+# The numbers below mirror GoalieBodyConfigBuilder's poses, the same way the
+# box constants above mirror Goalie.tscn. Centres are part origins; each part's
+# vertical extent is its box height about that centre, EXCEPT the butterfly
+# pads, which are rolled 90° (`*_pad_rot.z = ±90`) so the box's WIDTH becomes
+# its height and its HEIGHT becomes the lateral splay — the same roll that
+# makes BUTTERFLY_PAD_HALF_WIDTH_M half the long axis.
+const HEAD_BOX_M: float = 0.26
+
+const PAD_CENTER_Y_STANDING_M: float = 0.44
+const TORSO_CENTER_Y_STANDING_M: float = 1.22
+const HEAD_CENTER_Y_STANDING_M: float = 1.79
+
+const PAD_CENTER_Y_BUTTERFLY_M: float = 0.14
+const TORSO_CENTER_Y_BUTTERFLY_M: float = 0.40
+const HEAD_CENTER_Y_BUTTERFLY_M: float = 0.97
+
+
+# Vertical extent (bottom, top) of a part, as a Vector2 so callers can test a
+# height against it without allocating.
+static func _span(center_y: float, height: float) -> Vector2:
+	return Vector2(center_y - height * 0.5, center_y + height * 0.5)
+
+
+# The leg pads. Standing they are a 0.84 m column bottoming at the ice and
+# topping out at the pad-top seam (GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M);
+# rolled flat in the butterfly they are only their own box WIDTH tall — 0.28 m,
+# which is 11 inches, the real NHL pad width. That collapse is the whole reason
+# the over-the-pad shot exists: going down trades 0.58 m of vertical coverage
+# for 0.48 m of lateral splay.
+static func pad_span(down: bool) -> Vector2:
+	if down:
+		return _span(PAD_CENTER_Y_BUTTERFLY_M, PAD_BOX_WIDTH_M)
+	return _span(PAD_CENTER_Y_STANDING_M, PAD_BOX_HEIGHT_M)
+
+
+# The trunk. Standing it is glued to the pad-top seam (0.86–1.58); in the save
+# stances it drops with the body so the same box spans 0.04–0.76 — which is
+# what leaves a gap above it once the pads are flat.
+static func torso_span(down: bool) -> Vector2:
+	if down:
+		return _span(TORSO_CENTER_Y_BUTTERFLY_M, TORSO_BOX_HEIGHT_M)
+	return _span(TORSO_CENTER_Y_STANDING_M, TORSO_BOX_HEIGHT_M)
+
+
+static func head_span(down: bool) -> Vector2:
+	if down:
+		return _span(HEAD_CENTER_Y_BUTTERFLY_M, HEAD_BOX_M)
+	return _span(HEAD_CENTER_Y_STANDING_M, HEAD_BOX_M)
+
+
+# Half the vertical reach of a hand about its own centre — how far off a hand's
+# height a puck can arrive and still meet it.
+static func hand_vertical_half_extent() -> float:
+	return GLOVE_BOX_WIDTH_M * 0.5
+
+
+# Does a hand centred at `hand_y` meet a puck arriving at `arrival_y`?
+static func hand_covers_height(arrival_y: float, hand_y: float) -> bool:
+	return absf(arrival_y - hand_y) <= hand_vertical_half_extent()
+
+
+# Half-width the keeper's STRUCTURE covers at arrival height `y` — pads, trunk
+# and head only. The HANDS are deliberately absent: they move, they are raced
+# against the shot's flight in the planner's reaction model, and their live
+# positions arrive as replicated pose. This answers the part of the question
+# that is pure shape, and the caller adds whatever the hands win.
+#
+# The result is symmetric because every structural part is centred on the
+# midline; only the hands are sided.
+static func structural_cover_half_width_at(y: float, down: bool) -> float:
+	var cover: float = 0.0
+	var pads: Vector2 = pad_span(down)
+	if y >= pads.x and y <= pads.y:
+		cover = maxf(cover, butterfly_pad_edge_half_width() if down
+				else GoalieBehaviorRules.STANDING_PAD_CENTER_X_M + PAD_BOX_WIDTH_M * 0.5)
+	var torso: Vector2 = torso_span(down)
+	if y >= torso.x and y <= torso.y:
+		cover = maxf(cover, torso_half_width())
+	var head: Vector2 = head_span(down)
+	if y >= head.x and y <= head.y:
+		cover = maxf(cover, HEAD_BOX_M * 0.5)
+	return cover

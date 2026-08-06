@@ -273,16 +273,45 @@ const _FLEX_RUNWAY_LEAN: Array[float] = [0.90, 1.00, 1.12]  # wrister full-strok
 # open toe hook). The ANGLE LADDER is the elevation lever (the manual
 # contact-point model — docs/elevation-rework-plan.md v3): each loft level is
 # a set launch angle from this pattern's ladder, steeper on the open blade at
-# every rung. MID chases HIGH's band end so adjacent full-charge bands nearly
-# touch (the 2026-07 retune closed the just-off-the-doorstep dead ring). At
-# full wrister charge the top-shelf bands land: LOW = the point snipe (M92
-# ~13–21 m; M28 ~10–14 m then clips iron; M88 arrives under-the-arm and can
-# NEVER sail — its flattest ladder apexes at crossbar-ping height even off a
-# max slapper), MID = the slot snipe (M92 ~2.9–4.0 m), HIGH = the in-tight
-# roof (M92 ~2.0–2.7 m; only the M28's 28° tops the shelf from the crease —
-# doorstep floors 2.24/1.93/1.62 m by gear). The M28 is the close-range
-# weapon and the worst at range at every rung; the M88 is the safe blade
-# that cannot miss the net high, and fills its long range at slapper pace.
+# every rung.
+#
+# THE LEVEL NAMES THE SHOT; THE GEAR NAMES THE RANGE. Each level targets a
+# GOALIE-POSTURE landmark — absolute heights off the ice, not fractions of the
+# net — and each gear places those same three shots at its own HOME RANGE:
+#
+#   level        target        what it beats
+#   LOW  (35%)   0.41 m        over the butterfly pad (0.28), UNDER his hands
+#   MID  (60%)   0.70 m        the armpit — OVER his committed hands (0.49)
+#   HIGH (85%)   0.99 m        upstairs — over the standing pad seam (0.86)
+#
+#   gear   home    ladder
+#   M88    8.5 m   the range blade — peaks in the high slot / long range
+#   M92    6.0 m   the all-rounder — 3 shots from the slot out to long range
+#   M28    4.5 m   the close blade — peaks in the slot, owns the crease
+#
+# (Percentages are of the 1.17 m scoring cavity, a naming convenience only —
+# what the rungs actually clear is the goalie's equipment, whose heights are
+# absolute. See GoalieAnatomy for the pad/hand/torso boxes those come from.)
+#
+# Away from home the menu slides rather than breaking: one zone out a gear
+# keeps two shots, two zones out one. Nobody gets the full menu at the point,
+# which is deliberate — a point shot only has to reach the net, not pick a
+# corner (the whole net is a 3.4° window at 19 m, so no ladder could).
+#
+# Two properties fall out of anchoring the fans close in rather than at range,
+# and both are load-bearing:
+#   · BUILD TOLERANCE. Build variance lives entirely in the gravity drop
+#     (~d²/v²), so the ±17% shot-power spread moves arrival by only ±3–12 cm
+#     at these home ranges instead of the ±60 cm it moved when bands sat at
+#     15–22 m. Every build keeps its full menu at home; the lone casualty is a
+#     weak build's M88 LOW, which lands under the pad. No normalization needed
+#     — the anchoring dissolved the problem.
+#   · THE SLAPPER NEEDS NO SEPARATE LADDER. Its extra pace costs ~5 cm of drop
+#     at home range, so the same rungs ride about one notch higher. Real, and
+#     small enough that the level still means what it means.
+# NO rung sails on a wrister, and no LOW rung sails even off a max slapper
+# (apexes 0.62 / 0.75 / 1.01 m by gear) — the flat bottom of every ladder is
+# the universally safe shot.
 #
 # The rest of the identity triangle, all lateral trades about the M92:
 #   M88 — the playmaker/point blade: best backhand, +3% slapper (a flatter
@@ -297,9 +326,9 @@ const _FLEX_RUNWAY_LEAN: Array[float] = [0.90, 1.00, 1.12]  # wrister full-strok
 # alignment bonus at the decision sites (PuckReceptionRules callers) — never
 # pickup_max_speed, so soft passes settle on every blade and the client's
 # provisional-pickup gate stays build-independent.
-const _CURVE_LOFT_LOW_DEG: Array[float] = [7.0, 8.0, 8.5]      # M88 / M92 / M28
-const _CURVE_LOFT_MID_DEG: Array[float] = [15.5, 17.5, 19.0]
-const _CURVE_LOFT_HIGH_DEG: Array[float] = [21.0, 24.0, 28.0]
+const _CURVE_LOFT_LOW_DEG: Array[float] = [5.0, 5.5, 6.4]      # M88 / M92 / M28
+const _CURVE_LOFT_MID_DEG: Array[float] = [6.9, 8.2, 10.0]
+const _CURVE_LOFT_HIGH_DEG: Array[float] = [8.9, 11.0, 13.6]
 const _CURVE_RUNWAY_LEAN: Array[float] = [1.00, 1.00, 0.90]
 const _CURVE_BACKHAND_LEAN: Array[float] = [1.08, 1.00, 0.90]
 const _CURVE_SLAP_LEAN: Array[float] = [1.03, 1.00, 0.97]

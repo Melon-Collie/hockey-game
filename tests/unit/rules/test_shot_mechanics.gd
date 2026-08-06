@@ -451,29 +451,41 @@ func test_loft_is_direction_and_position_free() -> void:
 
 
 func test_missing_high_is_a_real_outcome() -> void:
-	# A MID (15°) at full charge from 8 m crosses the goal plane above the
-	# crossbar — the price of greed the v3 model is built on. Ease the charge
-	# and the same rung stays under the bar.
+	# A HIGH two zones past its home range crosses the goal plane above the
+	# crossbar — the price of greed the model is built on. Ease the charge and
+	# the same rung stays under the bar.
+	# Runs at the LIVE wrister ceiling rather than this file's 25 m/s fixture:
+	# the ladder is authored against the real 33 m/s top of the band, and at
+	# 25 m/s the M92's HIGH apexes at 1.16 m — under the bar, so it could not
+	# sail at any range and the property would be untestable.
 	var cfg := _wrister_cfg()
-	var full: ShotMechanics.ShotResult = _wrister_at(cfg, 2, FULL_SWEEP)
+	cfg.max_wrister_power = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+	var full: ShotMechanics.ShotResult = _wrister_at(cfg, 3, FULL_SWEEP)
 	assert_gt(_crossing_height(full, 8.0), GameRules.NET_HEIGHT + 0.03,
-			"full-charge MID from 8 m sails over the bar")
-	var eased: ShotMechanics.ShotResult = _wrister_at(cfg, 2, 2.5)
+			"full-charge HIGH from 8 m sails over the bar")
+	var eased: ShotMechanics.ShotResult = _wrister_at(cfg, 3, 2.5)
 	assert_lt(_crossing_height(eased, 8.0), GameRules.NET_HEIGHT,
 			"an eased charge on the same rung stays under the bar")
 
 
 func test_flattest_ladder_never_sails() -> void:
-	# The M88's 7° LOW apexes at crossbar-ping height even off a max slapper
-	# (40 m/s) — the safe blade cannot put the puck over the glass, with no
-	# clamp anywhere: the property IS the gear table.
+	# DRIFT DETECTOR, not a requirement — same standing as the table-level
+	# check above (elevation doc §1.2). Its value is the WIRING, not the
+	# property: it drives a real release and carries the M88's own +3% slapper
+	# lean (curve_slap_mult), which a bare-40 m/s fixture omitted. That
+	# omission once hid the property being false at neutral build, so whatever
+	# a future ladder asserts here, it must keep the per-gear multiplier.
+	var m88 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
 	var cfg := _slapper_cfg()
-	cfg.loft_tan_low = 0.12278   # tan 7° — the M88 rung
+	cfg.max_slapper_power = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S \
+			* m88.curve_slap_mult()
+	cfg.loft_tan_low = m88.curve_loft_tan_low()
 	var r: ShotMechanics.ShotResult = ShotMechanics.release_slapper(
 			Vector3.ZERO, Vector3(0, 0, 10), 1, 1.0, cfg, Vector3(0, 0, 1))
 	var v_y: float = r.power * r.direction.y
 	var apex: float = v_y * v_y / (2.0 * GameRules.GRAVITY_M_S2)
-	assert_lt(apex, 1.25, "M88 LOW at max slap: iron at worst, never over")
+	assert_lt(apex, GameRules.NET_HEIGHT,
+			"M88 LOW at max slap apexes under the bar")
 
 
 # Quick passes ride the fixed-speed loft table — LOW at pass power IS the
@@ -658,12 +670,25 @@ func test_follow_through_aim_ignores_degenerate_cursor() -> void:
 	assert_almost_eq(aim.z, -1.0, 0.0001, "degenerate cursor holds shot line")
 
 
-# ── Per-gear ladders: the band identities ────────────────────────────────────
-# The gear tables (PlayerAttributes._CURVE_LOFT_*_DEG) give each blade its own
-# top-shelf bands — checked at full wrister charge (33 m/s) with the same
-# arrival arithmetic the AI rung-picker uses.
+# ── Per-gear ladders: the posture vocabulary ─────────────────────────────────
+# The level names the SHOT, the gear names the RANGE. Each level targets a
+# goalie-posture landmark (absolute heights off the ice — GoalieAnatomy's pad,
+# hand and torso boxes), and each gear places those same three shots at its own
+# HOME RANGE. Checked at full wrister charge (33 m/s) with the same arrival
+# arithmetic the AI rung-picker uses.
 
 const _FULL_PACE: float = 33.0
+
+# Posture landmarks the rungs are aimed to clear.
+const _BUTTERFLY_PAD_TOP: float = 0.28   # GoalieAnatomy pad box width, rolled flat
+const _BUTTERFLY_HANDS: float = 0.49     # GoalieStickRules butterfly hand height
+const _STANDING_SEAM: float = 0.86       # GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M
+const _CAVITY_TOP: float = 1.17          # AIActionScoring.HIGH_BAND_CEILING_M
+
+# Where each blade's menu is authored to land.
+const _HOME_M88: float = 8.5
+const _HOME_M92: float = 6.0
+const _HOME_M28: float = 4.5
 
 
 func _arrive(dist: float, speed: float, tan_a: float) -> float:
@@ -671,39 +696,95 @@ func _arrive(dist: float, speed: float, tan_a: float) -> float:
 			- 9.8 * dist * dist * (1.0 + tan_a * tan_a) / (2.0 * speed * speed)
 
 
-func test_doorstep_roof_belongs_to_the_m28() -> void:
-	# From 2 m at full pace only the M28's 30° tops the shelf; the M92's 26°
-	# arrives just under it and the M88's 22° mid-net — each blade has its own
-	# roof pocket, and the crease is the toe hook's alone.
-	var m88 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
-	var m92 := PlayerAttributes.all_average()
-	var m28 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1)
-	var h88: float = _arrive(2.0, _FULL_PACE, m88.curve_loft_tan_high())
-	var h92: float = _arrive(2.0, _FULL_PACE, m92.curve_loft_tan_high())
-	var h28: float = _arrive(2.0, _FULL_PACE, m28.curve_loft_tan_high())
-	assert_lt(h88, 0.86, "M88 arrives mid-net from the crease")
-	assert_between(h28, 1.0, 1.19, "only the toe hook tops the shelf from 2 m")
-	assert_gt(h28, h92, "steeper toe, higher doorstep arrival")
+func _m88() -> PlayerAttributes:
+	return PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
 
 
-func test_m28_is_worse_at_range_on_every_rung() -> void:
-	# Every M28 rung flies steeper than the same M88 rung — which from range
-	# means the bar or over. LOW from the deep point: the M88 stays under,
-	# the M28 is at the iron.
-	var m88 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_CLOSED, 1, 1)
-	var m28 := PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1)
-	assert_lt(_arrive(17.0, _FULL_PACE, m88.curve_loft_tan_low()), 1.19,
-			"M88 LOW from the point stays under the bar")
-	assert_gt(_arrive(17.0, _FULL_PACE, m28.curve_loft_tan_low()), 1.19,
-			"M28 LOW from the point is at the iron or over")
+func _m28() -> PlayerAttributes:
+	return PlayerAttributes.new(73, 201, 1, PlayerAttributes.CURVE_OPEN, 1, 1)
 
 
-func test_m92_low_is_the_point_snipe() -> void:
-	# The all-rounder's 8° LOW tops the shelf from the point band and cannot
-	# miss high at full wrister pace (its whole arc apexes under the bar).
-	var m92 := PlayerAttributes.all_average()
-	var t: float = m92.curve_loft_tan_low()
-	assert_between(_arrive(15.0, _FULL_PACE, t), 0.95, 1.19, "top shelf from 15 m")
-	var sin_a: float = t / sqrt(1.0 + t * t)
-	var apex: float = pow(_FULL_PACE * sin_a, 2.0) / (2.0 * 9.8)
-	assert_lt(apex, 1.19, "the M92 point snipe cannot sail on a wrister")
+func _assert_menu_at_home(attrs: PlayerAttributes, home: float, gear: String) -> void:
+	# The defining property of the ladder: at its own home range every blade
+	# delivers the SAME three shots, each clearing a different posture landmark.
+	var lo: float = _arrive(home, _FULL_PACE, attrs.curve_loft_tan_low())
+	var mid: float = _arrive(home, _FULL_PACE, attrs.curve_loft_tan_mid())
+	var hi: float = _arrive(home, _FULL_PACE, attrs.curve_loft_tan_high())
+	assert_between(lo, _BUTTERFLY_PAD_TOP, _BUTTERFLY_HANDS,
+			"%s LOW clears the butterfly pad, stays under his hands" % gear)
+	assert_between(mid, _BUTTERFLY_HANDS, _STANDING_SEAM,
+			"%s MID is the armpit — over his committed hands" % gear)
+	assert_between(hi, _STANDING_SEAM, _CAVITY_TOP,
+			"%s HIGH is upstairs — over the standing pad seam" % gear)
+
+
+func test_every_gear_delivers_the_full_menu_at_its_home_range() -> void:
+	_assert_menu_at_home(_m88(), _HOME_M88, "M88")
+	_assert_menu_at_home(PlayerAttributes.all_average(), _HOME_M92, "M92")
+	_assert_menu_at_home(_m28(), _HOME_M28, "M28")
+
+
+func test_gears_own_different_zones() -> void:
+	# The identity: at the SAME distance the three blades sit at different
+	# heights, so which zone gives you the full menu is the gear choice. At the
+	# M28's home the closed blade is still down at pad height on its top rung.
+	var h88: float = _arrive(_HOME_M28, _FULL_PACE, _m88().curve_loft_tan_high())
+	var h92: float = _arrive(_HOME_M28, _FULL_PACE,
+			PlayerAttributes.all_average().curve_loft_tan_high())
+	var h28: float = _arrive(_HOME_M28, _FULL_PACE, _m28().curve_loft_tan_high())
+	assert_lt(h88, h92, "the range blade sits lowest in tight")
+	assert_lt(h92, h28, "the close blade sits highest in tight")
+	assert_lt(h88, _STANDING_SEAM, "M88 cannot go upstairs from the slot")
+	assert_between(h28, _STANDING_SEAM, _CAVITY_TOP, "M28 owns upstairs in tight")
+
+
+func test_the_crease_is_an_over_the_pad_zone_not_a_roof_zone() -> void:
+	# Deliberate: nobody roofs the 2 m doorstep — reserving a rung for it is
+	# what cost every blade its slot elevation. What the crease needs is the
+	# over-the-butterfly-pad shot, and the close blade delivers exactly that.
+	var m28 := _m28()
+	assert_lt(_arrive(2.0, _FULL_PACE, m28.curve_loft_tan_high()), _STANDING_SEAM,
+			"even the toe hook is under the standing seam from the crease")
+	assert_gt(_arrive(2.0, _FULL_PACE, m28.curve_loft_tan_high()),
+			_BUTTERFLY_PAD_TOP, "but it clears the butterfly pad")
+
+
+func test_the_point_puts_a_shot_on_net_without_a_full_menu() -> void:
+	# A point shot only has to reach the net — the whole cavity is a ~3.4°
+	# window at 19 m, so no ladder could offer a menu there. What it must not
+	# do is leave the flattest rung sailing.
+	var m88 := _m88()
+	assert_lt(_arrive(19.0, _FULL_PACE, m88.curve_loft_tan_low()), _CAVITY_TOP,
+			"M88 LOW is on net from the point")
+	assert_lt(_arrive(19.0, _FULL_PACE, _m28().curve_loft_tan_low()), _CAVITY_TOP,
+			"M28 LOW is on net from the point")
+
+
+func test_m28_flies_steeper_than_m88_on_every_rung() -> void:
+	# The ordering that makes the open blade the close-range weapon: every M28
+	# rung is steeper than the same M88 rung, so its menu sits nearer the net.
+	var m88 := _m88()
+	var m28 := _m28()
+	assert_gt(m28.curve_loft_tan_low(), m88.curve_loft_tan_low())
+	assert_gt(m28.curve_loft_tan_mid(), m88.curve_loft_tan_mid())
+	assert_gt(m28.curve_loft_tan_high(), m88.curve_loft_tan_high())
+	# ...and from range that steepness is what costs it the top of the net.
+	assert_gt(_arrive(9.0, _FULL_PACE, m28.curve_loft_tan_mid()), _CAVITY_TOP,
+			"M28 MID sails from long range")
+	assert_lt(_arrive(9.0, _FULL_PACE, m88.curve_loft_tan_mid()), _STANDING_SEAM,
+			"M88 MID is still the armpit there")
+
+
+func test_no_low_rung_sails_on_any_gear_at_any_pace() -> void:
+	# DRIFT DETECTOR, not a requirement (elevation doc §1.2). Nothing in the
+	# design asks LOW to be un-sailable — it falls out of the bottom rung being
+	# flat, and it holds today with metres of margin. If a future ladder raises
+	# LOW enough to trip this, the question is "did we mean to?", not "which
+	# invariant did we break." Do not treat it as a ceiling on LOW.
+	var max_slap: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
+	for attrs: PlayerAttributes in [
+			_m88(), PlayerAttributes.all_average(), _m28()]:
+		var t: float = attrs.curve_loft_tan_low()
+		var sin_a: float = t / sqrt(1.0 + t * t)
+		assert_lt(pow(max_slap * sin_a, 2.0) / (2.0 * 9.8), GameRules.NET_HEIGHT,
+				"LOW apexes under the bar at max slap")
