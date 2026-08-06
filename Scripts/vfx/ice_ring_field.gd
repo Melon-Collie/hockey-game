@@ -110,6 +110,10 @@ func _process(_delta: float) -> void:
 	# is a handful of scalar uniforms rather than an array, and the first skater
 	# reporting it wins. Checked BEFORE the ring gate below — the two are
 	# independent pieces of chrome and one must not suppress the other.
+	# Reticle and arrow are separate gates: a plain carried slapshot charge shows
+	# ONLY the aim arrow (no reticle/ring — see LocalController's
+	# _update_one_timer_indicator), so the claim must trigger on either flag or
+	# the arrow-only case never reaches the shader at all.
 	var slapper_seen: bool = false
 	# Self-only for the same reason as the slapper indicator.
 	var stamina_seen: bool = false
@@ -117,12 +121,14 @@ func _process(_delta: float) -> void:
 		var skater: Skater = node as Skater
 		if skater == null:
 			continue
-		if not slapper_seen and skater.slapper_field_visible():
+		if not slapper_seen and (skater.slapper_field_visible()
+				or skater.slapper_field_arrow_visible()):
 			slapper_seen = true
 			var centre: Vector2 = skater.slapper_field_center()
 			_material.set_shader_parameter(&"slapper_zone", Vector4(centre.x, centre.y,
 					skater.slapper_field_radius(), skater.slapper_field_ring_scale()))
 			_material.set_shader_parameter(&"slapper_dir", skater.slapper_field_arrow_dir())
+			_material.set_shader_parameter(&"slapper_active", skater.slapper_field_visible())
 			_material.set_shader_parameter(&"slapper_arrow",
 					skater.slapper_field_arrow_visible())
 		if not stamina_seen and skater.stamina_field_visible():
@@ -161,8 +167,10 @@ func _process(_delta: float) -> void:
 	_material.set_shader_parameter(&"chevron_count", chevron_count)
 	_material.set_shader_parameter(&"hud_screen_down", screen_down)
 	# Cleared explicitly: a stale `true` would leave the last charge's reticle
-	# painted on the ice for the rest of the period.
-	_material.set_shader_parameter(&"slapper_active", slapper_seen)
+	# (or aim arrow) painted on the ice for the rest of the period.
+	if not slapper_seen:
+		_material.set_shader_parameter(&"slapper_active", false)
+		_material.set_shader_parameter(&"slapper_arrow", false)
 	_material.set_shader_parameter(&"stamina_active", stamina_seen)
 
 
