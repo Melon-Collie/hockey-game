@@ -53,6 +53,8 @@ var _lock_label: Label = null
 var _apply_btn: Button = null
 # The locker, opened over this popup by its launcher button.
 var _locker_popup: LockerPopup = null
+# The launcher itself — the pad's focus returns here when the locker closes.
+var _locker_edit_btn: Button = null
 # Gold "unapplied changes" note under the launcher — pending locker edits are
 # otherwise invisible until Apply.
 var _locker_pending_label: Label = null
@@ -221,14 +223,14 @@ func _build_locker_row(vbox: VBoxContainer) -> void:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 2)
 	row.add_child(box)
-	var edit_btn := Button.new()
-	edit_btn.text = tr(&"LOCKER_EDIT_BUTTON")
-	edit_btn.custom_minimum_size = Vector2(_FIELD_W, 48)
-	edit_btn.add_theme_font_size_override("font_size", 17)
-	MenuStyle.wire_hover_scale(edit_btn)
-	SoundManager.wire_button(edit_btn)
-	edit_btn.pressed.connect(_open_locker)
-	box.add_child(edit_btn)
+	_locker_edit_btn = Button.new()
+	_locker_edit_btn.text = tr(&"LOCKER_EDIT_BUTTON")
+	_locker_edit_btn.custom_minimum_size = Vector2(_FIELD_W, 48)
+	_locker_edit_btn.add_theme_font_size_override("font_size", 17)
+	MenuStyle.wire_hover_scale(_locker_edit_btn)
+	SoundManager.wire_button(_locker_edit_btn)
+	_locker_edit_btn.pressed.connect(_open_locker)
+	box.add_child(_locker_edit_btn)
 
 	_locker_pending_label = Label.new()
 	_locker_pending_label.text = tr(&"EDIT_PENDING_NOTE")
@@ -246,7 +248,7 @@ func _open_locker() -> void:
 	# gear model resolves its TEAM / ACCENT / LIGHT zones against that same
 	# pick, so the locker previews the design on the team you are about to play
 	# for.
-	_locker_popup.set_focus_scope(self, null)
+	_locker_popup.set_focus_scope(self, _locker_edit_btn)
 	_locker_popup.open(_pending_attributes(), _pending_tape, _pending_gear_code(),
 			_build_locked, _pending_team_colors(), _pending_skin, _pending_is_left)
 

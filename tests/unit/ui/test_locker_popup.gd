@@ -513,6 +513,28 @@ func test_every_row_control_is_pad_reachable() -> void:
 				"%s can be focused" % name)
 
 
+# The locker is a CHILD of the player screen it covers, and open() walls that
+# screen off — the wall must not take the locker down with it (a walled locker
+# is a dead dialog for the pad), and closing must lift the wall so focus can
+# return to the launcher.
+func test_opening_over_its_own_parent_keeps_the_rows_focusable() -> void:
+	var form := Control.new()
+	add_child_autofree(form)
+	var launcher := Button.new()
+	form.add_child(launcher)
+	_popup.get_parent().remove_child(_popup)
+	form.add_child(_popup)
+	_popup.set_focus_scope(form, launcher)
+	_open()
+	assert_eq(_btn("_length_btn").get_focus_mode_with_override(), Control.FOCUS_ALL,
+			"the locker's rows stay focusable inside its own wall")
+	assert_eq(launcher.get_focus_mode_with_override(), Control.FOCUS_NONE,
+			"the launcher behind the scrim is walled off")
+	_popup.call("_cancel")
+	assert_eq(launcher.get_focus_mode_with_override(), Control.FOCUS_ALL,
+			"closing lifts the wall so focus can return to the launcher")
+
+
 # The hint has to name the device that is actually driving, and follow a swap.
 func test_the_case_hint_names_the_driving_device() -> void:
 	_open()

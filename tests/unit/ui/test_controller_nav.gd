@@ -61,6 +61,25 @@ func test_open_and_close_modal_toggle_the_wall() -> void:
 	assert_true(_bg_btn.has_focus(), "closing a modal makes the menu reachable again")
 
 
+# A modal can live INSIDE the subtree it walls off (the locker is a Control
+# child of the player screen it covers). The wall must not take the modal down
+# with it — that leaves the popup with nothing the pad can focus — and the
+# carve-out must not leak focusability to the rest of the background.
+func test_a_modal_inside_the_background_stays_focusable() -> void:
+	var inner_modal := Control.new()
+	var inner_btn := Button.new()
+	inner_modal.add_child(inner_btn)
+	_bg.add_child(inner_modal)
+	ControllerNav.open_modal(_bg, inner_modal, inner_btn)
+	assert_eq(inner_btn.get_focus_mode_with_override(), Control.FOCUS_ALL,
+			"the modal's own controls stay focusable under the wall")
+	assert_eq(_bg_btn.get_focus_mode_with_override(), Control.FOCUS_NONE,
+			"the rest of the background is still walled off")
+	ControllerNav.close_modal(_bg, _bg_btn)
+	assert_eq(_bg_btn.get_focus_mode_with_override(), Control.FOCUS_ALL,
+			"closing lifts the wall")
+
+
 func test_modal_helpers_are_null_safe() -> void:
 	# Callers pass a null background when they have no single subtree to wall off.
 	ControllerNav.set_subtree_focusable(null, false)
