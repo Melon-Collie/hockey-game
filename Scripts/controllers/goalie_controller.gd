@@ -3647,9 +3647,10 @@ func _post_edge_seal_x(side: float, pad_edge_extent: float, rotation_rad: float)
 # ── Facing ────────────────────────────────────────────────────────────────────
 # Threat-based facing: rotate toward where the goalie is tracking, not raw
 # puck position. Stickhandling jitter no longer twists the body. Real goalies
-# keep the body square once down — only the head/upper body track the puck
-# (which we don't model), so BUTTERFLY/RECOVERING hold the body squared to
-# centre. Rotating the entire rotation_y in butterfly looks unrealistic.
+# keep the body square once down — the head tracks the puck instead, which IS
+# modelled (`_desired_head_yaw_deg`, and `_eye_offset_x` for where the eyes then
+# sit) — so BUTTERFLY/RECOVERING hold the body squared to centre. Rotating the
+# entire rotation_y in butterfly looks unrealistic.
 func _update_facing(delta: float) -> void:
 	if _sm.current == State.PLAYING_PUCK:
 		# Out playing the puck: face the puck itself, unclamped — behind the net
