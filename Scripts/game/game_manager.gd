@@ -2808,7 +2808,8 @@ func _on_player_spawned(record: PlayerRecord) -> void:
 	if record.is_local:
 		var local_ctrl: LocalController = record.controller as LocalController
 		local_ctrl.set_goal_context(
-				teams[0].defended_goal, teams[1].defended_goal, _get_puck_carrier_team_id)
+				teams[0].defended_goal, teams[1].defended_goal,
+				_get_puck_carrier_team_id, _get_puck_carrier_skater)
 		local_ctrl.puck_release_requested.connect(_on_puck_release_requested)
 		local_ctrl.nudge_requested.connect(_on_nudge_requested)
 		local_ctrl.hit_received.connect(func(impulse: Vector3) -> void:
@@ -2981,16 +2982,24 @@ func _resolve_skater_team_id(skater: Skater) -> int:
 	return _registry.resolve_team_id(skater) if _registry != null else -1
 
 
-func _get_puck_carrier_team_id() -> int:
+# The carrying skater on ANY peer. `puck.carrier` is host-only — never written on
+# a client (Scripts/networking/CLAUDE.md) — so the client-side carrier view comes
+# first and the host's authoritative field is the fallback. get_client_carrier_skater
+# covers the REMOTE carrier too, which get_local_carrier alone did not: on a client,
+# anything keyed off a teammate's or opponent's carry read as "nobody has the puck".
+func _get_puck_carrier_skater() -> Skater:
 	if puck_controller != null:
-		var local_carrier: Skater = puck_controller.get_local_carrier()
-		if local_carrier != null:
-			return _resolve_skater_team_id(local_carrier)
+		var client_carrier: Skater = puck_controller.get_client_carrier_skater()
+		if client_carrier != null:
+			return client_carrier
 	if puck != null:
-		var carrier: Skater = puck.get_carrier()
-		if carrier != null:
-			return _resolve_skater_team_id(carrier)
-	return -1
+		return puck.get_carrier()
+	return null
+
+
+func _get_puck_carrier_team_id() -> int:
+	var carrier: Skater = _get_puck_carrier_skater()
+	return _resolve_skater_team_id(carrier) if carrier != null else -1
 
 
 func _resolve_skater_peer_id(skater: Skater) -> int:

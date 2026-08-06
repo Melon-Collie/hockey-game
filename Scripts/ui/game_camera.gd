@@ -81,6 +81,11 @@ const _ON_RINK_MARGIN: float = 5.0
 var _goal_0: HockeyGoal = null  # Team 0's defended goal
 var _goal_1: HockeyGoal = null  # Team 1's defended goal
 var _carrier_team_getter: Callable  # () -> int team_id, or -1 if no carrier
+# () -> Skater carrying the puck, or null. Goes through a getter rather than
+# `puck.get_carrier()` because that field is host-only — never written on a
+# client (see Scripts/networking/CLAUDE.md), so reading it directly left every
+# carrier-driven framing rule dead for everyone but the host.
+var _carrier_getter: Callable
 var _local_team_id: int = -1
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
@@ -187,13 +192,20 @@ func hold_period_break_wide(duration: float) -> void:
 	_smoothed_attack_dir = 0.0
 	_smoothed_direction_factor = 1.0
 
-func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable) -> void:
+func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable,
+		carrier_getter: Callable) -> void:
 	_goal_0 = goal_0
 	_goal_1 = goal_1
 	_carrier_team_getter = carrier_team_getter
+	_carrier_getter = carrier_getter
 
 func set_local_team_id(team_id: int) -> void:
 	_local_team_id = team_id
+
+# Whether the local player is the one carrying — the gate on both carrier-driven
+# framing rules (the vision probe and the velocity lookahead).
+func _local_is_carrier() -> bool:
+	return _carrier_getter.is_valid() and _carrier_getter.call() == skater
 
 # Whether a world position sits within (a margin of) the rink — i.e. the puck is
 # in play rather than stashed off-rink by the tutorial or genuinely absent.
@@ -468,7 +480,7 @@ func _process(delta: float) -> void:
 		# Carrier vision: fit a probe point ahead of the carrier so the zoom
 		# opens up instead of sitting at min height on the collapsed
 		# player+puck span (see the Carrier Vision exports).
-		if fit_puck and puck.get_carrier() == skater:
+		if fit_puck and _local_is_carrier():
 			var vision_point: Vector3 = _carrier_vision_point(player_pos, attack_dir_now)
 			half_span_x = maxf(half_span_x, absf(vision_point.x - base_center.x))
 			fit_min_z = minf(fit_min_z, vision_point.z)
@@ -526,7 +538,7 @@ func _process(delta: float) -> void:
 		# the attacking goal: lookahead and bias both push the same way; skating
 		# laterally with the puck: lookahead pushes sideways while bias keeps
 		# pulling toward the goal — net is a forward-and-sideways framing).
-		if fit_puck and puck.get_carrier() == skater:
+		if fit_puck and _local_is_carrier():
 			var carrier_vel_xz: Vector3 = Vector3(skater.velocity.x, 0.0, skater.velocity.z)
 			var carrier_speed: float = carrier_vel_xz.length()
 			if carrier_speed > 0.5:

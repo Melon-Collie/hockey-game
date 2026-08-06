@@ -123,8 +123,9 @@ func set_local_team_id(team_id: int) -> void:
 func set_historical_others_provider(provider: Callable) -> void:
 	_historical_others_provider = provider
 
-func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable) -> void:
-	camera.set_goal_context(goal_0, goal_1, carrier_team_getter)
+func set_goal_context(goal_0: HockeyGoal, goal_1: HockeyGoal, carrier_team_getter: Callable,
+		carrier_getter: Callable) -> void:
+	camera.set_goal_context(goal_0, goal_1, carrier_team_getter, carrier_getter)
 
 # Forces the player-locked camera framing regardless of the user's camera-mode
 # pref. Used by the tutorial for the puckless movement steps so the camera sits
