@@ -48,11 +48,11 @@ class_name AIRolePressure
 # One bound on that pressure: when NOBODY is home behind us (we are the last man
 # back, the normal case once a rush gains the zone and the markers are still
 # recovering), the cut-off is only taken as fast as it can be taken SET — the
-# last-man rendezvous clamp (AIRoleHelpers.settable_stand_depth). Note the rush
-# side of the blue line no longer uses it: RUSH_D1's gap comes from the ladder
-# (AIRoleRushD), which is bounded by construction. A lunge into a rush at pace ends
-# with the pressurer's momentum pointing the wrong way and the carrier walking
-# around him, which is worse than the space the clamp concedes.
+# last-man approach limit (AIRoleHelpers.settable_stand_depth). RUSH_D1 bounds
+# its own gap stand with the same read — the ladder sizes the gap, not the trip
+# to it. A lunge into a rush at pace ends with the pressurer's momentum pointing
+# the wrong way and the carrier walking around him, which is worse than the space
+# the limit concedes.
 
 # Engaged/closing boundary: within ~1.5 search steps of the cut-off the
 # argmax runs the full polar ring incl. half-step samples (fine corrections
@@ -145,10 +145,10 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# harness, a properly-gapped defender took the transition → PRESSURE handoff at
 	# the blue line, saw the cut-off jump 6 m up-ice, charged it at 6 m/s, met
 	# the carrier once, and was then blown by and left 10 m behind the play. So
-	# bound the step-up to the rendezvous the last man can actually arrive SET at
+	# bound the approach to the speed the rendezvous leaves room for
 	# (AIRoleHelpers.settable_stand_depth). Inert whenever it should be: a carrier who isn't
-	# closing on our net (a cycle, a walk-out, an in-zone battle) leaves the
-	# budget unbounded, and any teammate home behind us skips it entirely — which
+	# closing on our net (a cycle, a walk-out, an in-zone battle) lifts the
+	# limit entirely, and any teammate home behind us skips it — which
 	# is every forecheck (F2/F3 are between F1 and our net by construction) and
 	# any in-zone look where a MARK is covering the house.
 	var min_depth: float = -INF

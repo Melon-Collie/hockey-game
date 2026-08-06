@@ -24,6 +24,10 @@ class_name AIRoleRushD
 # (`has_support_behind` and the rendezvous read) rather than each defender's
 # private depth scan, which on a rush sees nobody home and disables the
 # blue-line stand for everyone.
+#
+# The ladder sizes the gap; it does not authorize the trip to it. A defender
+# deeper than his stand still owes the rendezvous bound before he steps up —
+# see _settable_gap.
 
 # The gap ladder, in stick lengths (BLADE_REACH_M — the honest physical unit,
 # already attribute-scaled, so a long-stick D legitimately plays a hair wider).
@@ -138,8 +142,23 @@ static func _decide_d1(ctx: RoleContext) -> RoleDecision:
 	# GAP UP: his speed advantage is gone, so stop retreating and take the ice.
 	# Closing to stick range on an angle IS the attack — the steering drives us
 	# through it at pace, which is what "defend by skating forward" means here.
-	if _should_gap_up(ctx, read, carrier_pos, closing):
+	# The gap-up is exempt from the step-up bound below, because the bound prices
+	# exactly the risk the gap-up's own triggers rule out: being beaten by pace
+	# you cannot match. A carrier who isn't coming at speed, hasn't got his legs
+	# under him yet, or has been steered into the wall with no outside left to
+	# take is one you attack — the reversal the bound protects is not the thing
+	# that beats you there.
+	var gapping_up: bool = _should_gap_up(ctx, read, carrier_pos, closing)
+	if gapping_up:
 		gap = minf(_stick(ctx) * GAP_MIN_STICKS, dist)
+	else:
+		gap = minf(_settable_gap(ctx, carrier_pos, dir_net, gap, closing), dist)
+	# Stepping UP into the stand, or retreating with it? Measured off the carrier
+	# on the same axis the gap is, so the comparison is exact and carries no dead
+	# band of its own — the arrival brake it selects (below) has its own
+	# engage/release hysteresis and a speed floor, so the one regime where this
+	# can flicker is a near-stationary body, where the brake is inert anyway.
+	var stepping_up: bool = _depth_along(ctx, carrier_pos, dir_net) > gap
 
 	var stand: Vector3 = carrier_pos + dir_net * gap
 	stand = _angle_inside(stand, carrier_pos, dir_net)
@@ -154,9 +173,24 @@ static func _decide_d1(ctx: RoleContext) -> RoleDecision:
 			stand = fan
 
 	d.target_position = _clamp_to_house(ctx, stand)
-	# The rush advances every tick — pace the stand, don't brake at it.
-	d.arrive_at_speed = true
+	# A stand sweeping toward us at the rush's own pace is not a station: braking
+	# at it parks us short and the rush arrives while we are still stopped, so a
+	# RETREAT is paced. A step-UP is the opposite errand, and the approach bound
+	# above placed that stand precisely as the brake trigger for the speed it will
+	# allow — pacing through it disarms the actuator the bound was counting on and
+	# the step-up creeps back into a lunge. The gap-up is the deliberate
+	# exception: against a carrier who has no speed to beat us with, driving
+	# through the stand IS the attack.
+	d.arrive_at_speed = gapping_up or not stepping_up
 	return d
+
+
+# How far goal-side of `threat_pos` this bot currently stands, along `dir_net` —
+# the same axis and origin the gap is expressed in, so the two are comparable.
+static func _depth_along(ctx: RoleContext, threat_pos: Vector3,
+		dir_net: Vector3) -> float:
+	return (ctx.self_pos.x - threat_pos.x) * dir_net.x \
+			+ (ctx.self_pos.z - threat_pos.z) * dir_net.z
 
 
 # The BASE ladder, in stick lengths: ice remaining to OUR blue line gives 3
@@ -232,6 +266,40 @@ static func _should_gap_up(ctx: RoleContext, read: AIRushRead,
 		if acc.length_squared() < 1.0:
 			return true
 	return false
+
+
+# ── Step-up discipline ───────────────────────────────────────────────────────
+# The ladder says WHERE the stand is. It does not ask whether this body can GET
+# there and still be a defender when the rush arrives, and those are different
+# questions. The second one bites in exactly one regime: a defender already
+# DEEPER than the ladder's stand — a D at home with the rush still in the
+# neutral zone. There the ladder names a stand 10–18 m up-ice, which is past the
+# sprint engage gap, so the gap defender arrives at the carrier carrying a full
+# stride of up-ice momentum and any cut leaves him reversing while the rush is
+# gone. Measured over the start sweep in test_rush_gap_discipline.gd, the
+# unbounded ladder met the rush at 4.2 m/s of up-ice speed having wandered a
+# mean 10.9 m (worst 28.5 m) off its own net.
+#
+# So the step-up is bounded by the APPROACH SPEED the rendezvous leaves room for
+# — the same limit PRESSURE's last man runs (AIRoleHelpers.settable_stand_depth):
+# close on the rush no faster than you can still be travelling WITH it by the
+# time it arrives. That is the perception the ladder was missing rather than a
+# cap on it, and it is inert wherever it should be — a defender already at his
+# gap has no approach to make, and a stalled or regrouping carrier lifts the
+# limit to his own top speed so the gap-up still closes right up. What it removes
+# is the charge at a stand this body cannot arrive at, and because the limit
+# falls as the spare depth does, the stand settles onto the ladder as the ice
+# between them runs out instead of being overrun.
+#
+# Skipped with a layer home behind us: a beaten challenge is then a scoring
+# chance rather than a breakaway, which is what licenses D1 to step into the
+# rush while D2 holds mid-ice behind him.
+static func _settable_gap(ctx: RoleContext, carrier_pos: Vector3,
+		dir_net: Vector3, gap: float, closing: float) -> float:
+	if AIRoleHelpers.has_support_behind(ctx):
+		return gap
+	return AIRoleHelpers.settable_stand_depth(
+			ctx, carrier_pos, dir_net, gap, closing)
 
 
 # Shade the stand to the INSIDE of the carrier — toward the middle of the ice —

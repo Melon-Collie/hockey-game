@@ -278,3 +278,88 @@ func test_wrong_side_candidates_are_filtered() -> void:
 	var d: RoleDecision = AIRolePressure.decide(ctx)
 	assert_true(d.target_position.z >= carrier_pos.z - 0.01,
 			"wrong-side candidates must be filtered; chosen target.z=%f vs carrier.z=%f" % [d.target_position.z, carrier_pos.z])
+
+
+# ── The last-man step-up clamp (AIRoleHelpers.settable_stand_depth) ──────────
+# PRESSURE's cut-off sits one stick goal-side of where the carrier is GOING —
+# a challenge position, and the right one while a layer is home behind. As the
+# genuine LAST man it is also a step-up, and a rush at pace is exactly when that
+# step-up cannot be made: charge it and the reversal leaves the pressurer's
+# momentum pointing the wrong way with the carrier walking around him.
+#
+# These pin the DOCTRINE, not the arithmetic — the clamp has been re-derived
+# once already and the properties below are what must survive any version of it.
+# The clamp had no direct coverage at all before them.
+
+# Depth of the chosen stand, goal-side of the carrier along the carrier→our-net
+# line. Larger = deeper = further from the carrier.
+func _stand_depth(d: RoleDecision, carrier: Vector3) -> float:
+	var to_net: Vector3 = Vector3(0.0, 0.0, OUR_NET_Z) - carrier
+	var n: float = sqrt(to_net.x * to_net.x + to_net.z * to_net.z)
+	if n < 0.001:
+		return 0.0
+	return ((d.target_position.x - carrier.x) * to_net.x
+			+ (d.target_position.z - carrier.z) * to_net.z) / n
+
+
+# A last man 12 m goal-side of a carrier flying at our net, vs the same
+# geometry with a teammate home behind him.
+func _rush_ctx(support_behind: bool, carrier_speed: float) -> Dictionary:
+	var self_pos := Vector3(0.0, 0.0, 12.0)
+	var carrier := Vector3(0.0, 0.0, 0.0)
+	var vel := Vector3(0.0, 0.0, carrier_speed)
+	var skaters: Array = [
+			[1, TEAM_ID, self_pos],
+			[200, 1 - TEAM_ID, carrier, vel],
+	]
+	if support_behind:
+		skaters.append([2, TEAM_ID, Vector3(0.0, 0.0, 22.0)])
+	var ctx: RoleContext = _make_ctx(self_pos, 200, skaters)
+	ctx.self_max_speed = 9.0
+	# Keep the body-check path out of it — this is about the stand.
+	ctx.check_aggression = 0.0
+	return {"ctx": ctx, "carrier": carrier}
+
+
+func test_last_man_does_not_lunge_at_a_rush_at_pace() -> void:
+	var alone: Dictionary = _rush_ctx(false, 7.0)
+	var layered: Dictionary = _rush_ctx(true, 7.0)
+	var bounded: float = _stand_depth(
+			AIRolePressure.decide(alone["ctx"]), alone["carrier"])
+	var free: float = _stand_depth(
+			AIRolePressure.decide(layered["ctx"]), layered["carrier"])
+	assert_gt(bounded, free,
+			"the last man holds ice the layered pressurer may take; %.2f vs %.2f"
+			% [bounded, free])
+
+
+func test_the_clamp_is_a_hold_never_a_retreat() -> void:
+	# It may refuse to spend depth; it may never spend MORE than the pressurer
+	# already has. He stands 12 m goal-side of the carrier.
+	var alone: Dictionary = _rush_ctx(false, 7.0)
+	var bounded: float = _stand_depth(
+			AIRolePressure.decide(alone["ctx"]), alone["carrier"])
+	assert_lte(bounded, 12.05,
+			"the clamp never pushes the stand back past our own feet; got %.2f"
+			% bounded)
+
+
+func test_a_carrier_who_is_not_coming_leaves_the_clamp_inert() -> void:
+	# A stalled or regrouping carrier's stand isn't going anywhere, so there is
+	# no rendezvous to lose and the pressurer closes right up.
+	var stalled: Dictionary = _rush_ctx(false, 0.0)
+	var layered: Dictionary = _rush_ctx(true, 0.0)
+	assert_almost_eq(
+			_stand_depth(AIRolePressure.decide(stalled["ctx"]), stalled["carrier"]),
+			_stand_depth(AIRolePressure.decide(layered["ctx"]), layered["carrier"]),
+			0.05, "against a stalled carrier the last man reads like anyone else")
+
+
+func test_a_faster_rush_concedes_more_ground() -> void:
+	# Monotonicity is the whole shape of the bound: the less time the rush
+	# leaves, the less of the step-up is available.
+	var slow: Dictionary = _rush_ctx(false, 3.0)
+	var fast: Dictionary = _rush_ctx(false, 8.0)
+	assert_gt(_stand_depth(AIRolePressure.decide(fast["ctx"]), fast["carrier"]),
+			_stand_depth(AIRolePressure.decide(slow["ctx"]), slow["carrier"]),
+			"a faster rush leaves the last man less step-up")
