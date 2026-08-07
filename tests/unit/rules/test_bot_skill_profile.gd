@@ -82,13 +82,12 @@ func test_tiers_form_a_strictly_softening_ladder_on_every_axis() -> void:
 			"Normal sags further off the carrier than Hard")
 	assert_gt(easy.pursuit_standoff_m, normal.pursuit_standoff_m,
 			"Easy sags further off the carrier than Normal")
-	# Pace — pass speed: RETIRED at 1.0 for every tier. Scaling below 1.0
-	# under-delivered the solved receiver-relative arrival and passes died
-	# short of the tape (missed passes, not softer ones).
-	assert_eq(normal.pass_speed_scale, 1.0,
-			"Normal launches passes at the full solved pace")
-	assert_eq(easy.pass_speed_scale, 1.0,
-			"Easy launches passes at the full solved pace")
+	# Pace — pass speed: a lower tier's puck ARRIVES softer (the launch is solved
+	# for the reduced target, so it still gets there — see pass_launch_speed).
+	assert_lt(normal.pass_speed_scale, hard.pass_speed_scale,
+			"Normal puts the puck on the tape softer than Hard")
+	assert_lt(easy.pass_speed_scale, normal.pass_speed_scale,
+			"Easy puts the puck on the tape softer than Normal")
 	# Pace — check aggression: lower hunts fewer body checks.
 	assert_lt(normal.check_aggression, hard.check_aggression,
 			"Normal hunts fewer checks than Hard")

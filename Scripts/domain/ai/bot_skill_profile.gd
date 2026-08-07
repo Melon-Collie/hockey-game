@@ -110,12 +110,20 @@ var settle_penalty_tau_s: float
 # pressure.gd. Must stay under a stick length — see normal().
 var pursuit_standoff_m: float
 
-# PACE: multiplier on the bot's own pass launch speed (passes only, not shots).
-# Held at 1.0 for every tier: the launch solve already lands the puck on the tape
-# at a deliberately soft receiver-relative pace, so scaling below 1.0
-# under-delivers that solve and starves passes short — missed passes, not a more
-# readable game. Kept plumbed (AIActionScoring.pass_launch_speed via RoleContext)
-# in case a future tier wants a solved-for softer arrival.
+# PACE: multiplier on the pace this bot's passes ARRIVE at (passes only, not
+# shots) — AIActionScoring.pass_launch_speed then solves the launch that delivers
+# it, so a softened feed still reaches the tape and still catches a streaking
+# receiver. 0.85 puts the puck on the stick at 17 m/s instead of 20.
+#
+# The most direct "how much time does the human get" dial there is: a 12 m feed
+# at 0.85 spends 0.71 s in flight instead of 0.60 s, which is most of a stride
+# for a defender reading it. And the bot is SELF-HONEST about it — every pass
+# scoring site solves its lane clearance and miss probability at this same
+# reduced pace, so a lower tier also stops ATTEMPTING the feeds its slower puck
+# can no longer thread, rather than throwing them and getting picked.
+#
+# It scaled the finished LAUNCH before, which is why it sat retired at 1.0 for
+# every tier — see the pass_launch_speed doc block for what that broke.
 var pass_speed_scale: float
 
 # PACE: how hard the on-puck pressurer hunts body checks. 1.0 = full hit-hunting;
@@ -220,6 +228,11 @@ static func hard() -> BotSkillProfile:
 # the shot-outcome sim it buries 53% of what it takes against 87% for Hard, with
 # the misses landing on the keeper — posts ~1%, wides ~0%.
 #
+# Passes ARRIVE at 0.85 pace (17 m/s on the tape rather than 20), which is the
+# tier's readability dial: an extra ~0.1 s of flight on a routine feed is most of
+# a stride for the human reading it, and the bot prices its own lanes at that
+# same pace so it also stops trying the ones the slower puck can't thread.
+#
 # The 0.60 settle doubt is the tier's INDECISION dial: for the first beat of a
 # possession an option must be worth ~2.5× its giveaway bar to be worth the puck
 # — a slot look or a clean outlet still goes at once, while the point shot and
@@ -246,7 +259,7 @@ static func hard() -> BotSkillProfile:
 # bar, the τ for a longer one.
 static func normal() -> BotSkillProfile:
 	return BotSkillProfile.new(0.22, 6, 0.04, 0.015, 0.16, 0.60, 0.30,
-			0.75, 1.0, 0.65, 0.6,
+			0.75, 0.85, 0.65, 0.6,
 			true, true, true, true, true, true)
 
 
@@ -262,14 +275,16 @@ static func normal() -> BotSkillProfile:
 # reliably forces the turnover.
 #
 # Pace is low-energy across the board — defenders sag ~3 m, barely lead the play,
-# and never hunt body checks — which is most of what makes Easy feel easy.
+# never hunt body checks, and put the puck on a teammate's tape at 0.75 pace
+# (15 m/s), a floaty feed a newcomer has time to step in front of — which is most
+# of what makes Easy feel easy.
 #
 # Cognition: all gates closed, beginner hockey IQ to match the beginner hands.
 # The cutback to the middle, the straight-line poke-check, and the cross-crease
 # 2-on-1 glory feed all genuinely work against it.
 static func easy() -> BotSkillProfile:
 	return BotSkillProfile.new(0.34, 9, 0.055, 0.0225, 0.24, 0.85, 0.55,
-			3.0, 1.0, 0.0, 0.2,
+			3.0, 0.75, 0.0, 0.2,
 			false, false, false, false, false, false)
 
 

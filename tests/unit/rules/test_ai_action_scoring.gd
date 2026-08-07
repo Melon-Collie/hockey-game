@@ -1184,15 +1184,37 @@ func test_pass_speed_scale_defaults_to_unchanged() -> void:
 			AIActionScoring.pass_launch_speed(18.0, maxw))
 
 
-func test_pass_speed_scale_slows_the_puck_below_the_magnet_pace() -> void:
-	# The pace knob applies AFTER the clamp, so an easier bot's pass drops below the
-	# magnet pace — a slower, readable puck by design.
+func test_pass_speed_scale_softens_the_arrival_and_still_delivers() -> void:
+	# The pace knob scales the TARGET ARRIVAL pace, and the launch is then solved
+	# to deliver that — so an easier bot's puck lands soft instead of landing
+	# short. Both halves are asserted because the knob spent its whole life
+	# retired at 1.0 for failing the second one.
 	var maxw: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
-	var full: float = AIActionScoring.pass_launch_speed(4.0, maxw, 1.0)
-	var slowed: float = AIActionScoring.pass_launch_speed(4.0, maxw, 0.7)
-	assert_almost_eq(slowed, full * 0.7, 0.001)
-	assert_lt(slowed, AIActionScoring.PASS_TARGET_CLOSING_M_S,
-			"a scaled pass is slower than the magnet pace")
+	var decel: float = GameRules.PUCK_ICE_DECEL_M_S2
+	var dist: float = 12.0
+
+	# Static receiver: the arrival pace backed out of the launch is exactly the
+	# scaled target, not merely "lower than before".
+	var slowed: float = AIActionScoring.pass_launch_speed(dist, maxw, 0.85)
+	var arrival: float = sqrt(slowed * slowed - 2.0 * decel * dist)
+	assert_almost_eq(arrival, AIActionScoring.PASS_TARGET_CLOSING_M_S * 0.85, 0.01,
+			"the puck arrives at the scaled target closing pace")
+	assert_lt(slowed, AIActionScoring.pass_launch_speed(dist, maxw, 1.0),
+			"and it is a genuinely slower puck than the full-pace feed")
+
+	# THE REGRESSION GUARD. A receiver streaking away along the pass needs a
+	# HARDER launch to close at the target at all. Scaling the finished launch
+	# (the retired mechanism) under-delivers that solve and the feed dies behind
+	# him; scaling the target keeps the lead intact, just softer.
+	var pass_dir := Vector3(1, 0, 0)
+	var streak := Vector3(6, 0, 0)
+	var lead: float = AIActionScoring.pass_launch_speed(dist, maxw, 0.85, streak, pass_dir)
+	var lead_arrival: float = sqrt(lead * lead - 2.0 * decel * dist)
+	assert_almost_eq(lead_arrival - streak.x,
+			AIActionScoring.PASS_TARGET_CLOSING_M_S * 0.85, 0.01,
+			"a streaking receiver still gets the scaled closing pace on his tape")
+	assert_gt(lead, slowed,
+			"and the lead feed still fires harder than the standing one")
 
 
 func test_pass_launch_speed_fires_harder_onto_a_streaking_receiver() -> void:
