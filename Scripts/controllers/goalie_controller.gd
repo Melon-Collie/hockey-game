@@ -1891,29 +1891,8 @@ func _update_shot_timer(delta: float) -> void:
 	# drop_max_time_to_impact. `low_drop_ready` is a level signal, so the drop
 	# fires on whichever tick the puck first becomes imminent.
 	var ttg: float = _puck_time_to_goal_line()
-	if ttg < 0.0 or ttg > drop_max_time_to_impact:
-		return
-	# A LIVE BEATEN-WIDE VERDICT OWNS THE DROP. The square butterfly and the post
-	# seal are both "go down now" and they race, but they answer different
-	# questions, and dropping square is the wrong answer to a lateral race already
-	# lost. Worse, it is self-erasing: going down changes his sealing reach, the
-	# puck reads as back inside it, and the verdict he was one confirmation tick
-	# from acting on disappears. Measured as the drop landing mid-window and the
-	# seal then never firing at all.
-	#
-	# THE DEFERRAL IS BOUNDED BY THE DROP'S OWN DEADLINE, because waiting on a
-	# verdict that will not arrive in time is how the reflex turns into a statue —
-	# he yields to a seal that never confirms and does nothing whatsoever. The
-	# pads have to START by `ttg - drop_time`, so the seal gets the window only
-	# while its remaining confirmation still fits inside it; past that the reflex
-	# takes over and he at least gets square pads down.
-	if _beaten_wide_committed:
-		return
-	if _beaten_wide_armed:
-		var remaining: float = lateral_commit_confirm_s - _beaten_wide_confirm_timer
-		if remaining <= maxf(ttg - butterfly_drop_speed, 0.0):
-			return
-	_enter_butterfly()
+	if ttg >= 0.0 and ttg <= drop_max_time_to_impact:
+		_enter_butterfly()
 
 # Seconds until the puck crosses this goalie's goal line on its current heading,
 # or -1 if it isn't approaching (moving parallel or away). Host-side only — uses
@@ -2073,6 +2052,19 @@ func _update_state(delta: float) -> void:
 			# A converged read that says "high" checks an unsealed drop.
 			if _maybe_arrest_drop():
 				return
+			# THE SEAL IS REACHABLE FROM DOWN, not only from his feet. The upright
+			# branch above owns the case where the verdict confirms while he is still
+			# standing; this is the same verdict confirming a few ticks later, after a
+			# reflex drop already put him on the ice. Without it the beat is simply
+			# unspendable once he is down — he waits out the whole butterfly and then
+			# has to re-earn the push through `_try_commit_slide`, which is the "most
+			# of half a second after the moment he was beaten" this call exists to
+			# avoid (see _seal_beaten_wide_post).
+			#
+			# Self-guarding: it no-ops unless the verdict is CONFIRMED with a live
+			# drive sign, and `_commit_slide_toward` owns the mid-slide re-entry rules.
+			if _sm.current == State.BUTTERFLY:
+				_seal_beaten_wide_post()
 			# Recovery only fires from idle BUTTERFLY (not mid-slide and not
 			# mid-coil). Slide completion transitions back to BUTTERFLY first —
 			# recovery can fire on the next tick if conditions hold. RVH from
@@ -2969,9 +2961,19 @@ func _opposing_shooter_near_puck(loose_puck_radius: float) -> bool:
 	_ensure_view()
 	return _view.nearest_opponent_dist < loose_puck_radius
 
+# GOING DOWN DOES NOT UN-BEAT HIM. This used to clear the beaten-wide verdict and
+# its confirmation timer, which made the drop and the seal destroy each other: a
+# verdict one tick from committing was wiped by the reflex drop, and because the
+# TIMER was zeroed too it then had to serve the full `lateral_commit_confirm_s`
+# again — which the next butterfly entry would reset again. The seal simply never
+# fired on the plays it exists for.
+#
+# Nothing is protected by dropping it here. `_advance_beaten_wide` re-asks the
+# coverage question every tick and disarms the moment it stops holding, so a stale
+# verdict cannot survive on its own, and `_update_position`'s BUTTERFLY branch
+# still runs `_try_commit_slide` — a goalie who is already down converting a
+# confirmed beat into a seal is the behaviour, not a bug to guard against.
 func _enter_butterfly() -> void:
-	_beaten_wide_confirm_timer = 0.0
-	_beaten_wide_armed = false
 	_slide_coverage_confirm_timer = 0.0
 	_sm.transition_to(State.BUTTERFLY)
 
