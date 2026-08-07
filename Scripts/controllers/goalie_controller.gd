@@ -944,7 +944,11 @@ extends Node
 @export var rejoin_blend_duration: float = 0.075  # smoothstep window back from extrapolation
 
 @export var low_shot_threshold: float = 0.45
-@export var elevated_threshold: float = 0.45
+# The legs-or-hands fork. Not a chosen number: it is the height where the
+# butterfly silhouette runs out (GoalieAnatomy.butterfly_cover_ceiling), so a
+# shot below it is one the seal can still take and a shot above it is one the
+# drop would hand over.
+@export var elevated_threshold: float = GoalieAnatomy.butterfly_cover_ceiling()
 @export var react_hand_y_min: float = 0.50
 @export var react_hand_y_max: float = 1.55
 # Reach height ABOVE THE CHEST ANCHOR — the posture cost of being down. Each
