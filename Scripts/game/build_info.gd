@@ -21,7 +21,7 @@ const VERSION: String = "dev"
 #   - The legal RANGE of an existing field, even at the same wire type. An older
 #     peer coerces the new value back into its own range and then simulates
 #     different physics than the host, diverging prediction.
-const PROTOCOL_VERSION: int = 57
+const PROTOCOL_VERSION: int = 58
 
 
 func _ready() -> void:

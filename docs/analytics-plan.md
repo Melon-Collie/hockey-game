@@ -152,8 +152,17 @@ shot map / xG-share / heatmap, captured host-side and persisted:
   `ShotEvent.encode_list` / `decode_list` are the wire format (malformed rows
   skipped, never a mid-walk script error). `GameManager.get_shot_events()` is the
   role-agnostic seam the screens read: host → live buffer, client → pushed copy.
-- v1 edge (documented): a goal the goalie grazed first can log as SAVED (the SOG
-  dedup guard blocks the GOAL re-label); a clean goal logs GOAL. Minor map mislabel.
+- Goal outcomes are final, not first-come: a goal the goalie got a piece of has
+  already resolved as SAVED (`on_goalie_touch` runs before the goal sensor), so
+  `on_goal_confirmed` re-labels that same event in place rather than being dropped
+  by the SOG dedup guard. A goal with no tracked release at all (carry-in, jam-in
+  off a pickup, a scramble past the pending window) takes its position from the
+  scorer's own location, supplied by `PhaseCoordinator`; without it those goals
+  plotted at centre ice and the map discarded them as out-of-zone.
+- Remaining gap: an OWN goal logs no shot event (nobody shot it), so a player's
+  career goal total can exceed the goals plotted on their map by their own-goal
+  count — and a goal with no tracked release carries xG 0, since none was ever
+  evaluated.
 
 **B2 (the screens) NOT STARTED** — the post-game analytics screen (§7.1), the
 career heatmap, and the real-game reliability-plot calibration. Godot `_draw()` UI

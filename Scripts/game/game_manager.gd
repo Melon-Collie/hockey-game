@@ -390,6 +390,15 @@ var _ranked_match: bool = false
 # career row so a future filter can pick its own bar instead of inheriting the
 # latch's arbitrary 2.
 var _peak_humans: int = 0
+# True once this game's end-of-game stat sweep has run (_finalize_game_stats).
+# One sweep per game on every peer: a client can be driven into it by either the
+# host's final stats or the fallback timer, and both may happen. Cleared with the
+# rest of the per-match state on world spawn and rematch.
+var _career_reported: bool = false
+# How long a client waits at the horn for the host's final stats before uploading
+# what it already holds. Generous enough to cover a reliable retransmit on a poor
+# link, short enough that the row still lands while the podium is up.
+const _FINAL_STATS_WAIT_S: float = 3.0
 
 # Sound wiring is split between persistent (NetworkManager autoload, GameManager
 # self-signals — wire once for the lifetime of the process) and per-game (puck /
@@ -495,6 +504,7 @@ func _wire_network_signals() -> void:
 	NetworkManager.faceoff_positions_received.connect(_on_faceoff_positions_received)
 	NetworkManager.game_reset_received.connect(on_game_reset)
 	NetworkManager.stats_received.connect(_on_stats_received)
+	NetworkManager.final_stats_received.connect(_on_final_stats_received)
 	NetworkManager.shot_events_received.connect(_on_shot_events_received)
 	NetworkManager.slot_swap_requested.connect(_on_slot_swap_requested)
 	NetworkManager.slot_swap_confirmed.connect(_on_slot_swap_confirmed)
@@ -1347,6 +1357,7 @@ func _spawn_world() -> void:
 	_seen_first_prep = false  # fresh world → next prep is the opening faceoff
 	_ranked_match = false  # re-latches as players spawn (_on_registry_player_added)
 	_peak_humans = 0
+	_career_reported = false
 	_state_machine = GameStateMachine.new()
 	if not NetworkManager.pending_game_config.is_empty():
 		var cfg: Dictionary = NetworkManager.pending_game_config
@@ -4307,7 +4318,7 @@ func get_team_shots(team_id: int) -> int:
 # ── Scene exit & reset ───────────────────────────────────────────────────────
 func _on_game_over() -> void:
 	# Highlight reel runs for every game-over (online + Play vs Bots), so it's
-	# scheduled before the career/telemetry early-returns below.
+	# scheduled ahead of the stat sweep and its gates.
 	_schedule_post_game_replay()
 	# Ship the game's shot log to clients (analytics B1) — same reasoning: the
 	# post-game analytics views are a LOCAL view of the match everyone just
@@ -4317,6 +4328,57 @@ func _on_game_over() -> void:
 	if NetworkManager.is_host and _advanced_stats_tracker != null:
 		NetworkManager.send_shot_events_to_all(
 				ShotEvent.encode_list(_advanced_stats_tracker.get_shot_events()))
+	if NetworkManager.is_host:
+		# The host's own counters ARE the authority — nothing is in flight, so its
+		# sweep runs now. Clients get those same counters as one reliable packet
+		# that doubles as their cue to run theirs.
+		_broadcast_final_stats()
+		_finalize_game_stats()
+		return
+	# A client's counters arrive on a channel with no ordering against the phase
+	# byte that brought it here, so anything that changed in the last moments of
+	# the game may still be in flight. Wait for the host's final stats rather than
+	# sweeping stale ones; the timer is only the safety net for never getting them.
+	_arm_final_stats_fallback()
+
+
+# Host: push the settled counters to every client, superseding any pending
+# contact-path flush (StatsSyncGate) the way an immediate sync does.
+func _broadcast_final_stats() -> void:
+	_stats_sync_gate.clear()
+	if _codec == null or NetworkManager.connected_peer_ids().is_empty():
+		return
+	NetworkManager.send_final_stats_to_all(_codec.encode_stats())
+
+
+# Client: the host's settled counters landed. Apply them, then sweep.
+func _on_final_stats_received(data: Array) -> void:
+	_on_stats_received(data)
+	_finalize_game_stats()
+
+
+# Client: upload what we have if the host's final stats never arrive (it died
+# between the world-state packet that ended the game and the reliable send).
+# Losing the row entirely is worse than posting one a hit short.
+func _arm_final_stats_fallback() -> void:
+	var game_id: String = _game_id
+	get_tree().create_timer(_FINAL_STATS_WAIT_S).timeout.connect(func() -> void:
+		# A rematch started while we waited: that game's row either posted or is
+		# gone, and the counters now in the registry belong to the NEW game.
+		if _game_id == game_id:
+			_finalize_game_stats()
+	, CONNECT_ONE_SHOT)
+
+
+# The end-of-game stat sweep: achievements, Steam career stats, the Supabase
+# career row, the shot log, the network-quality row. Runs once per game on every
+# peer — the host at the horn, a client when the host's final stats land (or the
+# fallback fires). Everything here reads counters that must be settled first,
+# which is what the guard and the two entry points are for.
+func _finalize_game_stats() -> void:
+	if _career_reported:
+		return
+	_career_reported = true
 	if _state_machine == null or _registry == null or _career_reporter == null:
 		return
 	var local: PlayerRecord = _registry.get_local()
@@ -4618,6 +4680,7 @@ func _apply_reset() -> void:
 	if _telemetry != null:
 		_telemetry.reset_session()
 	_net_session_reported = false
+	_career_reported = false
 	# End any highlight reel (post-game loop or a mid-break intermission cut
 	# short by the rematch) and drop the previous match's clips so a rematch's
 	# screens only reel their own goals.
@@ -4644,6 +4707,12 @@ func _apply_reset() -> void:
 	clock_updated.emit(_state_machine.period_duration)
 	_registry.reset_all_stats()
 	_shot_tracker.reset_all()
+	# The shot log is per-GAME, and a rematch doesn't respawn the world that built
+	# these — so clear them here or the next game-over posts this game's shots
+	# again under the rematch's game_id (and its analytics screens draw both).
+	if _advanced_stats_tracker != null:
+		_advanced_stats_tracker.reset()
+	_client_shot_events.clear()
 	if _phase_coord != null:
 		_phase_coord.reset_goal_log()
 	if _turnover_tracker != null:
