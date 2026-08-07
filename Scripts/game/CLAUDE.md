@@ -31,20 +31,29 @@ they all share. **A new claim resolver must follow all of it.**
   `LagCompRewind.self_view_time(host_ts)`; anything they were *watching* goes to
   `remote_view_time(host_ts, interp_delay)`. Never reach into raw timestamps —
   go through `LagCompRewind`.
-- **The self-view instant is usually PAST the buffer — catch it up.** The host
-  holds a client's input until its stamp comes due, so at claim arrival the
-  newest capture sits at `host_ts + one_way` while `self_view_time` asks for
-  `host_ts + lead`. Whenever the lead exceeds the one-way trip — every link under
-  roughly twice the lead, i.e. most of them, and the *cleaner* the link the worse
-  it gets — `StateBufferManager.get_state_at` answers with the newest sample and
-  no signal at all (`_find_bracket`'s `ts >= newest` branch). Add
-  `LagCompRewind.self_view_catch_up(...)` to every body-anchored quantity read
-  from that snapshot (position, `blade_contact_world`, `top_hand_world` — the
-  blade rides the body, so it rigid-translates with it). Skipping it rewinds the
-  claimant's own body short and drags the reach/continuity clamps back onto a
-  stale body, which eats honest full-extension claims; measured at the lead
-  servo's 50 ms cap on a 20 ms link, that was ~0.59 m against a 0.7 m contact
-  diameter. It self-disables once one-way exceeds the lead.
+- **A claim resolves on the input stream's timeline, not on packet arrival.**
+  The host holds a client's input until its stamp comes due, so at claim arrival
+  the newest capture sits at `host_ts + one_way` while `self_view_time` asks for
+  `host_ts + lead` — and whenever the lead exceeds the one-way trip (by design on
+  any healthy link, and the *cleaner* the link the wider the gap)
+  `StateBufferManager.get_state_at` answers that future query with the newest
+  sample and no signal at all (`_find_bracket`'s `ts >= newest` branch).
+  `GameManager` therefore routes all four claim signals through
+  `DeferredClaimQueue`, which parks a claim until the buffer covers its
+  self-view instant. **Every reject condition is consequently evaluated at
+  RELEASE, not arrival** — write resolvers accordingly, and don't cache anything
+  at the signal boundary. The queue is dropped on rematch reset; a claim parked
+  across a faceoff is otherwise caught by the resolvers' own `pickup_locked` /
+  ghost / carrier-changed gates.
+- **Still add `LagCompRewind.self_view_catch_up(...)` to body-anchored
+  quantities** read from the self-view snapshot (position, `blade_contact_world`,
+  `top_hand_world` — the blade rides the body, so it rigid-translates with it).
+  With the queue in front it normally returns `Vector3.ZERO`; it remains the
+  backstop for the queue's `MAX_HOLD_S` clamp and for any future path that
+  reaches a resolver without being deferred. Without one of the two, the
+  claimant's own body is rewound short and the reach/continuity clamps fence an
+  honest full-extension claim against a stale body — measured at the lead servo's
+  50 ms cap on a 20 ms link, ~0.59 m against a 0.7 m contact diameter.
 - **Reach-clamp the client-sent blade to the rewound body — never `rtt/2`.** The
   blade is client-authoritative aim, so the clamp is what bounds it. The host
   independently reconstructs the blade from replicated inputs; the clamp is the

@@ -296,6 +296,9 @@ var breakout_episodes := AIBreakoutEpisodeTracker.new()
 # denominator and quietly corrupt every share it reports.
 var shape_tally_armed: bool = false
 var _state_buffer_manager: StateBufferManager = null
+# Parks client claims until the buffer covers the instant they name — claims run
+# on the input stream's timeline, not on packet arrival. See DeferredClaimQueue.
+var _deferred_claims := DeferredClaimQueue.new()
 # Per-team last-elected loose-puck chaser, fed back into
 # AILoosePuckChase.elect each frame for incumbent hysteresis.
 var _prev_chase_by_team: Dictionary[int, int] = {}
@@ -662,6 +665,9 @@ func _physics_process(delta: float) -> void:
 	_shot_tracker.tick(delta)
 	_hit_tracker.tick(delta)
 	_possession_tracker.tick(delta)
+	# Release before _pickup_claim.tick so a claim coming due this frame can still
+	# arm the contest window on the frame it lands.
+	_deferred_claims.drain(_state_buffer_manager.newest_host_timestamp())
 	_pickup_claim.tick(delta)
 	HostCostProbe.record(HostCostProbe.Section.GM_TAIL, Time.get_ticks_usec() - t_section)
 
@@ -3097,24 +3103,34 @@ func _on_pickup_claim_received(peer_id: int, host_timestamp: float, interp_delay
 		input_lead_ms: float, blade_curr: Vector3, blade_prev: Vector3, top_hand: Vector3) -> void:
 	if not NetworkManager.is_host:
 		return
-	_pickup_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, input_lead_ms,
-			blade_curr, blade_prev, top_hand)
+	_deferred_claims.submit(
+			LagCompRewind.self_view_time(host_timestamp, input_lead_ms),
+			_state_buffer_manager.newest_host_timestamp(),
+			_pickup_claim.receive_claim,
+			[peer_id, host_timestamp, interp_delay_ms, input_lead_ms, blade_curr, blade_prev, top_hand])
 
 
 func _on_poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float,
 		input_lead_ms: float, expected_carrier_peer_id: int, blade_curr: Vector3, blade_prev: Vector3) -> void:
 	if not NetworkManager.is_host:
 		return
-	_poke_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, input_lead_ms,
-			expected_carrier_peer_id, blade_curr, blade_prev)
+	_deferred_claims.submit(
+			LagCompRewind.self_view_time(host_timestamp, input_lead_ms),
+			_state_buffer_manager.newest_host_timestamp(),
+			_poke_claim.receive_claim,
+			[peer_id, host_timestamp, interp_delay_ms, input_lead_ms, expected_carrier_peer_id,
+			blade_curr, blade_prev])
 
 
 func _on_stick_lift_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float,
 		input_lead_ms: float, expected_carrier_peer_id: int, blade_curr: Vector3) -> void:
 	if not NetworkManager.is_host:
 		return
-	_stick_lift_claim.receive_claim(peer_id, host_timestamp, interp_delay_ms, input_lead_ms,
-			expected_carrier_peer_id, blade_curr)
+	_deferred_claims.submit(
+			LagCompRewind.self_view_time(host_timestamp, input_lead_ms),
+			_state_buffer_manager.newest_host_timestamp(),
+			_stick_lift_claim.receive_claim,
+			[peer_id, host_timestamp, interp_delay_ms, input_lead_ms, expected_carrier_peer_id, blade_curr])
 
 
 func _on_server_puck_released_by_carrier(peer_id: int) -> void:
@@ -4195,7 +4211,11 @@ func _on_hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_times
 		interp_delay_ms: float, input_lead_ms: float) -> void:
 	if not NetworkManager.is_host:
 		return
-	_hit_claim.receive_claim(hitter_peer_id, victim_peer_id, host_timestamp, interp_delay_ms, input_lead_ms)
+	_deferred_claims.submit(
+			LagCompRewind.self_view_time(host_timestamp, input_lead_ms),
+			_state_buffer_manager.newest_host_timestamp(),
+			_hit_claim.receive_claim,
+			[hitter_peer_id, victim_peer_id, host_timestamp, interp_delay_ms, input_lead_ms])
 
 
 # Relay for PhaseCoordinator.faceoff_prep_announced that recognizes the
@@ -4707,6 +4727,7 @@ func _apply_reset() -> void:
 	_last_emitted_clock_secs = -1
 	_last_ghost_state.clear()
 	_hit_claim.reset_throttle()
+	_deferred_claims.clear()
 	_puck_oob_timer = 0.0
 	score_changed.emit(0, 0)
 	period_synced.emit(1)
