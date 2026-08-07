@@ -120,12 +120,35 @@ grab-then-lose bug. A miss fraction that stays high after v28 points at the
 | Key | Meaning |
 |---|---|
 | `pickup_claims_total` | Client pickup claims that reached the rewound geometry test (all eligibility gates — fresh, loose, not ghost/cooldown/shot-blocking — passed). The denominator. |
-| `pickup_claim_misses_total` | Of those, how many failed the geometry test: the (reach-clamped) client blade and rewound puck didn't overlap even though the client's view said in-range. **`misses / claims` is the headline sanity number — near-zero means the rewind reproduces the client's view; a high fraction means the puck rewind is off (the "reached for it, didn't get it" symptom).** |
+| `pickup_claim_misses_total` | Of those, how many failed the geometry test: the (reach-clamped) client blade and rewound puck didn't overlap even though the client's view said in-range. **`misses / claims` is NOT readable on its own** — see the four `claim_miss_*` keys below. It conflates rewind failure, the two sides running different tests (the client's send gate is point-in-sphere at one instant, the host's is a swept segment pair), and legitimate grazes, since blade-proximity pickup claims on every pass near a loose puck. Measured fractions of 26–58% across four sessions turned out to be uninterpretable without the breakdown. |
 | `pickup_claim_deflects_total` | Reached the puck but the rewound speed/angle said tip-not-catch (a deflect, not a catch). Separates "missed the puck" from "touched it but it wasn't catchable". |
 | `poke_claims_total` | Client poke claims that reached the rewound swept-geometry test (opponent carrier, not ghost, pokeable). The denominator for pokes. |
 | `poke_claim_misses_total` | Of those, how many failed the swept `check_poke` against the rewound carried puck. Read as `poke_claim_misses / poke_claims`. |
 | `stick_lift_claims_total` | Client stick-lift claims that reached the rewound geometry test (blade hooked under an opposing carrier's shaft). The denominator for lifts. |
 | `stick_lift_claim_misses_total` | Of those, how many failed `check_blade_under_stick` against the rewound shaft. Read as `stick_lift_claim_misses / stick_lift_claims`. |
+
+### Why a claim missed — read these before trusting a miss rate
+
+Not flattened into `network_session_health`: the view body is ~150 lines of
+documented extraction and the migration that touched it last argued explicitly
+against forking it for a small addition. Query the jsonb directly —
+`(metrics->>'claim_miss_sep_ratio_peak')::float` etc. Host rows only.
+
+**Read `claim_miss_sep_ratio` first.** It alone decides whether the other three
+are worth looking at.
+
+| Key | Meaning |
+|---|---|
+| `claim_miss_sep_ratio` (avg) / `claim_miss_sep_ratio_peak` (max) | Swept separation at the rewind instant ÷ the test radius, over pickup and poke misses. **~1.0–1.2 = boundary grazes** — the send gate and the swept test disagreeing at the edge, harmless, and the miss rate is a naming problem not a netcode one. **>2 = the rewind put blade and puck somewhere unrelated**, which is the failure the miss counter is meant to report. |
+| `claim_miss_recovered_total` | Misses where the host's own present-time grab granted the same peer within ~0.35 s. A rejected claim does **not** cost the puck — the present-time path is independent. High recovery ⇒ misses are a *latency* cost (the lag-comp fast path fell through, the normal path caught it a trip later); low recovery ⇒ players are genuinely losing pucks. Not comparably bad, and the miss count can't tell them apart. |
+| `claim_blade_divergence_m` (avg) / `claim_blade_divergence_peak_m` | Distance between the client-sent blade and the host's **own reconstruction** of it at the rewind instant, over every claim reaching the geometry test (hit or miss — so the miss rate has a denominator). This measures rewind fidelity *directly*, which is what the miss fraction only claims to measure. |
+| `claim_continuity_clamps_total` | How often `continuity_clamp` actually had to pull the client's blade toward that reconstruction. The clamp converts reconstruction noise into misses regardless of what the client saw, so a high count with a high miss rate points at blade reconstruction, not at the puck rewind. Read against `blade_jumps_total` on the client rows. |
+
+**Confound to control for:** blade reconstruction replays the claimant's inputs
+across the carried input lead, so its error grows with lead depth. Sessions where
+`input_lead_extra_ms_avg` sits at the `MAX_LEAD_EXTRA_S` ceiling reconstruct
+across ~3× the designed span and will inflate divergence, clamps, and therefore
+misses. Check the lead before comparing miss rates across sessions.
 | `host_input_queue_depth` (max/avg) | **Host only** (clients fold 0; the separate `input_queue_depth` is the client's echo). Deepest pending remote-input queue the host saw in the window. **Read it WITH `input_drains_per_sec` — this is the discriminator for drain-driven reconcile churn:** drains firing while depth is **deep** (≫2) means the drain is eating a cushion the lead servo deliberately built (raise the drain trigger); drains while depth is **shallow** (0–1) means inputs genuinely arrive late and the lead/clock is the problem. Healthy depth ≈ the stamp lead in ticks. |
 | `input_lead_extra_ms` (max/avg) | Client only. The adaptive input-lead servo's live EXTRA above the static `INPUT_LEAD_SEC` base (bounded 0..50 ms). Healthy: settles low and stable. Pinned at ~50 = runaway over-lead (a hidden input-latency tax on this client's actions); ~0 while the host row shows rising `input_drains_per_sec` = under-leading (the cushion isn't covering real jitter). Added post-C1 because the honest capture labels changed what the servo measures as pop-overdue. |
 | `recon_replayed_per_sec` (max/avg) | Client only. Subset of `reconcile_per_sec` whose matched prediction was a replay-**re-recorded** entry rather than a live capture. The reconcile-storm attribution split: a high share means corrections are echoing through the replay's approximations (no goalie-body sliding, snapshot-approximated body checks — replay-fidelity work); a low share during storms means genuine fresh live-prediction divergence (the body-check/contact Known Issue). |

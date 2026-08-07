@@ -145,6 +145,40 @@ var _poke_claim_count: int = 0
 var _poke_claim_miss_count: int = 0
 var _stick_lift_claim_count: int = 0
 var _stick_lift_claim_miss_count: int = 0
+# ── Why a claim missed ───────────────────────────────────────────────────────
+# The miss counters above give a RATE and nothing else, so a 45% miss fraction
+# is unreadable: it conflates the rewind genuinely failing to reproduce the
+# client's view, the two sides running different tests (the client's send gate
+# is point-in-sphere at one instant, the host's is a swept segment pair), and
+# the player legitimately grazing past a loose puck — blade-proximity pickup
+# claims on every near-miss. These three separate those, and each answers one
+# question:
+#
+#   claim_miss_sep_ratio   — swept separation at the rewind instant / the test
+#     radius, recorded on every miss. ~1.0-1.2 is a boundary graze (the send
+#     gate and the swept test disagreeing at the edge, expected and harmless);
+#     >2 means the rewind put blade and puck somewhere unrelated, which is the
+#     failure the miss counter is supposed to be reporting.
+#   claim_miss_recovered   — a miss followed by the host's own present-time
+#     grab granting the same peer shortly after. Separates "the lag-comp fast
+#     path fell through, the normal path caught it a trip later" (a latency
+#     cost) from "the player lost the puck" (a gameplay loss). The miss rate
+#     alone cannot tell these apart and they are not comparably bad.
+#   claim_blade_divergence_m / claim_continuity_clamps — distance between the
+#     client-sent blade and the host's OWN reconstruction of it at the rewind
+#     instant, over every claim reaching the geometry test, plus how often
+#     continuity_clamp actually had to move the point. This measures rewind
+#     fidelity DIRECTLY, which is what the miss fraction only claims to measure:
+#     the clamp pulls the client's blade toward the host's reconstruction, so a
+#     noisy reconstruction converts into misses regardless of what the client saw.
+var _claim_miss_sep_ratio_sum: float = 0.0
+var _claim_miss_sep_ratio_n: int = 0
+var _claim_miss_sep_ratio_max: float = 0.0
+var _claim_miss_recovered_count: int = 0
+var _claim_blade_divergence_sum: float = 0.0
+var _claim_blade_divergence_n: int = 0
+var _claim_blade_divergence_max: float = 0.0
+var _claim_continuity_clamp_count: int = 0
 # Host: claims dropped at the RPC boundary by the stamp-plausibility gate
 # (LagCompRewind.is_claim_stamp_plausible) — BEFORE any resolver ran, so they
 # appear in no other claim counter. Expected ~0: a legit claim's stamp is
@@ -538,6 +572,32 @@ static func record_pickup_claim_miss() -> void:
 static func record_pickup_claim_deflect() -> void:
 	if instance: instance._pickup_claim_deflect_count += 1
 
+# Miss diagnostics (see the field block). `separation` and `radius` are the
+# swept-test distance and the threshold it failed against — passed as the pair so
+# the ratio is computed here rather than at four call sites with four chances to
+# use the wrong radius.
+static func record_claim_miss_separation(separation: float, radius: float) -> void:
+	if instance == null or radius <= 0.0 or not is_finite(separation):
+		return
+	var ratio: float = separation / radius
+	instance._claim_miss_sep_ratio_sum += ratio
+	instance._claim_miss_sep_ratio_n += 1
+	instance._claim_miss_sep_ratio_max = maxf(instance._claim_miss_sep_ratio_max, ratio)
+
+static func record_claim_miss_recovered() -> void:
+	if instance: instance._claim_miss_recovered_count += 1
+
+# `divergence` is |client-sent blade − host's reconstruction| at the rewind
+# instant; `clamped` is whether continuity_clamp actually moved the point.
+static func record_claim_blade_divergence(divergence: float, clamped: bool) -> void:
+	if instance == null or not is_finite(divergence):
+		return
+	instance._claim_blade_divergence_sum += divergence
+	instance._claim_blade_divergence_n += 1
+	instance._claim_blade_divergence_max = maxf(instance._claim_blade_divergence_max, divergence)
+	if clamped:
+		instance._claim_continuity_clamp_count += 1
+
 # Poke / stick-lift lag-comp claim outcomes (see the counter comment). record_*_claim
 # is the denominator (reached the rewound geometry test); record_*_claim_miss is the
 # geometry-fail verdict. Host-only in practice; no-op outside a session.
@@ -748,6 +808,14 @@ func tick(delta: float) -> void:
 	_pickup_claim_count = 0
 	_pickup_claim_miss_count = 0
 	_pickup_claim_deflect_count = 0
+	_claim_miss_sep_ratio_sum = 0.0
+	_claim_miss_sep_ratio_n = 0
+	_claim_miss_sep_ratio_max = 0.0
+	_claim_miss_recovered_count = 0
+	_claim_blade_divergence_sum = 0.0
+	_claim_blade_divergence_n = 0
+	_claim_blade_divergence_max = 0.0
+	_claim_continuity_clamp_count = 0
 	_poke_claim_count = 0
 	_poke_claim_miss_count = 0
 	_stick_lift_claim_count = 0
@@ -849,6 +917,22 @@ func _fold_session_sample() -> void:
 		"pickup_claims": float(_pickup_claim_count),
 		"pickup_claim_misses": float(_pickup_claim_miss_count),
 		"pickup_claim_deflects": float(_pickup_claim_deflect_count),
+		# WHY a claim missed (see the field block). sep_ratio and blade_divergence
+		# are levels (the view takes _max/_avg); recovered and continuity_clamps are
+		# TOTAL_KEYS. Read sep_ratio FIRST — it decides whether the miss rate is
+		# boundary grazes (~1.0-1.2, harmless) or rewind failure (>2), and the other
+		# two are only worth reading in the second case.
+		# Mean/peak pair per the puck_predict_residual convention: the session view
+		# takes _max of a window MEAN as "typically how bad", and the _peak key
+		# carries the genuine worst single claim, which a mean-of-means buries.
+		"claim_miss_sep_ratio": (_claim_miss_sep_ratio_sum / float(_claim_miss_sep_ratio_n)
+				if _claim_miss_sep_ratio_n > 0 else 0.0),
+		"claim_miss_sep_ratio_peak": _claim_miss_sep_ratio_max,
+		"claim_miss_recovered": float(_claim_miss_recovered_count),
+		"claim_blade_divergence_m": (_claim_blade_divergence_sum / float(_claim_blade_divergence_n)
+				if _claim_blade_divergence_n > 0 else 0.0),
+		"claim_blade_divergence_peak_m": _claim_blade_divergence_max,
+		"claim_continuity_clamps": float(_claim_continuity_clamp_count),
 		# Poke / stick-lift claim outcomes (also TOTAL_KEYS session sums). Same
 		# rewind-health read as pickup: misses/claims ≈ how often the host's rewind
 		# disagreed with the client's in-range view. Clients fold 0s.

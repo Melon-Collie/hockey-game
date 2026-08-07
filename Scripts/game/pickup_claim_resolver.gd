@@ -50,6 +50,18 @@ var _pending_host_timestamp: float = 0.0
 var _pending_blade_curr: Vector3 = Vector3.ZERO
 var _pending_blade_prev: Vector3 = Vector3.ZERO
 
+# Miss-recovery watch (telemetry only — no gameplay effect). A rejected claim
+# does NOT cost the peer the puck: the host's own present-time grab is an
+# independent path and still grants when the blade genuinely reaches. So a miss
+# is either "the lag-comp fast path fell through and the normal path caught it a
+# trip later" (a latency cost) or "the player lost it" (a gameplay loss), and the
+# miss count alone cannot tell those apart even though they are not comparably
+# bad. Remember the last rejected peer briefly; if the authoritative grant lands
+# on them inside the window, count it recovered.
+const _MISS_RECOVERY_WINDOW_S: float = 0.35
+var _miss_peer_id: int = -1
+var _miss_recovery_timer: float = 0.0
+
 
 func setup(
 		registry: PlayerRegistry,
@@ -63,6 +75,10 @@ func setup(
 
 
 func tick(delta: float) -> void:
+	if _miss_recovery_timer > 0.0:
+		_miss_recovery_timer -= delta
+		if _miss_recovery_timer <= 0.0:
+			_miss_peer_id = -1
 	if _pending_peer_id == -1:
 		return
 	_pending_timer += delta
@@ -91,6 +107,12 @@ func clear() -> void:
 # pending claimant isn't the grantee, NACK them so their optimistic pin rolls
 # back now instead of waiting out the RTT-scaled timeout.
 func clear_for_grant(granted_peer_id: int) -> void:
+	# Telemetry only (see _MISS_RECOVERY_WINDOW_S): this peer's claim was rejected
+	# moments ago and the authoritative path has now handed them the puck anyway.
+	if _miss_recovery_timer > 0.0 and granted_peer_id == _miss_peer_id:
+		NetworkTelemetry.record_claim_miss_recovered()
+		_miss_peer_id = -1
+		_miss_recovery_timer = 0.0
 	if _pending_peer_id != -1 and _pending_peer_id != granted_peer_id:
 		NetworkManager.send_pickup_claim_nack(_pending_peer_id)
 	clear()
@@ -264,9 +286,20 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	# replicated inputs) — shrinks the exploitable slop from the reach sphere to the
 	# reconstruction error. No-ops per point when the host has no reconstruction.
 	var continuity: float = LagCompRewind.blade_continuity_tolerance(_peer_blade_speed(peer_id))
+	var pre_continuity_blade: Vector3 = blade_curr
 	blade_curr = LagCompRewind.continuity_clamp(blade_curr, skater_snap.blade_contact_world, continuity)
 	blade_prev = LagCompRewind.continuity_clamp(blade_prev, skater_prev_snap.blade_contact_world, continuity)
 	top_hand = LagCompRewind.continuity_clamp(top_hand, skater_snap.top_hand_world, continuity)
+	# Rewind fidelity, measured directly rather than inferred from the miss rate:
+	# how far the client's blade sat from the host's OWN reconstruction of it, and
+	# whether the clamp had to pull it. Recorded for EVERY claim reaching the
+	# geometry test (hit or miss) so the miss rate has a denominator to read
+	# against — a high miss rate with near-zero divergence is a different problem
+	# from a high miss rate with the clamp biting constantly.
+	if skater_snap.blade_contact_world != Vector3.ZERO:
+		NetworkTelemetry.record_claim_blade_divergence(
+				pre_continuity_blade.distance_to(skater_snap.blade_contact_world),
+				pre_continuity_blade != blade_curr)
 	# Sanity telemetry (host-only, no-op off the host): this claim reached the
 	# rewound geometry test — the client's view said in-range and every
 	# eligibility gate passed. A check_pickup fail below means the host's rewind
@@ -276,6 +309,16 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	NetworkTelemetry.record_pickup_claim()
 	if not PuckInteractionRules.check_pickup(puck_prev, puck_pos, blade_prev, blade_curr, PuckController.PICKUP_RADIUS):
 		NetworkTelemetry.record_pickup_claim_miss()
+		# HOW badly it missed. A bare miss count can't separate a boundary graze
+		# (the client's point-in-sphere send gate passing where the swept test lands
+		# just outside — expected, since blade-proximity pickup claims on every pass
+		# near a loose puck) from the rewind putting blade and puck somewhere
+		# unrelated. The ratio makes that readable without a threshold here.
+		NetworkTelemetry.record_claim_miss_separation(
+				PuckInteractionRules.sweep_separation(puck_prev, puck_pos, blade_prev, blade_curr),
+				PuckController.PICKUP_RADIUS)
+		_miss_peer_id = peer_id
+		_miss_recovery_timer = _MISS_RECOVERY_WINDOW_S
 		NetworkManager.send_pickup_claim_nack(peer_id)
 		return
 	# Catch vs deflect — run the SAME decision the present-time path uses
