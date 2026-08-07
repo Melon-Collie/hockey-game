@@ -177,6 +177,48 @@ static func forward_predict_skater(snap: SkaterNetworkState, ctrl: SkaterControl
 			Constants.REMOTE_FORWARD_PREDICT_FRACTION, interp_delay_ms / 1000.0)
 	if ticks <= 0:
 		return false
+	return _integrate_skater(snap, ctrl, ticks, scratch)
+
+
+# The CLAIMANT'S OWN body at their self-view instant is not in the buffer, and
+# cannot be: the host holds a client's input until its stamp comes due, so at
+# claim arrival (host clock ~ host_ts + one_way) the newest capture sits at
+# host_ts + one_way while self_view_time asks for host_ts + lead. Whenever the
+# lead exceeds the one-way trip — every link under ~2x the lead, i.e. MOST of
+# them, and the cleaner the link the worse it is — the lookup lands past the
+# newest sample, and StateBufferManager._find_bracket answers a future query
+# with the newest entry and no signal at all. The claimant's own body is then
+# rewound SHORT by (lead - one_way), dragging the reach and continuity clamps
+# back toward a stale body and eating honest claims at full extension. Measured
+# worst case: at the servo's 50 ms lead cap on a 20 ms link, 65 ms of
+# under-rewind, ~0.59 m at skating speed against a 0.7 m contact diameter.
+#
+# Returns the displacement to ADD to body-anchored quantities read from the
+# self-view snapshot (position, blade_contact_world — the blade rides the body,
+# the same rigid translation the carrier reconstructions above apply to a
+# carried puck / stick shaft). Vector3.ZERO when the lookup was answerable, so a
+# link whose one-way already exceeds the lead is untouched. Depth is bounded by
+# the same lead ceiling the self-view rewind is bounded by, so a crafted claim
+# cannot buy itself integration distance.
+static func self_view_catch_up(snap: SkaterNetworkState, ctrl: SkaterController,
+		self_view_t: float, newest_ts: float,
+		scratch: SkaterMovementRules.ForwardResult) -> Vector3:
+	if snap == null or ctrl == null or newest_ts < 0.0 or not is_finite(self_view_t):
+		return Vector3.ZERO
+	var gap: float = minf(self_view_t - newest_ts,
+			NetworkManager.INPUT_LEAD_SEC + _INPUT_LEAD_EXTRA_MAX_S)
+	var ticks: int = roundi(gap * float(Constants.PHYSICS_TICK))
+	if ticks <= 0:
+		return Vector3.ZERO
+	if not _integrate_skater(snap, ctrl, ticks, scratch):
+		return Vector3.ZERO
+	return scratch.position - snap.position
+
+
+# Shared integration core for both reconstructions above — one body, so the
+# remote-render rewind and the self-view catch-up can never drift apart.
+static func _integrate_skater(snap: SkaterNetworkState, ctrl: SkaterController,
+		ticks: int, scratch: SkaterMovementRules.ForwardResult) -> bool:
 	var nm: RefCounted = ctrl.native_movement()
 	if nm != null:
 		# get_movement_config() is still consulted for its side effect of

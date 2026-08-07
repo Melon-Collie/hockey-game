@@ -312,3 +312,71 @@ func test_lead_extra_max_mirrors_clock_sync() -> void:
 	# drift apart a legit fully-adapted claim gets mis-rewound.
 	var cs_script: GDScript = load("res://Scripts/networking/clock_sync.gd")
 	assert_eq(LagCompRewind._INPUT_LEAD_EXTRA_MAX_S, cs_script.MAX_LEAD_EXTRA_S)
+
+
+# ── self_view_catch_up ───────────────────────────────────────────────────────
+#
+# The claimant's own body at self_view_time is NOT in the host's buffer whenever
+# their input lead exceeds the link's one-way trip — the host holds the input
+# until its stamp comes due, so the newest capture is behind the requested
+# instant and StateBufferManager answers the future query with the newest sample
+# and no signal. These pin the catch-up that closes that gap, including the
+# no-op cases (a link whose one-way already covers the lead must be untouched).
+
+func _moving_snap(speed: float) -> SkaterNetworkState:
+	var snap := SkaterNetworkState.new()
+	snap.position = Vector3.ZERO
+	snap.velocity = Vector3(0.0, 0.0, -speed)
+	snap.move_intent = Vector2(0.0, -1.0)
+	snap.facing = Vector2(0.0, 1.0)  # atan2(x, y) == 0 -> heading 0, fully aligned
+	return snap
+
+
+func test_self_view_catch_up_no_op_when_buffer_covers_the_instant() -> void:
+	# One-way exceeds the lead: the buffer genuinely holds the self-view instant,
+	# so the lookup was answerable and nothing may be added to it.
+	var ctrl := autofree(SkaterController.new()) as SkaterController
+	var d: Vector3 = LagCompRewind.self_view_catch_up(
+			_moving_snap(9.0), ctrl, 10.0, 10.05,
+			SkaterMovementRules.ForwardResult.new())
+	assert_eq(d, Vector3.ZERO)
+
+
+func test_self_view_catch_up_no_op_before_first_capture() -> void:
+	var ctrl := autofree(SkaterController.new()) as SkaterController
+	var d: Vector3 = LagCompRewind.self_view_catch_up(
+			_moving_snap(9.0), ctrl, 10.0, -1.0,
+			SkaterMovementRules.ForwardResult.new())
+	assert_eq(d, Vector3.ZERO)
+
+
+func test_self_view_catch_up_no_op_without_snapshot_or_controller() -> void:
+	var scratch := SkaterMovementRules.ForwardResult.new()
+	var ctrl := autofree(SkaterController.new()) as SkaterController
+	assert_eq(LagCompRewind.self_view_catch_up(null, ctrl, 10.05, 10.0, scratch), Vector3.ZERO)
+	assert_eq(LagCompRewind.self_view_catch_up(_moving_snap(9.0), null, 10.05, 10.0, scratch),
+			Vector3.ZERO)
+
+
+func test_self_view_catch_up_advances_a_moving_body_by_the_gap() -> void:
+	# 25 ms of gap (the base input lead on a zero-one-way link) at 9 m/s is
+	# ~0.22 m — the under-rewind this closes, and more than a quarter of the
+	# 0.7 m contact diameter the clamps fence against.
+	var ctrl := autofree(SkaterController.new()) as SkaterController
+	var d: Vector3 = LagCompRewind.self_view_catch_up(
+			_moving_snap(9.0), ctrl, 10.025, 10.0,
+			SkaterMovementRules.ForwardResult.new())
+	assert_almost_eq(d.length(), 0.225, 0.05)
+	assert_lt(d.z, 0.0)  # travelled along -Z, the direction of motion
+
+
+func test_self_view_catch_up_depth_is_bounded_by_the_lead_ceiling() -> void:
+	# A garbage or crafted view-time can't buy integration distance: the depth is
+	# clamped to the same INPUT_LEAD_SEC + extra ceiling that bounds the self-view
+	# rewind itself. Five seconds of gap at 9 m/s would be 45 m unclamped.
+	var ctrl := autofree(SkaterController.new()) as SkaterController
+	var d: Vector3 = LagCompRewind.self_view_catch_up(
+			_moving_snap(9.0), ctrl, 15.0, 10.0,
+			SkaterMovementRules.ForwardResult.new())
+	var ceiling_m: float = 9.0 * (NetworkManager.INPUT_LEAD_SEC + 0.05) + 0.1
+	assert_lt(d.length(), ceiling_m)

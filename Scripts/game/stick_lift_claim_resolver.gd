@@ -36,6 +36,9 @@ var _puck_getter: Callable = Callable()             # () -> Puck
 var _puck_controller_getter: Callable = Callable()  # () -> PuckController
 # Stage-3 forward-prediction scratch (reused; receive_claim is host-only).
 var _fp_result := SkaterMovementRules.ForwardResult.new()
+# Separate scratch for the claimant's self-view catch-up so it can never alias
+# the carrier reconstruction above.
+var _self_fp := SkaterMovementRules.ForwardResult.new()
 
 
 func setup(
@@ -143,13 +146,22 @@ func receive_claim(peer_id: int, host_timestamp: float,
 		if caps != null:
 			max_reach = caps.max_blade_reach
 			blade_speed = caps.blade_speed
+	# The self-view instant is past the newest capture on any link whose one-way
+	# is shorter than the claimant's input lead, so attacker_snap is silently the
+	# newest rather than the requested instant. Catch the body up and
+	# rigid-translate its blade with it, or the clamps below fence an honest
+	# full-extension lift against a stale body. No-op once the link's one-way
+	# exceeds the lead. See LagCompRewind.self_view_catch_up.
+	var self_catch: Vector3 = LagCompRewind.self_view_catch_up(
+			attacker_snap, record.controller as SkaterController,
+			blade_rewind_time, _state_buffer.newest_host_timestamp(), _self_fp)
 	var attacker_blade: Vector3 = LagCompRewind.clamp_client_blade(
-			client_blade_curr, attacker_snap.position, max_reach)
+			client_blade_curr, attacker_snap.position + self_catch, max_reach)
 	# Tighter continuity bound toward the host's own blade reconstruction — see
 	# PickupClaimResolver / LagCompRewind.continuity_clamp. No-ops when the host
 	# has no reconstruction for the attacker at the rewind instant.
 	attacker_blade = LagCompRewind.continuity_clamp(attacker_blade,
-			attacker_snap.blade_contact_world,
+			attacker_snap.blade_contact_world + self_catch,
 			LagCompRewind.blade_continuity_tolerance(blade_speed))
 	# Host-only claim-outcome telemetry (no-op off the host): the claim reached the
 	# rewound geometry test; a check_blade_under_stick fail is the lag-comp

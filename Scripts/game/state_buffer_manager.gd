@@ -19,6 +19,9 @@ var _goalie_buffers: Dictionary = {}   # team_id -> Array[GoalieNetworkState]
 var _goalie_ptrs: Dictionary = {}      # team_id -> int
 var _goalie_counts: Dictionary = {}    # team_id -> int (entries written, capped at BUFFER_SIZE)
 var _capture_count: int = 0
+# Instant of the newest capture (-1.0 = nothing captured yet). Every buffer is
+# stamped with the same `now` in capture(), so one value serves all of them.
+var _newest_ts: float = -1.0
 
 # Caller-owned bracket result: _find_bracket* fill this instead of returning a
 # fresh 3-element Array. The AI path queries every actor once per host tick
@@ -50,6 +53,7 @@ func setup(registry: PlayerRegistry, goalie_controllers: Array) -> void:
 	for i: int in BUFFER_SIZE:
 		_puck_buffer[i] = PuckNetworkState.new()
 	_puck_count = 0
+	_newest_ts = -1.0
 	for gc: GoalieController in goalie_controllers:
 		_alloc_goalie(gc.team_id)
 
@@ -69,6 +73,16 @@ func is_ready() -> bool:
 	return _capture_count >= 2
 
 
+# Instant of the newest capture, or -1.0 before the first. Claim resolvers need
+# it to detect a query landing PAST the buffer: get_state_at answers a future
+# timestamp with the newest sample and no signal (_find_bracket's `ts >= newest`
+# branch), so a caller asking for an instant the host has not simulated yet has
+# to test for it rather than trusting the result. See
+# LagCompRewind.self_view_catch_up for the case that motivates it.
+func newest_host_timestamp() -> float:
+	return _newest_ts
+
+
 func capture(registry: PlayerRegistry, puck_controller: PuckController, goalie_controllers: Array) -> void:
 	# Session-relative time, matching `NetworkManager.local_time()` everywhere
 	# else: world-state broadcast header, client claim timestamps, AI snapshot
@@ -76,6 +90,7 @@ func capture(registry: PlayerRegistry, puck_controller: PuckController, goalie_c
 	# `get_state_at(host_timestamp)` Just Works for both client-supplied
 	# timestamps and host-internal queries — no offset translation required.
 	var now: float = NetworkManager.local_time()
+	_newest_ts = now
 
 	# fill_* writes each controller's state directly into the pre-allocated
 	# ring slot — the previous get_*() calls allocated a throwaway state per

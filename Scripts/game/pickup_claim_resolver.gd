@@ -39,6 +39,9 @@ var _registry: PlayerRegistry = null
 var _state_buffer: StateBufferManager = null
 var _puck_getter: Callable = Callable()             # () -> Puck
 var _puck_controller_getter: Callable = Callable()  # () -> PuckController
+# Scratch for the claimant's self-view catch-up (reused; receive_claim is
+# host-only).
+var _self_fp := SkaterMovementRules.ForwardResult.new()
 
 var _pending_peer_id: int = -1
 var _pending_timer: float = 0.0
@@ -252,21 +255,33 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	# is pinned to within the claimant's physical reach of the server-authoritative
 	# body (skater_snap.position) so a modified client can't teleport its blade.
 	var max_reach: float = _peer_max_reach(peer_id)
+	# The self-view instant is past the newest capture on any link whose one-way
+	# is shorter than the claimant's input lead, so both snapshots above are
+	# silently the newest rather than the requested instant. Catch the body up
+	# and rigid-translate its blade/hand with it, or the clamps below fence an
+	# honest full-extension grab against a stale body. No-op once the link's
+	# one-way exceeds the lead. See LagCompRewind.self_view_catch_up.
+	var self_catch: Vector3 = LagCompRewind.self_view_catch_up(
+			skater_snap, record.controller as SkaterController,
+			blade_rewind_time, _state_buffer.newest_host_timestamp(), _self_fp)
 	var blade_curr: Vector3 = LagCompRewind.clamp_client_blade(
-			client_blade_curr, skater_snap.position, max_reach)
+			client_blade_curr, skater_snap.position + self_catch, max_reach)
 	var blade_prev: Vector3 = LagCompRewind.clamp_client_blade(
-			client_blade_prev, skater_prev_snap.position, max_reach)
+			client_blade_prev, skater_prev_snap.position + self_catch, max_reach)
 	var top_hand: Vector3 = LagCompRewind.clamp_client_blade(
-			client_top_hand, skater_snap.position, max_reach)
+			client_top_hand, skater_snap.position + self_catch, max_reach)
 	# Second, tighter bound: pin each client point to within a plausible continuity
 	# distance of the host's OWN reconstruction of the blade/hand at the rewind
 	# instant (blade_contact_world / top_hand_world, derived from the claimant's
 	# replicated inputs) — shrinks the exploitable slop from the reach sphere to the
 	# reconstruction error. No-ops per point when the host has no reconstruction.
 	var continuity: float = LagCompRewind.blade_continuity_tolerance(_peer_blade_speed(peer_id))
-	blade_curr = LagCompRewind.continuity_clamp(blade_curr, skater_snap.blade_contact_world, continuity)
-	blade_prev = LagCompRewind.continuity_clamp(blade_prev, skater_prev_snap.blade_contact_world, continuity)
-	top_hand = LagCompRewind.continuity_clamp(top_hand, skater_snap.top_hand_world, continuity)
+	blade_curr = LagCompRewind.continuity_clamp(
+			blade_curr, skater_snap.blade_contact_world + self_catch, continuity)
+	blade_prev = LagCompRewind.continuity_clamp(
+			blade_prev, skater_prev_snap.blade_contact_world + self_catch, continuity)
+	top_hand = LagCompRewind.continuity_clamp(
+			top_hand, skater_snap.top_hand_world + self_catch, continuity)
 	# Sanity telemetry (host-only, no-op off the host): this claim reached the
 	# rewound geometry test — the client's view said in-range and every
 	# eligibility gate passed. A check_pickup fail below means the host's rewind

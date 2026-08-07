@@ -43,6 +43,9 @@ var _puck_controller_getter: Callable = Callable()  # () -> PuckController
 var _last_claim_sent: Dictionary[String, float] = {}  # client only: "hitter:victim" -> time
 # Stage-3 forward-prediction scratch (reused; receive_claim is host-only).
 var _fp_result := SkaterMovementRules.ForwardResult.new()
+# Separate scratch for the hitter's self-view catch-up so it can never alias the
+# victim reconstruction above.
+var _self_fp := SkaterMovementRules.ForwardResult.new()
 
 
 func setup(
@@ -164,7 +167,19 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 			victim_rec.controller as SkaterController, interp_delay_ms, _fp_result):
 		vic_pos = _fp_result.position
 		vic_vel = _fp_result.velocity
-	if hitter_snap.position.distance_to(vic_pos) > MAX_RANGE_M:
+	# The hitter is SELF-view, and that instant is past the newest capture on any
+	# link whose one-way is shorter than their input lead, so hitter_snap is
+	# silently the newest rather than the requested instant. Unlike the other
+	# three resolvers this feeds the CONTACT GEOMETRY directly rather than only a
+	# clamp: an under-caught hitter reads short on range and skews the contact
+	# normal. Velocity is deliberately left at the snapshot's — over a window
+	# bounded by the input lead, thrust is near-balanced by friction at skating
+	# speed, so the closing-speed error is under 3% and the impulse gate would
+	# rather read the captured value than an integrated one.
+	var hit_pos: Vector3 = hitter_snap.position + LagCompRewind.self_view_catch_up(
+			hitter_snap, hitter_rec.controller as SkaterController,
+			hitter_rewind_time, _state_buffer.newest_host_timestamp(), _self_fp)
+	if hit_pos.distance_to(vic_pos) > MAX_RANGE_M:
 		return
 	# Puck carrier read from the victim's rewind snapshot — that's the world the
 	# attacker saw when they committed to the check. The tracker's grace path
@@ -177,7 +192,7 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	# Re-derive impulse from rewound velocities along the hitter→victim normal.
 	# Each velocity is read from its own rewound snapshot so the closing speed
 	# reflects what the attacker actually saw, not a single mid-time slice.
-	var to_victim: Vector3 = vic_pos - hitter_snap.position
+	var to_victim: Vector3 = vic_pos - hit_pos
 	to_victim.y = 0.0
 	if to_victim.length_squared() < 0.0001:
 		return

@@ -31,6 +31,20 @@ they all share. **A new claim resolver must follow all of it.**
   `LagCompRewind.self_view_time(host_ts)`; anything they were *watching* goes to
   `remote_view_time(host_ts, interp_delay)`. Never reach into raw timestamps —
   go through `LagCompRewind`.
+- **The self-view instant is usually PAST the buffer — catch it up.** The host
+  holds a client's input until its stamp comes due, so at claim arrival the
+  newest capture sits at `host_ts + one_way` while `self_view_time` asks for
+  `host_ts + lead`. Whenever the lead exceeds the one-way trip — every link under
+  roughly twice the lead, i.e. most of them, and the *cleaner* the link the worse
+  it gets — `StateBufferManager.get_state_at` answers with the newest sample and
+  no signal at all (`_find_bracket`'s `ts >= newest` branch). Add
+  `LagCompRewind.self_view_catch_up(...)` to every body-anchored quantity read
+  from that snapshot (position, `blade_contact_world`, `top_hand_world` — the
+  blade rides the body, so it rigid-translates with it). Skipping it rewinds the
+  claimant's own body short and drags the reach/continuity clamps back onto a
+  stale body, which eats honest full-extension claims; measured at the lead
+  servo's 50 ms cap on a 20 ms link, that was ~0.59 m against a 0.7 m contact
+  diameter. It self-disables once one-way exceeds the lead.
 - **Reach-clamp the client-sent blade to the rewound body — never `rtt/2`.** The
   blade is client-authoritative aim, so the clamp is what bounds it. The host
   independently reconstructs the blade from replicated inputs; the clamp is the
