@@ -190,10 +190,23 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 	# replay check, is what hides them here: this viewer never sets replay mode.
 	skater.set_world_hud_hidden(true)
 	skater.set_player_name(p_name)
+	# Tape and gear style before the uniform paint — the same ordering contract
+	# PlayerRegistry.spawn() follows, because the paint resolves their palette
+	# picks (team tape, team laces) and must find the configs already installed.
+	var cosmetics: Dictionary = cosmetics_from_entry(entry)
+	var tape: StickTapeConfig = cosmetics.tape
+	var gear: GearStyleConfig = cosmetics.gear
+	var skin: int = cosmetics.skin
+	skater.set_tape_config(tape)
+	skater.set_gear_style(gear)
+	skater.set_skin_tone(skin)
 	skater.set_uniform(team_colors)
 	skater.set_jersey_info(p_name, jersey_number)
 
 	var record := PlayerRecord.new(peer_id, team_slot, false, team_obj)
+	record.tape_code = tape.to_code()
+	record.gear_style_code = gear.to_code()
+	record.skin_tone = skin
 	record.skater = skater
 	record.controller = controller
 	record.player_name = p_name
@@ -203,6 +216,35 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 	record.text_color = team_colors.text
 	record.text_outline_color = team_colors.text_outline
 	_records[record.peer_id] = record
+
+
+# The look a roster entry describes, as { tape, gear, skin } — a StickTapeConfig,
+# a GearStyleConfig, and a SkinToneRegistry index. Both the header roster and the
+# mid-game player_joined event carry the same three packed fields (see
+# GameManager.replay_roster_entry), so one decode serves both.
+#
+# Every field is optional and coerced: a .mreplay recorded before cosmetics were
+# written into the header has none of them and decodes to the stock kit, and a
+# hand-edited file can't produce an out-of-range pick — from_code / clamp_index
+# land it on a legal look, exactly as the join wire does.
+static func cosmetics_from_entry(entry: Dictionary) -> Dictionary:
+	return {
+		"tape": StickTapeConfig.from_code(
+				_entry_int(entry, "tape_code", StickTapeConfig.DEFAULT_CODE)),
+		"gear": GearStyleConfig.from_code(
+				_entry_int(entry, "gear_style_code", GearStyleConfig.DEFAULT_CODE)),
+		"skin": SkinToneRegistry.clamp_index(
+				_entry_int(entry, "skin_tone", SkinToneRegistry.DEFAULT_INDEX)),
+	}
+
+
+# JSON decodes every number as float, so accept both — and fall back rather than
+# crash when a field is absent (legacy file) or the wrong type (hand-edited).
+static func _entry_int(entry: Dictionary, key: String, fallback: int) -> int:
+	var raw: Variant = entry.get(key, fallback)
+	if raw is int or raw is float:
+		return int(raw)
+	return fallback
 
 
 # The crowd (ArenaStands) and scoreboard (Jumbotron) live inside the instanced
