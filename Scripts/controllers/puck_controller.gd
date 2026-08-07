@@ -354,6 +354,25 @@ func _physics_process(delta: float) -> void:
 			_interpolate(delta)
 			if NetworkTelemetry.instance:
 				NetworkTelemetry.instance.puck_mode = "interpolating"
+		_track_loose_velocity(delta)
+
+
+# Rendered loose-puck velocity, one tick stale — the arrival velocity the
+# reception cushion reads at the attach instant. The client's physics body is
+# frozen (velocity ~0) and the newest buffered snapshot can already be
+# post-catch when the pickup notify lands, but the rendered timeline trails
+# the newest snapshot by the interpolation delay, so at that moment it still
+# shows the pre-catch flight — which is also exactly what the player saw the
+# puck doing. Client-only (the host reads the live analytic velocity).
+var _loose_vel_prev_pos: Vector3 = Vector3.INF
+var _rendered_loose_velocity: Vector3 = Vector3.ZERO
+
+
+func _track_loose_velocity(delta: float) -> void:
+	var pos: Vector3 = puck.get_puck_position()
+	if _loose_vel_prev_pos.is_finite() and delta > 0.0:
+		_rendered_loose_velocity = (pos - _loose_vel_prev_pos) / delta
+	_loose_vel_prev_pos = pos
 
 # ── Lag Compensation ─────────────────────────────────────────────────────────
 # Called by GameManager after validating a client pickup claim against the
@@ -362,6 +381,7 @@ func _physics_process(delta: float) -> void:
 func apply_lag_comp_pickup(skater: Skater) -> void:
 	if not is_instance_valid(skater) or puck.carrier != null:
 		return
+	skater.trigger_reception_cushion(puck.get_puck_velocity() - skater.velocity)
 	puck.set_carrier(skater)
 	_on_puck_picked_up(skater)
 
@@ -661,6 +681,7 @@ func _check_interactions() -> void:
 						# stamp — the resolver applied the outcome; no carrier here.
 						pass
 					else:
+						skater.trigger_reception_cushion(puck_vel - skater.velocity)
 						puck.set_carrier(skater)
 						_on_puck_picked_up(skater)
 				else:
@@ -700,9 +721,13 @@ func notify_local_pickup(local_skater: Skater) -> void:
 	_client_carrier_peer_id = NetworkManager.local_peer_id()
 	# Host confirmed our pickup. If we were already provisionally pinned to this
 	# same blade, this promotes it seamlessly (no visible change); otherwise it
-	# attaches now.
+	# attaches now — cushion the catch on that fresh attach only (a promoted
+	# pin already fired it at pin time).
 	if _provisional_carrier_skater != null:
 		NetworkTelemetry.record_provisional_confirmed()
+	elif is_instance_valid(local_skater):
+		local_skater.trigger_reception_cushion(
+				_rendered_loose_velocity - local_skater.velocity)
 	_clear_provisional()
 	_release_seed_active = false
 	_state_buffer.clear()
@@ -720,6 +745,9 @@ func notify_remote_pickup(remote_skater: Skater, carrier_peer_id: int) -> void:
 	_remote_carrier_skater = remote_skater
 	_local_carrier_skater = null
 	_client_carrier_peer_id = carrier_peer_id
+	if is_instance_valid(remote_skater):
+		remote_skater.trigger_reception_cushion(
+				_rendered_loose_velocity - remote_skater.velocity)
 	if _provisional_carrier_skater != null:
 		NetworkTelemetry.record_provisional_stolen()  # legit loss of a 50/50, not the felt bug
 	_clear_provisional()  # a different player won the puck — roll back our optimistic pin
@@ -855,6 +883,12 @@ func try_provisional_pickup(local_skater: Skater) -> void:
 		return
 	_provisional_carrier_skater = local_skater
 	NetworkTelemetry.record_provisional_pin()
+	# The pin IS this machine's attach instant, so the catch cushion fires here
+	# (the confirming notify_local_pickup skips it on promotion). The gate above
+	# bounds this path to slow pucks, so the quadratic give is near-nothing — a
+	# settle, not a corral — by construction.
+	local_skater.trigger_reception_cushion(
+			_rendered_loose_velocity - local_skater.velocity)
 	# Grant travels ~1 RTT (claim out, confirm back) plus host processing; scale
 	# the rollback deadline off RTT so a slow link doesn't pop the pin before the
 	# confirm arrives.
@@ -903,6 +937,12 @@ func _arm_provisional_lockout(duration: float = -1.0) -> void:
 	_clear_provisional()
 
 func _pin_puck_to_carrier(carrier: Skater, delta: float) -> void:
+	# Retire the loose-velocity memory: differencing across a carry would fake
+	# a huge velocity on release, and a stale flight velocity must not cushion
+	# a later direct carrier→carrier handoff (attach notifies land BEFORE the
+	# first pinned tick, so the genuine catch has already read it by now).
+	_loose_vel_prev_pos = Vector3.INF
+	_rendered_loose_velocity = Vector3.ZERO
 	# Smooth puck toward the carrier's carry target each tick. Shared by the local
 	# carry and the remote-carrier pin. The lerp damps rapid blade movements so the
 	# puck feels weighty during stickhandling rather than teleporting instantly to
