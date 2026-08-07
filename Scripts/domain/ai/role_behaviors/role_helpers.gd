@@ -977,14 +977,75 @@ static func offensive_station_target(ctx: RoleContext, stand: Vector3,
 # crease repel. Both candidates lie on the net → `stand` ray, so the clamp is a
 # distance compare rather than a second projection.
 static func neutral_station_target(ctx: RoleContext, stand: Vector3,
-		was_holding: bool) -> Vector3:
-	if may_hold_forward_stand(ctx, was_holding, stand):
+		was_holding: bool, layer_stand: Vector3 = Vector3.INF) -> Vector3:
+	if may_hold_forward_stand(ctx, was_holding, stand) \
+			and (not layer_stand.is_finite() or home_layer_behind_me(ctx)):
 		return stand
 	var our_net: Vector3 = ctx.defending_goal_pos
 	var sagged: Vector3 = numbers_floor(ctx, stand)
+	# The LAYER's own stand, when the caller has one. numbers_floor answers "a man
+	# has beaten me, restore the layer against HIM" and returns the stand untouched
+	# when nobody has — which is silence, not an answer, in the one state where the
+	# puck belongs to nobody yet. Take whichever is deeper so both reasons bind.
+	if layer_stand.is_finite() \
+			and _xz_distance(layer_stand, our_net) < _xz_distance(sagged, our_net):
+		sagged = layer_stand
 	if _xz_distance(sagged, our_net) >= AIZoneCoverage.HOUSE_TOP_DEPTH_M:
 		return sagged
-	return house_gate_floor(our_net, stand)
+	return house_gate_floor(our_net, sagged)
+
+
+# ── "If I go, is anybody home?" ──────────────────────────────────────────────
+#
+# The clause the neutral shape was missing, and it is one character of logic:
+# `may_hold_forward_stand` is `has_support_behind OR not _attacker_behind`, so a
+# station holds its forward stand whenever nobody has ALREADY got behind it —
+# the genuine last man included. That is right where it is used (an offensive
+# station with the puck ours has something to be forward FOR), and wrong in the
+# one state where the puck belongs to nobody: both teams converge on a loose
+# puck, so nobody is behind anybody yet, every station reads clear, the whole
+# shape steps up together, and the man gets behind them BECAUSE they did.
+#
+# Measured on the real stack: a 3v3 whose two flanks both held their puck-side
+# stand spent 66% of the following threat window with nobody between the opposing
+# carrier and our own net — a coast-to-coast — with the elected RUSH_D1 already
+# up-ice of the puck when the state flipped, and therefore unable to be a gap
+# defender at all.
+#
+# So NEUTRAL demands both clauses: somebody home behind me AND nobody already
+# past me. The depth read is `has_support_behind`'s (the risk priced is "beaten
+# wide, nobody home", which is positional), with two differences that matter for
+# a whole shape rather than one body:
+#
+#   · THE ELECTED CHASER DOES NOT COUNT. He is committed to the puck and is not
+#     holding anything. Counting him is how a three-man team convinces itself it
+#     has a defender while all three are on the same puck.
+#   · A COVER ENVELOPE OF MARGIN, so "behind me" means meaningfully behind rather
+#     than a metre nearer the net — the same quantity and the same reasoning as
+#     `_attacker_behind`'s margin. Two flanks level with each other cover nothing
+#     for one another, so both stay home; over-covering the house on a coin flip
+#     is the safe direction, and the band is what stops the pair trading the job
+#     back and forth every dispatch.
+#
+# Antisymmetric by construction — the deepest man cannot have anyone behind him —
+# so exactly one body draws the layer and no two can each appoint the other.
+static func home_layer_behind_me(ctx: RoleContext) -> bool:
+	if ctx.snapshot == null:
+		return false
+	var chaser: int = ctx.snapshot.closest_to_puck_by_team.get(ctx.team_id, -1)
+	var my_depth: float = ctx.own_goal_dir * ctx.self_pos.z \
+			+ AIRushRead.cover_envelope_m()
+	for pid: int in ctx.snapshot.skater_states:
+		if pid == ctx.peer_id or pid == chaser:
+			continue
+		if ctx.team_id_by_peer.get(pid, -1) != ctx.team_id:
+			continue
+		var mate: SkaterNetworkState = ctx.snapshot.skater_states[pid]
+		if mate.is_ghost:
+			continue
+		if ctx.own_goal_dir * mate.position.z > my_depth:
+			return true
+	return false
 
 
 # Is any attacker currently deeper (nearer our net) than `stand`?

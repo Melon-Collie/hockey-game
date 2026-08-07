@@ -271,3 +271,106 @@ func test_two_defencemen_are_not_blown_by_a_neutral_zone_rush() -> void:
 			"attackers spend most of the zone with nobody between them and the net")
 	assert_eq(offenders.size(), 0,
 			"a defence pair was blown by on these entries: %s" % str(offenders))
+
+
+# ── The neutral zone: does the shape leave a man home? ───────────────────────
+#
+# A different failure from the two above, and a TEAM one: the individual routes
+# can all be good and the shape still lose, because every station stepped up at
+# once. NEUTRAL's flank stand is a rigid offset off the puck, so both flanks
+# follow it wherever it goes; and the bound on that stand only asked whether a
+# man had ALREADY got behind them, which in a neutral-zone puck race is nobody —
+# both teams are converging on a loose puck. So every station read clear, all
+# three bodies ended up within a few metres of the puck, and whoever won it had
+# beaten the whole team. `AIRoleHelpers.home_layer_behind_me` is the missing
+# clause; `AIRoleFlank` supplies the layer's stand.
+#
+# WHAT IS MEASURED, and why it is the shape rather than the outcome. The obvious
+# reading — the share of the following rush spent with nobody between their puck
+# and our net — does not work. Over a 5 s six-body sim with no body contact that
+# number is set by everything downstream of the shape (who wins the next battle,
+# whether a feed connects) and swings 0-66% between starts of the SAME condition;
+# measured both ways over six starts it read 19% before this bound and 21% after,
+# which is noise, not a result. The turnover instant saturates in the other
+# direction: an opponent first touches the puck while everyone is still deep, so
+# it reads 3/3 either way.
+#
+# So the read is the SHAPE, during the loose-puck window that the bound governs:
+# how far from our own net does our DEEPEST body get. A team with a layer keeps
+# one back around its own blue line; a team that steps up as a group has its
+# deepest man climbing with the other two, and the number is then just "where the
+# puck is". That is the complaint stated literally, it is what this bound
+# controls, and it is settled before the downstream variance starts.
+#
+#   Reference over the 8-start sweep:   no numbers half  →  with it
+#     mean deepest-body drift                  21.8 m            20.2 m
+#     worst single start                       24.0 m            22.0 m
+#     starts with nobody left back              3/8               0/8
+#
+# The window is the FIRST 2.5 s, which is where the shape is set. Run it longer
+# and a puck that rims into their end starts dragging the whole team after it,
+# which is correct play and not this bound's business — the reading gets noisier
+# without getting more informative.
+#
+# Be careful what this table is claiming. It is a measurement of the SHAPE, and
+# the shape moves by about a stride and a half. What it is NOT is a measured
+# improvement in goals or in rushes survived: over six-body sims with no body
+# contact, that outcome is not resolvable at this sample size in either
+# direction, and the honest attempt above is recorded so nobody re-derives it.
+const LOOSE_SECS: float = 2.5
+# How far off our own net the deepest body may drift while the puck is loose in
+# neutral ice. Sized on the shape it is meant to leave standing: the NEUTRAL back
+# post sits at our own blue line (AIZoneCoverage.defensive_anchor), which is
+# GOAL_LINE_Z - BLUE_LINE_Z from the net, plus a stride of tolerance for a body
+# that is still skating to it.
+const LAYER_DRIFT_MAX_M: float = GameRules.GOAL_LINE_Z - GameRules.BLUE_LINE_Z + 3.0
+
+
+# Team 0 attacks -Z; team 1 defends it. Returns how far from our own net our
+# DEEPEST body gets while the puck is loose in neutral ice.
+func _deepest_body_drift(puck_at: Vector3, their_edge: float) -> float:
+	var duel := Duel.new()
+	duel.add_skater(1, 0, Vector3(-4.0, 0.0, 6.0 - their_edge),
+			BotSkillProfile.hard(), Vector3(0.0, 0.0, -4.0))
+	duel.add_skater(2, 0, Vector3(3.0, 0.0, 9.0 - their_edge), BotSkillProfile.hard())
+	duel.add_skater(3, 0, Vector3(9.0, 0.0, 12.0), BotSkillProfile.hard())
+	duel.add_skater(11, 1, Vector3(-5.0, 0.0, -9.0), BotSkillProfile.hard())
+	duel.add_skater(12, 1, Vector3(1.0, 0.0, -12.0), BotSkillProfile.hard())
+	duel.add_skater(13, 1, Vector3(6.0, 0.0, -10.0), BotSkillProfile.hard())
+	duel.start(-1, puck_at)
+
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var worst: float = 0.0
+	for _t: int in int(LOOSE_SECS / DT):
+		duel.step()
+		var deepest: float = INF
+		for pid: int in [11, 12, 13]:
+			deepest = minf(deepest, duel._skater(pid).pos.distance_to(net))
+		worst = maxf(worst, deepest)
+	return worst
+
+
+func test_the_neutral_shape_leaves_a_man_home() -> void:
+	var sum: float = 0.0
+	var worst: float = 0.0
+	var offenders: Array[String] = []
+	var n: int = 0
+	for puck_z: float in [4.0, 2.0, 0.0, -2.0]:
+		var row: String = "  puck z%+5.1f :" % puck_z
+		for edge: float in [0.0, 3.0]:
+			var drift: float = _deepest_body_drift(
+					Vector3(0.0, 0.0, puck_z), edge)
+			n += 1
+			sum += drift
+			worst = maxf(worst, drift)
+			if drift > LAYER_DRIFT_MAX_M:
+				offenders.append("z%.0f/edge%.0f" % [puck_z, edge])
+			row += "  edge%3.0f deepest %5.1f m" % [edge, drift]
+		gut.p(row)
+	gut.p("  → deepest body drifts a mean %.1f m off our own net while the puck is loose (worst %.1f)" % [
+			sum / float(n), worst])
+
+	assert_lt(sum / float(n), LAYER_DRIFT_MAX_M,
+			"the neutral shape steps up as a group — nobody stays home")
+	assert_eq(offenders.size(), 0,
+			"no body stayed back on these loose pucks: %s" % str(offenders))
