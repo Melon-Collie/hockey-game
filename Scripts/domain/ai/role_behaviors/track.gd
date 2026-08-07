@@ -86,9 +86,11 @@ static func _decide_puck(ctx: RoleContext) -> RoleDecision:
 	var to_net: Vector3 = our_net - lead
 	var dist: float = sqrt(to_net.x * to_net.x + to_net.z * to_net.z)
 	var hip: Vector3 = lead
+	var inside: bool = _is_inside(ctx, read)
 	if dist > 0.001:
 		# The hip, goal-side: arrive between him and the net, not beside him.
-		hip = lead + Vector3(to_net.x / dist, 0.0, to_net.z / dist) * HIP_GOAL_SIDE_M
+		var dir_net := Vector3(to_net.x / dist, 0.0, to_net.z / dist)
+		hip = lead + dir_net * _hip_gap(ctx, lead, dir_net, carrier_vel, dist)
 
 	# Caught him: finish the check if it is a real, separating one. Gated on
 	# already being goal-side — see CHECK_GOAL_SIDE_MARGIN_M.
@@ -109,7 +111,11 @@ static func _decide_puck(ctx: RoleContext) -> RoleDecision:
 	# and a backchecker who eases up at his hip has not caught him. (Riding a man,
 	# the closing profile already expresses that — it spends the closing speed and
 	# leaves him matched; the flag still covers the loose-puck fallback.)
-	d.sprint_override = true
+	# A backchecker is behind the play by definition and the whole job is closing
+	# that distance, which is what licenses the sprint override past both gap
+	# gates. A tracker the shared read already calls INSIDE is not doing that job
+	# — sprinting him at a carrier he is in front of is a step-up, not a recovery.
+	d.sprint_override = not inside
 	d.arrive_at_speed = true
 	# Stick on the puck: aim at the carrier's blade side so the poke/lift is
 	# live the moment he's in reach, rather than the ready stance pointing at
@@ -118,6 +124,40 @@ static func _decide_puck(ctx: RoleContext) -> RoleDecision:
 		d.aim_world_pos = lead
 		d.has_aim_override = true
 	return d
+
+
+# How far goal-side of the carrier the tracker actually stands, and therefore
+# what the hip is allowed to ask of him.
+#
+# THE HIP IS A CATCH-UP TARGET. Arriving 0.8 m goal-side of a carrier is the
+# right errand for a man chasing him from behind — it is the spot where you take
+# the puck rather than ride alongside. It is the wrong errand for a tracker who
+# is ALREADY goal-side, and the election hands this slot to whoever of the
+# non-RUSH_D1 bodies reaches the puck soonest, which in a shape that is home
+# means somebody in front of the play: measured, a tracker 16.5 m off our own net
+# was sent to a hip 30 m out, with the sprint override on, to become a second
+# challenger on a carrier RUSH_D1 already owns.
+#
+# So the gap the hip asks for is bounded by the depth this body already owns,
+# itself capped by the GAP LADDER (AIRoleRushD.ladder_gap_m — the shared answer
+# for how far goal-side of a threat a defender should stand, the same one
+# AIRoleChase's lost-race pre-contain uses). The three regimes fall out:
+#   · behind him — the depth term is nil, the hip is the hip, nothing changes;
+#   · goal-side inside the ladder — hold exactly what you have, give up no depth
+#     to go and meet him;
+#   · goal-side by more than the ladder — close to the ladder's gap and no
+#     further, which is a defender's gap rather than a run at the puck.
+static func _hip_gap(ctx: RoleContext, lead: Vector3, dir_net: Vector3,
+		carrier_vel: Vector3, dist: float) -> float:
+	var own_depth: float = (ctx.self_pos.x - lead.x) * dir_net.x \
+			+ (ctx.self_pos.z - lead.z) * dir_net.z
+	if own_depth <= HIP_GOAL_SIDE_M:
+		return HIP_GOAL_SIDE_M
+	var closing: float = maxf(
+			carrier_vel.x * dir_net.x + carrier_vel.z * dir_net.z, 0.0)
+	var ladder: float = AIRoleRushD.ladder_gap_m(
+			lead, ctx.own_goal_dir, ctx.self_blade_reach, closing)
+	return minf(minf(own_depth, maxf(ladder, HIP_GOAL_SIDE_M)), dist)
 
 
 # ── TRACK_MID: back through the middle, stop at the circle tops ──────────────
@@ -162,7 +202,7 @@ static func _decide_mid(ctx: RoleContext, side: float) -> RoleDecision:
 # The mid tracker's post: just inside the tops of the circles, split off centre.
 static func _post(ctx: RoleContext, read: AIRushRead, side: float) -> Vector3:
 	var our_net: Vector3 = ctx.defending_goal_pos
-	var depth: float = AIZoneCoverage.HOUSE_TOP_DEPTH_M - CIRCLE_TOP_INSET_M
+	var depth: float = _post_depth()
 	var axis: Vector3 = read.threat_axis
 	if axis == Vector3.ZERO or not axis.is_finite():
 		axis = Vector3(0.0, 0.0, -ctx.own_goal_dir)
@@ -171,9 +211,33 @@ static func _post(ctx: RoleContext, read: AIRushRead, side: float) -> Vector3:
 	return p if AIRoleHelpers.is_legal_position(p) else our_net - axis * depth
 
 
-# The attacker (excluding the carrier) nearest our net on my side of centre.
-# Lane ownership, not man-marking: whoever enters my ice is mine while he is in
-# it, and the deepest man in it is the one who gets covered.
+# The attacker (excluding the carrier) nearest our net on my side of centre, AND
+# INSIDE MY ICE. Lane ownership, not man-marking: whoever enters my ice is mine
+# while he is in it, and the deepest man in it is the one who gets covered.
+#
+# "Enters my ice" was missing, and the role's own rule — hold the post, never
+# chase out of the structure — cannot hold without it: the pick was the deepest
+# attacker on my half of the RINK, however far up-ice, and the cover geometry
+# then put the target goal-side of *him*. Measured, that sent a mid tracker at a
+# point 37 m off our own net — past the far blue line — to cover a trailer who
+# was himself 40 m out and no part of anything yet.
+#
+# The bound is the tracker's own post plus a cover envelope (the span within
+# which one body owns another, AIRushRead.cover_envelope_m — the same quantity
+# the numbers reads use for "meaningfully behind"). Inside it a man has arrived
+# and is the tracker's to pick up; outside it he has not, and the answer is the
+# post. It is expressed off _post_depth so the two cannot drift apart. No clamp
+# on the resulting target is needed: cover_man_target sits goal-side of the man
+# it covers, so bounding the man bounds the stand.
+static func _pickup_depth_m() -> float:
+	return _post_depth() + AIRushRead.cover_envelope_m()
+
+
+# Depth of the mid tracker's post off our own goal line.
+static func _post_depth() -> float:
+	return AIZoneCoverage.HOUSE_TOP_DEPTH_M - CIRCLE_TOP_INSET_M
+
+
 static func _man_in_my_lane(ctx: RoleContext, read: AIRushRead,
 		side: float) -> Vector3:
 	var i: int = _man_in_my_lane_index(ctx, read, side)
@@ -191,7 +255,7 @@ static func _man_in_my_lane_peer(ctx: RoleContext, read: AIRushRead,
 static func _man_in_my_lane_index(ctx: RoleContext, read: AIRushRead,
 		side: float) -> int:
 	var best: int = -1
-	var best_depth: float = INF
+	var best_depth: float = _pickup_depth_m()
 	var our_net: Vector3 = ctx.defending_goal_pos
 	for i: int in read.attackers.size():
 		if read.attackers[i] == read.carrier_peer:
@@ -202,6 +266,8 @@ static func _man_in_my_lane_index(ctx: RoleContext, read: AIRushRead,
 		# half of it would leave the other half to nobody.
 		if side != 0.0 and lead.x * side < 0.0:
 			continue  # other half of the ice — the neighbour's man
+		# Seeded at the pickup bound, so a man who has not entered my ice never
+		# wins the argmin and the caller falls through to the post.
 		var depth: float = lead.distance_to(our_net)
 		if depth < best_depth:
 			best_depth = depth

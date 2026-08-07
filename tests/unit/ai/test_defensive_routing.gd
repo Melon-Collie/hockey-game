@@ -303,8 +303,8 @@ func test_two_defencemen_are_not_blown_by_a_neutral_zone_rush() -> void:
 # controls, and it is settled before the downstream variance starts.
 #
 #   Reference over the 8-start sweep:   no numbers half  →  with it
-#     mean deepest-body drift                  21.8 m            20.2 m
-#     worst single start                       24.0 m            22.0 m
+#     mean deepest-body drift                  21.9 m            19.3 m
+#     worst single start                       24.2 m            20.2 m
 #     starts with nobody left back              3/8               0/8
 #
 # The window is the FIRST 2.5 s, which is where the shape is set. Run it longer
