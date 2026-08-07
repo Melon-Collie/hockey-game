@@ -523,15 +523,21 @@ func test_clear_forward_flips_for_other_goal() -> void:
 	assert_gt(vel.z, 0.0)
 
 # ── screen_occlusion_delay ────────────────────────────────────────────────────
-# Puck (shooter) at origin, goalie 10m down +Z, shot flying +Z at 10 m/s so a
-# screener's delay = its along-shot distance / 10. Defaults: radius 0.6,
-# min_along 0.6. A screener hides the puck until the puck reaches its along-shot
-# position, so a NET-FRONT (doorstep) body hides longest, a shooter-side body least.
+# Puck (shooter) at origin, goalie 10m down +Z, shot flying +Z at 10 m/s so for a
+# body ON that line the delay = its along-shot distance / 10. Two halves to the
+# model: the RELEASE has to be hidden (a release the goalie saw is a read he
+# keeps), and the occlusion ends when the puck leaves the body's shadow — which
+# for a dead-on shot is when it draws level with it, so a NET-FRONT (doorstep)
+# body hides longest and a shooter-side body least.
 
 func _screen_cfg() -> GoalieBehaviorRules.ScreenConfig:
 	var cfg := GoalieBehaviorRules.ScreenConfig.new()
-	cfg.screener_radius = 0.6
+	cfg.eye_height = 1.79
+	cfg.torso_half_width = 0.35
+	cfg.leg_half_width = 0.16
+	cfg.hip_height = 0.85
 	cfg.min_along = 0.6
+	cfg.peek_clearance = 0.05
 	return cfg
 
 func test_screen_no_bodies_is_clear() -> void:
@@ -548,11 +554,40 @@ func test_screen_dead_on_midway() -> void:
 	assert_almost_eq(d, 0.5, 0.001)
 
 func test_screen_off_to_the_side_clears() -> void:
-	# perp 1.0 > radius 0.6 → not on the sightline → no occlusion.
+	# 1.0 m off the eye→release line at half range (shadow half-width there is
+	# 0.6·5/10 = 0.3) → the goalie sees the release → no occlusion.
 	var d: float = GoalieBehaviorRules.screen_occlusion_delay(
 		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10),
 		PackedVector3Array([Vector3(1.0, 0, 5)]), _screen_cfg())
 	assert_eq(d, 0.0)
+
+func test_screen_needs_the_release_hidden_not_the_flight_path() -> void:
+	# Shot from the origin aimed 2 m wide of the goalie, with a body sitting
+	# exactly ON that flight path 6 m along — but 1.18 m off the goalie's
+	# eye→release line, so he watched the puck leave the blade in the clear. He
+	# HAS the trajectory; a body it flies behind afterwards cannot take the read
+	# back. The old shot-line test charged him 0.6 s for this.
+	var vel: Vector3 = Vector3(2, 0, 10).normalized() * 10.0
+	var on_path: Vector3 = vel.normalized() * 6.0
+	var d: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, vel, Vector3(0, 0, 10),
+		PackedVector3Array([on_path]), _screen_cfg())
+	assert_eq(d, 0.0, "a release the goalie saw is a read he keeps")
+
+func test_screen_angled_shot_leaves_the_shadow_early() -> void:
+	# Screener dead in front of the goalie (0, 8) with the shooter behind him at
+	# the origin — the release IS hidden. But the shot is angled 1.5 m across, so
+	# the puck slides out of the body's silhouette before it ever draws level
+	# with him: shorter blind window than the same screen taken dead-on.
+	var vel: Vector3 = (Vector3(1.5, 0, 10) - Vector3.ZERO).normalized() * 10.0
+	var angled: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, vel, Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0, 0, 8)]), _screen_cfg())
+	var dead_on: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10),
+		PackedVector3Array([Vector3(0, 0, 8)]), _screen_cfg())
+	assert_gt(angled, 0.0, "the release was hidden, so there is a real delay")
+	assert_lt(angled, dead_on, "angling off the sightline clears the screen sooner")
 
 func test_screen_behind_goalie_clears() -> void:
 	# Body past the goalie (along 12 >= goalie_along 10) can't hide an incoming puck.
@@ -606,6 +641,87 @@ func test_screen_stationary_puck_no_delay() -> void:
 		Vector3.ZERO, Vector3.ZERO, Vector3(0, 0, 10),
 		PackedVector3Array([Vector3(0, 0, 5)]), _screen_cfg())
 	assert_eq(d, 0.0)
+
+# ── The silhouette: a body is not a column ───────────────────────────────────
+
+func test_silhouette_narrows_toward_the_ice() -> void:
+	var cfg := _screen_cfg()
+	assert_eq(GoalieBehaviorRules.screener_half_width_at(1.4, cfg), 0.35,
+			"chest height sees the whole body")
+	assert_eq(GoalieBehaviorRules.screener_half_width_at(0.85, cfg), 0.35,
+			"the hips are where it stops narrowing")
+	assert_eq(GoalieBehaviorRules.screener_half_width_at(0.0, cfg), 0.16,
+			"at the ice it is a shin")
+	assert_between(GoalieBehaviorRules.screener_half_width_at(0.425, cfg), 0.16, 0.35)
+
+func test_a_goalie_who_goes_down_sees_through_traffic() -> void:
+	# Same shot, same body, two eye heights. Standing, the sightline to a puck on
+	# the ice crosses a mid-slot screener up at chest height and he is blind
+	# behind the full torso; dropped, the whole line falls into the shin band and
+	# the body stops covering the release. This is "get low and find it", and it
+	# is the one thing the blocking drop buys back for what it concedes.
+	var body := PackedVector3Array([Vector3(0.26, 0, 4.0)])
+	var standing := _screen_cfg()
+	var down := _screen_cfg()
+	down.eye_height = 0.97
+	var up_d: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10), body, standing)
+	var down_d: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), Vector3(0, 0, 10), body, down)
+	assert_gt(up_d, 0.0, "standing, the torso hides the release")
+	assert_lt(down_d, up_d, "dropping drops the eyeline into the legs")
+
+# ── screen_peek_offset ───────────────────────────────────────────────────────
+# Stepping off the angle to get the eyes around a body. Same frame as above:
+# goalie at (0, 10), release at the origin, so the sightline runs along −Z and a
+# lateral step turns it at full leverage.
+
+func test_peek_steps_away_from_the_screener() -> void:
+	# Body 0.2 m to the +x side of the sightline, halfway along. The line has to
+	# be pushed 0.20 m further at its range (0.35 torso − 0.20 already clear, plus
+	# 0.05 of daylight), and a step at the goalie's end moves it by half that far
+	# — so 0.4 m, taken to −x, away from the body.
+	var d: float = GoalieBehaviorRules.screen_peek_offset(
+		Vector3(0, 0, 10), Vector3.ZERO,
+		PackedVector3Array([Vector3(0.2, 0, 5)]), _screen_cfg(), 0.5)
+	assert_almost_eq(d, -0.4, 0.02)
+
+func test_peek_declines_a_screen_it_cannot_clear() -> void:
+	# Dead-on doorstep body with only 0.1 m of licence: half a peek buys no sight
+	# and still costs the angle, so he stays square and blocks it instead.
+	var d: float = GoalieBehaviorRules.screen_peek_offset(
+		Vector3(0, 0, 10), Vector3.ZERO,
+		PackedVector3Array([Vector3(0.0, 0, 8)]), _screen_cfg(), 0.1)
+	assert_eq(d, 0.0)
+
+func test_peek_declines_when_bracketed() -> void:
+	# Traffic on both sides of the line — there is no side to step to.
+	var d: float = GoalieBehaviorRules.screen_peek_offset(
+		Vector3(0, 0, 10), Vector3.ZERO,
+		PackedVector3Array([Vector3(0.2, 0, 5), Vector3(-0.2, 0, 6)]),
+		_screen_cfg(), 0.5)
+	assert_eq(d, 0.0)
+
+func test_peek_is_zero_with_a_clean_look() -> void:
+	var d: float = GoalieBehaviorRules.screen_peek_offset(
+		Vector3(0, 0, 10), Vector3.ZERO,
+		PackedVector3Array([Vector3(2.0, 0, 5)]), _screen_cfg(), 0.5)
+	assert_eq(d, 0.0)
+
+func test_peek_actually_clears_the_screen_it_solved_for() -> void:
+	# The whole point, closed loop: take the offset the solve returns, put the
+	# goalie there, and ask the occlusion model whether he can see the release.
+	var body := PackedVector3Array([Vector3(0.2, 0, 5)])
+	var square := Vector3(0, 0, 10)
+	var blind: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, Vector3(0, 0, 10), square, body, _screen_cfg())
+	assert_gt(blind, 0.0, "square, the body hides the release")
+	var peek: float = GoalieBehaviorRules.screen_peek_offset(
+		square, Vector3.ZERO, body, _screen_cfg(), 0.5)
+	var peeked: Vector3 = square + Vector3(peek, 0, 0)
+	var after: float = GoalieBehaviorRules.screen_occlusion_delay(
+		Vector3.ZERO, peeked - Vector3.ZERO, peeked, body, _screen_cfg())
+	assert_eq(after, 0.0, "stepped off the angle, he has his eyes on it")
 
 # ── unset_fraction / movement_read_penalty ────────────────────────────────────
 # A set (stopped) goalie reads at the base delay; a moving / scrambling one reads
@@ -732,11 +848,12 @@ func test_reachable_distance_zero_accel_is_instant_speed() -> void:
 	assert_almost_eq(GoalieBehaviorRules.reachable_lateral_distance(3.8, 0.0, 0.5), 1.9, 0.0001)
 
 # ── is_beaten_wide ────────────────────────────────────────────────────────────
-# Race to the tuck point (the post on the side the carrier drives toward):
-# beaten when the goalie's pad can't reach the seal spot before the PUCK's
-# lateral progress gets there — and only once the puck is past the goalie's
+# Race to the tuck point (the post on the side the PUCK is being taken):
+# beaten when the goalie's pad can't reach the seal spot before the puck's own
+# lateral travel gets there — and only once the puck is past the goalie's
 # standing sealing reach (the point of no return; a trailing puck commits
-# nothing). Goal at z=+26.6 → direction_sign −1.
+# nothing). Every velocity below is the PUCK's lateral velocity, not the
+# carrier's body. Goal at z=+26.6 → direction_sign −1.
 
 func _beaten_cfg() -> GoalieBehaviorRules.BeatenWideConfig:
 	var cfg := GoalieBehaviorRules.BeatenWideConfig.new()
@@ -748,17 +865,27 @@ func _beaten_cfg() -> GoalieBehaviorRules.BeatenWideConfig:
 	return cfg
 
 func test_beaten_by_fast_crease_cut_with_puck_leading() -> void:
-	# Carrier at (0, 25.3) driving across at 6 m/s with the puck LED out at
-	# (0.9, 25.5) — past the centred goalie's 0.42 seal edge, essentially at
+	# Carrier at (0, 25.3) with the puck LED out at (0.9, 25.5) travelling
+	# across at 6 m/s — past the centred goalie's 0.42 seal edge, essentially at
 	# the post. The goalie needs ~1.55m of travel with no time left: the
 	# genuine reach-around tuck in progress → sell out pads-first.
 	assert_true(GoalieBehaviorRules.is_beaten_wide(
 			Vector3(0.0, 0, 25.3), Vector3(0.9, 0, 25.5), 6.0,
 			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
 
+func test_beaten_by_forehand_backhand_on_a_straight_rush() -> void:
+	# THE move this rule exists for, and the one a body-velocity read missed
+	# entirely: the shooter drives STRAIGHT at the net (body barely moving
+	# laterally) and pulls the puck forehand→backhand across the goalie at
+	# 5 m/s. Nothing about the body says "drive"; the puck is past the sealing
+	# reach and going around him, which is the only thing that scores.
+	assert_true(GoalieBehaviorRules.is_beaten_wide(
+			Vector3(0.1, 0, 25.4), Vector3(-0.7, 0, 25.6), -5.0,
+			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
+
 func test_puck_trailing_drive_is_not_beaten() -> void:
-	# THE forehand-drag drive (the playtest exploit): body cuts across at
-	# 4 m/s but the puck trails on the far side at (−0.8). The wrap/cut-back
+	# THE forehand-drag drive (the playtest exploit): the whole play cuts across
+	# at 4 m/s but the puck trails on the far side at (−0.8). The wrap/cut-back
 	# is still free — the goalie must stay up and shuffle across, not sell
 	# out to the body.
 	assert_false(GoalieBehaviorRules.is_beaten_wide(
@@ -766,8 +893,8 @@ func test_puck_trailing_drive_is_not_beaten() -> void:
 			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
 
 func test_not_beaten_below_drive_speed() -> void:
-	# Puck past the seal edge but the body is only shuffling (2.0 < 2.5 m/s
-	# drive floor) — a wide carry, not a committed drive; stay up.
+	# Puck past the seal edge but barely drifting across (2.0 < 2.5 m/s floor) —
+	# a wide carry, not a puck being taken around him; stay up.
 	assert_false(GoalieBehaviorRules.is_beaten_wide(
 			Vector3(0.0, 0, 25.3), Vector3(0.9, 0, 25.5), 2.0,
 			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
@@ -787,11 +914,23 @@ func test_beaten_by_reach_around_in_tight() -> void:
 			Vector3(0.3, 0, 25.6), Vector3(0.8, 0, 25.8), 3.5,
 			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
 
-func test_stationary_dangle_does_not_drop_goalie() -> void:
-	# Lateral velocity below the drive floor — stay up, force the release,
-	# even with the puck dangled out wide.
+func test_parked_wide_puck_does_not_drop_goalie() -> void:
+	# Puck held out wide but not going anywhere (0.5 < 2.5 m/s) — stay up and
+	# force the release. Note what does NOT protect him here: a dangle that
+	# swings the puck across FAST does satisfy this rule, by design. Being
+	# un-committed against a stickhandle is the caller's quiet-eye window
+	# (lateral_commit_confirm_s), not a velocity floor — see the rule header.
 	assert_false(GoalieBehaviorRules.is_beaten_wide(
 			Vector3(0.3, 0, 25.6), Vector3(0.9, 0, 25.7), 0.5,
+			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
+
+func test_puck_inside_sealing_reach_is_not_beaten() -> void:
+	# The transient a deke produces every time it starts: the puck is moving
+	# fast across but is still inside the goalie's standing sealing reach
+	# (0.3 < 0.42). Nothing has been taken around him yet — the point of no
+	# return is what stops the first move of a stickhandle from committing him.
+	assert_false(GoalieBehaviorRules.is_beaten_wide(
+			Vector3(0.3, 0, 25.6), Vector3(0.3, 0, 25.7), 6.0,
 			Vector3(0, 0, 24.85), 26.6, 0.0, -1, 0.915, _beaten_cfg()))
 
 func test_fast_cut_far_from_goal_is_not_beaten() -> void:
@@ -832,19 +971,19 @@ func test_backdoor_shooter_caps_challenge_depth() -> void:
 	# perpendicular lines → cap ≈ 1.13, well under the 1.75 aggressive chart.
 	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
-			26.6, 0.0, -1, _backdoor_cfg())
+			26.6, 0.0, -1, INF, _backdoor_cfg())
 	assert_almost_eq(cap, 1.131, 0.02)
 
 func test_no_cap_without_live_shooter_behind_goal_line() -> void:
 	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 27.2),
-			26.6, 0.0, -1, _backdoor_cfg())
+			26.6, 0.0, -1, INF, _backdoor_cfg())
 	assert_true(is_inf(cap), "shooter behind the goal line can't one-time — no cap")
 
 func test_no_cap_for_shooter_outside_scoring_area() -> void:
 	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(0, 0, 15.0),
-			26.6, 0.0, -1, _backdoor_cfg())
+			26.6, 0.0, -1, INF, _backdoor_cfg())
 	assert_true(is_inf(cap), "shooter 11.6m out is not a backdoor threat")
 
 func test_no_cap_for_shooter_on_same_shot_line() -> void:
@@ -852,7 +991,7 @@ func test_no_cap_for_shooter_on_same_shot_line() -> void:
 	# to goal→(−4,23)): challenging the carrier already covers him.
 	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(-2, 0, 24.8),
-			26.6, 0.0, -1, _backdoor_cfg())
+			26.6, 0.0, -1, INF, _backdoor_cfg())
 	assert_true(is_inf(cap), "same-angle shooter needs no re-square — no cap")
 
 func test_doorstep_criss_cross_pins_goalie_deep() -> void:
@@ -860,18 +999,18 @@ func test_doorstep_criss_cross_pins_goalie_deep() -> void:
 	# (1.2, 25.2). 2.7m pass → goalie still ramping → cap ≈ 0.35.
 	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-1.5, 0, 25.3), Vector3(-1.5, 0, 25.3), Vector3(1.2, 0, 25.2),
-			26.6, 0.0, -1, _backdoor_cfg())
+			26.6, 0.0, -1, INF, _backdoor_cfg())
 	assert_almost_eq(cap, 0.348, 0.02)
 
 func test_faster_assumed_pass_caps_deeper() -> void:
 	var slow_cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
-			26.6, 0.0, -1, _backdoor_cfg())
+			26.6, 0.0, -1, INF, _backdoor_cfg())
 	var fast_cfg: GoalieBehaviorRules.BackdoorThreatConfig = _backdoor_cfg()
 	fast_cfg.pass_speed = 20.0
 	var fast_cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
-			26.6, 0.0, -1, fast_cfg)
+			26.6, 0.0, -1, INF, fast_cfg)
 	assert_lt(fast_cap, slow_cap)
 
 func test_unwinnable_race_caps_to_zero() -> void:
@@ -881,14 +1020,80 @@ func test_unwinnable_race_caps_to_zero() -> void:
 	cfg.react_delay = 0.5
 	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-1.5, 0, 25.3), Vector3(-1.5, 0, 25.3), Vector3(1.2, 0, 25.2),
-			26.6, 0.0, -1, cfg)
+			26.6, 0.0, -1, INF, cfg)
 	assert_almost_eq(cap, 0.0, 0.0001)
 
 func test_backdoor_cap_symmetric_for_minus_z_goal() -> void:
 	var cap: float = GoalieBehaviorRules.backdoor_depth_cap(
 			Vector3(-4, 0, -23), Vector3(-4, 0, -23), Vector3(1.2, 0, -25.2),
-			-26.6, 0.0, 1, _backdoor_cfg())
+			-26.6, 0.0, 1, INF, _backdoor_cfg())
 	assert_almost_eq(cap, 1.131, 0.02)
+
+# ── Coverage: he has defencemen ──────────────────────────────────────────────
+# The 2-on-1 rule — take the shooter, trust your D to take the pass. A defender
+# already disputing the reception buys the goalie time in the model's own
+# currency, so he challenges further out; one arriving with the puck buys
+# nothing; one who is late never shortens the play.
+
+func test_covered_backdoor_man_lets_him_challenge_further() -> void:
+	var free_cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, INF, _backdoor_cfg())
+	# A defender whose stick is already on the receiver disputes the feed for
+	# its whole flight.
+	var covered_cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, 0.0, _backdoor_cfg())
+	assert_gt(covered_cap, free_cap,
+			"a covered one-timer man is not a reason to give up the carrier's angle")
+
+func test_a_defender_arriving_with_the_puck_buys_nothing() -> void:
+	# 5.65 m feed at 14 m/s = 0.40 s of flight. A defender who gets there at
+	# exactly that moment has disputed nothing.
+	var free_cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, INF, _backdoor_cfg())
+	var late_cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, 0.404, _backdoor_cfg())
+	assert_almost_eq(late_cap, free_cap, 0.02)
+
+func test_a_late_defender_never_shortens_the_play() -> void:
+	# Arriving a full second after the puck is worth zero, not negative — the
+	# credit floors rather than penalising the goalie for bad coverage.
+	var free_cap: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, INF, _backdoor_cfg())
+	var very_late: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, 5.0, _backdoor_cfg())
+	assert_almost_eq(very_late, free_cap, 0.0001)
+
+func test_defender_arrival_starts_from_rest() -> void:
+	# The asymmetry that makes this NOT contest_time: coverage is a favour the
+	# goalie is about to trade net position for, so a body has to actually
+	# accelerate to earn it. On him → free. Five metres off → most of a second,
+	# not the 0.4 s an instant-full-speed read would have credited.
+	var stick: float = GameRules.DEFAULT_STICK_LENGTH_M
+	var v: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
+	var a: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
+	assert_eq(GoalieBehaviorRules.defender_arrival_time(1.0, stick, v, a), 0.0,
+			"already within a stick of him")
+	var five_m: float = GoalieBehaviorRules.defender_arrival_time(5.2, stick, v, a)
+	assert_gt(five_m, 0.6, "a body five metres off is not covering anybody yet")
+	assert_gt(five_m, GoalieSaveSelection.contest_time(5.2, stick, v),
+			"the credit read is strictly more conservative than the threat read")
+
+func test_coverage_credit_is_capped_by_the_pass_flight() -> void:
+	# Nothing is gained by a defender being there "even earlier" — the most he
+	# can dispute is the flight itself, so the credit saturates.
+	var on_him: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, 0.0, _backdoor_cfg())
+	var glued: float = GoalieBehaviorRules.backdoor_depth_cap(
+			Vector3(-4, 0, 23), Vector3(-4, 0, 23), Vector3(1.2, 0, 25.2),
+			26.6, 0.0, -1, -3.0, _backdoor_cfg())
+	assert_almost_eq(glued, on_him, 0.0001)
 
 # ── rush_retreat (speed-matched backflow) ─────────────────────────────────────
 

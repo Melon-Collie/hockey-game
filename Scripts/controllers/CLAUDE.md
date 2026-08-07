@@ -39,6 +39,15 @@ Two recurring traps, both measured:
 - **Blocking concedes the top of the net.** Any path that blocks a shot already
   read as elevated is strictly wrong. The block model has no `impact_y`.
 
+The one sanctioned commit is the **beaten-wide post seal** — and it is sanctioned
+because it is not a prediction. Its gate is positional (the puck is already past
+his standing sealing reach on the side it went), so it fires on an accomplished
+fact rather than a guess about intent, and the goalie pushes into the seal off
+the drop as one motion instead of landing square and re-deciding. Onset needs the
+puck genuinely moving across; *persistence* deliberately drops that term, because
+a puck that settles wide has not un-beaten him. Pulling it back inside the
+sealing reach is what un-commits him, and baiting that commit is the counter.
+
 ## Behind-net puck play — the doctrine
 
 **"Stop it, leave it, get back."** The goalie leaves his net ONLY to trap a rim

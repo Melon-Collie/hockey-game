@@ -134,13 +134,28 @@ func test_tick_coil_lerps_position_during_coil() -> void:
 # Post-seal depth scales with target X extremity. Centre target: hold depth.
 # Post-line target: full post-seal depth.
 func test_commit_slide_to_centre_holds_depth() -> void:
-	sb.commit_slide(0.0, 0.6, 0.0, 0.915, 0.0, 0.6)
+	assert_true(sb.commit_slide(0.4, 0.6, 0.0, 0.915, 0.4, 0.6))
 	assert_almost_eq(sb.end_depth, 0.6, 0.001, "0 extremity → unchanged depth")
 
 func test_commit_slide_to_post_pulls_post_seal_depth() -> void:
-	sb.commit_slide(0.0, 0.6, 0.915, 0.915, 0.0, 0.6)
+	assert_true(sb.commit_slide(0.0, 0.6, 0.915, 0.915, 0.0, 0.6))
 	# x_extremity = 1.0 → lerp(0.6, 0.10, 1.0) = 0.10
 	assert_almost_eq(sb.end_depth, 0.10, 0.001, "post target → fully post-seal depth")
+
+# ── The already-sealed no-op ─────────────────────────────────────────────────
+
+func test_commit_slide_declines_when_already_in_the_seal() -> void:
+	# Same spot, same depth: nothing to travel, so nothing to commit.
+	assert_false(sb.commit_slide(0.3, 0.12, 0.3, 0.915, 0.3, 0.12))
+	assert_eq(sb.dir, 0.0, "a declined commit leaves the slide state untouched")
+
+func test_commit_slide_takes_a_depth_only_seal() -> void:
+	# THE case the lateral-only guard used to throw away: he is already on the
+	# seal's x, but a metre out in depth with the post open behind him. The
+	# retreat to the post IS the slide.
+	assert_true(sb.commit_slide(0.3, 1.2, 0.3, 0.915, 0.3, 1.2),
+			"a seal he owes in depth alone is still a seal")
+	assert_lt(sb.end_depth, 1.2, "the committed path pulls him back toward the post")
 
 # ── Advance slide ────────────────────────────────────────────────────────────
 

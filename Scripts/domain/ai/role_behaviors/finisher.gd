@@ -365,7 +365,7 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 		# dies against the wall the real keeper adopts).
 		AIActionScoring.resolve_feed_keeper(
 				goalie_pos, ctx.attacking_goal_pos, flight_t, c, carrier_pos,
-				AIRoleHelpers.opp_goalie_hands(ctx), pass_speed)
+				AIRoleHelpers.opp_goalie_hands(ctx), pass_speed, opp_positions)
 		# A staging spot is worth the better of its two payoffs: the one-timer
 		# feed (score_pass — being open for a pass-and-shoot) or the TIP of
 		# the carrier's direct rip through this spot (tip_ev — standing where

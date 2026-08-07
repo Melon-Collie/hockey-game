@@ -177,7 +177,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		var cand_flight: float = carrier_pos.distance_to(c) / maxf(pass_speed, 1.0)
 		AIActionScoring.resolve_feed_keeper(
 				goalie_pos, ctx.attacking_goal_pos, cand_flight, c, carrier_pos,
-				AIRoleHelpers.opp_goalie_hands(ctx), pass_speed)
+				AIRoleHelpers.opp_goalie_hands(ctx), pass_speed, opp_positions)
 		var pass_value: float = AIActionScoring.score_pass(
 				carrier_pos, c, ctx.attacking_goal_pos,
 				AIActionScoring.feed_keeper_pos, GameRules.NET_HALF_WIDTH,

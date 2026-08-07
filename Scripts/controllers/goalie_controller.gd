@@ -217,8 +217,33 @@ extends Node
 # Evaluated once at the read (the goalie loses the beat the moment the puck is
 # hidden; re-checking mid-flight would hand the time back). Host-only like all
 # goalie AI, so it costs nothing on the wire and never diverges on clients.
+#
+# The silhouette values are MEASUREMENTS, not feel dials — they size the shadow,
+# and the shadow is geometry. They mirror Scenes/Skater.tscn (origin at the hips,
+# feet ~0.85 below it). Sight is taken at the height the eyeline crosses the body,
+# so the same screener is a torso to a standing goalie and a pair of shins to a
+# goalie who has gone down looking for the puck.
 @export var screen_max_extra_delay: float = 0.30  # s — CAP on the screen-occlusion pickup delay
-@export var screener_radius: float = 0.6          # m — body half-width that blocks sight
+@export var screener_torso_half_width: float = 0.35  # m — a body in gear, at and above the hips
+@export var screener_leg_half_width: float = 0.16    # m — a shin, at the ice
+@export var screener_hip_height: float = 0.85        # m — where the silhouette stops narrowing
+# How far off his angle he will step to get his eyes around a body. Feel, not
+# geometry: the STEP is solved (GoalieBehaviorRules.screen_peek_offset), this is
+# only how much net he is willing to sell for the look. A screen he cannot clear
+# inside it buys him nothing and he stays square, which is the intended failure.
+@export var screen_peek_max_offset: float = 0.35     # m
+# HIS EYES ARE NOT ON HIS MIDLINE, and that is the first thing he moves. Craning
+# — head over, shoulders leaning, feet and pads planted — buys this much lateral
+# sight for NO angle at all, because the coverage does not move with it. Only
+# what the neck cannot reach is paid for out of `screen_peek_max_offset` with an
+# actual step, which is why a goalie should be seen shuffling for a big screen
+# and not moving at all for a small one.
+#
+# The head yaw that already tracks the puck (head_track_max_yaw_deg) is a
+# different quantity — where he is LOOKING, not where his eyes ARE — and it is
+# still cosmetic. This one is not: it moves the sightline the occlusion solve is
+# taken along.
+@export var head_peek_max_offset: float = 0.15       # m
 
 # ── Caught moving ─────────────────────────────────────────────────────────────
 # A goalie is only sharp when SET — square and stopped. Being unset costs him
@@ -1132,6 +1157,24 @@ var _chest_t: float = 0.0
 # commits (see lateral_commit_confirm_s). Reset whenever their read breaks.
 var _beaten_wide_confirm_timer: float = 0.0
 var _slide_coverage_confirm_timer: float = 0.0
+# Beaten-wide latch. `_armed` means the onset fired and the puck has stayed
+# around him since (the confirmation window is running or has elapsed);
+# `_committed` means it survived that window; `_drive_sign` is the way the puck
+# went (±1, 0 when nothing is armed). `_seal_beaten_wide_post` reads the last two
+# immediately after the drop so the seal goes the way the puck did.
+# Where his eyes sit relative to his body midline (world X), and where the peek
+# solve wants them. A craned head reaches `head_peek_max_offset`; the rate is a
+# neck/shoulder lean, fast next to everything else he does but not instant, so a
+# screen drifting across the solve's refusal threshold doesn't snap the sightline.
+# Host-only — the AI is host-only and the offset is small enough that not putting
+# it on the wire costs clients nothing visible.
+var _eye_offset_x: float = 0.0
+var _eye_peek_target_x: float = 0.0
+const _HEAD_PEEK_RATE_M_S: float = 1.2
+
+var _beaten_wide_armed: bool = false
+var _beaten_wide_committed: bool = false
+var _beaten_wide_drive_sign: float = 0.0
 # Catch-and-hold state. `_clear.catch_secured` flips once the pin (freeze + lock) is
 # applied on the first catching tick — physics writes are deferred out of the
 # contact callback the catch signal fires from. `_clear.catch_pressured` picks the
@@ -1500,7 +1543,9 @@ func _build_rule_configs() -> void:
 	_universal_shot_cfg.low_shot_threshold = low_shot_threshold
 	_universal_shot_cfg.elevated_threshold = elevated_threshold
 	_screen_cfg = GoalieBehaviorRules.ScreenConfig.new()
-	_screen_cfg.screener_radius = screener_radius
+	_screen_cfg.torso_half_width = screener_torso_half_width
+	_screen_cfg.leg_half_width = screener_leg_half_width
+	_screen_cfg.hip_height = screener_hip_height
 	_move_read_cfg = GoalieBehaviorRules.MovementReadConfig.new()
 	_move_read_cfg.reference_speed = move_read_reference_speed
 	_move_read_cfg.speed_delay = move_read_speed_delay
@@ -1569,6 +1614,8 @@ func reset_to_crease() -> void:
 	_cross_crease_react_timer = 0.0
 	_cross_crease_timer = 0.0
 	_cross_crease_target_x = 0.0
+	_eye_offset_x = 0.0
+	_eye_peek_target_x = 0.0
 	_shot_commit_timer = 0.0
 	_shot_read_timer = 0.0
 	_prime_linger_timer = 0.0
@@ -1589,6 +1636,9 @@ func reset_to_crease() -> void:
 		puck.motion_pinned = false
 	_clear.reset()
 	_beaten_wide_confirm_timer = 0.0
+	_beaten_wide_armed = false
+	_beaten_wide_committed = false
+	_beaten_wide_drive_sign = 0.0
 	_slide_coverage_confirm_timer = 0.0
 	_puck_play.reset()
 	_lunge_active_timer = 0.0
@@ -1641,7 +1691,12 @@ func _physics_process(delta: float) -> void:
 	_update_shot_timer(delta)
 	_update_state(delta)
 	_update_depth(delta)
+	# Zeroed BEFORE the position step so any state that doesn't solve a peek (down,
+	# post-integrated, frozen on a read) relaxes the head back to his midline
+	# instead of leaving it craned wherever the last look left it.
+	_eye_peek_target_x = 0.0
 	_update_position(delta)
+	_eye_offset_x = move_toward(_eye_offset_x, _eye_peek_target_x, _HEAD_PEEK_RATE_M_S * delta)
 	_update_facing(delta)
 	_update_body_parts(delta)
 	_update_goalie_poke(delta)
@@ -1961,6 +2016,10 @@ func _update_state(delta: float) -> void:
 				# A controlled dangler in space still keeps him UP — there the answer
 				# fits.
 				_enter_butterfly()
+				# One motion when the drop is a COVERAGE verdict rather than a timing
+				# one: beaten laterally means the seal is the only answer left, so
+				# push into it off the drop instead of landing square and re-deciding.
+				_seal_beaten_wide_post()
 			else:
 				# Toggle STANDING ↔ READY based on threat conditions.
 				var should_be_ready: bool = _is_ready_situation()
@@ -2205,30 +2264,90 @@ func _should_block(delta: float) -> bool:
 # opening move, not a drive — the reset on a broken verdict is what makes
 # the pull-back un-commit him.
 func _confirmed_beaten_wide(delta: float) -> bool:
-	if not _is_beaten_wide():
+	# ONCE ARMED, THE WINDOW ASKS WHETHER THE PUCK STAYS AROUND HIM — not whether
+	# it keeps accelerating. Re-asking the onset question (which needs live
+	# lateral speed) on every tick of the window is self-cancelling: a deke's
+	# sweep is over in ~0.1 s and the puck then SETTLES wide, so the verdict
+	# switched off at the exact moment the beat completed and he never confirmed
+	# anything. Bringing the puck back inside the sealing reach, or out of the
+	# in-tight zone, is what disarms him — which is the cut-back counter, and the
+	# only thing the window was ever protecting against.
+	if _beaten_wide_armed and _beaten_wide_holds():
+		_beaten_wide_confirm_timer += delta
+	elif _is_beaten_wide():
+		_beaten_wide_armed = true
+		_beaten_wide_confirm_timer += delta
+	else:
+		_beaten_wide_armed = false
 		_beaten_wide_confirm_timer = 0.0
+		_beaten_wide_committed = false
 		return false
-	_beaten_wide_confirm_timer += delta
-	return _beaten_wide_confirm_timer >= lateral_commit_confirm_s
+	_beaten_wide_committed = _beaten_wide_confirm_timer >= lateral_commit_confirm_s
+	return _beaten_wide_committed
 
 
-# True when an opposing carrier's lateral drive has beaten the standing
-# goalie to the tuck point (the around-the-pad reach). Race math in
-# GoalieBehaviorRules.is_beaten_wide; this gathers the scene inputs. Reads the
-# carrier's actual body velocity AND the raw carried-puck position, not the
-# lerped tracked threat — the smoothed threat lags exactly when the drive is
-# fastest, and the puck term is the point-of-no-return gate (a forehand-drag
-# drive with the puck trailing commits nothing; see the rule header).
-func _is_beaten_wide() -> bool:
+# Does the beat still stand? Coverage only — see GoalieBehaviorRules.
+func _beaten_wide_holds() -> bool:
 	var carrier: Skater = puck.get_carrier()
 	if carrier == null:
 		return false
 	if team_id != -1 and carrier.get_team_id() == team_id:
 		return false
-	return GoalieBehaviorRules.is_beaten_wide(
-			carrier.global_position, puck.global_position, carrier.velocity.x,
+	return GoalieBehaviorRules.beaten_wide_holds(
+			carrier.global_position, puck.global_position, _beaten_wide_drive_sign,
 			goalie.global_position, _goal_line_z, _goal_center_x,
 			_direction_sign, net_half_width, _beaten_wide_cfg)
+
+
+# True when the puck has been taken laterally past the standing goalie's
+# coverage and won the race to the tuck point (the around-the-pad reach). Race
+# math in GoalieBehaviorRules.is_beaten_wide; this gathers the scene inputs.
+#
+# Reads the RAW carried-puck position and the puck's own measured lateral
+# velocity, not the lerped tracked threat and not the carrier's body: the
+# smoothed threat lags exactly when the move is fastest, and the puck is both
+# the point-of-no-return gate and the thing racing him to the post (see the rule
+# header — a forehand→backhand on a straight-line rush moves the puck across
+# while the body barely moves laterally at all).
+#
+# `_puck_velocity_est` is the per-tick finite difference of the puck's world
+# position, so it tracks a carried puck's stickhandling — which is what this
+# read wants; `puck.linear_velocity` is the loose-puck read and is not live
+# while the puck is on a blade.
+func _is_beaten_wide() -> bool:
+	_beaten_wide_drive_sign = 0.0
+	var carrier: Skater = puck.get_carrier()
+	if carrier == null:
+		return false
+	if team_id != -1 and carrier.get_team_id() == team_id:
+		return false
+	var puck_vx: float = _puck_velocity_est.x
+	if not GoalieBehaviorRules.is_beaten_wide(
+			carrier.global_position, puck.global_position, puck_vx,
+			goalie.global_position, _goal_line_z, _goal_center_x,
+			_direction_sign, net_half_width, _beaten_wide_cfg):
+		return false
+	_beaten_wide_drive_sign = signf(puck_vx)
+	return true
+
+
+# The beaten-wide drop is a PUSH, not a fall. A goalie who reads "he has taken it
+# around me" does not drop and then decide to move — he drops INTO the seal off
+# the far leg, and the butterfly closes during the transit. That is the same
+# drop-and-slide `_commit_cross_crease_response` already runs for a pass that has
+# won its race; this is the carried-puck twin of it, and without it the beaten
+# read only ever produced a stationary butterfly that then had to re-earn the
+# slide through `_try_commit_slide` (drop animation + a fresh confirmation
+# window) — most of half a second after the moment he was beaten, by which time
+# the tuck is in.
+#
+# Destination is the post on the side the puck went, and the commit is final:
+# a slide cannot correct mid-flight, so selling out here is exactly what makes
+# the pull-back-and-cut-across counter pay.
+func _seal_beaten_wide_post() -> void:
+	if not _beaten_wide_committed or _beaten_wide_drive_sign == 0.0:
+		return
+	_commit_slide_toward(_goal_center_x + _beaten_wide_drive_sign * net_half_width)
 
 # Distance from the nearest non-ghost opposing skater to the puck, or INF if
 # there are none (or no skater getter wired). Ghosted players (offside / icing)
@@ -2778,19 +2897,15 @@ func _sweep_anim_progress() -> float:
 func _opposing_shooter_near_puck(loose_puck_radius: float) -> bool:
 	# The per-tick memo this used to carry is gone: GoalieWorldView is already
 	# frame-stamped, so the shared scan does the memoising for every reader.
-	#
-	# NOTE the loose-puck distance comes from `nearest_opponent_dist_any`, which
-	# INCLUDES ghosted players — see the quirk documented on GoalieWorldView. Kept
-	# bit-identical to the pre-extraction behaviour and flagged there, rather than
-	# silently corrected inside a refactor.
 	var carrier: Skater = puck.get_carrier()
 	if carrier != null:
 		return team_id == -1 or carrier.get_team_id() != team_id
 	_ensure_view()
-	return _view.nearest_opponent_dist_any < loose_puck_radius
+	return _view.nearest_opponent_dist < loose_puck_radius
 
 func _enter_butterfly() -> void:
 	_beaten_wide_confirm_timer = 0.0
+	_beaten_wide_armed = false
 	_slide_coverage_confirm_timer = 0.0
 	_sm.transition_to(State.BUTTERFLY)
 
@@ -3061,8 +3176,27 @@ func _backdoor_depth_cap() -> float:
 		cap = minf(cap, GoalieBehaviorRules.backdoor_depth_cap(
 				puck.global_position, _tracked_threat_position,
 				pos, _goal_line_z, _goal_center_x,
-				_direction_sign, _backdoor_cfg))
+				_direction_sign, _defender_arrival_time(pos), _backdoor_cfg))
 	return cap
+
+
+# Soonest one of his own can get a stick on a body at `pos` — the coverage term
+# the backdoor cap prices. INF with nobody in support, which restores the
+# uncovered read exactly.
+func _defender_arrival_time(pos: Vector3) -> float:
+	var nearest_sq: float = INF
+	for mate in _view.teammates:
+		var dx: float = mate.x - pos.x
+		var dz: float = mate.z - pos.z
+		var d_sq: float = dx * dx + dz * dz
+		if d_sq < nearest_sq:
+			nearest_sq = d_sq
+	if is_inf(nearest_sq):
+		return INF
+	return GoalieBehaviorRules.defender_arrival_time(
+			sqrt(nearest_sq), GameRules.DEFAULT_STICK_LENGTH_M,
+			GameRules.DEFAULT_SKATER_MAX_SPEED_M_S,
+			GameRules.DEFAULT_SKATER_THRUST_M_S2)
 
 # ── Position ──────────────────────────────────────────────────────────────────
 # STANDING uses true 2D arc tracing: target is (arc_x, arc_z) from the threat,
@@ -3208,6 +3342,13 @@ func _move_along_arc(delta: float) -> Vector2:
 		current.x = _reaction_drift_x(delta, current.x)
 		return current
 	var target_xz: Vector2 = _arc_target_xz()
+	# Fight for sight before anything else adjusts the target: if traffic is hiding
+	# the puck, step off the angle far enough to see around it. Applied to the
+	# SQUARE target rather than his live position so the read can't chase its own
+	# output (see GoalieBehaviorRules.screen_peek_offset), and overridden outright
+	# by a cross-crease push below — a pass already in flight is a coverage problem,
+	# not a sight problem.
+	target_xz.x += _screen_peek_x(target_xz)
 	# Cross-crease "push on feet": after the read delay (handled in
 	# _update_cross_crease), a detected pass overrides the lateral target toward
 	# the projected crossing and the goalie commits a hard T-push toward the far
@@ -3286,6 +3427,33 @@ func _arc_target_xz() -> Vector2:
 	return GoalieBehaviorRules.target_arc_position(
 			_tracked_threat_position, _goal_line_z, _goal_center_x,
 			_direction_sign, _current_depth, _arc_cfg)
+
+
+# Solve the peek and SPLIT it: the neck moves first (free — the pads don't go
+# with it), the feet cover only what the neck cannot reach. Sets `_eye_offset_x`
+# (consumed by every sightline read) and returns the step the body owes, 0 when
+# there is nothing to see around — or nothing he can step around, since the solve
+# refuses half-measures.
+#
+# Sighted on the PUCK, not the tracked threat: the quiet-eye lerp is a positioning
+# smoother and this is a question about a real object's real line. Only while
+# upright and not already reading a shot in flight — a goalie mid-freeze has
+# already spent his read, and one in the butterfly is not stepping anywhere; both
+# cases relax the head back to his midline.
+#
+# Host-only; clients render the broadcast pose.
+func _screen_peek_x(square_xz: Vector2) -> float:
+	var total: float = 0.0
+	if is_server and _sm.is_upright() and not _reaction.reacting:
+		_ensure_view()
+		if not _view.screeners.is_empty():
+			_screen_cfg.eye_height = _sight_height()
+			total = GoalieBehaviorRules.screen_peek_offset(
+					Vector3(square_xz.x, goalie.global_position.y, square_xz.y),
+					puck.global_position, _view.screeners, _screen_cfg,
+					head_peek_max_offset + screen_peek_max_offset)
+	_eye_peek_target_x = clampf(total, -head_peek_max_offset, head_peek_max_offset)
+	return total - _eye_peek_target_x
 
 # Advance the caught-moving drift one tick and return the new lateral position.
 # A goalie caught mid-push at the release does not stop dead to make the save —
@@ -3425,14 +3593,13 @@ func _commit_slide_toward(coverage_x: float) -> void:
 	if puck_side == 0.0:
 		return
 	var seal_target: float = _post_edge_seal_x(puck_side, pad_edge, slide_rot)
-	# Skip if we're already at (or very near) the seal spot — the slide just
-	# completed, no need to re-commit on the same side.
-	if absf(seal_target - _current_x) < 0.05:
+	var seal_end: Vector2 = _coil_end_xz(puck_side, slide_rot)
+	# No-ops when he is already sitting in that seal — the 2D test lives in the
+	# collaborator, which owns both endpoints (see commit_slide).
+	if not _slide.commit_slide(_current_x, _current_depth, seal_target,
+			net_half_width, seal_end.x, seal_end.y):
 		return
 	_slide_start_rotation_y = goalie.get_goalie_rotation_y()
-	var seal_end: Vector2 = _coil_end_xz(puck_side, slide_rot)
-	_slide.commit_slide(_current_x, _current_depth, seal_target,
-			net_half_width, seal_end.x, seal_end.y)
 	# The slide owns lateral motion from here (committed endpoints, own velocity).
 	# Drop any caught-moving drift so it can't resume if the slide finishes while
 	# the goalie is still frozen on the same read.
@@ -3480,9 +3647,10 @@ func _post_edge_seal_x(side: float, pad_edge_extent: float, rotation_rad: float)
 # ── Facing ────────────────────────────────────────────────────────────────────
 # Threat-based facing: rotate toward where the goalie is tracking, not raw
 # puck position. Stickhandling jitter no longer twists the body. Real goalies
-# keep the body square once down — only the head/upper body track the puck
-# (which we don't model), so BUTTERFLY/RECOVERING hold the body squared to
-# centre. Rotating the entire rotation_y in butterfly looks unrealistic.
+# keep the body square once down — the head tracks the puck instead, which IS
+# modelled (`_desired_head_yaw_deg`, and `_eye_offset_x` for where the eyes then
+# sit) — so BUTTERFLY/RECOVERING hold the body squared to centre. Rotating the
+# entire rotation_y in butterfly looks unrealistic.
 func _update_facing(delta: float) -> void:
 	if _sm.current == State.PLAYING_PUCK:
 		# Out playing the puck: face the puck itself, unclamped — behind the net
@@ -4154,21 +4322,42 @@ func _maybe_arm_screen_block_drop(screen_d: float, move_d: float, back_date: flo
 	_screen_block_drop_timer = maxf(reaction_delay + move_d - back_date, 0.0)
 
 
-# Screen contribution: gather every body that could hide the puck from the goalie
-# (both teams — a D-man screens his own goalie too; ghosted players don't), take
-# the grounded occlusion delay for the worst screener, and clamp it to
-# `screen_max_extra_delay`. The shooter self-excludes geometrically (they sit at
-# the release point, along ≈ 0 < min_along).
+# Screen contribution: take the grounded occlusion delay for the worst body in
+# `GoalieWorldView.screeners` (both teams — a D-man screens his own goalie too;
+# ghosted players and committed shot-blockers do not, see that file) and clamp it
+# to `screen_max_extra_delay`. The shooter self-excludes geometrically (they sit
+# at the release point, along ≈ 0 < min_along).
 func _screen_delay(shot_velocity: Vector3) -> float:
 	if screen_max_extra_delay <= 0.0:
 		return 0.0
 	_ensure_view()
 	if _view.screeners.is_empty():
 		return 0.0
+	_screen_cfg.eye_height = _sight_height()
 	var delay: float = GoalieBehaviorRules.screen_occlusion_delay(
-			puck.global_position, shot_velocity, goalie.global_position,
+			puck.global_position, shot_velocity, _eye_position(),
 			_view.screeners, _screen_cfg)
 	return minf(delay, screen_max_extra_delay)
+
+
+# Where he is looking FROM, laterally: his body plus whatever the neck has craned
+# off the midline. Every sightline read goes through this rather than the body
+# origin — the whole point of modelling the head is that his eyes and his pads
+# are not in the same place.
+func _eye_position() -> Vector3:
+	var p: Vector3 = goalie.global_position
+	p.x += _eye_offset_x
+	return p
+
+
+# Where he is looking FROM. Head height by stance family — and the difference is
+# load-bearing rather than cosmetic: dropping takes the eyeline from over the
+# traffic's shoulders down into its shins, which is precisely why a goalie goes
+# down to find a puck in a crowd. The silhouette model turns that into shorter
+# screen delays for a down goalie without any rule saying so.
+func _sight_height() -> float:
+	return GoalieAnatomy.HEAD_CENTER_Y_BUTTERFLY_M if _sm.is_down() \
+			else GoalieAnatomy.HEAD_CENTER_Y_STANDING_M
 
 
 # How unset the goalie is right now, 0..1. Planar speed (lateral + depth motion)
