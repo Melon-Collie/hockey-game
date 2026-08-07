@@ -1527,7 +1527,6 @@ func _build_rule_configs() -> void:
 	_shot_cfg.net_half_width = net_half_width
 	_shot_cfg.net_margin = net_margin
 	_shot_cfg.reaction_delay = reaction_delay
-	_shot_cfg.low_shot_threshold = low_shot_threshold
 	_shot_cfg.elevated_threshold = elevated_threshold
 	# Universal-reaction impact classification uses the SAME geometry but with NO
 	# speed floor. The universal path's urgency decision is already made by
@@ -1536,7 +1535,7 @@ func _build_rule_configs() -> void:
 	# MORE urgent than a rocket from the point, not less. Re-running detect_shot
 	# with `_shot_cfg`'s 5 m/s `shot_speed_threshold` here silently rejected every
 	# sub-threshold puck, so slow pucks oozing at the net never triggered a
-	# reaction and the goalie sat a statue. This clone keeps low/elevated
+	# reaction and the goalie sat a statue. This clone keeps the elevated
 	# classification and the on-net check; speed gating stays on the RELEASE path
 	# (which must still filter slow dribbled passes) via `_shot_cfg`.
 	_universal_shot_cfg = GoalieBehaviorRules.ShotDetectionConfig.new()
@@ -1544,7 +1543,6 @@ func _build_rule_configs() -> void:
 	_universal_shot_cfg.net_half_width = net_half_width
 	_universal_shot_cfg.net_margin = net_margin
 	_universal_shot_cfg.reaction_delay = reaction_delay
-	_universal_shot_cfg.low_shot_threshold = low_shot_threshold
 	_universal_shot_cfg.elevated_threshold = elevated_threshold
 	_screen_cfg = GoalieBehaviorRules.ScreenConfig.new()
 	_screen_cfg.torso_half_width = screener_torso_half_width

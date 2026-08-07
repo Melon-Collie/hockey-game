@@ -15,7 +15,6 @@ class ShotResult:
 	var reaction_delay: float = 0.0
 	var impact_x: float = 0.0
 	var impact_y: float = 0.0
-	var is_low: bool = false      # impact_y < low_shot_threshold
 	var is_elevated: bool = false # impact_y >= elevated_threshold
 	# Seconds until the puck crosses the goal line on its current heading.
 	# Only meaningful when is_shot; lets callers gate on imminence (e.g. don't
@@ -27,7 +26,6 @@ class ShotDetectionConfig:
 	var net_half_width: float = 0.0
 	var net_margin: float = 0.0
 	var reaction_delay: float = 0.0
-	var low_shot_threshold: float = 0.0
 	var elevated_threshold: float = 0.0
 	# Gravity used for ballistic impact_y prediction. Linear extrapolation
 	# (`y + vy * t`) overestimates landing height for long-range elevated
@@ -84,7 +82,6 @@ static func detect_shot_into(
 	out.reaction_delay = 0.0
 	out.impact_x = 0.0
 	out.impact_y = 0.0
-	out.is_low = false
 	out.is_elevated = false
 	out.time_to_impact = 0.0
 	var result := out
@@ -112,7 +109,6 @@ static func detect_shot_into(
 	result.impact_x = impact_x
 	result.impact_y = impact_y
 	result.time_to_impact = t_to_goal
-	result.is_low = impact_y < cfg.low_shot_threshold
 	result.is_elevated = impact_y >= cfg.elevated_threshold
 	return result
 
