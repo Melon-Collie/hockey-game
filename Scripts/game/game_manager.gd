@@ -2584,27 +2584,42 @@ static func _is_valid_game_id(s: String) -> bool:
 	return true
 
 
+# One player as the .mreplay carries them — shared by the file header's
+# initial roster and the mid-game `player_joined` event so the two descriptions
+# of a skater can't drift apart (the viewer spawns from either through the same
+# path). Callers add the field their own record needs on top ("is_local" /
+# "kind"). Static: pure PlayerRecord → Dictionary, no GameManager state.
+static func replay_roster_entry(record: PlayerRecord) -> Dictionary:
+	return {
+		"peer_id": record.peer_id,
+		"player_name": record.player_name,
+		"jersey_number": record.jersey_number,
+		"team_id": record.team.team_id if record.team != null else 0,
+		"team_slot": record.team_slot,
+		"is_left_handed": record.is_left_handed,
+		# Build (height / weight / gear) so the viewer can re-apply the
+		# player's attributes — otherwise replay skaters render at the
+		# neutral frame and their re-derived lean/reach no longer matches
+		# the host's lean-compensated blade positions (stick off the ice).
+		"build": record.attributes.to_dict() if record.attributes != null else {},
+		# Cosmetics, packed exactly as the join / spawn wire carries them, so
+		# the viewer dresses each skater in the look they actually played in
+		# rather than the stock kit.
+		"tape_code": record.tape_code,
+		"skin_tone": record.skin_tone,
+		"gear_style_code": record.gear_style_code,
+	}
+
+
 # Roster captured at game-start; mid-game joiners aren't in here but the viewer
 # can still observe them appearing in later world-state packets.
 func _build_replay_header() -> Dictionary:
 	var roster: Array[Dictionary] = []
 	if _registry != null:
 		for peer_id: int in _registry.all():
-			var r: PlayerRecord = _registry.get_record(peer_id)
-			roster.append({
-				"peer_id": peer_id,
-				"player_name": r.player_name,
-				"jersey_number": r.jersey_number,
-				"team_id": r.team.team_id if r.team != null else 0,
-				"team_slot": r.team_slot,
-				"is_left_handed": r.is_left_handed,
-				"is_local": peer_id == NetworkManager.local_peer_id(),
-				# Build (height / weight / gear) so the viewer can re-apply the
-				# player's attributes — otherwise replay skaters render at the
-				# neutral frame and their re-derived lean/reach no longer matches
-				# the host's lean-compensated blade positions (stick off the ice).
-				"build": r.attributes.to_dict() if r.attributes != null else {},
-			})
+			var entry: Dictionary = replay_roster_entry(_registry.get_record(peer_id))
+			entry["is_local"] = peer_id == NetworkManager.local_peer_id()
+			roster.append(entry)
 	return {
 		"game_id": _game_id,
 		"started_at": Time.get_unix_time_from_system(),
@@ -2727,18 +2742,9 @@ func _on_replay_player_joined_event(record: PlayerRecord) -> void:
 		return
 	var ts: float = NetworkManager.local_time() if NetworkManager.is_host \
 			else NetworkManager.estimated_host_time()
-	var payload: PackedByteArray = JSON.stringify({
-		"kind": "player_joined",
-		"peer_id": record.peer_id,
-		"player_name": record.player_name,
-		"jersey_number": record.jersey_number,
-		"team_id": record.team.team_id if record.team != null else 0,
-		"team_slot": record.team_slot,
-		"is_left_handed": record.is_left_handed,
-		# Same build carry-through as the header roster — a mid-game arrival needs
-		# its attributes re-applied so its lean/reach match too (see _build_replay_header).
-		"build": record.attributes.to_dict() if record.attributes != null else {},
-	}).to_utf8_buffer()
+	var entry: Dictionary = replay_roster_entry(record)
+	entry["kind"] = "player_joined"
+	var payload: PackedByteArray = JSON.stringify(entry).to_utf8_buffer()
 	_replay_file_writer.enqueue_event(ts, payload)
 
 
