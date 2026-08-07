@@ -25,6 +25,17 @@ class_name AIRoleRushD
 # private depth scan, which on a rush sees nobody home and disables the
 # blue-line stand for everyone.
 #
+# THE GAP IS MEASURED OFF HIS REAL POSITION, not a velocity-led one. The lead
+# (AIRoleHelpers.lead_threat) used to be applied to the carrier reference before
+# the ladder offset, which double-counts his motion now that the route carries
+# his velocity as a feed-forward (RoleDecision.target_velocity, AISteering's
+# moving-frame pursuit). The gap actually held was therefore `ladder + pace x
+# anticipation` — at a 7.7 m/s rush that is 2.67 m of doctrine plus 2.31 m of
+# lead, 86% wider than the ladder asks for, in the role the ladder was written
+# for. It went unseen because test_role_rush_d measures against the LED point on
+# purpose, calling the difference "pure artifact" — which it is for isolating the
+# ladder, and is not for the carrier, who is beaten off his real body.
+#
 # The ladder sizes the gap; it does not authorize the trip to it. A defender
 # deeper than his stand still owes the rendezvous bound before he steps up —
 # see _settable_gap.
@@ -120,8 +131,6 @@ static func _decide_d1(ctx: RoleContext) -> RoleDecision:
 		d.target_position = ctx.self_pos
 		return d
 	var carrier_vel: Vector3 = AIRoleHelpers.resolve_play_ref_velocity(ctx)
-	carrier_pos = AIRoleHelpers.lead_threat(
-			carrier_pos, carrier_vel, ctx.defensive_anticipation_scale)
 
 	var our_net: Vector3 = ctx.defending_goal_pos
 	var to_net: Vector3 = our_net - carrier_pos

@@ -68,18 +68,20 @@ func _ctx(self_pos: Vector3, skaters: Array, carrier_pid: int,
 	return ctx
 
 
-# The gap the model actually holds, measured against the carrier's VELOCITY-LED
-# point — the reference the role builds its stand off (AIRoleHelpers.lead_threat).
-# Measuring off the raw body instead folds the lead distance into every reading,
-# which at rush speeds is a couple of metres of pure artifact.
-func _led(carrier: Vector3, vel: Vector3) -> Vector3:
-	return AIRoleHelpers.lead_threat(carrier, vel, 1.0)
-
-
-func _gap(d: RoleDecision, carrier: Vector3, vel: Vector3 = Vector3.ZERO) -> float:
-	var ref: Vector3 = _led(carrier, vel)
+# The gap the model actually holds, measured against the carrier's REAL body —
+# which is the only reference the carrier can be beaten off.
+#
+# This used to measure against his velocity-LED point, on the grounds that the
+# role built its stand there and folding the lead into every reading was "a
+# couple of metres of pure artifact". That was true for isolating the ladder and
+# false for the behaviour: the lead was a real part of the gap the bot held, and
+# measuring around it is exactly why nobody noticed the held gap was 86% wider
+# than the ladder asked for. The role no longer leads the reference at all (the
+# route carries the carrier's velocity instead), so the two agree again — but the
+# reading stays on the real body so it cannot hide a lead if one comes back.
+func _gap(d: RoleDecision, carrier: Vector3, _vel: Vector3 = Vector3.ZERO) -> float:
 	return Vector2(d.target_position.x, d.target_position.z).distance_to(
-			Vector2(ref.x, ref.z))
+			Vector2(carrier.x, carrier.z))
 
 
 # ── The gap ladder: ice remaining, not pace ──────────────────────────────────
@@ -292,10 +294,8 @@ func test_stand_shades_inside_to_steer_him_wide() -> void:
 			[[10, 1, carrier, Vector3(0.0, 0.0, 7.0)]], 10,
 			AIRushRead.Numbers.DOWN_ONE)
 	var d: RoleDecision = AIRoleRushD.decide(ctx, AIRoleSlots.Slot.RUSH_D1)
-	var led: Vector3 = _led(carrier, Vector3(0.0, 0.0, 7.0))
-	var on_line_x: float = led.x + (0.0 - led.x) \
-			* (_gap(d, carrier, Vector3(0.0, 0.0, 7.0))
-					/ led.distance_to(Vector3(0, 0, OUR_NET_Z)))
+	var on_line_x: float = carrier.x + (0.0 - carrier.x) \
+			* (_gap(d, carrier) / carrier.distance_to(Vector3(0, 0, OUR_NET_Z)))
 	assert_lt(d.target_position.x, on_line_x,
 			"the stand shades to the inside of the retreat line")
 

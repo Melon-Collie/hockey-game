@@ -241,9 +241,9 @@ func test_a_tracker_already_goal_side_holds_a_gap_instead_of_running_the_hip() -
 	var ctx: RoleContext = _ctx(Vector3(0.0, 0.0, 20.0),
 			[[10, 1, carrier, Vector3(0.0, 0.0, 7.0)]], 10)
 	var d: RoleDecision = AIRoleTrack.decide(ctx, AIRoleSlots.Slot.TRACK_PUCK)
-	var led: Vector3 = AIRoleHelpers.lead_threat(
-			carrier, Vector3(0.0, 0.0, 7.0), 1.0)
-	var gap: float = d.target_position.distance_to(led)
+	# Measured off his REAL body — the role no longer leads the reference, because
+	# the route carries his velocity instead (see the HIP_GOAL_SIDE_M note).
+	var gap: float = d.target_position.distance_to(carrier)
 	assert_gt(gap, AIRoleTrack.HIP_GOAL_SIDE_M * 2.0,
 			"a tracker in front of the play still ran at the hip; gap %.2f m" % gap)
 	assert_false(d.sprint_override,
@@ -257,9 +257,7 @@ func test_a_tracker_behind_the_play_still_runs_the_hip_down() -> void:
 	var ctx: RoleContext = _ctx(Vector3(0.0, 0.0, -6.0),
 			[[10, 1, carrier, Vector3(0.0, 0.0, 7.0)]], 10)
 	var d: RoleDecision = AIRoleTrack.decide(ctx, AIRoleSlots.Slot.TRACK_PUCK)
-	var led: Vector3 = AIRoleHelpers.lead_threat(
-			carrier, Vector3(0.0, 0.0, 7.0), 1.0)
-	assert_almost_eq(d.target_position.distance_to(led),
+	assert_almost_eq(d.target_position.distance_to(carrier),
 			AIRoleTrack.HIP_GOAL_SIDE_M, 0.1,
 			"the backchecker's target is still the hip")
 	assert_true(d.sprint_override, "and he is still sprinting to catch him")

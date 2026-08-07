@@ -41,6 +41,13 @@ const CIRCLE_TOP_INSET_M: float = 0.5
 # TRACK_PUCK's target on the carrier: his hip, not his body centre. Offset to
 # the defensive side of him so the tracker arrives goal-side and takes the puck,
 # rather than riding alongside and pushing him toward the net.
+#
+# Measured off his REAL position, not a velocity-led one. The lead used to be
+# applied here as well, which double-counted his motion: the route already
+# carries his velocity as a feed-forward (RoleDecision.target_velocity), so the
+# hip sat `pace x anticipation` further goal-side than the offset asked for and
+# the tracker never actually closed to it. Same defect, same fix, as the gap in
+# AIRoleRushD — see its header.
 const HIP_GOAL_SIDE_M: float = 0.8
 
 # A tracker may commit a check only once he is genuinely goal-side of the
@@ -79,22 +86,20 @@ static func _decide_puck(ctx: RoleContext) -> RoleDecision:
 		d.target_position = ctx.self_pos
 		return d
 	var carrier_vel: Vector3 = AIRoleHelpers.resolve_play_ref_velocity(ctx)
-	var lead: Vector3 = AIRoleHelpers.lead_threat(
-			carrier_pos, carrier_vel, ctx.defensive_anticipation_scale)
 
 	var our_net: Vector3 = ctx.defending_goal_pos
-	var to_net: Vector3 = our_net - lead
+	var to_net: Vector3 = our_net - carrier_pos
 	var dist: float = sqrt(to_net.x * to_net.x + to_net.z * to_net.z)
-	var hip: Vector3 = lead
+	var hip: Vector3 = carrier_pos
 	var inside: bool = _is_inside(ctx, read)
 	if dist > 0.001:
 		# The hip, goal-side: arrive between him and the net, not beside him.
 		var dir_net := Vector3(to_net.x / dist, 0.0, to_net.z / dist)
-		hip = lead + dir_net * _hip_gap(ctx, lead, dir_net, carrier_vel, dist)
+		hip = carrier_pos + dir_net * _hip_gap(ctx, carrier_pos, dir_net, carrier_vel, dist)
 
 	# Caught him: finish the check if it is a real, separating one. Gated on
 	# already being goal-side — see CHECK_GOAL_SIDE_MARGIN_M.
-	if _is_goal_side_of(ctx, lead, CHECK_GOAL_SIDE_MARGIN_M):
+	if _is_goal_side_of(ctx, carrier_pos, CHECK_GOAL_SIDE_MARGIN_M):
 		var check: AIBodyCheck.Result = AIRoleHelpers.evaluate_body_check(ctx)
 		if check.commit:
 			d.commit_check = true
@@ -121,7 +126,7 @@ static func _decide_puck(ctx: RoleContext) -> RoleDecision:
 	# live the moment he's in reach, rather than the ready stance pointing at
 	# open ice.
 	if read.mode != AIRushRead.Mode.NONE:
-		d.aim_world_pos = lead
+		d.aim_world_pos = carrier_pos
 		d.has_aim_override = true
 	return d
 
