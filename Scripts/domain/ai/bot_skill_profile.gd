@@ -133,9 +133,14 @@ var pass_speed_scale: float
 # AIRoleHelpers.evaluate_body_check.
 var check_aggression: float
 
-# PACE: multiplier on DEFENSIVE_ANTICIPATION_S, how far the backline leads a
-# moving man. Lower = defenders react to where you ARE, not where you're going.
-# Consumed in AIRoleHelpers.lead_threat via the cover roles.
+# PACE: multiplier on DEFENSIVE_ANTICIPATION_S, how far ahead a defender READS
+# the other attackers when pricing what the carrier can do with them — PRESSURE's
+# and FORECHECK's pass-lane set, the unassigned marker's recovery. Lower = the
+# bot scores the threats where they ARE, not where they're going.
+#
+# It no longer moves any defender's STAND. A cover point and a gap stand ride
+# their man (AIRoleHelpers.cover_threat), so leading the anchor as well would
+# double-count his motion; the on-puck space concession is pursuit_standoff_m.
 var defensive_anticipation_scale: float
 
 # COGNITION: exploit a MOVING goalie — aiming back across the grain of a slide

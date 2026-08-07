@@ -176,8 +176,9 @@ var pass_speed_scale: float = 1.0
 # How hard the on-puck pressurer hunts body checks. 1.0 = today; 0.0 = never
 # commits a check (pure containment). Consumed in evaluate_body_check.
 var check_aggression: float = 1.0
-# Multiplier on DEFENSIVE_ANTICIPATION_S — how much the backline leads a moving
-# man. 1.0 = today; lower = defenders sit a step behind (more space). lead_threat.
+# Multiplier on DEFENSIVE_ANTICIPATION_S — how far ahead a defender reads the
+# other attackers when pricing the carrier's options (lead_threat, via the
+# anticipating collect_opponents callers). 1.0 = today. Never moves a stand.
 var defensive_anticipation_scale: float = 1.0
 # SETTLE DOUBT: fraction by which a freshly-possessed carrier handicaps its own
 # read of every ACTIVE option (shoot / pass / dump) against that option's

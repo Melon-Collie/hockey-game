@@ -190,16 +190,9 @@ static func _decide_mid(ctx: RoleContext, side: float) -> RoleDecision:
 	# HOME: pick up the most dangerous man who has entered my lane, goal-side in
 	# the feed lane — the same cover geometry the zone soft-lock uses. No man in
 	# my ice means hold the post; never chase out of the structure.
-	var man_pid: int = _man_in_my_lane_peer(ctx, read, side)
-	var man_lead: Vector3 = _man_in_my_lane(ctx, read, side)
-	if man_lead.is_finite():
-		var play_ref: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
-		if play_ref.is_finite():
-			d.target_position = AIRoleHelpers.cover_man_target(
-					ctx, man_lead, play_ref)
-			# The cover point rides the man in my lane, not the puck.
-			d.target_velocity = AIRoleHelpers.man_ride_velocity(ctx, man_pid)
-			return d
+	if AIRoleHelpers.cover_threat(ctx, d, _man_in_my_lane_peer(ctx, read, side),
+			AIRoleHelpers.resolve_defensive_play_ref(ctx)):
+		return d
 	d.target_position = _post(ctx, read, side)
 	return d
 
@@ -243,14 +236,8 @@ static func _post_depth() -> float:
 	return AIZoneCoverage.HOUSE_TOP_DEPTH_M - CIRCLE_TOP_INSET_M
 
 
-static func _man_in_my_lane(ctx: RoleContext, read: AIRushRead,
-		side: float) -> Vector3:
-	var i: int = _man_in_my_lane_index(ctx, read, side)
-	return read.attacker_leads[i] if i != -1 else Vector3.INF
-
-
-# That man's peer id — the cover point rides HIS velocity, so both reads have to
-# name the same body.
+# The man this tracker owns, as a peer id — cover_threat resolves his position
+# and velocity from the one snapshot entry. -1 when nobody is in my ice.
 static func _man_in_my_lane_peer(ctx: RoleContext, read: AIRushRead,
 		side: float) -> int:
 	var i: int = _man_in_my_lane_index(ctx, read, side)

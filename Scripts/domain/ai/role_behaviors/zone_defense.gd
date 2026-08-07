@@ -9,10 +9,10 @@ class_name AIRoleZoneDefense
 #      I'm the one defender on the carrier: full AIRolePressure behavior
 #      (goal-side cutoff, body-check commit, loose-puck safety).
 #   2. SOFT-LOCK — else cover the most dangerous man inside my area
-#      (finish-danger read), goal-side in the carrier→man feed lane
-#      (cover_man_target), velocity-led. The lock releases when the man
-#      leaves the area (+ release margin) — never chase him out of the
-#      structure; the neighbor whose ice he enters picks him up.
+#      (finish-danger read) with the shared cover stand
+#      (AIRoleHelpers.cover_threat). The lock releases when the man leaves
+#      the area (+ release margin) — never chase him out of the structure;
+#      the neighbor whose ice he enters picks him up.
 #   3. BREATHE — else hold the area's rest anchor, which slides with the
 #      puck (collapse toward the house when it goes low, extend toward the
 #      points when it goes high).
@@ -46,19 +46,13 @@ static func decide(ctx: RoleContext, role_slot: int) -> RoleDecision:
 			role_slot, strong_x, own_goal_z, ctx.snapshot, ctx.team_id,
 			ctx.team_id_by_peer, our_goalie_pos, carrier_pid,
 			ctx.prev_locked_man)
-	if man_pid != -1 and ctx.snapshot.skater_states.has(man_pid):
-		var play_ref: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
-		if play_ref.is_finite():
-			var man: SkaterNetworkState = ctx.snapshot.skater_states[man_pid]
-			var man_pos: Vector3 = AIRoleHelpers.lead_threat(
-					man.position, man.velocity, ctx.defensive_anticipation_scale)
-			var d := RoleDecision.new()
-			d.target_position = AIRoleHelpers.cover_man_target(ctx, man_pos, play_ref)
-			d.locked_man_pid = man_pid
-			return d
+	var d := RoleDecision.new()
+	if AIRoleHelpers.cover_threat(ctx, d, man_pid,
+			AIRoleHelpers.resolve_defensive_play_ref(ctx)):
+		d.locked_man_pid = man_pid
+		return d
 
 	# 3. Breathe on the rest anchor.
-	var d2 := RoleDecision.new()
-	d2.target_position = AIZoneCoverage.anchor_of(
+	d.target_position = AIZoneCoverage.anchor_of(
 			role_slot, strong_x, own_goal_z, puck_pos)
-	return d2
+	return d

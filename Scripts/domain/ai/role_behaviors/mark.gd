@@ -45,23 +45,9 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# (deny the carrier's feed to him). Needs a live carrier (the feed source);
 	# resolve_defensive_play_ref returns INF when there's no puck, dropping us
 	# to the recovery fallback below.
-	var man_pid: int = ctx.assigned_threat_peer
-	if man_pid != -1 and ctx.snapshot != null \
-			and ctx.snapshot.skater_states.has(man_pid):
-		var carrier_pos: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
-		if carrier_pos.is_finite():
-			# Anticipate: cover where the man is cutting, not his current spot.
-			var man: SkaterNetworkState = ctx.snapshot.skater_states[man_pid]
-			var man_pos: Vector3 = AIRoleHelpers.lead_threat(
-					man.position, man.velocity, ctx.defensive_anticipation_scale)
-			d.target_position = AIRoleHelpers.cover_man_target(ctx, man_pos, carrier_pos)
-			# The cover point RIDES him — see AISteering's moving-frame pursuit.
-			# Marking is a station-keeping job in his frame, not in the rink's: a
-			# marker who flies the route as a trip to a spot arrives stopped and
-			# is beaten by the first cut, which is the same defect the rush gap
-			# had.
-			d.target_velocity = man.velocity
-			return d
+	if AIRoleHelpers.cover_threat(ctx, d, ctx.assigned_threat_peer,
+			AIRoleHelpers.resolve_defensive_play_ref(ctx)):
+		return d
 
 	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states

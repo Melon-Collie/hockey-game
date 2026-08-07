@@ -90,6 +90,33 @@ func test_soft_lock_covers_the_backdoor_man() -> void:
 			"the cover sits on the man")
 
 
+func test_the_soft_lock_rides_the_man_it_covers() -> void:
+	# The lock is a cover stand like every other, so it is flown in the man's
+	# frame — a marker who treats it as a trip to a spot arrives stopped and is
+	# beaten by the first cut. This was the one cover site in the game that
+	# published no ride velocity, which in 5v5 is the most common defensive
+	# stand there is.
+	var cut := Vector3(4.0, 0.0, -3.0)
+	var ctx: RoleContext = _make_ctx(_pt(-1.0, 2.0), [
+			[10, 1, _pt(9.0, 3.0)],
+			[11, 1, _pt(-1.5, 2.5), cut],
+	], 10)
+	var d: RoleDecision = AIRoleZoneDefense.decide(ctx, AIRoleSlots.Slot.ZONE_D_WEAK)
+	assert_eq(d.locked_man_pid, 11, "still the box man")
+	assert_eq(d.target_velocity, cut, "the lock rides him at his own pace")
+
+
+func test_the_breathing_anchor_does_not_ride_anybody() -> void:
+	# The other half of the same contract: a rest anchor is a spot on the ice,
+	# and a stand that rides with no man in it does not hold — it matches a
+	# velocity forever (see AISteering.is_rideable_anchor).
+	var ctx: RoleContext = _make_ctx(_pt(-1.0, 2.0),
+			[[10, 1, _pt(9.0, 3.0)]], 10)
+	var d: RoleDecision = AIRoleZoneDefense.decide(ctx, AIRoleSlots.Slot.ZONE_D_WEAK)
+	assert_eq(d.locked_man_pid, -1, "nobody in the area to lock")
+	assert_eq(d.target_velocity, Vector3.ZERO, "the rest anchor is parked")
+
+
 func test_winger_extends_to_the_point_when_the_puck_goes_high() -> void:
 	# Carrier walks to the strong point: the strong winger's area owns that
 	# ice and he steps up at the shot lane.

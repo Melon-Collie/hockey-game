@@ -113,6 +113,26 @@ time in shape, and whether a defence pair gets blown by) and
 measure the BODY over multi-second rushes, which is the only honest home for a
 claim about a route — a single dispatch cannot see one.
 
+## Covering a man is one behavior, and the role only chooses WHO
+
+`AIRoleHelpers.cover_threat` is the whole of it: take the ice between him and
+our net, from inside the lane the puck would be fed to him through, riding him.
+Every off-puck defensive role in the game calls it and differs *only* in which
+man it names — MARK from the threat partition, the 5v5 zone soft-lock from
+whoever is most dangerous in its area, TRACK_MID from whoever entered its lane,
+RUSH_D2 from whoever is driving the middle. **Man defense and zone defense are
+the same behavior under different assigners**, so a new coverage scheme is a new
+answer to "who is mine", never new positioning code.
+
+The seam is also what makes the frame rule above enforceable rather than
+aspirational. When the four sites were four copies, each drifted its own way:
+three led their man *and* rode him (the double-count the ladder was fixed for,
+and it covers from further off the faster he skates), the fourth — the 5v5 in-zone
+soft-lock, which is the most common defensive stand in a 5v5 game — rode nothing
+at all and flew every pickup as a trip to a parked spot. Position and velocity now
+come from one snapshot entry, so a stand cannot ride a body its geometry isn't
+built on.
+
 ## The gap ladder is one ladder, and both puck-owners read it
 
 `AIRoleRushD` (the rush gap) and `AIRolePressure` (the in-zone puck pressurer)

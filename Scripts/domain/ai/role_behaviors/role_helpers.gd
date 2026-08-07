@@ -311,6 +311,42 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 	return best_pos
 
 
+# THE stand for a defender who has been given somebody to cover — and the only
+# one. Every off-puck defensive role in the game does this one job and differs
+# only in WHO hands it the man: MARK gets him from the threat partition, the
+# zone soft-lock from whoever is most dangerous in its area, TRACK_MID from
+# whoever entered its lane, RUSH_D2 from whoever is driving the middle. Man
+# defense and zone defense are the same behavior under different assigners.
+#
+# Returns false when there is no man to cover, or no play to cover him from,
+# which is the caller's cue to fall back to its own post. A cover stand with
+# nobody in it is not a stand — see the ride-velocity note below.
+#
+# The man's POSITION and his VELOCITY are read from one snapshot entry, so the
+# point and the frame it rides cannot name different bodies. Three of the four
+# call sites sourced them separately and each carried a comment worrying about
+# exactly that; the worry is now structural.
+#
+# NO ANTICIPATION LEAD. The stand rides him (RoleDecision.target_velocity), so
+# the route already carries his motion as a feed-forward, and aiming the anchor
+# downrange as well double-counts it — the same defect the gap ladder and the
+# backchecker's hip were fixed for, surviving in the four roles nobody revisited.
+# Leading and riding together inflate the frame-relative gap by pace x lookahead:
+# a defender covering from up to DEFENSIVE_ANTICIPATION_MAX_M further off his man
+# the faster that man skates, which is backwards.
+static func cover_threat(ctx: RoleContext, d: RoleDecision, man_pid: int,
+		play_ref: Vector3) -> bool:
+	if man_pid == -1 or ctx.snapshot == null \
+			or not ctx.snapshot.skater_states.has(man_pid):
+		return false
+	if not play_ref.is_finite():
+		return false
+	var man: SkaterNetworkState = ctx.snapshot.skater_states[man_pid]
+	d.target_position = cover_man_target(ctx, man.position, play_ref)
+	d.target_velocity = man.velocity
+	return true
+
+
 # ── Carrier-best-option (inverse scoring) ────────────────────────────────────
 
 # Computes the opposing carrier's best option — shoot at our net, or pass to
@@ -713,16 +749,6 @@ static func stand_ride_velocity(ctx: RoleContext) -> Vector3:
 	if not ctx.snapshot.skater_states.has(pid):
 		return Vector3.ZERO
 	return ctx.snapshot.skater_states[pid].velocity
-
-
-# The velocity of a stand riding a NAMED opponent (a marker's man, D2's mid-lane
-# drive) rather than the carrier. Same contract as stand_ride_velocity; ZERO when
-# the peer is unknown.
-static func man_ride_velocity(ctx: RoleContext, man_pid: int) -> Vector3:
-	if man_pid == -1 or ctx.snapshot == null \
-			or not ctx.snapshot.skater_states.has(man_pid):
-		return Vector3.ZERO
-	return ctx.snapshot.skater_states[man_pid].velocity
 
 
 # Fills `out` with positions of opp peers other than the puck carrier — i.e.,

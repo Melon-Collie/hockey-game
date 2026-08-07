@@ -363,18 +363,11 @@ static func _decide_d2(ctx: RoleContext) -> RoleDecision:
 
 	# The mid-lane drive man: the attacker closest to the middle of the ice who
 	# isn't the carrier. He is the one D2 exists to take.
-	var man_pid: int = _mid_lane_man_peer(read)
-	var man_lead: Vector3 = _mid_lane_man(read)
-	if man_lead.is_finite():
-		var play_ref: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
-		if play_ref.is_finite():
-			d.target_position = _clamp_to_house(
-					ctx, AIRoleHelpers.cover_man_target(ctx, man_lead, play_ref))
-			# A cover point rides the man it covers — same frame argument as D1's
-			# gap stand.
-			d.target_velocity = AIRoleHelpers.man_ride_velocity(ctx, man_pid)
-			d.arrive_at_speed = true
-			return d
+	if AIRoleHelpers.cover_threat(ctx, d, _mid_lane_man_peer(read),
+			AIRoleHelpers.resolve_defensive_play_ref(ctx)):
+		d.target_position = _clamp_to_house(ctx, d.target_position)
+		d.arrive_at_speed = true
+		return d
 
 	# Nobody driving the middle: hold the mid-ice post behind RUSH_D1, shaded
 	# weak side. Depth is paced off the rush so he stays a layer, not a chaser.
@@ -388,16 +381,9 @@ static func _decide_d2(ctx: RoleContext) -> RoleDecision:
 
 
 # The attacker (excluding the carrier) driving the MIDDLE — the most central one
-# inside the mid-lane band, as his velocity-led point. Vector3.INF when nobody is
-# in the middle, which is D2's cue to hold his post rather than chase a wide man
-# (see D2_MID_LANE_HALF_WIDTH_M).
-static func _mid_lane_man(read: AIRushRead) -> Vector3:
-	var i: int = _mid_lane_man_index(read)
-	return read.attacker_leads[i] if i != -1 else Vector3.INF
-
-
-# That man's peer id — the cover point rides HIS velocity, so the two reads have
-# to name the same body.
+# inside the mid-lane band, as a peer id. -1 when nobody is in the middle, which
+# is D2's cue to hold his post rather than chase a wide man (see
+# D2_MID_LANE_HALF_WIDTH_M).
 static func _mid_lane_man_peer(read: AIRushRead) -> int:
 	var i: int = _mid_lane_man_index(read)
 	return read.attackers[i] if i != -1 else -1
