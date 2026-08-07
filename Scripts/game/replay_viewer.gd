@@ -46,6 +46,12 @@ var _num_periods: int = GameRules.NUM_PERIODS
 # events stream up through the new clock, but we have to re-spawn the
 # initial roster ourselves first.
 var _header_roster: Array = []
+# Peer that recorded the file (header `recorded_by_peer_id`) and their skater
+# once it spawns. This is "you" in the replay: the camera director opens its
+# chase / POV modes on them. 0 for a legacy header without the field, which
+# matches no peer, so the director keeps its own default.
+var _recording_peer_id: int = 0
+var _recording_skater: Skater = null
 
 
 func _ready() -> void:
@@ -146,6 +152,7 @@ func _spawn_actors_from_header(header: Dictionary) -> void:
 	goalie_result.top_goalie.apply_jersey_info(GameManager.GOALIE_NAMES[1], GameManager.GOALIE_NUMBERS[1])
 	_apply_crowd_colors()
 
+	_recording_peer_id = _entry_int(header, "recorded_by_peer_id", 0)
 	_header_roster = header.get("roster", []) as Array
 	for entry: Variant in _header_roster:
 		_spawn_skater_from_roster(entry as Dictionary)
@@ -217,6 +224,13 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 	record.text_outline_color = team_colors.text_outline
 	_records[record.peer_id] = record
 
+	# "You" in this replay. Also re-points the director after a backward seek,
+	# which frees and respawns the whole roster.
+	if peer_id == _recording_peer_id:
+		_recording_skater = skater
+		if _camera_director != null:
+			_camera_director.set_preferred_target(skater)
+
 
 # The look a roster entry describes, as { tape, gear, skin } — a StickTapeConfig,
 # a GearStyleConfig, and a SkinToneRegistry index. Both the header roster and the
@@ -282,6 +296,12 @@ func _mount_camera() -> void:
 				if record != null and record.skater != null and is_instance_valid(record.skater):
 					out.append(record.skater)
 			return out)
+	# The header roster spawned before this node existed, so hand the recording
+	# peer's skater over now (mid-game arrivals set it as they spawn). Chase and
+	# POV then open on you, wherever you sit in the roster order. The opening
+	# shot stays BROADCAST — a replay wants its establishing wide.
+	if _recording_skater != null:
+		_camera_director.set_preferred_target(_recording_skater)
 	_camera_director.activate_initial()
 
 
@@ -367,6 +387,8 @@ func _despawn_skater(peer_id: int) -> void:
 	if record.controller != null:
 		record.controller.queue_free()
 	_records.erase(peer_id)
+	if peer_id == _recording_peer_id:
+		_recording_skater = null
 
 
 # Backward seek: tear down every actor, respawn the header roster, replay

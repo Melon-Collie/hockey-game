@@ -30,6 +30,12 @@ var _chase_index: int = 0
 # a skater-tracking mode and on cycle_chase_target. Shared by CHASE and POV so
 # switching between them keeps the same tracked skater.
 var _cached_targets: Array[Skater] = []
+# Who the tracking modes open on (set_preferred_target). Consulted only when
+# there is no tracked skater to preserve — first entry into CHASE / POV, or
+# after the tracked one leaves the ice — so the user's own cycling always wins.
+# Null (the default, and what live spectator mode leaves it at) keeps the
+# original behavior: whoever the roster getter yields first.
+var _preferred_target: Skater = null
 
 
 func setup(puck_getter: Callable, skaters_getter: Callable) -> void:
@@ -40,10 +46,10 @@ func setup(puck_getter: Callable, skaters_getter: Callable) -> void:
 	add_child(_broadcast)
 	_broadcast.setup(puck_getter)
 
-	var target_getter: Callable = func() -> Skater:
-		if _cached_targets.is_empty():
-			return null
-		return _cached_targets[clampi(_chase_index, 0, _cached_targets.size() - 1)]
+	# The cameras read the tracked skater through the same accessor the director
+	# does, so a target freed under them (replay seek) reads null rather than a
+	# dangling reference.
+	var target_getter: Callable = current_target
 
 	_chase = ChaseCamera.new()
 	add_child(_chase)
@@ -55,6 +61,21 @@ func setup(puck_getter: Callable, skaters_getter: Callable) -> void:
 
 	_free = FreeCamera.new()
 	add_child(_free)
+
+
+# Names the skater CHASE / POV should open on — the replay viewer points this
+# at the peer that recorded the file, so "watch my own POV" is one key press
+# rather than a hunt through the cycle list. Safe to call before or after the
+# cameras exist, and safe to re-point at a respawned actor.
+func set_preferred_target(skater: Skater) -> void:
+	_preferred_target = skater
+	# Adopt it now if nothing is being tracked yet, so a call that lands after
+	# the first _refresh_targets (a mid-game arrival, a post-seek respawn) still
+	# takes effect.
+	if current_target() == null:
+		_refresh_targets()
+		if _mode == Mode.CHASE or _mode == Mode.POV:
+			mode_changed.emit(get_mode_label())
 
 
 func activate_initial() -> void:
@@ -174,33 +195,37 @@ func _current_transform() -> Transform3D:
 	return Transform3D.IDENTITY
 
 
-func _current_chase_skater() -> Skater:
+# Null when nothing is tracked OR the tracked actor has been freed (a replay
+# seek tears the whole roster down and respawns it), so callers can test for a
+# live target with one comparison.
+func current_target() -> Skater:
 	if _cached_targets.is_empty():
 		return null
-	return _cached_targets[clampi(_chase_index, 0, _cached_targets.size() - 1)]
+	var tracked: Skater = _cached_targets[clampi(_chase_index, 0, _cached_targets.size() - 1)]
+	return tracked if is_instance_valid(tracked) else null
 
 
 # Re-queries the skaters getter and rebuilds the cycle list, dropping freed
 # or null entries. Preserves the currently-targeted skater's index if it's
-# still present so cycle direction stays consistent across roster changes.
+# still present so cycle direction stays consistent across roster changes;
+# falls back to the preferred target when there is nothing to preserve.
 func _refresh_targets() -> Array[Skater]:
 	if not _skaters_getter.is_valid():
 		_cached_targets = []
 		return _cached_targets
 	var raw: Variant = _skaters_getter.call()
-	var prev: Skater = _current_chase_skater()
+	var prev: Skater = current_target()
 	var fresh: Array[Skater] = []
 	if raw is Array:
 		for entry: Variant in raw:
 			if entry is Skater and is_instance_valid(entry):
 				fresh.append(entry as Skater)
 	_cached_targets = fresh
-	if prev != null and is_instance_valid(prev):
-		var idx: int = _cached_targets.find(prev)
-		if idx >= 0:
-			_chase_index = idx
-		else:
-			_chase_index = clampi(_chase_index, 0, max(0, _cached_targets.size() - 1))
+	var idx: int = _cached_targets.find(prev) if prev != null else -1
+	if idx < 0 and is_instance_valid(_preferred_target):
+		idx = _cached_targets.find(_preferred_target)
+	if idx >= 0:
+		_chase_index = idx
 	else:
 		_chase_index = clampi(_chase_index, 0, max(0, _cached_targets.size() - 1))
 	return _cached_targets
