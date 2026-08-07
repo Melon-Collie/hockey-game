@@ -691,6 +691,40 @@ static func resolve_play_ref_velocity(ctx: RoleContext) -> Vector3:
 	return ctx.snapshot.puck_state.velocity
 
 
+# The velocity a defensive stand built off the play reference is ITSELF moving at
+# — what a role publishes as RoleDecision.target_velocity so the steering flies
+# the route in the stand's frame (AISteering, "moving-frame pursuit").
+#
+# A stand riding a live opposing CARRIER moves at his pace, and that is a frame a
+# defender can hold station in: the whole job is travelling with him. A stand
+# built off a LOOSE PUCK is not — a puck is decelerating, unowned, and nobody
+# "gaps up" on one; the answer there is the ordinary chase/contain, which the
+# point seek already expresses. So this returns ZERO for anything but a live
+# opposing carrier, and every consumer degrades to today's routing exactly when
+# there is no man to ride.
+static func stand_ride_velocity(ctx: RoleContext) -> Vector3:
+	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
+		return Vector3.ZERO
+	var pid: int = ctx.snapshot.puck_state.carrier_peer_id
+	if pid == -1 or pid == ctx.peer_id:
+		return Vector3.ZERO
+	if ctx.team_id_by_peer.get(pid, -1) == ctx.team_id:
+		return Vector3.ZERO   # our own carrier — not a man anyone is defending
+	if not ctx.snapshot.skater_states.has(pid):
+		return Vector3.ZERO
+	return ctx.snapshot.skater_states[pid].velocity
+
+
+# The velocity of a stand riding a NAMED opponent (a marker's man, D2's mid-lane
+# drive) rather than the carrier. Same contract as stand_ride_velocity; ZERO when
+# the peer is unknown.
+static func man_ride_velocity(ctx: RoleContext, man_pid: int) -> Vector3:
+	if man_pid == -1 or ctx.snapshot == null \
+			or not ctx.snapshot.skater_states.has(man_pid):
+		return Vector3.ZERO
+	return ctx.snapshot.skater_states[man_pid].velocity
+
+
 # Fills `out` with positions of opp peers other than the puck carrier — i.e.,
 # the carrier's potential pass receivers. Defensive roles use this to score
 # "carrier's best pass" when evaluating how much a candidate defender position

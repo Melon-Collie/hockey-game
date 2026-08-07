@@ -101,8 +101,14 @@ static func _decide_puck(ctx: RoleContext) -> RoleDecision:
 			return d
 
 	d.target_position = hip
+	# The hip rides him, so the route is flown in his frame (AISteering,
+	# "moving-frame pursuit"): a backchecker's target velocity IS the carrier's,
+	# and closing the last metres is a relative problem, not a trip to a spot.
+	d.target_velocity = AIRoleHelpers.stand_ride_velocity(ctx)
 	# Track at full pace and don't brake at the target: the carrier is moving,
-	# and a backchecker who eases up at his hip has not caught him.
+	# and a backchecker who eases up at his hip has not caught him. (Riding a man,
+	# the closing profile already expresses that — it spends the closing speed and
+	# leaves him matched; the flag still covers the loose-puck fallback.)
 	d.sprint_override = true
 	d.arrive_at_speed = true
 	# Stick on the puck: aim at the carrier's blade side so the poke/lift is
@@ -139,12 +145,15 @@ static func _decide_mid(ctx: RoleContext, side: float) -> RoleDecision:
 	# HOME: pick up the most dangerous man who has entered my lane, goal-side in
 	# the feed lane — the same cover geometry the zone soft-lock uses. No man in
 	# my ice means hold the post; never chase out of the structure.
+	var man_pid: int = _man_in_my_lane_peer(ctx, read, side)
 	var man_lead: Vector3 = _man_in_my_lane(ctx, read, side)
 	if man_lead.is_finite():
 		var play_ref: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
 		if play_ref.is_finite():
 			d.target_position = AIRoleHelpers.cover_man_target(
 					ctx, man_lead, play_ref)
+			# The cover point rides the man in my lane, not the puck.
+			d.target_velocity = AIRoleHelpers.man_ride_velocity(ctx, man_pid)
 			return d
 	d.target_position = _post(ctx, read, side)
 	return d
@@ -167,7 +176,21 @@ static func _post(ctx: RoleContext, read: AIRushRead, side: float) -> Vector3:
 # it, and the deepest man in it is the one who gets covered.
 static func _man_in_my_lane(ctx: RoleContext, read: AIRushRead,
 		side: float) -> Vector3:
-	var best: Vector3 = Vector3.INF
+	var i: int = _man_in_my_lane_index(ctx, read, side)
+	return read.attacker_leads[i] if i != -1 else Vector3.INF
+
+
+# That man's peer id — the cover point rides HIS velocity, so both reads have to
+# name the same body.
+static func _man_in_my_lane_peer(ctx: RoleContext, read: AIRushRead,
+		side: float) -> int:
+	var i: int = _man_in_my_lane_index(ctx, read, side)
+	return read.attackers[i] if i != -1 else -1
+
+
+static func _man_in_my_lane_index(ctx: RoleContext, read: AIRushRead,
+		side: float) -> int:
+	var best: int = -1
 	var best_depth: float = INF
 	var our_net: Vector3 = ctx.defending_goal_pos
 	for i: int in read.attackers.size():
@@ -182,7 +205,7 @@ static func _man_in_my_lane(ctx: RoleContext, read: AIRushRead,
 		var depth: float = lead.distance_to(our_net)
 		if depth < best_depth:
 			best_depth = depth
-			best = lead
+			best = i
 	return best
 
 

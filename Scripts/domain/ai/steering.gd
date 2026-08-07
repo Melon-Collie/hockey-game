@@ -135,6 +135,47 @@ const ANCHOR_DEADBAND: float = 0.5
 # approaches unchanged). The result is renormalised to unit weight, blending with
 # the repels like the seek term it replaces.
 
+# ── Moving-frame pursuit (a stand that rides a man) ──────────────────────────
+# Both seeks above steer at where the anchor IS. That is correct for a station —
+# a spot on the ice does not go anywhere — and wrong for every defensive stand,
+# because a gap point, a cover point and a backchecker's hip all RIDE an opponent
+# and sweep toward our net at his pace. Flown as a parked point, the trip has one
+# shape regardless of distance: sprint at the spot, arrival-brake to a STOP on it,
+# and be standing still when the man arrives. Measured on the real stack, a
+# defender who began the rush 20 m from his stand met the carrier at 10.8 m/s of
+# RELATIVE speed (head-on, already beaten); one who began 2 m away — no trip to
+# make — met him at 1.3 m/s, travelling with him, inside position established.
+# Same role, same ladder, same stand: the difference was entirely the route.
+#
+# It also made the step-up bound's own arithmetic unreachable.
+# AIRoleHelpers.settable_stand_depth reserves depth for a PIVOT ("being merely
+# stopped when the carrier arrives is not gap control"), but the field's only
+# actuator at the anchor is a brake to zero, so the pivot it paid for could never
+# be performed.
+#
+# When `anchor_velocity` is supplied the anchor term becomes a VELOCITY the bot
+# tracks rather than a point it visits:
+#
+#     desired = anchor_velocity + toward_anchor * closing(dist)
+#
+# and the thrust is whatever corrects our velocity onto it. The closing profile is
+# the arrival brake's own stopping law read as a speed rather than a trigger — the
+# fastest we can still be CLOSING at and still be matched to the frame on arrival,
+# counting the ice the frame eats from its own side — so it is built from physical
+# measurements (the brake's decel, the frame's approach) and not from a gain. It
+# is the same arithmetic the retired stand-placement bound used
+# (AIRoleHelpers.approach_speed_cap), applied continuously to the ROUTE instead of
+# once per dispatch to where the stand is put. The shape falls out at both ends:
+# far out the closing term dominates
+# and the heading is straight pursuit; as the gap closes the heading rotates onto
+# the anchor's own velocity, so the defender turns and runs WITH the play; at the
+# stand the desired velocity IS the man's and the relative speed is zero — which
+# is what "gapped up and in shape" means, and what no point-seek can express.
+#
+# Only roles that opt in pass it (Vector3.ZERO — the default — takes the seeks
+# above unchanged), so stations, carry waypoints and puck chases are untouched.
+const MOVING_FRAME_MIN_SPEED: float = 0.05
+
 # Brake-pivot thresholds. When the bot wants to head one direction but is
 # carrying meaningful speed in roughly the opposite direction (angle
 # between velocity and desired direction exceeds BRAKE_PIVOT_ANGLE_DEG),
@@ -220,16 +261,32 @@ static func compute_move_vector(
 		opponent_velocities: Array[Vector3] = [],
 		teammate_velocities: Array[Vector3] = [],
 		self_velocity: Vector3 = Vector3.ZERO,
-		velocity_match_speed: float = 0.0) -> Vector2:
+		velocity_match_speed: float = 0.0,
+		anchor_velocity: Vector3 = Vector3.ZERO) -> Vector2:
 	var force_x: float = 0.0
 	var force_z: float = 0.0
 
-	# Attract to anchor. Plain SEEK (unit direction) by default; velocity-matched
-	# seek when velocity_match_speed is supplied (see the block above). Deadband
-	# near the anchor lets friction settle the bot either way.
+	# Attract to anchor. Three seams, most specific first: MOVING-FRAME pursuit
+	# when the anchor rides a man (anchor_velocity supplied); the velocity-matched
+	# seek when only our own cross-drift needs cancelling; the plain SEEK
+	# otherwise. See the doc blocks above.
 	var to_anchor: Vector3 = anchor - self_pos
 	var anchor_dist: float = Vector2(to_anchor.x, to_anchor.z).length()
-	if anchor_dist > ANCHOR_DEADBAND:
+	var moving_frame: bool = velocity_match_speed > 0.0 \
+			and Vector2(anchor_velocity.x, anchor_velocity.z).length() \
+					> MOVING_FRAME_MIN_SPEED \
+			and is_rideable_anchor(anchor)
+	if moving_frame:
+		# NO deadband: holding station on a frame that is moving is itself work,
+		# and a bot that stops thrusting once it is ON the stand immediately falls
+		# off the back of it. The seeks below keep theirs — a spot on the ice
+		# genuinely needs no thrust to stay on.
+		var pursue: Vector2 = _moving_frame_pursuit(
+				to_anchor, anchor_dist, anchor_velocity, self_velocity,
+				velocity_match_speed)
+		force_x += pursue.x
+		force_z += pursue.y
+	elif anchor_dist > ANCHOR_DEADBAND:
 		var inv: float = 1.0 / anchor_dist
 		if velocity_match_speed > 0.0:
 			# Full thrust along the line to the anchor, minus only the
@@ -354,6 +411,80 @@ static func compute_move_vector(
 	if v.length() > 1.0:
 		v = v.normalized()
 	return v
+
+
+# A stand is only a FRAME to hold station in while it is somewhere a skater can
+# legally stand. Off the playing surface it is not a stand at all, and holding
+# station on it means matching the man's velocity with no arrival to end the
+# approach — a body chasing a man off the ice rather than a defender.
+#
+# This is the structural half of that guard; the role that owns a stand is
+# expected not to publish a ride velocity for a target it did not really produce
+# (AIRolePressure's no-legal-candidate fallback is the live case). The check is
+# here as well because the failure is silent and permanent when it happens: the
+# point seek at least stops at the anchor, while an unbounded ride has no
+# terminating condition, and no repel in the field is weighted to out-muscle a
+# full-unit anchor term. Falling back to the seek recovers the ordinary behavior.
+#
+# Deliberately the RINK surface and not AIRoleHelpers.is_legal_position — this
+# asks "can a body be here", not "should a stand be chosen here" (that one also
+# excludes the crease and the goal-line buffer, which are perfectly good ice to
+# be routed ACROSS).
+static func is_rideable_anchor(anchor: Vector3) -> bool:
+	var xz := Vector2(anchor.x, anchor.z)
+	return GameRules.clamp_to_rink_inner(xz).is_equal_approx(xz)
+
+
+# Track a stand that RIDES A MAN — see the moving-frame doc block above.
+#
+# Builds the velocity we want to be travelling at (the frame's own velocity plus
+# a closing term that is spent by the time we arrive) and returns the thrust that
+# corrects our velocity onto it. Unit magnitude while there is any real error:
+# `move_vector` is a joystick and the physics scales it, so the intelligence is
+# in the DIRECTION — full effort along the heading that fixes the error. The
+# residual ripple as the error goes to zero is one tick of thrust (≈0.09 m/s at
+# league accel), well under the friction the bot is fighting to hold the pace.
+#
+# Pure value math, no allocation.
+static func _moving_frame_pursuit(to_anchor: Vector3, anchor_dist: float,
+		anchor_velocity: Vector3, self_velocity: Vector3,
+		v_max: float) -> Vector2:
+	var des_x: float = anchor_velocity.x
+	var des_z: float = anchor_velocity.z
+	if anchor_dist > 0.001:
+		var inv_d: float = 1.0 / anchor_dist
+		# How fast the frame is eating the gap from ITS side — the component of its
+		# velocity pointing back down the line at us. This is the term that makes a
+		# defensive stand different from a station, and leaving it out is the whole
+		# of the old charge: shedding `v` takes v/B seconds, during which the gap
+		# closes by v²/2B from our side AND by c·v/B from the frame's, so a profile
+		# that only prices the first half arrives with speed it has no ice left to
+		# shed. Solving v²/2B + c·v/B = dist for the positive root:
+		var c: float = -(anchor_velocity.x * to_anchor.x
+				+ anchor_velocity.z * to_anchor.z) * inv_d
+		var closing: float = maxf(
+				sqrt(c * c + 2.0 * ARRIVAL_BRAKE_DECEL_M_S2 * anchor_dist) - c, 0.0)
+		# A frame RUNNING AWAY (c < 0) buys extra room by the same arithmetic and
+		# the root grants it, which is what lets a backchecker's hip be chased down.
+		var inv: float = closing * inv_d
+		des_x += to_anchor.x * inv
+		des_z += to_anchor.z * inv
+	# We cannot skate faster than we can skate. Clamping the SUM (rather than the
+	# closing term) keeps the best available heading: flat out along the line that
+	# serves both errands, which as the gap closes rotates off pursuit and onto the
+	# frame's own velocity.
+	var des_len: float = sqrt(des_x * des_x + des_z * des_z)
+	if des_len > v_max and des_len > 0.001:
+		var k: float = v_max / des_len
+		des_x *= k
+		des_z *= k
+	var err_x: float = des_x - self_velocity.x
+	var err_z: float = des_z - self_velocity.z
+	var err_len: float = sqrt(err_x * err_x + err_z * err_z)
+	if err_len < 0.001:
+		return Vector2.ZERO
+	var inv_err: float = 1.0 / err_len
+	return Vector2(err_x * inv_err, err_z * inv_err)
 
 
 # The carrier's threat-gated opponent avoidance (see the doc on the constants
@@ -553,6 +684,17 @@ static func should_brake(desired: Vector2, velocity_xz: Vector2, was_braking: bo
 # overshooting it? See the ARRIVAL_BRAKE_* doc above. `was_braking` is
 # the previous tick's decision (hysteresis). Pure and stateless beyond
 # that flag.
+#
+# NOT for a stand that rides a man — the caller withholds it there, and the
+# moving-frame doc block says why. This brake is an actuator on OUR OWN velocity,
+# and "overshoot" only means something when the target holds still. Measured
+# against a moving stand it fires on closing the ANCHOR is producing: a defender
+# stopped dead in front of a rush reads 6.9 m/s of closing at a stand 1 m away,
+# brakes, and braking does nothing whatsoever to slow the rush — so he stays
+# parked while it arrives. In the moving-frame path the closing profile IS the
+# arrival law (it commands a decelerating velocity, so there is nothing left for a
+# trigger to decide) and the brake-PIVOT supplies the hard actuator whenever that
+# command opposes the body's momentum.
 static func should_arrival_brake(self_pos: Vector3, anchor: Vector3,
 		velocity_xz: Vector2, was_braking: bool) -> bool:
 	var speed: float = velocity_xz.length()

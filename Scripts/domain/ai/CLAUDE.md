@@ -73,6 +73,46 @@ Normal and Hard deliberately run **all gates open** — they are the same player
 separated only by continuous tuning, so the gap reads as "sharper" rather than
 "knows moves the other doesn't". Easy is where gates close.
 
+## A defensive stand is a moving frame, not a spot
+
+Everything a defensive role computes — the gap ladder's stand, the angling
+shade, a cover point, a backchecker's hip — RIDES an opponent and sweeps toward
+our net at his pace. So the role publishes the stand's own velocity
+(`RoleDecision.target_velocity`) and the steering flies the route in that frame
+(`AISteering`, moving-frame pursuit): the commanded velocity is the stand's plus
+a closing term that is spent by the time you arrive, so an approach ends
+*matched* to the play rather than stopped in front of it.
+
+The distinction is not cosmetic. Flown as a parked point, the trip has one shape
+regardless of distance — sprint at the spot, brake to a stop on it — so a
+defender could only defend from ice he was already standing on. Measured on the
+real stack, one who began a rush 20 m from his stand met the carrier at 10.8 m/s
+of relative speed; one already in the frame met him at 1.3 m/s. Same role, same
+ladder, same stand.
+
+Two consequences worth knowing before touching this area:
+
+- **Do not bound a route by placing the stand defensively.** Three successive
+  models tried it (a step-up plan, then an approach-speed limit, both now
+  retired for a live carrier) because an ice-frame seek could only reach a spot
+  by charging it. The route regulates its own approach — by the same physics, in
+  the frame where it means something, continuously rather than once per dispatch
+  — so a placement bound on top is two controllers on one axis, and it measured
+  as one: the stand landed within 0.3 m of wherever the defender already stood
+  and he never closed on anybody.
+- **A ride velocity is a commitment with no terminating condition.** A stand only
+  gets one when the role really produced a stand. A degenerate "hold where you
+  are" fallback that also rides a man does not hold — it matches his velocity
+  forever, and it walked a pressurer out through the end boards behind his own
+  net. `AISteering.is_rideable_anchor` is the structural backstop; the role is
+  still expected not to publish one it did not earn.
+
+Both halves are pinned by `tests/unit/ai/test_defensive_routing.gd` (share of
+time in shape, and whether a defence pair gets blown by) and
+`test_rush_gap_discipline.gd` (up-ice speed and excursion at the meet). Those
+measure the BODY over multi-second rushes, which is the only honest home for a
+claim about a route — a single dispatch cannot see one.
+
 ## Determinism
 
 Bot decisions must be replay-safe: same situation, same difficulty, same

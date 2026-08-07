@@ -8,6 +8,20 @@ extends RefCounted
 # for CARRIER it's the chosen carry destination.
 var target_position: Vector3 = Vector3.ZERO
 
+# How fast `target_position` is ITSELF moving, world m/s. Set by the roles whose
+# stand rides an opponent — a gap point, a cover point, a backchecker's hip —
+# where the spot sweeps toward our net at the man's pace. The steering then flies
+# the route in the stand's own frame instead of treating it as a parked point
+# (AISteering, "moving-frame pursuit"), which is the difference between arriving
+# matched to the play and arriving stopped in front of it.
+#
+# Vector3.ZERO (the default) means a spot on the ice: stations, zone anchors,
+# carry waypoints and puck chases all leave it alone and steer exactly as before.
+# It is the stand's velocity, NOT the man's — usually they are the same, but a
+# stand whose geometry is doing something else (a shade tightening, a gap
+# closing) is entitled to say so.
+var target_velocity: Vector3 = Vector3.ZERO
+
 # Optional aim override. When `has_aim_override` is true,
 # `aim_world_pos` replaces the state machine's default mouse target
 # (the ready-stance look-at toward `target_position`). Used by

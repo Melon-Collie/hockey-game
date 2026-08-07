@@ -2158,6 +2158,7 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# order says go THERE, not through someone).
 		if ctx.ping_move_target.is_finite():
 			decision.target_position = _clamp_anchor(ctx.ping_move_target)
+			decision.target_velocity = Vector3.ZERO  # an ordered SPOT, not a man
 			decision.commit_check = false
 		# Station-keeping: arrive AT the role destination (arrival brake)
 		# instead of overshooting a spot that stopped moving — EXCEPT on a
@@ -2173,9 +2174,13 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# composes with the arrival brake (which still stops the station) and
 		# with the commit/at-speed drives (which keep their momentum straight
 		# at the target). See AISteering velocity-matched seek.
+		#
+		# A role whose stand RIDES A MAN publishes that stand's own velocity, and
+		# the route — pursuit heading and arrival brake alike — is then flown in
+		# the stand's frame rather than the ice's. See RoleDecision.target_velocity.
 		_apply_steering(input, snapshot, self_pos, decision.target_position,
 				not decision.commit_check and not decision.arrive_at_speed,
-				_self_max_speed)
+				_self_max_speed, decision.target_velocity)
 		if decision.commit_check:
 			# Body-check commit: drive THROUGH the carrier at max closing
 			# velocity. Force sprint even at short range — the gap gate would
@@ -4610,7 +4615,8 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 # callers (carry steps, puck chase, check commits, tag-up) leave it false —
 # they either re-pick the anchor continuously or WANT to arrive at speed.
 func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
-		anchor: Vector3, arrive: bool = false, velocity_match_speed: float = 0.0) -> void:
+		anchor: Vector3, arrive: bool = false, velocity_match_speed: float = 0.0,
+		anchor_velocity: Vector3 = Vector3.ZERO) -> void:
 	# Standard potential-field steering with brake-pivot.
 	# Use the per-team roster published by GameManager._enrich_snapshot_for_ai
 	# instead of re-partitioning snapshot.skater_states every physics tick.
@@ -4682,12 +4688,20 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		var self_st: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
 		if self_st != null:
 			match_self_vel = self_st.velocity
+	# A stand that RIDES A MAN is flown in its own frame: the anchor term
+	# tracks a velocity rather than visiting a point, and the arrival brake
+	# stands down (it is an actuator on our own speed and cannot slow an
+	# approaching anchor). See AISteering's moving-frame pursuit.
+	var moving_anchor: bool = velocity_match_speed > 0.0 \
+			and Vector2(anchor_velocity.x, anchor_velocity.z).length() \
+					> AISteering.MOVING_FRAME_MIN_SPEED \
+			and AISteering.is_rideable_anchor(anchor)
 	var desired: Vector2 = AISteering.compute_move_vector(
 			self_pos, anchor, _scratch_teammates, _scratch_opponents,
 			lane_start, lane_end,
 			GameRules.RINK_HALF_WIDTH, GameRules.RINK_HALF_LENGTH,
 			opp_repel, steer_vels, _scratch_teammate_steer_vels,
-			match_self_vel, velocity_match_speed)
+			match_self_vel, velocity_match_speed, anchor_velocity)
 
 	# Brake-pivot: if our current velocity is roughly opposite the desired
 	# direction (~180° transition), stopping hard beats carving a wide arc.
@@ -4705,8 +4719,10 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# Arrival brake (opt-in per call site): stop AT a station target
 		# instead of overshooting one that slowed down and doubling back.
 		# The pivot brake wins when both would fire (it already implies
-		# maximal braking).
-		if arrive and not _pivot_braking:
+		# maximal braking). A MOVING anchor never takes it — see
+		# AISteering.should_arrival_brake; there the closing profile is the
+		# arrival law and the pivot brake is the only actuator needed.
+		if arrive and not _pivot_braking and not moving_anchor:
 			_arrival_braking = AISteering.should_arrival_brake(
 					self_pos, anchor, Vector2(v.x, v.z), _arrival_braking)
 		else:

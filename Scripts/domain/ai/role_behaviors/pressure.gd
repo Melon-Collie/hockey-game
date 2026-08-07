@@ -226,6 +226,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
+	var found: bool = false
 	for c: Vector3 in candidates:
 		if not AIRoleHelpers.is_legal_position(c):
 			continue
@@ -247,8 +248,23 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		if pressure_score > best_score:
 			best_score = pressure_score
 			best_pos = c
+			found = true
 
 	d.target_position = best_pos
+	# The cut-off rides the carrier (its whole geometry is built off his led
+	# position), so the route is flown in his frame — see AISteering's
+	# moving-frame pursuit. This is what makes the last-man bound above
+	# executable: it places the stand as a brake trigger for an approach that
+	# ends MATCHED to the rush, and an ice-frame seek could only end stopped.
+	#
+	# ONLY when a candidate actually survived the filters. Every candidate being
+	# rejected (the pressurer chased the play off the legal surface, so the whole
+	# ring is illegal) leaves `best_pos` at our own feet, which means HOLD — and a
+	# hold that rides a man is not a hold, it is "match his velocity forever". Left
+	# unguarded that walked a pressurer out through the end boards behind his own
+	# net, perfectly gapped 7.5 m off a carrier who was also leaving.
+	if found:
+		d.target_velocity = AIRoleHelpers.stand_ride_velocity(ctx)
 	return d
 
 
