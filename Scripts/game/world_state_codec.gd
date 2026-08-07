@@ -155,8 +155,16 @@ func encode_world_state() -> PackedByteArray:
 			# folds 0 on host rows). Read with input_drains_per_sec: draining a
 			# DEEP queue means the drain is eating the lead servo's cushion;
 			# draining a SHALLOW one means inputs genuinely arrive late.
-			# Bots are local-driven and never queue, so they can't skew the max.
-			NetworkTelemetry.record_host_queue_depth(depth)
+			#
+			# Sampled for NETWORKED peers only. Bots are non-local too, and their
+			# base get_queue_depth() returns a structural 0 — folding those into
+			# the average scales it by the human share of the roster, so the same
+			# link reads a different depth in a 6-bot lobby than a full one, and
+			# the value can't be compared against the input lead it measures. The
+			# depth still goes on the wire for every skater; only the fold is
+			# narrowed.
+			if record.controller is RemoteController:
+				NetworkTelemetry.record_host_queue_depth(depth)
 		# encode_s32 (not u32) so negative AI bot peer_ids round-trip correctly.
 		# For real ENet peer ids (always positive) the encoded bytes are
 		# identical to u32, so this is wire-compatible with existing builds.

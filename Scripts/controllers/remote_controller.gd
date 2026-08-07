@@ -290,6 +290,14 @@ func _drain_backlog(now: float) -> void:
 		var stale: InputState = _input_queue.pop_front()
 		var overdue: float = now - stale.host_timestamp
 		last_processed_host_timestamp = stale.host_timestamp
+		# Record the lead here too. A drained input is BY DEFINITION the most
+		# overdue one in the queue, so omitting it made input_lead_ms
+		# survivorship-biased: its own max was bounded by _DRAIN_TARGET_S, and a
+		# session could report a max well under _DRAIN_TRIGGER_S while draining
+		# several times a second — the two readings looked mutually impossible.
+		# Phase-resume artifacts stay out, matching the servo's sample gate.
+		if overdue <= _DRAIN_STALE_SOLO_S:
+			NetworkTelemetry.record_input_lead(overdue)
 		# Presses are edges the player committed — dropping the frame that carried
 		# one must not eat the action. Held/absolute state (move vector, brake,
 		# aim, elevation_level) is NOT carried: the next applied input holds the
