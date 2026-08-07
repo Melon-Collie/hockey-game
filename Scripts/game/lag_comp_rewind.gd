@@ -105,11 +105,19 @@ const _INPUT_LEAD_EXTRA_MAX_S: float = 0.05
 # [INPUT_LEAD_SEC, INPUT_LEAD_SEC + extra max]. input_lead_ms < 0 (or absent
 # — the host's own local claims) uses the base constant.
 static func self_view_time(host_timestamp: float, input_lead_ms: float = -1.0) -> float:
+	return host_timestamp + clamped_lead_s(input_lead_ms)
+
+
+# The claim-carried input lead, in seconds, bounded to the range a legitimate
+# client can actually stamp with. Shared by every consumer of the lead — the two
+# view-times and the forward-predict depth — so a modified client cannot buy
+# itself a different rewind depth in one of them. A negative or absent value
+# (the host's own local claims, bots) falls back to the base constant.
+static func clamped_lead_s(input_lead_ms: float = -1.0) -> float:
 	if input_lead_ms < 0.0 or not is_finite(input_lead_ms):
-		return host_timestamp + NetworkManager.INPUT_LEAD_SEC
-	var lead_s: float = clampf(input_lead_ms / 1000.0,
+		return NetworkManager.INPUT_LEAD_SEC
+	return clampf(input_lead_ms / 1000.0,
 			NetworkManager.INPUT_LEAD_SEC, NetworkManager.INPUT_LEAD_SEC + _INPUT_LEAD_EXTRA_MAX_S)
-	return host_timestamp + lead_s
 
 
 # Host-time at which to query StateBufferManager for any entity the claimant
@@ -134,8 +142,8 @@ static func prev_tick(view_time: float) -> float:
 # CARRIED puck is unaffected — it rides the carrier's render timeline
 # (remote_view + forward_predict_skater); this helper is only for claims
 # against a loose puck (pickup / deflect verdicts, the one-timer range gate).
-static func puck_view_time(host_timestamp: float) -> float:
-	return host_timestamp
+static func puck_view_time(host_timestamp: float, input_lead_ms: float = -1.0) -> float:
+	return host_timestamp + clamped_lead_s(input_lead_ms)
 
 
 # Stage-3 forward-prediction depth: how many physics ticks a remote body is
@@ -150,11 +158,14 @@ static func puck_view_time(host_timestamp: float) -> float:
 # caller feeds it the raw client-reported interp_delay_ms, and without the clamp
 # a crafted claim (or a NaN/huge warmup glitch) turns the integration loop into
 # an unbounded host stall.
-static func forward_predict_ticks(fraction: float, interp_delay_s: float) -> int:
-	if not is_finite(interp_delay_s):
+static func forward_predict_ticks(fraction: float, interp_delay_s: float,
+		lead_s: float = 0.0) -> int:
+	if not is_finite(interp_delay_s) or not is_finite(lead_s):
 		return 0
 	var delay_s: float = clampf(interp_delay_s, 0.0, _INTERP_DELAY_CLAMP_MS_MAX / 1000.0)
-	return roundi(clampf(fraction, 0.0, 1.0) * delay_s * float(Constants.PHYSICS_TICK))
+	var lead: float = clampf(lead_s, 0.0,
+			NetworkManager.INPUT_LEAD_SEC + _INPUT_LEAD_EXTRA_MAX_S)
+	return roundi(clampf(fraction, 0.0, 1.0) * (delay_s + lead) * float(Constants.PHYSICS_TICK))
 
 
 # Stage-3 shared reconstruction: intent-integrate a remote-rendered skater from
@@ -170,11 +181,13 @@ static func forward_predict_ticks(fraction: float, interp_delay_s: float) -> int
 #  - depth from the claim-carried interp_delay_ms — the same value the
 #    claimant's render used that frame.
 static func forward_predict_skater(snap: SkaterNetworkState, ctrl: SkaterController,
-		interp_delay_ms: float, scratch: SkaterMovementRules.ForwardResult) -> bool:
+		interp_delay_ms: float, input_lead_ms: float,
+		scratch: SkaterMovementRules.ForwardResult) -> bool:
 	if snap == null or ctrl == null:
 		return false
 	var ticks: int = forward_predict_ticks(
-			Constants.REMOTE_FORWARD_PREDICT_FRACTION, interp_delay_ms / 1000.0)
+			Constants.REMOTE_FORWARD_PREDICT_FRACTION, interp_delay_ms / 1000.0,
+			clamped_lead_s(input_lead_ms))
 	if ticks <= 0:
 		return false
 	return _integrate_skater(snap, ctrl, ticks, scratch)

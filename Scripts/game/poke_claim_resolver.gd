@@ -119,7 +119,8 @@ func receive_claim(peer_id: int, host_timestamp: float,
 	# render == rewind.
 	var carrier_snap: SkaterNetworkState = puck_snap.get_skater_state(expected_carrier_peer_id)
 	if LagCompRewind.forward_predict_skater(carrier_snap,
-			expected_record.controller as SkaterController, interp_delay_ms, _fp_result):
+			expected_record.controller as SkaterController, interp_delay_ms, input_lead_ms,
+			_fp_result):
 		var carrier_delta: Vector3 = _fp_result.position - carrier_snap.position
 		puck_pos += carrier_delta
 		puck_prev += carrier_delta

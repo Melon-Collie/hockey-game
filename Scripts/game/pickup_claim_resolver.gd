@@ -214,7 +214,7 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	# calls per entity (curr + one physics tick back) feeds the swept-segment
 	# test below.
 	var blade_rewind_time: float = LagCompRewind.self_view_time(host_timestamp, input_lead_ms)
-	var puck_rewind_time: float = LagCompRewind.puck_view_time(host_timestamp)
+	var puck_rewind_time: float = LagCompRewind.puck_view_time(host_timestamp, input_lead_ms)
 	var puck_snap: WorldSnapshot = _state_buffer.get_state_at(puck_rewind_time)
 	if puck_snap.puck_state == null or puck_snap.puck_state.carrier_peer_id != -1:
 		NetworkManager.send_pickup_claim_nack(peer_id)

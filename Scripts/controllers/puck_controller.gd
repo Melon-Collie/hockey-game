@@ -1092,6 +1092,15 @@ func _ice_friction_velocity(vel: Vector3, dt: float) -> Vector3:
 # caller falls back to the legacy interpolation path.
 func _predict_loose(delta: float) -> bool:
 	var now: float = NetworkManager.estimated_host_time()
+	# The predicted puck renders at host-present + the local input LEAD, the same
+	# instant this client's own body and blade occupy, so reaching for a loose
+	# puck is judged across one clock instead of a lead-wide skew. `now` stays
+	# host-present for the STALENESS and seed-timeout gates below — those measure
+	# how old the authoritative data is, which the render target must not shift.
+	# The host reproduces this instant exactly: LagCompRewind.puck_view_time adds
+	# the same bounded lead, and DeferredClaimQueue holds the claim until the
+	# buffer covers it, so it stays an ordinary past lookup there.
+	var lead: float = LagCompRewind.clamped_lead_s(NetworkManager.get_input_lead_ms())
 	if _release_seed_active:
 		var confirmed: BufferedPuckState = null
 		if not _state_buffer.is_empty():
@@ -1118,7 +1127,7 @@ func _predict_loose(delta: float) -> bool:
 			_release_seed_active = false
 		else:
 			_run_prediction(_release_seed_pos, _release_seed_vel,
-					maxf(now - _release_seed_stamp, 0.0))
+					maxf(now - _release_seed_stamp, 0.0) + lead)
 			is_extrapolating = false
 			if NetworkTelemetry.instance:
 				NetworkTelemetry.instance.puck_mode = "predicted_hold" if _sim_stopped else "predicted_seed"
@@ -1133,7 +1142,7 @@ func _predict_loose(delta: float) -> bool:
 		if age > Constants.PUCK_PREDICT_MAX_S:
 			NetworkTelemetry.record_puck_predict_fallback()
 		return false
-	_run_prediction(source.state.position, source.state.velocity, age)
+	_run_prediction(source.state.position, source.state.velocity, age + lead)
 	is_extrapolating = false  # prediction is the mode, not a buffer underrun
 	if NetworkTelemetry.instance:
 		NetworkTelemetry.instance.puck_mode = "predicted_hold" if _sim_stopped else "predicted"

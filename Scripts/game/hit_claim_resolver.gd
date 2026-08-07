@@ -164,7 +164,8 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	var vic_pos: Vector3 = victim_snap.position
 	var vic_vel: Vector3 = victim_snap.velocity
 	if LagCompRewind.forward_predict_skater(victim_snap,
-			victim_rec.controller as SkaterController, interp_delay_ms, _fp_result):
+			victim_rec.controller as SkaterController, interp_delay_ms, input_lead_ms,
+			_fp_result):
 		vic_pos = _fp_result.position
 		vic_vel = _fp_result.velocity
 	# The hitter is SELF-view, and that instant is past the newest capture on any

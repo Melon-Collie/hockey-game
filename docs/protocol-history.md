@@ -258,3 +258,14 @@ here whenever you bump, in the same format.
 #      the achievements, Steam stats, and career row. Adding an @rpc method
 #      shifts the rpc-config ordering both peers hash, so mixed builds must be
 #      refused even though no existing wire format changed.
+# v59: clock unification — every rendered entity moves to
+#      estimated_host_time() + input lead, the instant the client's own
+#      predicted body already occupies. Remote skaters carry the lead in their
+#      forward-predict depth and the loose puck predicts to the same target;
+#      the host reproduces both from the claim-carried `input_lead_ms` that has
+#      ridden the four claim RPCs since v39. NO wire format changes — but a
+#      mixed lobby would silently disagree about which instant a claim names
+#      (an old client renders remotes and the puck a lead behind a new host's
+#      rewind, and vice versa), which is a mis-adjudication rather than a
+#      decode error, so mixed builds must be refused.
+

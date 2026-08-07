@@ -118,7 +118,8 @@ func receive_claim(peer_id: int, host_timestamp: float,
 	var shaft_top: Vector3 = victim_snap.top_hand_world
 	var shaft_blade: Vector3 = victim_snap.blade_contact_world
 	if LagCompRewind.forward_predict_skater(victim_snap,
-			expected_record.controller as SkaterController, interp_delay_ms, _fp_result):
+			expected_record.controller as SkaterController, interp_delay_ms, input_lead_ms,
+			_fp_result):
 		var carrier_delta: Vector3 = _fp_result.position - victim_snap.position
 		shaft_top += carrier_delta
 		shaft_blade += carrier_delta
