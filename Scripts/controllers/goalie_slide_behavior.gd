@@ -250,7 +250,21 @@ func advance_slide(delta: float, goal_center_x: float, net_half_width: float) ->
 	var new_depth: float = lerpf(start_depth, end_depth, arc_t) \
 			+ slide_pivot_arc_depth * sin(PI * arc_t)
 	new_x = clampf(new_x, goal_center_x - net_half_width, goal_center_x + net_half_width)
-	if absf(velocity_x) <= slide_min_speed:
+	# ARRIVAL ENDS THE SLIDE, not the decay of the push. Position is
+	# `lerp(start, end, arc_t)`, so once arc_t saturates the body IS at the seal and
+	# the leftover velocity moves nothing — it only runs the clock. Ending solely on
+	# `|velocity_x| <= slide_min_speed` meant a short committed path finished
+	# travelling long before the push had bled off, and the goalie sat pinned in
+	# SLIDING for the remainder: he cannot recover (RECOVERING only fires from idle
+	# BUTTERFLY) and cannot commit a new slide. Measured on a post seal off a lateral
+	# beat — arrived 0.61 s, released 1.38 s, so 0.77 s frozen in the seal with the
+	# rebound live. The second-effort push after a seal was unreachable for most of a
+	# second, which is exactly the window a scramble lives in.
+	#
+	# The speed floor stays as the OTHER terminator: a push that decays before
+	# covering its path has run out of slide, and snapping to the destination there
+	# is the existing (short-)slide behaviour, unchanged.
+	if arc_t >= 1.0 or absf(velocity_x) <= slide_min_speed:
 		velocity_x = 0.0
 		arc_t = 1.0
 		new_x = end_x

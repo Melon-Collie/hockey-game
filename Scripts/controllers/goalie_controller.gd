@@ -1957,6 +1957,7 @@ func _update_state(delta: float) -> void:
 		_reaction.shot_timer = 0.0
 		_reaction.arm_timer = 0.0
 	_slide.tick_cooldown(delta)
+	_advance_beaten_wide(delta)
 	if _clear.cover_cooldown_timer > 0.0:
 		_clear.cover_cooldown_timer = maxf(_clear.cover_cooldown_timer - delta, 0.0)
 	_puck_play.tick_cooldown(delta)
@@ -1987,7 +1988,23 @@ func _update_state(delta: float) -> void:
 					_sm.transition_to(State.VH_LEFT if puck_local_x < 0.0 else State.VH_RIGHT)
 				else:
 					_sm.transition_to(State.RVH_LEFT if puck_local_x < 0.0 else State.RVH_RIGHT)
-			elif _should_block(delta) and not _reaction.reacting:
+			elif _beaten_wide_committed:
+				# THE SEAL IS A COVERAGE VERDICT, NOT A TIMING ONE, which is why it
+				# gets its own arm instead of riding the block's `not reacting` gate.
+				# That gate exists because blocking a shot already read as ELEVATED is
+				# strictly wrong and `_should_block` has no impact_y — a statement
+				# about height. Being beaten to the post is not about height, and the
+				# shot being in flight does not give him back the lateral race; it is
+				# the moment he has least time to lose. Sharing the branch meant the
+				# one sanctioned commit fired only on plays where nobody shot.
+				#
+				# Still no prediction here: the gate is positional (the puck is already
+				# past his standing sealing reach on the side it went), so this fires on
+				# an accomplished fact. The counter is unchanged — pull the puck back
+				# inside the sealing reach and the verdict drops before it confirms.
+				_enter_butterfly()
+				_seal_beaten_wide_post()
+			elif _should_block() and not _reaction.reacting:
 				# The block-or-react decision — see GoalieSaveSelection for the doctrine.
 				#
 				# ⚠️ `not _reaction.reacting` IS LOAD-BEARING. It looks inherited from
@@ -2015,11 +2032,10 @@ func _update_state(delta: float) -> void:
 				#
 				# A controlled dangler in space still keeps him UP — there the answer
 				# fits.
+				#
+				# Purely a TIMING drop by the time it gets here: the coverage half —
+				# beaten laterally, where only the seal answers — took the branch above.
 				_enter_butterfly()
-				# One motion when the drop is a COVERAGE verdict rather than a timing
-				# one: beaten laterally means the seal is the only answer left, so
-				# push into it off the drop instead of landing square and re-deciding.
-				_seal_beaten_wide_post()
 			else:
 				# Toggle STANDING ↔ READY based on threat conditions.
 				var should_be_ready: bool = _is_ready_situation()
@@ -2119,7 +2135,7 @@ func _is_ready_situation() -> bool:
 # question rather than three thresholds. `_confirmed_beaten_wide` is an INPUT
 # rather than a branch, because a lost lateral race is a coverage fact, not a
 # timing one.
-func _build_save_situation(delta: float) -> GoalieSaveSelection.Situation:
+func _build_save_situation() -> GoalieSaveSelection.Situation:
 	var s := _save_situation
 	var puck_pos: Vector3 = puck.global_position
 	# PRICE THE SHOT FROM WHERE IT WILL ACTUALLY BE RELEASED. A slapper charge
@@ -2231,7 +2247,11 @@ func _build_save_situation(delta: float) -> GoalieSaveSelection.Situation:
 	s.sight_delay = _screen_delay(sight_vel)
 	s.reaction_delay = reaction_delay
 	s.drop_time = butterfly_drop_speed
-	s.lateral_race_lost = _confirmed_beaten_wide(delta)
+	# READ, not advance — `_advance_beaten_wide` owns the clock and runs once a
+	# tick. Building the situation must stay free of side effects: it is built
+	# from three different callers per tick, and when it moved the confirmation
+	# window that alone made the window's length depend on how many of them ran.
+	s.lateral_race_lost = _beaten_wide_committed
 	return s
 
 
@@ -2245,17 +2265,17 @@ func _should_hold_seal() -> bool:
 	if _lunge_active_timer > 0.0:
 		return false
 	return GoalieSaveSelection.should_hold_seal(
-			_build_save_situation(0.0), recovery_duration)
+			_build_save_situation(), recovery_duration)
 
 
-func _should_block(delta: float) -> bool:
+func _should_block() -> bool:
 	# Lunge precedence, carried over from the doorstep predicate this replaced: a
 	# committed poke IS a save selection, already made. Dropping out of it would
 	# be a free undo of the gamble, and the gamble is the point — a beaten lunge
 	# is supposed to concede (see _movement_read_delay).
 	if _lunge_active_timer > 0.0:
 		return false
-	return GoalieSaveSelection.should_block(_build_save_situation(delta))
+	return GoalieSaveSelection.should_block(_build_save_situation())
 
 
 # Beaten-wide with the quiet-eye confirmation: the race verdict must hold
@@ -2263,7 +2283,15 @@ func _should_block(delta: float) -> bool:
 # sells out pads-first. One tick of lateral body velocity is a deke's
 # opening move, not a drive — the reset on a broken verdict is what makes
 # the pull-back un-commit him.
-func _confirmed_beaten_wide(delta: float) -> bool:
+#
+# ONCE A TICK, UNCONDITIONALLY, and it is the only thing that moves the clock —
+# every other caller reads `_beaten_wide_committed`. It used to be advanced from
+# inside `_build_save_situation`, which made the confirmation window depend on how
+# many times the save situation happened to be built that tick and on which
+# `_update_state` branch was reached: the window never advanced at all while he
+# was down, or while the puck was in the defensive zone, or on any tick the rim
+# check took the branch first.
+func _advance_beaten_wide(delta: float) -> void:
 	# ONCE ARMED, THE WINDOW ASKS WHETHER THE PUCK STAYS AROUND HIM — not whether
 	# it keeps accelerating. Re-asking the onset question (which needs live
 	# lateral speed) on every tick of the window is self-cancelling: a deke's
@@ -2281,20 +2309,35 @@ func _confirmed_beaten_wide(delta: float) -> bool:
 		_beaten_wide_armed = false
 		_beaten_wide_confirm_timer = 0.0
 		_beaten_wide_committed = false
-		return false
+		return
 	_beaten_wide_committed = _beaten_wide_confirm_timer >= lateral_commit_confirm_s
-	return _beaten_wide_committed
 
 
 # Does the beat still stand? Coverage only — see GoalieBehaviorRules.
+#
+# A LOOSE PUCK CARRIES THE VERDICT ON ITS OWN, and getting that wrong is what made
+# the seal unreachable on the only plays it exists for. Persistence used to need a
+# hostile carrier, so the instant the beaten player SHOT, the verdict evaporated —
+# he was beaten wide, the shot left the blade, and by the next tick the goalie had
+# forgotten. Measured: beaten wide then a release at 0.10 / 0.20 / 0.30 s sealed
+# NEVER, against 0.325 s when nobody shot.
+#
+# Releasing the puck does not un-beat anybody. It is the same fact the header
+# already states for deceleration — the beat is GEOMETRY — and possession is no
+# more part of that geometry than speed is. So the loose puck becomes its own
+# threat position and the coverage question is asked unchanged.
+#
+# Onset still requires a carrier (`_is_beaten_wide`), so nothing arms off a loose
+# puck: this can only keep alive a verdict a carried puck already earned.
 func _beaten_wide_holds() -> bool:
 	var carrier: Skater = puck.get_carrier()
-	if carrier == null:
-		return false
-	if team_id != -1 and carrier.get_team_id() == team_id:
-		return false
+	var threat: Vector3 = puck.global_position
+	if carrier != null:
+		if team_id != -1 and carrier.get_team_id() == team_id:
+			return false
+		threat = carrier.global_position
 	return GoalieBehaviorRules.beaten_wide_holds(
-			carrier.global_position, puck.global_position, _beaten_wide_drive_sign,
+			threat, puck.global_position, _beaten_wide_drive_sign,
 			goalie.global_position, _goal_line_z, _goal_center_x,
 			_direction_sign, net_half_width, _beaten_wide_cfg)
 
@@ -4525,7 +4568,7 @@ func _on_puck_contact(contacted: Goalie) -> void:
 	# slot. (The slide event-lockout above still gives a beat before a committed
 	# slide, so the goalie doesn't chase an unpredictable fresh deflection.)
 	_reaction.arm_clear(true)
-	if is_server and _sm.is_upright() and _should_block(0.0):
+	if is_server and _sm.is_upright() and _should_block():
 		_enter_butterfly()
 
 # Resolving events (boards / post / net) that aren't goalie-specific. Any of
