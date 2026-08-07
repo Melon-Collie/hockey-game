@@ -27,19 +27,40 @@ const INPUT_LEAD_SEC: float = BATCH_INTERVAL + BUFFER_TICKS * TICK_DURATION  # ~
 # ~1 fallback tick/sec and the reconcile churn that follows. The client can see
 # this itself from data already on the wire: each snapshot's input ack tells it
 # how overdue that input was when the host popped it (snapshot host_ts − ack
-# stamp). This servo adapts a bounded EXTRA lead on top of the constant —
-# Jacobson mean + 4·dev of measured overdue, allowing one tick of grace,
-# stepped asymmetrically (fast up: a starving host queue is felt immediately;
-# slow down: over-lead only costs remote-visibility latency). The claim rewind
-# convention follows it: claims carry the lead the client stamped with, and
+# stamp). This servo adapts a bounded EXTRA lead on top of the constant, stepped
+# asymmetrically (fast up: a starving host queue is felt immediately; slow down:
+# over-lead only costs remote-visibility latency). The claim rewind convention
+# follows it: claims carry the lead the client stamped with, and
 # LagCompRewind.self_view_time uses the carried value (bounded host-side), so
 # render == rewind holds at any adapted lead.
+#
+# THE TARGET MUST SIT ABOVE THE MEASURE'S OWN FLOOR. Pop-overdue is one-sided:
+#
+#     overdue = max(0, arrival − stamp) + tick quantization
+#
+# The lead can drive the lateness term to zero but never the quantization term,
+# so overdue has a hard floor of a uniform [0, TICK) — mean ~TICK/2, Jacobson
+# mean-absolute-deviation ~TICK/4. An earlier form servoed `mean + 4·dev` toward
+# one tick of grace, which is unreachable BY CONSTRUCTION: 4·dev alone floors at
+# ~TICK, so the error term floors at ~1.5·TICK against a 1·TICK target and stays
+# positive at any lead. The integrator therefore had no zero and wound to
+# MAX_LEAD_EXTRA_S on every link, including a perfect one — measured pinned at
+# the 50 ms ceiling across three sessions on a 23 ms / 0%-loss link, i.e. a
+# permanent 50 ms input-latency tax plus a host input queue running 3x its
+# designed depth. Servo the MEAN alone, whose floor (~TICK/2) leaves real
+# headroom under the one-tick target.
+#
+# The variance margin cannot be restored by moving it elsewhere: any margin the
+# integrator can OBSERVE (added to the stamp, hence to the lead) reduces measured
+# overdue and is simply backed out of _lead_extra, leaving the equilibrium
+# unchanged. Burst tolerance comes from the fast-up/slow-down asymmetry below,
+# which is not a bias and does not move the fixed point.
 #
 # NOTE (invariant): this state is SEPARATE from the NTP offset. ClockSync's
 # offset stays pure ping/pong NTP — the ban on queue-depth feedback into
 # _offset stands; the lead servo only shapes future STAMPS, never the clock.
 const MAX_LEAD_EXTRA_S: float = 0.05          # hard ceiling: 6 ticks of extra
-const _LEAD_GRACE_S: float = TICK_DURATION    # one tick of overdue is healthy
+const _LEAD_GRACE_S: float = TICK_DURATION    # target MEAN overdue; floor is ~TICK/2
 const _OVR_GAIN: float = 0.05                 # EMA horizon ~20 acks (~170 ms)
 const _LEAD_UP_STEP_S: float = 0.001          # per ack: ~120 ms/s climb at 120 Hz
 const _LEAD_DOWN_STEP_S: float = 0.00005      # per ack: ~6 ms/s relax
@@ -48,7 +69,6 @@ const _LEAD_DOWN_STEP_S: float = 0.00005      # per ack: ~6 ms/s relax
 const _OVR_SAMPLE_MAX_S: float = 0.25
 var _lead_extra: float = TICK_DURATION  # start one tick up (the playtest-measured deficit)
 var _ovr_mean: float = 0.0
-var _ovr_dev: float = 0.0
 
 
 # Feed one measured pop-overdue sample (snapshot host_ts − freshly-advanced
@@ -59,13 +79,14 @@ func record_ack_overdue(overdue_s: float) -> void:
 	if overdue_s < 0.0 or overdue_s > _OVR_SAMPLE_MAX_S or not is_finite(overdue_s):
 		return
 	_ovr_mean += (overdue_s - _ovr_mean) * _OVR_GAIN
-	_ovr_dev += (absf(overdue_s - _ovr_mean) - _ovr_dev) * _OVR_GAIN
-	# Servo: the measured overdue already includes the current extra's effect,
-	# so the target is RELATIVE — current extra plus the measured excess over
-	# the one-tick grace. Excess ~0 → hold; negative → slow relax toward 0.
-	var target: float = clampf(
-			_lead_extra + (_ovr_mean + 4.0 * _ovr_dev - _LEAD_GRACE_S), 0.0, MAX_LEAD_EXTRA_S)
-	_lead_extra += clampf(target - _lead_extra, -_LEAD_DOWN_STEP_S, _LEAD_UP_STEP_S)
+	# Servo: the measured overdue already includes the current extra's effect, so
+	# the error is RELATIVE — how far the mean sits above one tick of grace.
+	# Mean above grace → climb; below → slow relax. The fixed point is reachable
+	# (see the floor derivation above), which is the whole property here.
+	var error: float = _ovr_mean - _LEAD_GRACE_S
+	_lead_extra = clampf(
+			_lead_extra + clampf(error, -_LEAD_DOWN_STEP_S, _LEAD_UP_STEP_S),
+			0.0, MAX_LEAD_EXTRA_S)
 
 
 func current_input_lead_s() -> float:

@@ -122,6 +122,62 @@ func test_sustained_overdue_raises_the_lead() -> void:
 	assert_gt(cs.current_input_lead_s(), before, "sustained overdue climbs the lead")
 
 
+# Closed-loop model of what the host actually measures at the pop:
+#
+#     overdue = max(0, arrival_lateness - extra_lead) + tick quantization
+#
+# The lead can drive the lateness term to zero but never the quantization term.
+# Feeding the servo its own output this way is the only way to test convergence
+# — an open-loop constant can't show a fixed point. Quantization cycles
+# deterministically (order is irrelevant, the distribution is the point) so the
+# test stays replay-safe.
+func _closed_loop_overdue(cs: RefCounted, arrival_lateness: float, i: int) -> float:
+	var extra: float = cs.current_input_lead_s() - cs.INPUT_LEAD_SEC
+	var quantization: float = (float(i % 8) / 8.0) * (1.0 / 120.0)
+	return maxf(0.0, arrival_lateness - extra) + quantization
+
+
+func test_the_servo_target_sits_above_the_measure_s_own_floor() -> void:
+	# The structural property the shipped servo violated. Mean overdue floors at
+	# ~TICK/2 no matter how much lead is applied, so a target below that floor is
+	# unsatisfiable at ANY lead and the integrator has no fixed point. The old
+	# form targeted `mean + 4*dev` (floor ~1.5*TICK) at one tick of grace.
+	var cs := _ready_clock()
+	var floor_mean: float = 0.0
+	for i in range(8):
+		floor_mean += (float(i) / 8.0) * (1.0 / 120.0)
+	floor_mean /= 8.0
+	assert_lt(floor_mean, cs._LEAD_GRACE_S,
+			"the target must be reachable with zero arrival lateness")
+
+
+func test_a_clean_link_settles_clear_of_the_ceiling() -> void:
+	# THE regression, in closed loop: no arrival lateness at all, only the
+	# unavoidable quantization. The old servo wound to MAX_LEAD_EXTRA_S here and
+	# stayed — measured pinned at the 50 ms cap for the full duration of three
+	# separate sessions on a 23 ms, 0%-loss link, a permanent input-latency tax
+	# nobody could see without the telemetry.
+	var cs := _ready_clock()
+	for i in range(20000):
+		cs.record_ack_overdue(_closed_loop_overdue(cs, 0.0, i))
+	var extra: float = cs.current_input_lead_s() - cs.INPUT_LEAD_SEC
+	assert_lt(extra, cs.MAX_LEAD_EXTRA_S * 0.5,
+			"a clean link must settle well clear of the ceiling, not pin against it")
+
+
+func test_a_genuinely_late_link_buys_lead_but_still_settles() -> void:
+	# The servo must still do its job: real lateness earns real extra lead. What
+	# it must NOT do is saturate — a finite equilibrium is what distinguishes
+	# "adapted" from "wound out".
+	var cs := _ready_clock()
+	for i in range(40000):
+		cs.record_ack_overdue(_closed_loop_overdue(cs, 0.030, i))
+	var extra: float = cs.current_input_lead_s() - cs.INPUT_LEAD_SEC
+	assert_gt(extra, 0.010, "30 ms of genuine lateness must buy real extra lead")
+	assert_lt(extra, cs.MAX_LEAD_EXTRA_S - 0.001,
+			"...and still settle short of the cap, leaving headroom for a burst")
+
+
 func test_lead_extra_is_hard_capped() -> void:
 	var cs := _ready_clock()
 	for _i in range(5000):
