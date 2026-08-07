@@ -419,17 +419,7 @@ static func _stick(ctx: RoleContext) -> float:
 # beaten to the outside of a net he's standing on top of. The doorstep belongs
 # to in-zone coverage, which is a different state.
 static func _clamp_to_house(ctx: RoleContext, pos: Vector3) -> Vector3:
-	var our_net: Vector3 = ctx.defending_goal_pos
-	var dx: float = pos.x - our_net.x
-	var dz: float = pos.z - our_net.z
-	var dsq: float = dx * dx + dz * dz
-	var gate: float = AIZoneCoverage.HOUSE_TOP_DEPTH_M
-	if dsq >= gate * gate:
-		return pos
-	var dl: float = sqrt(dsq)
-	if dl < 0.001:
-		return Vector3(our_net.x, 0.0, our_net.z - signf(our_net.z) * gate)
-	return Vector3(our_net.x + dx * (gate / dl), 0.0, our_net.z + dz * (gate / dl))
+	return AIRoleHelpers.hold_out_to_house_gate(ctx.defending_goal_pos, pos)
 
 
 # Argmax over the retreat-line point plus fan candidates toward each receiver's

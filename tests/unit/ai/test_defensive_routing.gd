@@ -39,9 +39,25 @@ extends GutTest
 # from the defence-pair scenario below:
 #
 #                                  parked-point route   moving-frame route
-#   mean share of time in shape            17%                 84%
-#   deep starts (z <= -14)                  0%                 96%
+#   mean share of time in shape            17%                 62%
+#   deep starts (z <= -14)                  0%                 61%
 #   in-zone time with nobody goal-side      5% (worst 48%)      0% (worst 0%)
+#
+# The in-shape figures were 82% / 93% before AIRolePressure gained its house-gate
+# floor, and that drop is a DELIBERATE TRADE, not drift. Shadowing means
+# retreating WITH the man; refusing to be walked to your own net means, at some
+# point, not retreating. The two are opposed, and the floor buys the second at
+# the cost of the first over the last few metres — worst-case depth conceded went
+# 0.1 m (standing in his own crease) to 5.5 m for it. See
+# test_a_defender_is_not_walked_into_his_own_net below, which pins the other side.
+# The bar here stays well clear of the parked-point route's 17%, which is the
+# regression this test exists to catch.
+#
+# The principled way to get both is a GAP LADDER for PRESSURE — a cushion that
+# shrinks as the ice runs out, so the defender arrives on the man at the circles
+# while still travelling with him the whole way — which is what AIRoleRushD does
+# outside the zone and what PRESSURE has never had. That is a larger change than
+# a floor and is not attempted here.
 #
 # The inside offset does NOT improve and is not claimed to: the parked-point
 # route reads a LARGER shade (+1.65 m vs +0.79 m) because it is measured off a
@@ -75,7 +91,7 @@ const IN_SHAPE_REL_M_S: float = 4.0
 const IN_SHAPE_GAP_M: float = 3.0 * SkaterAgentStateMachine.BLADE_REACH_M \
 		+ AIRoleHelpers.DEFENSIVE_ANTICIPATION_MAX_M \
 		+ SkaterAgentStateMachine.BLADE_REACH_M
-const MIN_SHARE_IN_SHAPE: float = 0.6
+const MIN_SHARE_IN_SHAPE: float = 0.5
 
 
 # The signed offset of `body` off the carrier→our-net line, positive toward the
@@ -112,6 +128,7 @@ func _rush(d_start: Vector3, c_start: Vector3) -> Dictionary:
 	var in_shape: int = 0
 	var samples: int = 0
 	var entry_inside: float = 0.0
+	var conceded: float = INF
 	for _t: int in int(SECS / DT):
 		duel.step()
 		if duel.carrier_id != 1:
@@ -120,6 +137,17 @@ func _rush(d_start: Vector3, c_start: Vector3) -> Dictionary:
 		if car.pos.z > ENTRY_Z:
 			continue
 		var dm: Object = duel._skater(2)
+		# How deep he was walked, over the whole rush — see the depth test below.
+		conceded = minf(conceded, dm.pos.distance_to(net))
+		# SHADOWING ONLY. Once the carrier is inside the house the defender's job
+		# stops being "travel with him" and becomes "contest him", and the two are
+		# different behaviours: standing a man up necessarily means NOT matching
+		# his velocity, so measuring in-shape through the contest reads a correct
+		# stand-up as a failure. That is not a threshold to loosen — it is a
+		# second behaviour, and it gets its own test rather than being averaged
+		# into this one.
+		if car.pos.distance_to(net) < AIZoneCoverage.HOUSE_TOP_DEPTH_M:
+			continue
 		if samples == 0:
 			entry_inside = _inside_offset(dm.pos, car.pos, net)
 		samples += 1
@@ -127,7 +155,8 @@ func _rush(d_start: Vector3, c_start: Vector3) -> Dictionary:
 				and (dm.vel - car.vel).length() < IN_SHAPE_REL_M_S:
 			in_shape += 1
 	return {"share": float(in_shape) / float(maxi(samples, 1)),
-			"samples": samples, "inside": entry_inside}
+			"samples": samples, "inside": entry_inside,
+			"conceded": conceded}
 
 
 func test_a_defender_with_a_trip_to_make_still_arrives_in_shape() -> void:
@@ -185,6 +214,65 @@ func test_a_defender_with_a_trip_to_make_still_arrives_in_shape() -> void:
 	# And he arrives on the INSIDE of the man, not trailing him to the middle.
 	assert_gt(inside_sum / float(n), 0.5,
 			"defenders are not angling the carrier off the middle")
+
+
+# ── Standing him up: the defender must not be walked to his own net ──────────
+#
+# The other half of the shadow, and the one the in-shape read above deliberately
+# stops measuring. A cut-off point defined relative to the carrier — his led
+# position, one stick goal-side — is correct CLOSING geometry, and tracking it
+# perfectly is therefore an instruction to retreat at the carrier's own speed for
+# as long as he keeps coming. Nothing said when to stop. Measured on the real
+# stack against a carrier who simply drives the middle, the pressurer rode a
+# constant ~6 m cushion from the tops of the circles to his own GOAL LINE and
+# never contested anything: you could walk him into his own net by skating at
+# him. AIRolePressure's house-gate floor is the fix.
+#
+#   Over the 9-start sweep below:                    no floor  →  with it
+#     defender's closest approach to his own net, mean   3.6 m      7.3 m
+#     worst single start                                 0.1 m      5.5 m
+#
+# The bar BOUNDS THE PATHOLOGY, not the tuning (this file's assertion philosophy).
+# What it has to catch is a defender standing in his own crease — the 0.1 m
+# reading, which is the reported defect — so it sits well above that and below
+# what the floor actually delivers. Pinning it nearer the house gate would be
+# pinning the floor's exact depth, which is a different and more brittle claim:
+# the floor releases once the carrier is inside the gate (a corner battle is a
+# place a pressurer belongs), so following him down from there is correct and
+# this reading is legitimately below the gate.
+const MIN_CONCEDED_DEPTH_M: float = 4.0
+
+
+func test_a_defender_is_not_walked_into_his_own_net() -> void:
+	var conceded_sum: float = 0.0
+	var worst: float = INF
+	var walked: Array[String] = []
+	var n: int = 0
+	for dz: float in [-8.0, -14.0, -20.0]:
+		var row: String = "  D z=%6.1f :" % dz
+		for cx: float in [-6.0, 0.0, 6.0]:
+			var r: Dictionary = _rush(Vector3(cx * 0.45, 0.0, dz),
+					Vector3(cx, 0.0, 8.0))
+			var c: float = r["conceded"]
+			if not is_finite(c):
+				row += "  x%+5.1f  (never entered)" % cx
+				continue
+			n += 1
+			conceded_sum += c
+			worst = minf(worst, c)
+			if c < MIN_CONCEDED_DEPTH_M:
+				walked.append("z%.0f/x%.0f" % [dz, cx])
+			row += "  x%+5.1f closest to own net %5.1f m" % [cx, c]
+		gut.p(row)
+	gut.p("  → defender's closest approach to his own net: mean %.1f m, worst %.1f m" % [
+			conceded_sum / float(maxi(n, 1)), worst])
+
+	assert_gt(n, 5, "too few entries to read anything")
+	assert_gt(conceded_sum / float(n), MIN_CONCEDED_DEPTH_M,
+			"defenders are being walked back toward their own net")
+	assert_eq(walked.size(), 0,
+			"a defender was walked inside the house on these rushes: %s"
+					% str(walked))
 
 
 # ── The layer: attackers vs a defence pair ───────────────────────────────────

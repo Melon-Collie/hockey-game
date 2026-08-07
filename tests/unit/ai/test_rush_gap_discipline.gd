@@ -29,11 +29,11 @@ extends GutTest
 # and the MOVING-FRAME ROUTE that retired all three:
 #
 #                              charging   step-up plan   approach limit   route
-#   mean up-ice speed at meet   4.2 m/s      2.4 m/s        2.2 m/s       1.0 m/s
-#   starts meeting at >3 m/s     27/35        12/35          12/35          5/35
-#   mean excursion off own net   10.9 m       4.2 m          5.1 m         0.7 m
-#   worst single excursion       28.5 m      10.8 m          9.2 m         2.0 m
-#   separation at the meet       0.69 m      0.57 m         0.84 m        2.85 m
+#   mean up-ice speed at meet   4.2 m/s      2.4 m/s        2.2 m/s       0.6 m/s
+#   starts meeting at >3 m/s     27/35        12/35          12/35          0/35
+#   mean excursion off own net   10.9 m       4.2 m          5.1 m         0.9 m
+#   worst single excursion       28.5 m      10.8 m          9.2 m         5.1 m
+#   separation at the meet       0.69 m      0.57 m         0.84 m        0.53 m
 #
 # The first three columns are all attempts to bound a CHARGE by placing the stand
 # somewhere a charge would end set. The fourth removes the charge instead: the
@@ -42,9 +42,14 @@ extends GutTest
 # that decays onto the rush's own by arrival, and RUSH_D1 no longer runs a
 # stand-placement bound at all (AIRoleRushD._settable_gap). The excursion
 # collapsing to under a metre is the visible shape of that: a defender who
-# understands the stand is coming to him does not go and fetch it. The separation
-# rising to a genuine stick-and-a-half is the other half — he is holding a gap
-# rather than repeatedly colliding with the man he could not slow down for.
+# understands the stand is coming to him does not go and fetch it.
+#
+# The route column read 1.0 m/s and 2.85 m of separation until AIRolePressure
+# gained its house-gate floor, which stops a defender being walked toward his own
+# net. He therefore MEETS the carrier instead of retreating in front of him, and
+# the separation falls accordingly. That is a contest, not a lunge — the up-ice
+# speed at the meet fell at the same time and no start is over the lunge bar now,
+# so he is closing while set.
 
 const Duel := preload("res://tests/unit/ai/duel_harness.gd")
 

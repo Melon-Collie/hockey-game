@@ -894,10 +894,10 @@ static func _we_possess(ctx: RoleContext) -> bool:
 static func numbers_floor(ctx: RoleContext, stand: Vector3) -> Vector3:
 	var read: AIRushRead = ctx.rush_read
 	var our_net: Vector3 = ctx.defending_goal_pos
-	var stand_d: float = _xz_distance(stand, our_net)
+	var stand_d: float = xz_distance(stand, our_net)
 	var deepest: float = stand_d
 	for lead: Vector3 in read.attacker_leads:
-		var d: float = _xz_distance(lead, our_net)
+		var d: float = xz_distance(lead, our_net)
 		if d < deepest:
 			deepest = d
 	if deepest >= stand_d:
@@ -988,9 +988,9 @@ static func neutral_station_target(ctx: RoleContext, stand: Vector3,
 	# when nobody has — which is silence, not an answer, in the one state where the
 	# puck belongs to nobody yet. Take whichever is deeper so both reasons bind.
 	if layer_stand.is_finite() \
-			and _xz_distance(layer_stand, our_net) < _xz_distance(sagged, our_net):
+			and xz_distance(layer_stand, our_net) < xz_distance(sagged, our_net):
 		sagged = layer_stand
-	if _xz_distance(sagged, our_net) >= AIZoneCoverage.HOUSE_TOP_DEPTH_M:
+	if xz_distance(sagged, our_net) >= AIZoneCoverage.HOUSE_TOP_DEPTH_M:
 		return sagged
 	return house_gate_floor(our_net, sagged)
 
@@ -1052,7 +1052,7 @@ static func home_layer_behind_me(ctx: RoleContext) -> bool:
 static func _attacker_behind(ctx: RoleContext, stand: Vector3,
 		was_holding: bool = false) -> bool:
 	var our_net: Vector3 = ctx.defending_goal_pos
-	var stand_d: float = _xz_distance(stand, our_net)
+	var stand_d: float = xz_distance(stand, our_net)
 	# "Behind me" means MEANINGFULLY behind, not merely a metre nearer the net: a
 	# defending winger covering the point sits LEVEL with a D and must not read as
 	# a man who has beaten him. The grounded span for "same layer" is the cover
@@ -1062,7 +1062,7 @@ static func _attacker_behind(ctx: RoleContext, stand: Vector3,
 	if was_holding:
 		margin += BEHIND_HOLD_EXTRA_M
 	for lead: Vector3 in ctx.rush_read.attacker_leads:
-		if _xz_distance(lead, our_net) < stand_d - margin:
+		if xz_distance(lead, our_net) < stand_d - margin:
 			return true
 	return false
 
@@ -1083,7 +1083,7 @@ static func self_race_vmax(ctx: RoleContext) -> float:
 			else AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
 	return BotSprintRules.race_speed(
 			ctx.self_max_speed, mult, s.stamina, s.sprint_locked,
-			_xz_distance(ctx.self_pos, ctx.defending_goal_pos))
+			xz_distance(ctx.self_pos, ctx.defending_goal_pos))
 
 
 # ── Last-man step-up discipline ──────────────────────────────────────────────
@@ -1239,6 +1239,29 @@ static func station_retreat_floor(ctx: RoleContext, fwd: Vector3,
 	return house_gate_floor(our_net, fwd)
 
 
+# The other side of the same line: hold `pos` OUT at the top of the circles when
+# it has been placed deeper than that. Where house_gate_floor bounds how far a
+# retreating station may sag, this bounds how far a defender may be PUSHED, and
+# the reason is the same one AIRoleRushD has always given for it — past the gate a
+# field skater duplicates the goalie, fights his own crease repel, and gets beaten
+# to the outside of a net he is standing on top of.
+#
+# Returns `pos` untouched when it is already outside the gate, and projects it out
+# along the net → pos ray otherwise (degenerate at the net itself: straight out
+# along the rink axis).
+static func hold_out_to_house_gate(our_net: Vector3, pos: Vector3) -> Vector3:
+	var dx: float = pos.x - our_net.x
+	var dz: float = pos.z - our_net.z
+	var dsq: float = dx * dx + dz * dz
+	var gate: float = AIZoneCoverage.HOUSE_TOP_DEPTH_M
+	if dsq >= gate * gate:
+		return pos
+	var dl: float = sqrt(dsq)
+	if dl < 0.001:
+		return Vector3(our_net.x, 0.0, our_net.z - signf(our_net.z) * gate)
+	return Vector3(our_net.x + dx * (gate / dl), 0.0, our_net.z + dz * (gate / dl))
+
+
 # The point on the net → `fwd` ray at the top of the circles: the deepest a field
 # skater should ever be pushed by a last-man bound. Below it he duplicates the
 # goalie, fights his own crease repel, and overshoots behind the goal line.
@@ -1252,7 +1275,7 @@ static func house_gate_floor(our_net: Vector3, fwd: Vector3) -> Vector3:
 	return Vector3(our_net.x + dx * k, 0.0, our_net.z + dz * k)
 
 
-static func _xz_distance(a: Vector3, b: Vector3) -> float:
+static func xz_distance(a: Vector3, b: Vector3) -> float:
 	var dx: float = b.x - a.x
 	var dz: float = b.z - a.z
 	return sqrt(dx * dx + dz * dz)

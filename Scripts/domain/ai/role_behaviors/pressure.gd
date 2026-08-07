@@ -151,6 +151,67 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# limit entirely, and any teammate home behind us skips it — which
 	# is every forecheck (F2/F3 are between F1 and our net by construction) and
 	# any in-zone look where a MARK is covering the house.
+	# DON'T BACK IN AHEAD OF A MAN WHO HASN'T GOT THERE YET. The cut-off above is
+	# defined entirely relative to the carrier — his LED position, one stick
+	# goal-side — so a defender who TRACKS IT PERFECTLY retreats at the carrier's
+	# own speed for as long as the carrier keeps coming. Measured on the real stack
+	# against a carrier who simply drives the middle: the pressurer rode a constant
+	# ~6 m cushion from the top of the circles to his own GOAL LINE (depth off our
+	# net 11.6 m -> 0.4 m), conceding the whole zone without contesting anything and
+	# arriving with the carrier still at full pace. You can walk him into his own
+	# net just by skating at him.
+	#
+	# The fix is a floor on the stand, NOT a smaller cushion. Two narrower repairs
+	# were tried and measured worse, and are recorded so they are not retried:
+	#   · dropping the anticipation LEAD once the defender is established
+	#     goal-side. The lead is load-bearing — it is what keeps the target ahead of
+	#     a moving man — and without it the stand sits behind him, so the route
+	#     chases the lag and dives at his body (separation at the meet over the gap
+	#     sweep 2.85 m -> 0.35 m, which is a collision, not a gap).
+	#   · bounding the cushion by the ice behind the DEFENDER. At the circles that
+	#     reads as "no cushion at all" against a carrier still 7 m out, which is the
+	#     same lunge by another route.
+	# The cushion itself is right; what was missing is any limit on where holding it
+	# may drag him.
+	#
+	# RUSH_D1 has refused exactly this since it was written
+	# (AIRoleRushD._clamp_to_house) and its reason applies verbatim: past the tops
+	# of the circles a field skater duplicates the goalie, fights his own crease
+	# repel, and gets beaten to the outside of a net he is standing on top of.
+	# PRESSURE simply never had the floor, which is why the DZONE handoff at the
+	# circle tops is precisely where the sag started.
+	#
+	# The floor RELEASES when the carrier himself reaches the gate, because then
+	# pressuring deep is the actual job — a corner battle, a walkout, a wraparound —
+	# and this must not become a rule that keeps a pressurer out of the low zone.
+	# What it removes is only the retreat AHEAD of him: the stand plants at the
+	# gate, the carrier keeps closing, and the gap collapses on its own.
+	# Keyed on the DEFENDER's own depth, not the target's. "Don't get walked past
+	# the circles" is a statement about this body, and the cut-off sits a full
+	# cushion ahead of the carrier — so testing the target instead fires the floor
+	# while the carrier is still ~6 m outside the gate, freezing the shadow early
+	# and costing the very tracking it is meant to protect (time-in-shape over the
+	# routing sweep 84% -> 62%). Keyed on the body it is inert until he has
+	# actually been pushed to the structure, and then it holds him there.
+	var gate: float = AIZoneCoverage.HOUSE_TOP_DEPTH_M
+	var hold_the_gate: bool = AIRoleHelpers.xz_distance(carrier_pos, our_net) > gate \
+			and AIRoleHelpers.xz_distance(ctx.self_pos, our_net) < gate
+	if hold_the_gate:
+		search_center = AIRoleHelpers.hold_out_to_house_gate(our_net, search_center)
+
+	# The approach bound below is the ICE-frame read, and it is retired for a live
+	# carrier for the same reason RUSH_D1's was (AIRoleRushD._settable_gap): it
+	# exists because a parked-point seek could only reach a stand by charging it
+	# and braking to zero, and the moving-frame route makes that structurally
+	# impossible instead — its commanded velocity is the stand's own plus a
+	# closing term that decays to nothing on arrival. Running both is two
+	# controllers on one axis, and the second one wins in the worst place: it
+	# names a stand at wherever the body already is, so the pressurer being walked
+	# toward his own net is forbidden from closing on the man walking him there.
+	# That is exactly the space this whole read is trying to take away.
+	#
+	# A loose puck keeps it — there is no man to ride, so the route is a point
+	# seek again and the trip genuinely needs bounding.
 	var min_depth: float = -INF
 	var depth_dir: Vector3 = Vector3.ZERO
 	if not AIRoleHelpers.has_support_behind(ctx):
@@ -165,6 +226,17 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 					+ (search_center.z - carrier_pos.z) * net_dir.z
 			var settable: float = AIRoleHelpers.settable_stand_depth(
 					ctx, carrier_pos, net_dir, want, closing)
+			# ...but never deeper than the house gate. The approach bound refuses a
+			# LUNGE UP-ICE; it must not end up ordering a retreat, and once a body
+			# has been pushed inside the gate that is what it does — it names a
+			# stand at wherever he already is while the gate names one at the
+			# circles, and between them no candidate is legal at all. The
+			# structural floor is the harder of the two: it is the one with a
+			# physical reason behind it, and letting it win only ever puts the
+			# pressurer FURTHER from his own net.
+			if hold_the_gate:
+				settable = minf(settable,
+						AIRoleHelpers.xz_distance(carrier_pos, our_net) - gate)
 			if settable > want:
 				# Push the whole candidate ring back onto the settable line, so
 				# the argmax still picks the lateral angle — it just picks it
@@ -227,7 +299,16 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
 	var found: bool = false
-	for c: Vector3 in candidates:
+	for raw: Vector3 in candidates:
+		# The gate is a CLAMP, not a filter. Rejecting candidates inside it empties
+		# the set whenever the whole ring is deep, and the argmax then falls
+		# through to "stand where you are" — which stops the retreat by accident
+		# rather than by choice, and drifts with whatever momentum the body had.
+		# Projecting each candidate out onto the gate keeps the set non-empty and
+		# leaves the argmax its real job: with the depth settled, pick the lateral
+		# ANGLE that takes the carrier's best option away.
+		var c: Vector3 = AIRoleHelpers.hold_out_to_house_gate(our_net, raw) \
+				if hold_the_gate else raw
 		if not AIRoleHelpers.is_legal_position(c):
 			continue
 		if not _is_goal_side(c, carrier_pos, our_net):
