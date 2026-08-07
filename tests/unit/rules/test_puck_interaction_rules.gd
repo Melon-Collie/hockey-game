@@ -269,3 +269,46 @@ func test_body_block_misses_a_puck_over_the_top_of_the_band() -> void:
 	assert_false(PuckInteractionRules.check_body_block(
 			Vector3(-1, 1.6, 0), Vector3(0, 1.6, 0), _AXIS, _REACH, _Y_BOT, _Y_TOP),
 			"a puck above the band clears the body")
+
+
+# ── sweep_separation ─────────────────────────────────────────────────────────
+# The diagnostic exposure of the quantity check_pickup / check_poke threshold on.
+# A claim miss reports a bare boolean, which cannot distinguish a boundary graze
+# from the host's rewind reconstructing something unrelated — that distinction is
+# what makes a claim-miss RATE readable at all, so the number has to be the
+# test's own rather than an endpoint approximation of it.
+
+func test_sweep_separation_agrees_with_the_check_it_exposes() -> void:
+	# The contract that matters: check_pickup passes exactly when the separation
+	# is within the radius. Sweep the radius across the measured separation and
+	# assert the two never disagree.
+	var pp := Vector3(0, 0, 0)
+	var pc := Vector3(1, 0, 0)
+	var bp := Vector3(0, 0, 0.5)
+	var bc := Vector3(1, 0, 0.5)
+	var sep: float = PuckInteractionRules.sweep_separation(pp, pc, bp, bc)
+	assert_almost_eq(sep, 0.5, 0.0001, "parallel sweeps 0.5 apart separate by 0.5")
+	assert_true(PuckInteractionRules.check_pickup(pp, pc, bp, bc, sep + 0.01),
+			"a radius above the separation must pass")
+	assert_false(PuckInteractionRules.check_pickup(pp, pc, bp, bc, sep - 0.01),
+			"a radius below the separation must fail")
+
+
+func test_sweep_separation_is_zero_when_the_sweeps_cross() -> void:
+	# A tunnelling contact — the case the swept test exists for. Separation 0 is
+	# what distinguishes "they touched" from "they nearly touched".
+	assert_almost_eq(PuckInteractionRules.sweep_separation(
+			Vector3(-1, 0, 0), Vector3(1, 0, 0),
+			Vector3(0, 0, -1), Vector3(0, 0, 1)), 0.0, 0.0001)
+
+
+func test_sweep_separation_reports_a_gross_miss_at_its_true_scale() -> void:
+	# The discriminating case: a boundary graze and a rewind failure must produce
+	# very different numbers, not just "false" twice.
+	var graze: float = PuckInteractionRules.sweep_separation(
+			Vector3.ZERO, Vector3(1, 0, 0), Vector3(0, 0, 0.4), Vector3(1, 0, 0.4))
+	var gross: float = PuckInteractionRules.sweep_separation(
+			Vector3.ZERO, Vector3(1, 0, 0), Vector3(0, 0, 3.0), Vector3(1, 0, 3.0))
+	assert_almost_eq(graze, 0.4, 0.0001)
+	assert_almost_eq(gross, 3.0, 0.0001)
+	assert_gt(gross / graze, 5.0, "the two failure kinds are orders apart, not both just 'false'")

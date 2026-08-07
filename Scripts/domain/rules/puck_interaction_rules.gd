@@ -20,6 +20,19 @@ static func check_poke(
 	return _segment_segment_dist_sq(puck_prev, puck_curr, blade_prev, blade_curr) <= radius * radius
 
 
+# The exact quantity check_pickup / check_poke threshold on, exposed for
+# diagnostics: closest approach between the swept puck and the swept blade over
+# the tick. A failed claim reports a bare boolean, which cannot distinguish a
+# boundary graze (the client's point-in-sphere send gate passing where the swept
+# test lands a hair outside) from the host's rewind putting the two somewhere
+# else entirely. Returned as a distance rather than re-derived from endpoints so
+# the number is the test's own, not an approximation of it.
+static func sweep_separation(
+		puck_prev: Vector3, puck_curr: Vector3,
+		blade_prev: Vector3, blade_curr: Vector3) -> float:
+	return sqrt(_segment_segment_dist_sq(puck_prev, puck_curr, blade_prev, blade_curr))
+
+
 # Body-block trigger: the puck's swept path (puck_prev→puck_curr) passes through the blocker's
 # body as a VERTICAL CYLINDER (matching the real torso, not a floating sphere). Horizontally
 # within `radius` of the body axis at the closest approach, AND — at that same point — inside

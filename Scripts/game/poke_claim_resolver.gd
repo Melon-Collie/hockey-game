@@ -178,6 +178,11 @@ func receive_claim(peer_id: int, host_timestamp: float,
 	NetworkTelemetry.record_poke_claim()
 	if not PuckInteractionRules.check_poke(puck_prev, puck_pos, blade_prev, blade_curr, PuckController.POKE_RADIUS):
 		NetworkTelemetry.record_poke_claim_miss()
+		# HOW badly (see PickupClaimResolver's matching call): ~1.0-1.2 is a
+		# boundary graze, >2 means the rewind reconstructed something unrelated.
+		NetworkTelemetry.record_claim_miss_separation(
+				PuckInteractionRules.sweep_separation(puck_prev, puck_pos, blade_prev, blade_curr),
+				PuckController.POKE_RADIUS)
 		return
 	# Pass the intended victim through so apply guards against the carrier
 	# having changed (X → Z) between claim send and apply. Looked up from the
