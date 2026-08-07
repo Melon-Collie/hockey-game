@@ -231,21 +231,29 @@ func test_drift_stopping_is_harder_than_pushing() -> void:
 
 
 func test_prime_and_read_penalty_share_one_definition_of_set() -> void:
-	# The quiet-eye credit is premised on being coiled and settled. A goalie the
-	# read penalty is calling unset must not simultaneously collect it, so both
-	# go through _unset_fraction and the prime gate sits inside its range.
+	# The quiet-eye credit is premised on being coiled and settled, and it is
+	# PRORATED by that rather than gated on it. Both the credit and the penalty go
+	# through _unset_fraction, so they can disagree by degree but never in kind.
 	var gc: GoalieController = _gc()
 	gc._build_rule_configs()
 	assert_almost_eq(gc._unset_fraction(), 0.0, 0.0001, "stopped goalie is set")
+	var full: float = GoalieBehaviorRules.prearmed_read_delay(
+			gc.reaction_delay, gc.prearmed_reaction_delay, gc._unset_fraction())
+	assert_almost_eq(full, gc.prearmed_reaction_delay, 0.0001,
+			"a coiled goalie collects the whole prime")
 	gc._velocity_x = gc.t_push_speed
-	assert_gt(gc._unset_fraction(), gc.set_unset_max,
-			"a goalie mid-T-push does not collect the primed read")
+	var pushing: float = GoalieBehaviorRules.prearmed_read_delay(
+			gc.reaction_delay, gc.prearmed_reaction_delay, gc._unset_fraction())
+	assert_gt(pushing, full, "a goalie mid-T-push collects less of it")
 	gc._velocity_x = 0.0
 	gc._lunge_active_timer = 0.1
-	assert_gt(gc._unset_fraction(), gc.set_unset_max,
-			"nor does one with a committed jab extended")
-	assert_between(gc.set_unset_max, 0.0, 0.5,
-			"the set band is a settling shuffle, not a push")
+	var lunging: float = GoalieBehaviorRules.prearmed_read_delay(
+			gc.reaction_delay, gc.prearmed_reaction_delay, gc._unset_fraction())
+	assert_almost_eq(lunging, gc.reaction_delay, 0.0001,
+			"a committed jab is fully unset — no credit at all")
+	# Additive-only holds at the boundary: the prime can never price a read
+	# SLOWER than the cold baseline, whatever the body is doing.
+	assert_lte(lunging, gc.reaction_delay)
 
 
 func test_movement_penalty_is_additive_only() -> void:

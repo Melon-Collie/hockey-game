@@ -1254,6 +1254,29 @@ static func unset_fraction(planar_speed: float, scrambling: bool, cfg: MovementR
 	return unset
 
 
+# The quiet-eye credit, PRORATED BY HOW SETTLED HE WAS. A fully coiled goalie
+# reads from `prearmed`, a fully moving one from `base`, and everything between
+# gets the share of the prime its stillness earned.
+#
+# The proration is the point. Quiet-eye is a fixation quality, and the research
+# it comes from (Panchuk & Vickers; CSA's set-and-sighted threshold) measures a
+# CONTINUUM of read quality against settle time — there is no speed at which a
+# keeper's prepared response vanishes between one frame and the next. Gating it
+# on a threshold instead made the credit all-or-nothing at ~0.6 m/s of the
+# goalie's own travel: a step across it flipped him from dropping on every slot
+# shot to dropping on none, and in tight — where he is still converging off the
+# rush and never settles inside the band at all — he collected it never. That is
+# the same binary-vs-proportional failure `movement_read_penalty` documents
+# above, in the larger of the two terms.
+#
+# Still additive-only in spirit: `unset` = 1 returns `base` exactly, so this can
+# never price a read SLOWER than the cold baseline, and the movement penalty
+# goes on top of whatever this returns.
+static func prearmed_read_delay(base: float, prearmed: float,
+		unset: float) -> float:
+	return lerpf(minf(prearmed, base), base, clampf(unset, 0.0, 1.0))
+
+
 # Extra read latency (s) from being caught unset. TWO different costs, because
 # "moving" and "scrambling" fail for different physical reasons and pricing them
 # with one number gets both wrong:

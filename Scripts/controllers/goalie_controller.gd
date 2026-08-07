@@ -271,11 +271,6 @@ extends Node
 @export var move_read_speed_delay: float = 0.04    # s — read latency when moving on his feet
 @export var move_read_scramble_delay: float = 0.12 # s — read latency while recovering / mid-lunge
 @export var move_read_reference_speed: float = 2.5 # m/s — planar speed counted as fully moving
-# Unset fraction (0..1) at or below which the goalie still counts as SET for the
-# quiet-eye prime (_is_set_in_slot). 0.25 of the reference speed ≈ 0.6 m/s — a
-# settling shuffle, not a push. Above it he is moving and does not collect the
-# primed read.
-@export var set_unset_max: float = 0.25
 # Deceleration available to kill lateral momentum during the reaction freeze,
 # as a fraction of `lateral_accel` (the accel he gets from a LOADED edge). Below
 # 1.0 because stopping is the harder half: a goalie caught mid-push has weight on
@@ -1124,6 +1119,10 @@ var _shot_commit_timer: float = 0.0
 # release itself (which clears the windup state) can't race it off.
 var _shot_read_timer: float = 0.0
 var _prime_linger_timer: float = 0.0
+# How unset he was when the prime was earned, 0 (coiled) → 1 (fully moving).
+# Prorates the credit at release; 1 means the prime is worth nothing, which is
+# the same read he gets with no prime at all.
+var _prime_unset: float = 1.0
 # ── Read staleness (see the read_lag export) ─────────────────────────────────
 # Ring of the shooter's published aim, one entry per host tick while the goalie
 # is reading a wind-up. `_lagged_aim` reads `read_lag` seconds back — the belief
@@ -1621,6 +1620,7 @@ func reset_to_crease() -> void:
 	_shot_commit_timer = 0.0
 	_shot_read_timer = 0.0
 	_prime_linger_timer = 0.0
+	_prime_unset = 1.0
 	_aim_history_idx = 0
 	_aim_history_len = 0
 	_read_blend = 1.0
@@ -1891,8 +1891,29 @@ func _update_shot_timer(delta: float) -> void:
 	# drop_max_time_to_impact. `low_drop_ready` is a level signal, so the drop
 	# fires on whichever tick the puck first becomes imminent.
 	var ttg: float = _puck_time_to_goal_line()
-	if ttg >= 0.0 and ttg <= drop_max_time_to_impact:
-		_enter_butterfly()
+	if ttg < 0.0 or ttg > drop_max_time_to_impact:
+		return
+	# A LIVE BEATEN-WIDE VERDICT OWNS THE DROP. The square butterfly and the post
+	# seal are both "go down now" and they race, but they answer different
+	# questions, and dropping square is the wrong answer to a lateral race already
+	# lost. Worse, it is self-erasing: going down changes his sealing reach, the
+	# puck reads as back inside it, and the verdict he was one confirmation tick
+	# from acting on disappears. Measured as the drop landing mid-window and the
+	# seal then never firing at all.
+	#
+	# THE DEFERRAL IS BOUNDED BY THE DROP'S OWN DEADLINE, because waiting on a
+	# verdict that will not arrive in time is how the reflex turns into a statue —
+	# he yields to a seal that never confirms and does nothing whatsoever. The
+	# pads have to START by `ttg - drop_time`, so the seal gets the window only
+	# while its remaining confirmation still fits inside it; past that the reflex
+	# takes over and he at least gets square pads down.
+	if _beaten_wide_committed:
+		return
+	if _beaten_wide_armed:
+		var remaining: float = lateral_commit_confirm_s - _beaten_wide_confirm_timer
+		if remaining <= maxf(ttg - butterfly_drop_speed, 0.0):
+			return
+	_enter_butterfly()
 
 # Seconds until the puck crosses this goalie's goal line on its current heading,
 # or -1 if it isn't approaching (moving parallel or away). Host-side only — uses
@@ -4133,25 +4154,45 @@ func _update_shot_commit(delta: float, carrier: Skater) -> void:
 		_shot_commit_timer = maxf(_shot_commit_timer - delta, 0.0)
 	if _prime_linger_timer > 0.0:
 		_prime_linger_timer = maxf(_prime_linger_timer - delta, 0.0)
+	# Best credit available THIS TICK, across both sources. INF means neither
+	# armed, which leaves any running linger holding the credit it was armed with.
+	var armed_unset: float = INF
 	if _is_reading_shot_threat(carrier):
 		_shot_commit_timer = prelean_commit_window
 		_shot_read_timer += delta
 		if _shot_read_timer >= prearm_read_time:
-			_prime_linger_timer = prearm_linger
+			# A completed windup fixation is the full credit: the response was
+			# programmed during the fixation, which is the thing quiet-eye
+			# measures. Movement is priced separately and additively.
+			armed_unset = 0.0
 		_push_aim_sample(carrier.predicted_shot_velocity)
 	else:
 		_shot_read_timer = 0.0
 		_aim_history_len = 0
-	# Set-and-sighted in the slot: a coiled, upright goalie with an opposing
-	# carrier already in tight is pre-programmed to react even without a held
-	# windup, so a quick slot release draws a reflex save ATTEMPT instead of
-	# freezing him in place (see the prearm doc-block). Refreshed every tick the
-	# threat sits in the slot; `prearm_linger` carries the prime across the release
-	# tick (which clears the carrier) into _on_puck_released. The movement-read
-	# penalty still ADDS on top at _on_puck_released, so a goalie caught scrambling
-	# in the slot claws the credit back — only a genuinely set goalie collects it.
-	if _is_set_in_slot(carrier):
-		_prime_linger_timer = prearm_linger
+	# Set-and-sighted in the slot: an upright goalie with an opposing carrier
+	# already in tight is pre-programmed to react even without a held windup, so a
+	# quick slot release draws a reflex save ATTEMPT instead of freezing him in
+	# place (see the prearm doc-block). Refreshed every tick the threat sits in the
+	# slot; `prearm_linger` carries the prime across the release tick (which clears
+	# the carrier) into _on_puck_released.
+	#
+	# The credit is PRORATED by how settled he is rather than gated on it. A
+	# threshold made this the difference between dropping on every slot shot and
+	# dropping on none, one step apart in his own travel speed, and in tight — where
+	# he is still converging off the rush — he never cleared it at all. The
+	# movement-read penalty still ADDS on top, so a scrambling goalie is charged
+	# twice over, as he should be.
+	if _carrier_in_prime_slot(carrier):
+		armed_unset = minf(armed_unset, _unset_fraction())
+	if is_inf(armed_unset):
+		return
+	# RE-PRICED EVERY TICK IT ARMS, never ratcheted. Carrying the best credit ever
+	# seen across a continuously refreshed prime lets a goalie who was coiled
+	# seconds ago collect the whole thing while he is being beaten wide — measured
+	# as him reading a shot fast enough to skip the post seal he had already lost
+	# the race to.
+	_prime_unset = armed_unset
+	_prime_linger_timer = prearm_linger
 
 # True when an opposing carrier in the slot is winding up a shot (the wrister's
 # frozen-puck coil or a slapshot charge) close enough that the goalie respects
@@ -4166,23 +4207,20 @@ func _is_reading_shot_threat(carrier: Skater) -> bool:
 	return carrier.current_shot_state == SkaterStateMachine.State.WRISTER_AIM \
 			or carrier.current_shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK
 
-# True when a SET, upright goalie has an opposing carrier already in tight (within
+# True when an upright goalie has an opposing carrier already in tight (within
 # `prime_slot_distance`, in front). Arms the slot-proximity prime — the goalie is
 # coiled and reacts reflexively on a quick release rather than freezing. No windup
 # state required (that's the point: quick slot snaps are the freeze case). See the
 # prearm doc-block for why this is an ATTEMPT enabler, not a save buff.
 #
-# The set-ness test is the same `_unset_fraction` the read penalty uses, so the
-# prime and the penalty cannot disagree about the same body. Being coiled is the
-# whole premise of the credit: a goalie still pushing across has neither the
-# loaded edge nor the settled sightline that pre-programs the response, so he
-# does not collect it.
-func _is_set_in_slot(carrier: Skater) -> bool:
-	# Geometry first: it early-outs on the common cases (no carrier, own team, not
-	# upright, already reacting) without the set-ness solve's sqrt. Per-tick path.
-	if not _opposing_carrier_in_front(carrier, prime_slot_distance):
-		return false
-	return _unset_fraction() <= set_unset_max
+# RANGE ONLY. How settled he is prices the credit at the call site rather than
+# vetoing it here, through the same `_unset_fraction` the read penalty uses — so
+# the prime and the penalty still cannot disagree about the same body, they just
+# disagree by degree now instead of by cliff.
+func _carrier_in_prime_slot(carrier: Skater) -> bool:
+	# Geometry only, and it early-outs on the common cases (no carrier, own team,
+	# not upright, already reacting). Per-tick path.
+	return _opposing_carrier_in_front(carrier, prime_slot_distance)
 
 # Shared geometric core of the windup read and the slot-proximity prime: `carrier`
 # is an opposing puck-carrier in front of the goalie (slot side, not behind the
@@ -4532,8 +4570,11 @@ func _on_puck_released() -> void:
 	var leg_delay: float = result.reaction_delay
 	var arm_cut: float = 0.0
 	if _prime_linger_timer > 0.0:
-		leg_delay = minf(leg_delay, prearmed_reaction_delay)
-		arm_cut = maxf(reaction_delay - prearmed_reaction_delay, 0.0)
+		leg_delay = minf(leg_delay, GoalieBehaviorRules.prearmed_read_delay(
+				reaction_delay, prearmed_reaction_delay, _prime_unset))
+		# Falls out of the leg read rather than being priced twice: whatever the
+		# prime bought the legs, it bought the arms.
+		arm_cut = maxf(reaction_delay - leg_delay, 0.0)
 	# WHERE he thinks it is going comes from the stale wind-up read; WHEN and
 	# WHETHER come from the release he actually saw. A stable aim makes the two
 	# identical — a telegraphed shot is read exactly as well as before R1.
