@@ -149,23 +149,9 @@ const HYSTERESIS_PENALTY_S: float = 0.2
 # above use the time-based HYSTERESIS_PENALTY_S instead.)
 const HYSTERESIS_PENALTY_M: float = 1.0
 
-# DZONE: PRESSURE + MARK own their positional targets in their
-# role behaviors. No DZONE-specific anchor constants left.
-
-# OZONE: FINISHER + SUPPORT now compute their own targets in their
-# role modules (Step 2 of the no-anchors refactor). Anchor formulas
-# deleted; the brain assigns slots semantically without consulting
-# slot_anchor for these roles.
-
-# TRANS_DO: OUTLET + SUPPORT also own their own targets — anchor
-# formulas deleted.
-
-# TRANS_OD: the rush layers own their positional targets in their role
-# behaviors (AIRoleRushD / AIRoleTrack). No TRANS_OD-specific anchor
-# constants left.
-
-# NEUTRAL: CHASE + FLANK_L/R. Roles own their positional
-# targets — no NEUTRAL-specific anchor constants.
+# This file assigns slots and nothing else. Every role owns its own positional
+# target in its behavior module, computed per dispatch off in-game references —
+# there are no anchor constants here for any state.
 
 
 # Returns the list of slots for a given state, in canonical order.
@@ -191,14 +177,6 @@ static func slots_for_state(state: int) -> Array[int]:
 			return []
 
 
-# Carrier doesn't have a brain anchor — they're driven by the carrier
-# utility AI in `_state_carry`. Every other role owns its positional
-# target in its role-behavior module; slot_anchor is dead surface that
-# Step 3 of the no-anchors refactor will delete entirely.
-static func slot_anchor(slot: Slot, carrier_pos: Vector3) -> Vector3:
-	if slot == Slot.CARRIER:
-		return carrier_pos
-	return Vector3.ZERO
 
 
 # Assigns each teammate to a slot. Returns Dictionary[peer_id, Slot].

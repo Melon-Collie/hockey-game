@@ -36,7 +36,7 @@ class_name AIRoleSupport
 # covering set beats him trivially and the trailer joins the rush.
 #
 # Search center is derived from in-game references (the carrier's
-# position) rather than ctx.anchor. Polar samples around the carrier
+# position). Polar samples around the carrier
 # feed the score function; the counter cost penalizes candidates that
 # leave the counter uncovered, biasing toward recoverable depth.
 #

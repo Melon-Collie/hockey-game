@@ -27,9 +27,9 @@ const TICK_PERIOD: float = 1.0 / 6.0
 # Strong-side X is sign(puck.x) but with a hysteresis band so the
 # strong/weak side doesn't flip every tick when the puck cycles
 # through center. Once we've picked +1, only flip to -1 when puck.x
-# crosses below -STRONG_SIDE_HYSTERESIS_M, and vice versa. Without
-# this, ANCHOR / FINISHER / etc. anchors flip strong-side rapidly on
-# a corner-to-corner cycle and bots try to switch sides every brain tick.
+# crosses below -STRONG_SIDE_HYSTERESIS_M, and vice versa. Without this,
+# every strong/weak-sided role's geometry flips on a corner-to-corner cycle
+# and bots try to switch sides every brain tick.
 const STRONG_SIDE_HYSTERESIS_M: float = 1.5
 
 var team_id: int = 0
@@ -116,9 +116,9 @@ var _cadence_offset_s: float = 0.0
 # puck-carrier change makes the current slot assignment stale.
 var _force_tick_pending: bool = false
 # Set of peer_ids that should NOT receive a slot assignment. Used by the
-# tutorial to puppet a bot in scripted mode — the puppeted bot's slot
-# would otherwise drag it back to a role anchor each brain tick. Kept as
-# a Dictionary[int, bool] for O(1) `has()` lookups.
+# tutorial to puppet a bot in scripted mode — the puppeted bot's slot would
+# otherwise have its role behavior steering it each brain tick. Kept as a
+# Dictionary[int, bool] for O(1) `has()` lookups.
 var _excluded_peers: Dictionary = {}
 var _team_id_by_peer: Dictionary = {}
 # Live per-peer AISkaterCaps from PlayerRegistry (memoized), so man-marking reads
@@ -193,8 +193,8 @@ func force_retick() -> void:
 
 # Exclude a peer from slot assignment. Used by the tutorial when a bot is
 # put into scripted/puppet mode — without this the brain would assign it a
-# role and downstream get_slot / get_anchor calls would yank it toward an
-# anchor each tick. Include is the inverse.
+# role and its behavior module would steer it each tick. Include is the
+# inverse.
 func exclude_skater(peer_id: int) -> void:
 	_excluded_peers[peer_id] = true
 	slot_assignments.erase(peer_id)
@@ -293,9 +293,9 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 				snapshot, team_id, _own_goal_z, state, _team_id_by_peer,
 				prev_assignments, _strong_x, _caps_by_peer)
 	# Drop excluded peers (puppeted tutorial bots) so neither they nor any
-	# downstream consumer of get_slot / get_anchor pulls them toward a slot
-	# anchor. AIRoleSlots.assign already may have given them a slot — erase
-	# after the fact rather than touching the call signature.
+	# downstream consumer of get_slot steers them. AIRoleSlots.assign already
+	# may have given them a slot — erase after the fact rather than touching
+	# the call signature.
 	for excluded_pid: int in _excluded_peers:
 		slot_assignments.erase(excluded_pid)
 
@@ -550,25 +550,6 @@ func ping_pass_target(peer_id: int) -> int:
 	return ping_directives.pass_target_for(peer_id)
 
 
-# Computes the world-space anchor for a given peer's current slot.
-# Returns Vector3.ZERO if the peer isn't assigned a slot.
-func get_anchor(peer_id: int, snapshot: WorldSnapshot) -> Vector3:
-	var slot: int = slot_assignments.get(peer_id, AIRoleSlots.Slot.NONE)
-	if slot == AIRoleSlots.Slot.NONE:
-		return Vector3.ZERO
-	if snapshot == null or snapshot.puck_state == null:
-		return Vector3.ZERO
-	var puck_pos: Vector3 = snapshot.puck_state.position
-	var carrier_pos: Vector3 = puck_pos
-	var carrier_pid: int = snapshot.puck_state.carrier_peer_id
-	if carrier_pid != -1 and snapshot.skater_states.has(carrier_pid):
-		carrier_pos = snapshot.skater_states[carrier_pid].position
-	if team_size >= 5:
-		return AIRoleSlots5.slot_anchor(
-				slot, _own_goal_z, _strong_x, puck_pos, carrier_pos)
-	return AIRoleSlots.slot_anchor(slot, carrier_pos)
-
-
 # TeamStrategyView interface: expose the two fields the role context reads so the
 # frozen TeamBrainView can mirror them behind the same method surface.
 func get_team_size() -> int:
@@ -597,7 +578,7 @@ func get_view() -> TeamBrainView:
 	return _view
 
 
-func build_view(snapshot: WorldSnapshot) -> void:
+func build_view() -> void:
 	if _view == null:
 		_view = TeamBrainView.new()
 	var v: TeamBrainView = _view
@@ -611,14 +592,11 @@ func build_view(snapshot: WorldSnapshot) -> void:
 	_freeze_bool_dict(_one_timer_ready_by_peer, v.one_timer_ready_by_peer)
 	_freeze_float_dict(threat_shoot_base_by_opp, v.threat_shoot_base)
 	v.rush.copy_from(rush_read)
-	# Per-slotted-peer reads: the anchor (recomputed here against the live frame
-	# so it stays per-frame fresh) and the resolved ping directives.
-	v.anchor_by_peer.clear()
+	# Per-slotted-peer reads: the resolved ping directives.
 	v.ping_move_by_peer.clear()
 	v.ping_shoot_by_peer.clear()
 	v.ping_pass_by_peer.clear()
 	for pid: int in slot_assignments:
-		v.anchor_by_peer[pid] = get_anchor(pid, snapshot)
 		v.ping_move_by_peer[pid] = ping_directives.move_target_for(pid)
 		v.ping_shoot_by_peer[pid] = ping_directives.shoot_ping_for(pid)
 		v.ping_pass_by_peer[pid] = ping_directives.pass_target_for(pid)

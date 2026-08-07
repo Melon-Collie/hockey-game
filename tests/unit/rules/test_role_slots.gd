@@ -102,12 +102,6 @@ func test_slots_for_neutral() -> void:
 	assert_true(slots.has(AIRoleSlots.Slot.FLANK_R))
 
 
-# ─── Slot anchors ───────────────────────────────────────────────────────────
-# slot_anchor() is now dead surface. Every role owns its positional
-# target in its role-behavior module. Step 3 (final cleanup) deletes
-# the function entirely.
-
-
 # ─── assign() ───────────────────────────────────────────────────────────────
 
 func test_assign_dzone_distributes_slots() -> void:

@@ -18,9 +18,6 @@ var defending_goal_pos: Vector3 = Vector3.ZERO
 # +1 if own goal sits at +GOAL_LINE_Z (Team 0), -1 otherwise. "Forward"
 # (toward attacking goal) along Z is `-own_goal_dir`.
 var own_goal_dir: float = 1.0
-# TeamBrain anchor for this bot's current slot. May be Vector3.ZERO when
-# unassigned (first ticks); roles fall back to self_pos in that case.
-var anchor: Vector3 = Vector3.ZERO
 # Team-strategy read surface for queries like get_slot(other_peer_id). Holds the
 # live TeamBrain in unit tests and the frozen TeamBrainView in production dispatch
 # (both are TeamStrategyView) — see docs/ai-threading-plan.md, Phase 3a.

@@ -50,24 +50,10 @@ const POLAR_ANGLES: Array[float] = [
 
 # ── Candidate generation ─────────────────────────────────────────────────────
 
-# Returns the standard off-puck candidate set: anchor + self
-# (stand-still) + 8 polar samples around the anchor at SEARCH_STEP_M.
-# Polar pattern is fixed-cardinal (0°, 45°, ..., 315°) — roles that
-# need slot-oriented search (like CARRIER) roll their own.
-#
-# Phase 4d / Step 2 of the no-anchors refactor: roles increasingly
-# compute their own search center from in-game refs (carrier pos,
-# nets, etc.) instead of leaning on ctx.anchor. New code should
-# call `generate_candidates_around(self_pos, center)` directly.
-static func generate_candidates(ctx: RoleContext) -> Array[Vector3]:
-	return generate_candidates_around(ctx.self_pos, ctx.anchor)
-
-
 # Returns the standard 10-candidate set centered on `center`:
 # `center` itself + `self_pos` (stand-still) + 8 polar samples
-# around `center` at SEARCH_STEP_M. Use this when a role wants to
-# pick its own search center from in-game references rather than
-# inheriting whatever ctx.anchor happens to be.
+# around `center` at SEARCH_STEP_M. Every role picks its own search
+# center from in-game references (the carrier, a man, our net).
 #
 # `with_inner_ring` appends 8 more polar samples at half step so the
 # argmax can express small corrections instead of jumping in 3 m

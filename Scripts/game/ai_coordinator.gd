@@ -438,7 +438,7 @@ func _worker_loop() -> void:
 		for brain: TeamBrain in _worker_brains:
 			brain.tick(d, snap)
 		for brain: TeamBrain in _worker_brains:
-			brain.build_view(snap)
+			brain.build_view()
 		last_brain_us = Time.get_ticks_usec() - t0
 		for b: AIController in _worker_bots:
 			b.decide(snap, d)

@@ -16,7 +16,7 @@ const OUR_NET_Z: float = 26.65   # Team 0 defends +Z
 const OPP_NET_Z: float = -OUR_NET_Z
 
 
-func _make_ctx(self_pos: Vector3, anchor: Vector3, carrier_pid: int = -1,
+func _make_ctx(self_pos: Vector3, carrier_pid: int = -1,
 		skaters: Array = []) -> RoleContext:
 	var snap := WorldSnapshot.new()
 	if skaters.is_empty():
@@ -54,7 +54,6 @@ func _make_ctx(self_pos: Vector3, anchor: Vector3, carrier_pid: int = -1,
 	ctx.attacking_goal_pos = Vector3(0.0, 0.0, OPP_NET_Z)
 	ctx.defending_goal_pos = Vector3(0.0, 0.0, OUR_NET_Z)
 	ctx.own_goal_dir = 1.0
-	ctx.anchor = anchor
 	ctx.team_id_by_peer = team_map
 	return ctx
 
@@ -67,7 +66,7 @@ func test_supports_loose_puck_instead_of_freezing() -> void:
 	# puck and present a support option. Bot starts buried deep in our
 	# own end; target must advance toward the play, never self_pos.
 	var self_pos := Vector3(10, 0, 22)   # buried deep in our own end
-	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO)   # loose puck at origin
+	var ctx: RoleContext = _make_ctx(self_pos)   # loose puck at origin
 	var d: RoleDecision = AIRoleSupport.decide(ctx)
 	assert_ne(d.target_position, self_pos,
 			"loose puck → support the play, don't freeze at self_pos")
@@ -81,7 +80,7 @@ func test_falls_back_to_self_pos_when_opp_has_puck() -> void:
 		[1, TEAM_ID, self_pos, Vector3.ZERO],
 		[200, 1 - TEAM_ID, Vector3(0, 0, -10), Vector3.ZERO],
 	]
-	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 200, skaters)
+	var ctx: RoleContext = _make_ctx(self_pos, 200, skaters)
 	var d: RoleDecision = AIRoleSupport.decide(ctx)
 	assert_eq(d.target_position, self_pos,
 			"opp carrier → no offensive context, fall back to self_pos")
@@ -95,7 +94,7 @@ func test_returns_a_legal_position_when_carrier_is_teammate() -> void:
 		[1, TEAM_ID, Vector3(0, 0, -10), Vector3.ZERO],   # us (SUPPORT)
 		[100, TEAM_ID, carrier_pos, Vector3.ZERO],        # carrier
 	]
-	var ctx: RoleContext = _make_ctx(Vector3(0, 0, -10), Vector3.ZERO, 100, skaters)
+	var ctx: RoleContext = _make_ctx(Vector3(0, 0, -10), 100, skaters)
 	var d: RoleDecision = AIRoleSupport.decide(ctx)
 	assert_true(absf(d.target_position.x) <= GameRules.RINK_HALF_WIDTH,
 			"x within rink")
@@ -117,7 +116,7 @@ func test_stays_goal_side_of_carrier() -> void:
 		[1, TEAM_ID, self_pos, Vector3.ZERO],          # us (SUPPORT)
 		[100, TEAM_ID, carrier_pos, Vector3.ZERO],     # carrier
 	]
-	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	var ctx: RoleContext = _make_ctx(self_pos, 100, skaters)
 	var d: RoleDecision = AIRoleSupport.decide(ctx)
 	assert_true(
 			ctx.own_goal_dir * d.target_position.z
@@ -144,7 +143,7 @@ func test_anti_crowding_avoids_candidates_near_teammates() -> void:
 		[100, TEAM_ID, carrier_pos, Vector3.ZERO],               # carrier
 		[110, TEAM_ID, crowding_teammate_pos, Vector3.ZERO],     # squatting on a candidate
 	]
-	var ctx: RoleContext = _make_ctx(Vector3(8, 0, 0), Vector3.ZERO, 100, skaters)
+	var ctx: RoleContext = _make_ctx(Vector3(8, 0, 0), 100, skaters)
 	var d: RoleDecision = AIRoleSupport.decide(ctx)
 	var dist_to_teammate: float = d.target_position.distance_to(crowding_teammate_pos)
 	assert_gt(dist_to_teammate, AIRoleHelpers.ANTI_CROWD_RADIUS_M - 0.01,
@@ -165,7 +164,7 @@ func test_exposure_pulls_target_higher_when_opp_threatens_recovery() -> void:
 		[1, TEAM_ID, support_pos, Vector3.ZERO],
 		[100, TEAM_ID, carrier_pos, Vector3.ZERO],
 	]
-	var ctx_a: RoleContext = _make_ctx(support_pos, Vector3.ZERO, 100, skaters_no_threat)
+	var ctx_a: RoleContext = _make_ctx(support_pos, 100, skaters_no_threat)
 	var no_threat_target: Vector3 = AIRoleSupport.decide(ctx_a).target_position
 
 	var skaters_threat: Array = [
@@ -173,7 +172,7 @@ func test_exposure_pulls_target_higher_when_opp_threatens_recovery() -> void:
 		[100, TEAM_ID, carrier_pos, Vector3.ZERO],
 		[200, 1 - TEAM_ID, Vector3(0, 0, OUR_NET_Z - 10), Vector3(0, 0, 8)],
 	]
-	var ctx_b: RoleContext = _make_ctx(support_pos, Vector3.ZERO, 100, skaters_threat)
+	var ctx_b: RoleContext = _make_ctx(support_pos, 100, skaters_threat)
 	var threat_target: Vector3 = AIRoleSupport.decide(ctx_b).target_position
 
 	assert_true(threat_target.z >= no_threat_target.z - 0.01,
@@ -189,7 +188,7 @@ func test_no_opponents_means_no_exposure_penalty() -> void:
 		[1, TEAM_ID, Vector3(0, 0, -10), Vector3.ZERO],
 		[100, TEAM_ID, carrier_pos, Vector3.ZERO],
 	]
-	var ctx: RoleContext = _make_ctx(Vector3(0, 0, -10), Vector3.ZERO, 100, skaters)
+	var ctx: RoleContext = _make_ctx(Vector3(0, 0, -10), 100, skaters)
 	var d: RoleDecision = AIRoleSupport.decide(ctx)
 	assert_true(absf(d.target_position.x) <= GameRules.RINK_HALF_WIDTH)
 	assert_true(absf(d.target_position.z) <= GameRules.GOAL_LINE_Z)
@@ -240,7 +239,7 @@ func test_crease_lurker_does_not_zero_the_high_stations() -> void:
 		[200, 1, Vector3(-7.8, 0, -21.8), Vector3.ZERO],       # cycle pressure on the carrier
 		[210, 1, Vector3(0, 0, OUR_NET_Z - 2), Vector3.ZERO],  # crease lurker
 	]
-	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	var ctx: RoleContext = _make_ctx(self_pos, 100, skaters)
 	_add_opp_goalie(ctx, carrier_pos)
 	var d: RoleDecision = AIRoleSupport.decide(ctx)
 	assert_lt(d.target_position.z, -8.0,
@@ -281,7 +280,7 @@ func test_swings_off_a_covered_high_post_to_a_live_outlet() -> void:
 		[200, 1, lane_blocker, Vector3.ZERO],           # on the high-post lane
 		[210, 1, Vector3(-2, 0, -23), Vector3.ZERO],
 	]
-	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	var ctx: RoleContext = _make_ctx(self_pos, 100, skaters)
 	_add_opp_goalie(ctx, carrier_pos)
 	# Keeper drawn OUT challenging the deep-corner carrier — the regime
 	# where feed value genuinely differentiates stations. (A HOME keeper
@@ -317,7 +316,7 @@ func test_plays_the_high_post_when_the_carrier_works_the_oz_corner() -> void:
 		[200, 1, Vector3(-6, 0, -21), Vector3.ZERO],   # defenders collapsed low
 		[210, 1, Vector3(-2, 0, -23), Vector3.ZERO],
 	]
-	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	var ctx: RoleContext = _make_ctx(self_pos, 100, skaters)
 	_add_opp_goalie(ctx, carrier_pos)
 	var d: RoleDecision = AIRoleSupport.decide(ctx)
 	assert_gt(d.target_position.distance_to(carrier_pos), AIRoleSupport.SEARCH_RADIUS_M + 1.0,
@@ -354,7 +353,7 @@ func test_deep_trailer_tracks_the_rush_past_a_beaten_forechecker() -> void:
 		[100, TEAM_ID, carrier_pos, Vector3.ZERO],         # carrier at NZ
 		[200, 1, Vector3(0, 0, OUR_NET_Z - 4), Vector3.ZERO],  # beaten forechecker, deep in our zone
 	]
-	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	var ctx: RoleContext = _make_ctx(self_pos, 100, skaters)
 	var d: RoleDecision = AIRoleSupport.decide(ctx)
 	assert_lt(d.target_position.z, self_pos.z - 8.0,
 			"the deep trailer advances up toward the rush instead of stranding"
@@ -374,7 +373,7 @@ func test_transition_keeps_the_carrier_orbit_trail() -> void:
 		[1, TEAM_ID, self_pos, Vector3.ZERO],
 		[100, TEAM_ID, carrier_pos, Vector3.ZERO],
 	]
-	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	var ctx: RoleContext = _make_ctx(self_pos, 100, skaters)
 	var d: RoleDecision = AIRoleSupport.decide(ctx)
 	assert_lt(d.target_position.distance_to(carrier_pos),
 			AIRoleSupport.SEARCH_RADIUS_M + 1.0,

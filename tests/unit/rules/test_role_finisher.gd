@@ -19,7 +19,7 @@ func _make_skater(pid: int, team: int, pos: Vector3,
 	return [pid, team, pos, 2 if is_elevated else 0]
 
 
-func _make_ctx(self_pos: Vector3, anchor: Vector3,
+func _make_ctx(self_pos: Vector3,
 		puck_pos: Vector3, puck_vel: Vector3,
 		skaters: Array = []) -> RoleContext:
 	# Build a snapshot with the given puck and skaters. If `skaters`
@@ -59,7 +59,6 @@ func _make_ctx(self_pos: Vector3, anchor: Vector3,
 	ctx.attacking_goal_pos = Vector3(0.0, 0.0, OPP_NET_Z)
 	ctx.defending_goal_pos = Vector3(0.0, 0.0, OUR_NET_Z)
 	ctx.own_goal_dir = 1.0
-	ctx.anchor = anchor
 	ctx.team_id_by_peer = team_map
 	return ctx
 
@@ -70,7 +69,7 @@ func test_hold_when_puck_too_slow() -> void:
 	# Puck heading at our offensive goal but below INCOMING_SHOT_SPEED.
 	var anchor := Vector3(-2.0, 0.0, -22.0)  # back-door anchor in OZ
 	var ctx: RoleContext = _make_ctx(
-			Vector3(-2.0, 0.0, -22.0), anchor,
+			Vector3(-2.0, 0.0, -22.0),
 			Vector3(0.0, 0.0, -10.0), Vector3(0.0, 0.0, -8.0))  # 8 m/s — below 12 m/s gate
 	var d: RoleDecision = AIRoleFinisher.decide(ctx)
 	assert_eq(d.target_position, anchor)
@@ -82,7 +81,7 @@ func test_hold_when_puck_heading_away_from_goal() -> void:
 	# toward our offensive goal.
 	var anchor := Vector3(-2.0, 0.0, -22.0)
 	var ctx: RoleContext = _make_ctx(
-			Vector3(-2.0, 0.0, -22.0), anchor,
+			Vector3(-2.0, 0.0, -22.0),
 			Vector3(0.0, 0.0, -10.0), Vector3(0.0, 0.0, 20.0))
 	var d: RoleDecision = AIRoleFinisher.decide(ctx)
 	assert_eq(d.target_position, anchor)
@@ -92,7 +91,7 @@ func test_hold_when_puck_heading_away_from_goal() -> void:
 func test_hold_when_no_puck_state() -> void:
 	var anchor := Vector3(-2.0, 0.0, -22.0)
 	var ctx: RoleContext = _make_ctx(
-			Vector3(-2.0, 0.0, -22.0), anchor,
+			Vector3(-2.0, 0.0, -22.0),
 			Vector3.ZERO, Vector3.ZERO)
 	ctx.snapshot.puck_state = null
 	var d: RoleDecision = AIRoleFinisher.decide(ctx)
@@ -110,7 +109,7 @@ func test_tip_shifts_anchor_onto_puck_path_and_aims_at_goal() -> void:
 	var anchor := Vector3(-2.0, 0.0, -22.0)
 	var teammate_pos := Vector3(4.0, 0.0, -15.0)
 	var ctx: RoleContext = _make_ctx(
-			Vector3(-2.0, 0.0, -22.0), anchor,
+			Vector3(-2.0, 0.0, -22.0),
 			teammate_pos, Vector3(-3.0, 0.0, -15.0),
 			[
 				_make_skater(1, TEAM_ID, Vector3(-2.0, 0.0, -22.0), false),
@@ -136,7 +135,7 @@ func test_lift_and_tip_when_shooter_is_elevated() -> void:
 	var anchor := Vector3(-2.0, 0.0, -22.0)
 	var teammate_pos := Vector3(4.0, 0.0, -15.0)
 	var ctx: RoleContext = _make_ctx(
-			Vector3(-2.0, 0.0, -22.0), anchor,
+			Vector3(-2.0, 0.0, -22.0),
 			teammate_pos, Vector3(-3.0, 0.0, -15.0),
 			[
 				_make_skater(1, TEAM_ID, Vector3(-2.0, 0.0, -22.0), false),
@@ -158,7 +157,7 @@ func test_ground_tip_does_not_lift_blade() -> void:
 	var anchor := Vector3(-2.0, 0.0, -22.0)
 	var teammate_pos := Vector3(4.0, 0.0, -15.0)
 	var ctx: RoleContext = _make_ctx(
-			Vector3(-2.0, 0.0, -22.0), anchor,
+			Vector3(-2.0, 0.0, -22.0),
 			teammate_pos, Vector3(-3.0, 0.0, -15.0),
 			[
 				_make_skater(1, TEAM_ID, Vector3(-2.0, 0.0, -22.0), false),
@@ -178,7 +177,7 @@ func test_hold_when_puck_path_crossing_is_in_past() -> void:
 	# falls back to self_pos = anchor.
 	var anchor := Vector3(-2.0, 0.0, -21.0)
 	var ctx: RoleContext = _make_ctx(
-			Vector3(-2.0, 0.0, -21.0), anchor,
+			Vector3(-2.0, 0.0, -21.0),
 			Vector3(0.0, 0.0, -23.0),  # puck DEEPER (more -Z) than back-door
 			Vector3(0.0, 0.0, -15.0))  # heading further toward opp goal — away from us
 	var d: RoleDecision = AIRoleFinisher.decide(ctx)
@@ -193,7 +192,7 @@ func test_positioning_falls_back_to_self_pos_when_no_carrier() -> void:
 	# reassign within a frame).
 	var self_pos := Vector3(-2.0, 0.0, -22.0)
 	var ctx: RoleContext = _make_ctx(
-			self_pos, Vector3.ZERO,
+			self_pos,
 			Vector3(0.0, 0.0, -10.0), Vector3.ZERO)  # slow puck → reactive returns null
 	var d: RoleDecision = AIRoleFinisher.decide(ctx)
 	assert_eq(d.target_position, self_pos,
@@ -208,7 +207,7 @@ func test_positioning_picks_legal_position_when_carrier_present() -> void:
 	var anchor := Vector3(-2.0, 0.0, -22.0)
 	var carrier_pos := Vector3(5.0, 0.0, -22.0)  # OZ corner, strong-side
 	var ctx: RoleContext = _make_ctx(
-			Vector3(-2.0, 0.0, -22.0), anchor,
+			Vector3(-2.0, 0.0, -22.0),
 			carrier_pos, Vector3.ZERO,  # carrier holds puck, no shot in flight
 			[
 				_make_skater(1, TEAM_ID, Vector3(-2.0, 0.0, -22.0), false),
@@ -247,7 +246,7 @@ func _stage_x_for_strong_side(strong_x: float) -> float:
 	# weak-side search bias.
 	var carrier_pos := Vector3(6.0, 0.0, -20.0)
 	var ctx: RoleContext = _make_ctx(
-			Vector3(0.0, 0.0, -20.0), Vector3.ZERO,
+			Vector3(0.0, 0.0, -20.0),
 			carrier_pos, Vector3.ZERO,
 			[
 				_make_skater(1, TEAM_ID, Vector3(0.0, 0.0, -20.0), false),
@@ -294,7 +293,7 @@ func _cycle_ctx(skaters: Array) -> RoleContext:
 	# half-wall; the finisher (peer 1) reads its staging spot. Puck carried
 	# (not a shot), so positioning mode runs.
 	var ctx: RoleContext = _make_ctx(
-			Vector3(-3.0, 0.0, -20.0), Vector3.ZERO,
+			Vector3(-3.0, 0.0, -20.0),
 			Vector3(8.0, 0.0, -20.0), Vector3.ZERO, skaters)
 	ctx.snapshot.puck_state.carrier_peer_id = 2
 	ctx.strong_x = 1.0
@@ -346,7 +345,7 @@ func test_finisher_parks_the_tip_station_when_offices_die_and_goalie_sits_deep()
 	# both the direct blast and the tip).
 	var carrier := Vector3(6.0, 0.0, -9.0)
 	var ctx: RoleContext = _make_ctx(
-			Vector3(-2.0, 0.0, -21.0), Vector3.ZERO,
+			Vector3(-2.0, 0.0, -21.0),
 			carrier, Vector3.ZERO,
 			[
 				_make_skater(1, TEAM_ID, Vector3(-2.0, 0.0, -21.0)),
@@ -390,7 +389,7 @@ func _rush_ctx(carrier_vel: Vector3) -> RoleContext:
 	# positioning runs. strong_x = +1 so the weak side is -X.
 	var carrier_pos := Vector3(6.0, 0.0, -18.0)
 	var ctx: RoleContext = _make_ctx(
-			Vector3(0.0, 0.0, -18.0), Vector3.ZERO,
+			Vector3(0.0, 0.0, -18.0),
 			carrier_pos, Vector3.ZERO,
 			[
 				_make_skater(1, TEAM_ID, Vector3(0.0, 0.0, -18.0), false),
@@ -450,7 +449,7 @@ func test_reactive_fires_on_loose_shots_and_defers_while_the_puck_reads_held() -
 	var anchor := Vector3(-2.0, 0.0, -22.0)
 	var teammate_pos := Vector3(4.0, 0.0, -15.0)
 	var ctx: RoleContext = _make_ctx(
-			Vector3(-2.0, 0.0, -22.0), anchor,
+			Vector3(-2.0, 0.0, -22.0),
 			teammate_pos, Vector3(-3.0, 0.0, -15.0),  # fast ground shot
 			[
 				_make_skater(1, TEAM_ID, Vector3(-2.0, 0.0, -22.0), false),

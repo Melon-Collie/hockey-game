@@ -2056,8 +2056,8 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	else:
 		# Role dispatch: each TeamBrain-assigned slot maps to a behavior
 		# module that produces a RoleDecision (target_position +
-		# optional aim override + optional fire intents). The default
-		# fallback (AIRoleAnchorFollow) just steers to the brain anchor.
+		# optional aim override + optional fire intents). Only Slot.NONE
+		# reaches the default branch — every real slot has a module.
 		var ctx: RoleContext = _build_role_context(snapshot, self_pos, self_state)
 		# Throttle the expensive positioning argmax to ~30 Hz (ROLE_DECISION_
 		# PERIOD_TICKS), reusing the cached decision between re-evals — the same
@@ -2387,8 +2387,6 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	# rules; stamped every build since the ctx instance is reused.
 	ctx.offsides_enforced = rule_set != GameRules.RuleSet.OFF
 	if _current_strategy != null:
-		var brain_anchor: Vector3 = _current_strategy.get_anchor(_peer_id, snapshot)
-		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos
 		ctx.strong_x = _current_strategy.strong_x()
 		ctx.assigned_threat_peer = _current_strategy.assigned_threat(_peer_id)
 		# The brain's shared threat memo, read off the strategy view (a frozen
@@ -2412,7 +2410,6 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 		ctx.ping_shoot_active = _current_strategy.ping_shoot(_peer_id)
 		ctx.ping_pass_target_peer = _current_strategy.ping_pass_target(_peer_id)
 	else:
-		ctx.anchor = self_pos
 		# Match RoleContext.new()'s default when no brain is wired (tests),
 		# since the reused instance would otherwise carry a stale value.
 		ctx.strong_x = 1.0
@@ -2533,7 +2530,10 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 			# High-slot trailer — SUPPORT's goal-side trail read.
 			decision = AIRoleSupport.decide(ctx)
 		_:
-			decision = AIRoleAnchorFollow.decide(ctx)
+			# Slot.NONE only — the brain has not assigned this peer yet, so
+			# there is nothing to be in position FOR. Hold.
+			decision = RoleDecision.new()
+			decision.target_position = ctx.self_pos
 	_prev_role_slot = slot
 	_prev_role_target = decision.target_position
 	_prev_locked_man_pid = decision.locked_man_pid

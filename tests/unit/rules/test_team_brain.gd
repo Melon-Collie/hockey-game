@@ -245,16 +245,18 @@ func test_brain_keeps_legacy_slots_at_3() -> void:
 				"3v3 DZONE stays {PRESSURE, MARK}, got %d" % slot)
 
 
-func test_5v5_anchor_comes_from_the_5v5_geometry() -> void:
-	# The net-front box D's anchor must sit at the crease edge — the
-	# AIRoleSlots5.slot_anchor path, not the 3v3 slot_anchor (which returns
-	# ZERO for non-carrier slots).
+func test_5v5_dzone_fills_the_five_zone_slots() -> void:
+	# The 5v5 D-zone election must hand out the hybrid-zone set, one body each
+	# — the 3v3 {PRESSURE, MARK} table is a different shape entirely.
 	var team_map: Dictionary = {100: 0, 110: 0, 120: 0, 130: 0, 140: 0, 200: 1}
 	var positions: Dictionary = {100: 0, 110: 1, 120: 2, 130: 3, 140: 4}
 	var brain := TeamBrain.new(TEAM_ID, team_map, {}, 5, positions)
 	var snap: WorldSnapshot = _make_5v5_snapshot(200)
 	brain.tick(1.0, snap)
-	var weak_d: int = 130 if brain.get_slot(130) == AIRoleSlots.Slot.ZONE_D_WEAK else 140
-	var anchor: Vector3 = brain.get_anchor(weak_d, snap)
-	assert_ne(anchor, Vector3.ZERO)
-	assert_between(anchor.z, 22.0, 26.65, "net-front anchor sits at the crease edge")
+	var seen: Dictionary = {}
+	for pid: int in [100, 110, 120, 130, 140]:
+		seen[brain.get_slot(pid)] = true
+	for slot: int in [AIRoleSlots.Slot.ZONE_D_STRONG, AIRoleSlots.Slot.ZONE_D_WEAK,
+			AIRoleSlots.Slot.ZONE_C, AIRoleSlots.Slot.ZONE_W_STRONG,
+			AIRoleSlots.Slot.ZONE_W_WEAK]:
+		assert_true(seen.has(slot), "5v5 DZONE left slot %d unfilled" % slot)

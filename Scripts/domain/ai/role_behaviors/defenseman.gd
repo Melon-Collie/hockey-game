@@ -86,8 +86,10 @@ static func decide(ctx: RoleContext, slot: int) -> RoleDecision:
 		AIRoleSlots.Slot.DBACK_R:
 			return _decide_back(ctx, 1.0)
 		_:
+			# Unreachable: the dispatcher routes exactly the seven slots above
+			# here. Hold rather than return a target of (0, 0, 0).
 			var d := RoleDecision.new()
-			d.target_position = ctx.anchor if ctx.anchor != Vector3.ZERO else ctx.self_pos
+			d.target_position = ctx.self_pos
 			return d
 
 
