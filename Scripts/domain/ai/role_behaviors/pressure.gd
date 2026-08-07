@@ -151,9 +151,25 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var gap: float = AIRoleRushD.ladder_gap_m(
 			carrier_pos, ctx.own_goal_dir, ctx.self_blade_reach, closing_now) \
 			+ ctx.pursuit_standoff_m
+	# ── AND THE STAND IS ANGLED ───────────────────────────────────────────────
+	# Same shared closing geometry RUSH_D1 uses (AIRoleHelpers.carrier_stand):
+	# the gap up the carrier→our-net line, shaded to the INSIDE so his retreat
+	# path is steered to the boards. PRESSURE had the ladder's DISTANCE but no
+	# bearing doctrine at all — it stood wherever the argmax said deflated his
+	# options most, which is a defender offering both lanes equally, i.e. the
+	# thing angling exists to stop. The transition D angled him off the middle
+	# all the way to the blue line and then handed him to a pressurer who did
+	# not, so the carrier got the middle back at exactly the line where it is
+	# worth the most.
+	var inside_dir := Vector3.ZERO
+	var inside_shade: float = 0.0
 	var search_center: Vector3 = carrier_pos
 	if net_dist > 0.001:
-		search_center += (to_net / net_dist) * minf(gap, net_dist)
+		var to_net_dir: Vector3 = to_net / net_dist
+		search_center = AIRoleHelpers.carrier_stand(
+				carrier_pos, to_net_dir, minf(gap, net_dist))
+		inside_dir = AIRoleHelpers.inside_dir(carrier_pos, to_net_dir)
+		inside_shade = AIRoleHelpers.inside_shade_m(carrier_pos)
 	# The lead survives for the PASS-LANE read below, which is about where a feed
 	# would be thrown from rather than how close to stand.
 	var lead: Vector3 = carrier_pos \
@@ -286,6 +302,19 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 				c = Vector3(carrier_pos.x + gx * k, 0.0, carrier_pos.z + gz * k)
 			elif net_dist > 0.001:
 				c = carrier_pos + (to_net / net_dist) * gap
+		# THE SHADE IS A FLOOR TOO, for the same reason the gap is. The ring
+		# spans ±SEARCH_STEP_M about a centre the shade moves by at most
+		# ANGLE_INSIDE_M, so re-centring alone is invisible to the argmax — it
+		# can pick the outside sample and undo the angle completely. Clamped,
+		# the argmax chooses among stands that all keep inside position, which
+		# is the same division of labour the gap already has: doctrine fixes the
+		# geometry, the search picks which option to take away. Nudged along the
+		# inside axis rather than rejected, so the set can never empty.
+		if inside_shade > 0.001:
+			var off: float = (c.x - carrier_pos.x) * inside_dir.x \
+					+ (c.z - carrier_pos.z) * inside_dir.z
+			if off < inside_shade:
+				c += inside_dir * (inside_shade - off)
 		if not AIRoleHelpers.is_legal_position(c):
 			continue
 		if not _is_goal_side(c, carrier_pos, our_net):

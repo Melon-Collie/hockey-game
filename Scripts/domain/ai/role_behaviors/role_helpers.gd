@@ -333,6 +333,59 @@ static func cover_threat(ctx: RoleContext, d: RoleDecision, man_pid: int,
 	return true
 
 
+# ── Closing the carrier: the angle ───────────────────────────────────────────
+
+# How far to the INSIDE of the carrier→our-net line a defender who owns the
+# carrier stands. The stand is deliberately NOT on that line: shading to the
+# middle steers his retreat path toward the boards — take away the middle, give
+# the outside. A defender sitting dead on the line offers both lanes equally,
+# which is how a carrier walks straight into the slot.
+const ANGLE_INSIDE_M: float = 1.5
+# Lateral offset at which the shade reaches full depth — the end-zone dot lane.
+# Inside the dots a carrier is still IN the middle and there is no outside to
+# concede yet; at the dots the inside/outside split is real.
+const ANGLE_INSIDE_FULL_X_M: float = GameRules.END_ZONE_FACEOFF_DOT_X
+# The shade's depth for a carrier at `carrier_pos` — nil at centre ice, full at
+# the dot lane and beyond.
+#
+# Scaling to zero at centre is load-bearing, not a taper for feel: a carrier in
+# the middle has no inside to take away (both lanes are the same lane), so a
+# fixed shade there has to pick a side arbitrarily and flips a full
+# 2 x ANGLE_INSIDE_M the instant he crosses x = 0. That discontinuity lands
+# exactly on the mid-lane drive. Where the sign is ambiguous the magnitude is
+# nil, so the two sides meet continuously instead of needing damping.
+static func inside_shade_m(carrier_pos: Vector3) -> float:
+	return ANGLE_INSIDE_M * minf(
+			absf(carrier_pos.x) / ANGLE_INSIDE_FULL_X_M, 1.0)
+
+
+# Unit vector perpendicular to the carrier's retreat line, pointing toward the
+# middle of the ice. ZERO when the carrier is dead centre — there is no inside
+# to take, and no side to pick.
+static func inside_dir(carrier_pos: Vector3, dir_net: Vector3) -> Vector3:
+	var side: float = -signf(carrier_pos.x)
+	if side == 0.0:
+		return Vector3.ZERO
+	var perp := Vector3(-dir_net.z, 0.0, dir_net.x)
+	return perp if perp.x * side > 0.0 else -perp
+
+
+# The stand for a defender who owns the carrier: `gap` metres up the carrier→our
+# -net line, shaded to the inside. Shared by every role that closes a puck
+# carrier — the rush gap (AIRoleRushD) and the in-zone pressurer
+# (AIRolePressure) — so both defend him the same way and the TRANS_OD → DZONE
+# handoff is not a change of doctrine. Falls back to the unshaded stand when the
+# shade would put the body somewhere illegal.
+static func carrier_stand(carrier_pos: Vector3, dir_net: Vector3,
+		gap: float) -> Vector3:
+	var stand: Vector3 = carrier_pos + dir_net * gap
+	var depth: float = inside_shade_m(carrier_pos)
+	if depth < 0.001:
+		return stand
+	var shaded: Vector3 = stand + inside_dir(carrier_pos, dir_net) * depth
+	return shaded if is_legal_position(shaded) else stand
+
+
 # ── Carrier-best-option (inverse scoring) ────────────────────────────────────
 
 # Computes the opposing carrier's best option — shoot at our net, or pass to

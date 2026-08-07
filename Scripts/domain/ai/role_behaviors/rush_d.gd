@@ -73,27 +73,6 @@ const GAP_UP_FRESH_RECEIVE_M_S: float = 4.5
 # Steered inside this of the boards: no room left to take outside.
 const GAP_UP_WALL_M: float = 2.0
 
-# ── Angling ──────────────────────────────────────────────────────────────────
-# The stand is NOT on the carrier→net line. It shades to the INSIDE (the middle
-# of the ice) so the retreat path steers him toward the boards: take away the
-# middle, give the outside. A defender sitting dead on the retreat line offers
-# both lanes equally, which is how a carrier walks straight into the slot.
-#
-# The DEPTH of that shade scales with how far off centre the carrier already is:
-# none at centre ice, full at the end-zone dot lane and beyond. A carrier in the
-# middle has no inside to take away — both lanes are the same lane — so a fixed
-# shade there had to pick a side arbitrarily, and it flipped a full 2×
-# ANGLE_INSIDE_M the instant he crossed x = 0. That discontinuity landed exactly
-# on the mid-lane drive, and with no incumbent hysteresis on this target the
-# stand jumped side to side under a carrier driving straight at the net. Scaling
-# it to zero at centre removes the jump rather than damping it: where the sign is
-# ambiguous the magnitude is nil, so the two sides meet continuously.
-const ANGLE_INSIDE_M: float = 1.5
-# Lateral offset at which the shade reaches full depth — the end-zone dot lane.
-# Inside the dots a carrier is still IN the middle and there is no outside to
-# concede yet; at the dots the inside/outside split is real.
-const ANGLE_INSIDE_FULL_X_M: float = GameRules.END_ZONE_FACEOFF_DOT_X
-
 # ── Odd-man lane fan (moved from AIRoleContain, unchanged in substance) ──────
 const RUSH_LANE_FAN_FRACTIONS: Array[float] = [0.25, 0.5, 0.75, 1.0]
 const LINE_HOLD_MARGIN: float = 0.04
@@ -174,8 +153,10 @@ static func _decide_d1(ctx: RoleContext) -> RoleDecision:
 	# can flicker is a near-stationary body, where the brake is inert anyway.
 	var stepping_up: bool = _depth_along(ctx, carrier_pos, dir_net) > gap
 
-	var stand: Vector3 = carrier_pos + dir_net * gap
-	stand = _angle_inside(stand, carrier_pos, dir_net)
+	# The stand and its inside shade are the shared closing geometry
+	# (AIRoleHelpers.carrier_stand) — AIRolePressure closes a carrier the same
+	# way, so the TRANS_OD → DZONE handoff is not a change of doctrine.
+	var stand: Vector3 = AIRoleHelpers.carrier_stand(carrier_pos, dir_net, gap)
 
 	# Odd-man: play the pass. The lane fan finds the feed lane from the
 	# evaluators; the numbers read decides WHEN that doctrine applies, rather
@@ -333,25 +314,6 @@ static func _settable_gap(ctx: RoleContext, carrier_pos: Vector3,
 		return gap
 	return AIRoleHelpers.settable_stand_depth(
 			ctx, carrier_pos, dir_net, gap, closing)
-
-
-# Shade the stand to the INSIDE of the carrier — toward the middle of the ice —
-# so the lane we leave open is the outside one. Perpendicular to the retreat
-# line, signed toward centre.
-static func _angle_inside(stand: Vector3, carrier_pos: Vector3,
-		dir_net: Vector3) -> Vector3:
-	# Depth first: nil at centre, full at the dot lane (see ANGLE_INSIDE_M).
-	var depth: float = ANGLE_INSIDE_M * minf(
-			absf(carrier_pos.x) / ANGLE_INSIDE_FULL_X_M, 1.0)
-	if depth < 0.001:
-		return stand   # dead centre — no inside to take, and no side to pick
-	# Perpendicular to the retreat line, in XZ.
-	var perp := Vector3(-dir_net.z, 0.0, dir_net.x)
-	# Point it toward the middle of the ice (x = 0) relative to the carrier.
-	if perp.x * -signf(carrier_pos.x) < 0.0:
-		perp = -perp
-	var shaded: Vector3 = stand + perp * depth
-	return shaded if AIRoleHelpers.is_legal_position(shaded) else stand
 
 
 # ── RUSH_D2: hold mid-ice, take the mid-lane drive ───────────────────────────

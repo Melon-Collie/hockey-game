@@ -125,6 +125,11 @@ func test_every_angle_of_attack_produces_a_shot() -> void:
 			"every clean 1v1 angle (all tiers) must produce a shot attempt; missed: %s" % str(missed))
 
 
+# Cells of the pressured sweep below where an ANGLED pressurer takes the look
+# away entirely. Pinned exactly, not budgeted — see the note at the assertion.
+const PRESSURED_ANGLED_NO_SHOT_CELLS: Array = ["EASY@+25", "EASY@-25", "NORMAL@-25"]
+
+
 func test_pressured_1v1_with_backchecker_still_shoots() -> void:
 	# The realistic case: a backchecker trailing ~2 m (pressure, but can't strip a
 	# carrier at speed). The pressure should make the bot release QUICKLY — it must
@@ -145,17 +150,49 @@ func test_pressured_1v1_with_backchecker_still_shoots() -> void:
 			var start: Vector3 = net + Vector3(sin(a), 0.0, cos(a)) * radius
 			var vel: Vector3 = (net - start).normalized() * speed
 			var r: Dictionary = _run_rush(start, vel, 3.5, false, prof, gap)
-			gut.p("  %-6s angle %+5.0f°  →  shots=%d (legit=%d crease=%d)  first@%.1fm" % [
-					tier, deg, r["shots"], r["legit"], r["crease"], r["first_dist"]])
+			gut.p("  %-6s angle %+5.0f°  →  shots=%d (legit=%d crease=%d)  first@%.1fm min-dist=%.1f" % [
+					tier, deg, r["shots"], r["legit"], r["crease"], r["first_dist"], r["min_dist"]])
 			if r["shots"] <= 0:
 				missed.append("%s@%+.0f" % [tier, deg])
-	# The fixed bug (this branch): under backchecker pressure the bot used to fail
-	# to get a shot off at sharp/off-centre angles and skate past. The momentum-
-	# aware time_to_arrive (a lateral cut it can't settle into no longer prices as a
-	# fast arrival, so the goalie reads square and the honest shot wins) makes it
-	# release from range instead — every pressured angle now produces a shot.
-	assert_eq(missed.size(), 0,
-			"every pressured angle produces a shot attempt; missed: %s" % str(missed))
+	# The bug this originally fixed: under backchecker pressure the bot failed to
+	# get a shot off at sharp/off-centre angles and skated past. The momentum-aware
+	# time_to_arrive makes it release from range instead.
+	#
+	# It no longer asserts a shot from EVERY cell, because the defender changed.
+	# The pressurer used to hold the gap ladder's DISTANCE with no bearing doctrine
+	# at all — it stood wherever the argmax said deflated the carrier's options
+	# most, which is a defender offering the inside and outside lanes equally.
+	# It now angles him off the middle (AIRoleHelpers.carrier_stand), and a
+	# defender who has genuinely taken the inside lane is entitled to take the
+	# look with it. Measured: the pressurer concedes 1.2 m less of his own ice in
+	# the worst case (closest approach to our net 8.2 m -> 9.4 m, deep starts
+	# 5% -> 0%) and the cost is the three cells below.
+	#
+	# So the spec splits in two, and BOTH halves have to hold:
+	#
+	#   HARD is untouched — the look is still there, and the tier with the
+	#   precision to take it does, from every angle. That is what says the play
+	#   exists and the bot is not paralysed.
+	#
+	#   The lower tiers' misses are PINNED EXACTLY rather than given a budget, so
+	#   this fails in both directions: angling that starts eating more looks fails
+	#   here, and angling that stops working fails here too. Re-pin only with the
+	#   measurement that justifies the new list.
+	#
+	# The absolute "never skate past" guard is unaffected and lives in
+	# test_every_angle_of_attack_produces_a_shot, which has no defender in it —
+	# with nobody to take the lane away, all 21 cells must still shoot, and do.
+	var hard_missed: Array = []
+	for cell: String in missed:
+		if cell.begins_with("HARD"):
+			hard_missed.append(cell)
+	assert_eq(hard_missed, [] as Array,
+			"HARD must beat an angled pressurer from every angle; missed: %s"
+			% str(hard_missed))
+	missed.sort()
+	assert_eq(missed, PRESSURED_ANGLED_NO_SHOT_CELLS,
+			"the looks an angled pressurer takes away have moved; got %s, pinned %s"
+			% [str(missed), str(PRESSURED_ANGLED_NO_SHOT_CELLS)])
 
 
 func test_going_by_the_net_still_produces_a_shot() -> void:
