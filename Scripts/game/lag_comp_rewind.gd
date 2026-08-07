@@ -105,11 +105,19 @@ const _INPUT_LEAD_EXTRA_MAX_S: float = 0.05
 # [INPUT_LEAD_SEC, INPUT_LEAD_SEC + extra max]. input_lead_ms < 0 (or absent
 # — the host's own local claims) uses the base constant.
 static func self_view_time(host_timestamp: float, input_lead_ms: float = -1.0) -> float:
+	return host_timestamp + clamped_lead_s(input_lead_ms)
+
+
+# The claim-carried input lead, in seconds, bounded to the range a legitimate
+# client can actually stamp with. Shared by every consumer of the lead — the two
+# view-times and the forward-predict depth — so a modified client cannot buy
+# itself a different rewind depth in one of them. A negative or absent value
+# (the host's own local claims, bots) falls back to the base constant.
+static func clamped_lead_s(input_lead_ms: float = -1.0) -> float:
 	if input_lead_ms < 0.0 or not is_finite(input_lead_ms):
-		return host_timestamp + NetworkManager.INPUT_LEAD_SEC
-	var lead_s: float = clampf(input_lead_ms / 1000.0,
+		return NetworkManager.INPUT_LEAD_SEC
+	return clampf(input_lead_ms / 1000.0,
 			NetworkManager.INPUT_LEAD_SEC, NetworkManager.INPUT_LEAD_SEC + _INPUT_LEAD_EXTRA_MAX_S)
-	return host_timestamp + lead_s
 
 
 # Host-time at which to query StateBufferManager for any entity the claimant
@@ -134,8 +142,8 @@ static func prev_tick(view_time: float) -> float:
 # CARRIED puck is unaffected — it rides the carrier's render timeline
 # (remote_view + forward_predict_skater); this helper is only for claims
 # against a loose puck (pickup / deflect verdicts, the one-timer range gate).
-static func puck_view_time(host_timestamp: float) -> float:
-	return host_timestamp
+static func puck_view_time(host_timestamp: float, input_lead_ms: float = -1.0) -> float:
+	return host_timestamp + clamped_lead_s(input_lead_ms)
 
 
 # Stage-3 forward-prediction depth: how many physics ticks a remote body is
@@ -150,11 +158,14 @@ static func puck_view_time(host_timestamp: float) -> float:
 # caller feeds it the raw client-reported interp_delay_ms, and without the clamp
 # a crafted claim (or a NaN/huge warmup glitch) turns the integration loop into
 # an unbounded host stall.
-static func forward_predict_ticks(fraction: float, interp_delay_s: float) -> int:
-	if not is_finite(interp_delay_s):
+static func forward_predict_ticks(fraction: float, interp_delay_s: float,
+		lead_s: float = 0.0) -> int:
+	if not is_finite(interp_delay_s) or not is_finite(lead_s):
 		return 0
 	var delay_s: float = clampf(interp_delay_s, 0.0, _INTERP_DELAY_CLAMP_MS_MAX / 1000.0)
-	return roundi(clampf(fraction, 0.0, 1.0) * delay_s * float(Constants.PHYSICS_TICK))
+	var lead: float = clampf(lead_s, 0.0,
+			NetworkManager.INPUT_LEAD_SEC + _INPUT_LEAD_EXTRA_MAX_S)
+	return roundi(clampf(fraction, 0.0, 1.0) * (delay_s + lead) * float(Constants.PHYSICS_TICK))
 
 
 # Stage-3 shared reconstruction: intent-integrate a remote-rendered skater from
@@ -170,13 +181,57 @@ static func forward_predict_ticks(fraction: float, interp_delay_s: float) -> int
 #  - depth from the claim-carried interp_delay_ms — the same value the
 #    claimant's render used that frame.
 static func forward_predict_skater(snap: SkaterNetworkState, ctrl: SkaterController,
-		interp_delay_ms: float, scratch: SkaterMovementRules.ForwardResult) -> bool:
+		interp_delay_ms: float, input_lead_ms: float,
+		scratch: SkaterMovementRules.ForwardResult) -> bool:
 	if snap == null or ctrl == null:
 		return false
 	var ticks: int = forward_predict_ticks(
-			Constants.REMOTE_FORWARD_PREDICT_FRACTION, interp_delay_ms / 1000.0)
+			Constants.REMOTE_FORWARD_PREDICT_FRACTION, interp_delay_ms / 1000.0,
+			clamped_lead_s(input_lead_ms))
 	if ticks <= 0:
 		return false
+	return _integrate_skater(snap, ctrl, ticks, scratch)
+
+
+# The CLAIMANT'S OWN body at their self-view instant is not in the buffer, and
+# cannot be: the host holds a client's input until its stamp comes due, so at
+# claim arrival (host clock ~ host_ts + one_way) the newest capture sits at
+# host_ts + one_way while self_view_time asks for host_ts + lead. Whenever the
+# lead exceeds the one-way trip — every link under ~2x the lead, i.e. MOST of
+# them, and the cleaner the link the worse it is — the lookup lands past the
+# newest sample, and StateBufferManager._find_bracket answers a future query
+# with the newest entry and no signal at all. The claimant's own body is then
+# rewound SHORT by (lead - one_way), dragging the reach and continuity clamps
+# back toward a stale body and eating honest claims at full extension. Measured
+# worst case: at the servo's 50 ms lead cap on a 20 ms link, 65 ms of
+# under-rewind, ~0.59 m at skating speed against a 0.7 m contact diameter.
+#
+# Returns the displacement to ADD to body-anchored quantities read from the
+# self-view snapshot (position, blade_contact_world — the blade rides the body,
+# the same rigid translation the carrier reconstructions above apply to a
+# carried puck / stick shaft). Vector3.ZERO when the lookup was answerable, so a
+# link whose one-way already exceeds the lead is untouched. Depth is bounded by
+# the same lead ceiling the self-view rewind is bounded by, so a crafted claim
+# cannot buy itself integration distance.
+static func self_view_catch_up(snap: SkaterNetworkState, ctrl: SkaterController,
+		self_view_t: float, newest_ts: float,
+		scratch: SkaterMovementRules.ForwardResult) -> Vector3:
+	if snap == null or ctrl == null or newest_ts < 0.0 or not is_finite(self_view_t):
+		return Vector3.ZERO
+	var gap: float = minf(self_view_t - newest_ts,
+			NetworkManager.INPUT_LEAD_SEC + _INPUT_LEAD_EXTRA_MAX_S)
+	var ticks: int = roundi(gap * float(Constants.PHYSICS_TICK))
+	if ticks <= 0:
+		return Vector3.ZERO
+	if not _integrate_skater(snap, ctrl, ticks, scratch):
+		return Vector3.ZERO
+	return scratch.position - snap.position
+
+
+# Shared integration core for both reconstructions above — one body, so the
+# remote-render rewind and the self-view catch-up can never drift apart.
+static func _integrate_skater(snap: SkaterNetworkState, ctrl: SkaterController,
+		ticks: int, scratch: SkaterMovementRules.ForwardResult) -> bool:
 	var nm: RefCounted = ctrl.native_movement()
 	if nm != null:
 		# get_movement_config() is still consulted for its side effect of

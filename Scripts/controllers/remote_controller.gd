@@ -601,8 +601,18 @@ func _interpolate(delta: float) -> void:
 	# the window and both sides drop it). Facing is held (rendered from the
 	# interpolated value); position + velocity advance. No-op at fraction 0 —
 	# forward_predict_ticks returns 0 and integrate_forward is the identity.
+	# Depth includes the local input LEAD, so at fraction 1 the body lands on
+	# estimated_host_time() + lead — the same instant this client's own predicted
+	# skater occupies (inputs are applied immediately and stamped a lead ahead, and
+	# the body can't leave that instant without introducing local input delay).
+	# One clock for the whole rendered scene is what makes the local collision step
+	# resolve its own body against remotes at a shared instant instead of across a
+	# lead-wide skew. The host reconstructs the identical depth from the
+	# claim-carried input_lead_ms (bounded by LagCompRewind.clamped_lead_s), so
+	# render == rewind still holds. Fraction 0 stays exact legacy: 0 ticks.
 	var fp_ticks: int = LagCompRewind.forward_predict_ticks(
-			Constants.REMOTE_FORWARD_PREDICT_FRACTION, interp_delay)
+			Constants.REMOTE_FORWARD_PREDICT_FRACTION, interp_delay,
+			LagCompRewind.clamped_lead_s(NetworkManager.get_input_lead_ms()))
 	if fp_ticks > 0:
 		# Stagger from the bracket's NEWER endpoint — the same snapshot the host's
 		# rewind reads (StateBufferManager copies newer-endpoint too), so the

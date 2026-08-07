@@ -16,13 +16,14 @@ extends RefCounted
 # Flow:
 #   receive_claim(peer_id, host_ts, interp_delay, client_blade_curr/prev, top_hand)
 #     → reject if puck locked, claim stale, skater missing/ghost, on cooldown
-#     → rewind puck to LagCompRewind.puck_view_time (the claim stamp — the
-#       claimant renders the loose puck predicted at ~host present) and
-#       the claimant's body to self_view_time(host_ts); reach-clamp the client
-#       blade to that body — never rtt/2
+#     → rewind puck to LagCompRewind.puck_view_time and the claimant's body to
+#       self_view_time(host_ts) — since the clock unification these are the SAME
+#       instant (stamp + the claimant's input lead), so the puck and the blade
+#       reaching for it are judged together; reach-clamp the client blade to that
+#       body — never rtt/2
 #     → reject if PuckInteractionRules.check_pickup fails against the client blade
-#     → if a prior claim is pending and |Δhost_ts| < CONTEST_WINDOW_S, contest;
-#       otherwise the earlier claim_timestamp wins outright
+#     → if a prior claim is pending and the two SELF-VIEW instants are within
+#       CONTEST_WINDOW_S, contest; otherwise whoever reached first wins outright
 #     → otherwise arm pending and wait CONTEST_WINDOW_S for a contender
 #   tick(delta) [each host physics frame]
 #     → after CONTEST_WINDOW_S with no contender, apply_lag_comp_pickup and clear
@@ -39,10 +40,20 @@ var _registry: PlayerRegistry = null
 var _state_buffer: StateBufferManager = null
 var _puck_getter: Callable = Callable()             # () -> Puck
 var _puck_controller_getter: Callable = Callable()  # () -> PuckController
+# Scratch for the claimant's self-view catch-up (reused; receive_claim is
+# host-only).
+var _self_fp := SkaterMovementRules.ForwardResult.new()
 
 var _pending_peer_id: int = -1
 var _pending_timer: float = 0.0
-var _pending_host_timestamp: float = 0.0
+# The pending claimant's SELF-VIEW instant (self_view_time = stamp + their input
+# lead), NOT the raw claim stamp. Both arbitration paths below compare it against
+# another reach instant — the host's live blade at `now`, or a contender's own
+# self-view — and the raw stamp is a lead earlier than the moment the claimant
+# actually reached. Comparing a stamp to a reach instant skewed every present-time
+# verdict by a full lead (25-75 ms against a 50 ms window), and against a
+# contender it skewed by the DIFFERENCE of two per-client servo leads.
+var _pending_view_time: float = 0.0
 # The pending claimant's client-sent blade geometry (already reach-clamped), kept
 # so a subsequent contest resolves the prior claimant's squirt from the blade IT
 # actually reported — client-authoritative for BOTH contestants, not a host-side
@@ -97,7 +108,7 @@ func tick(delta: float) -> void:
 func clear() -> void:
 	_pending_peer_id = -1
 	_pending_timer = 0.0
-	_pending_host_timestamp = 0.0
+	_pending_view_time = 0.0
 	_pending_blade_curr = Vector3.ZERO
 	_pending_blade_prev = Vector3.ZERO
 
@@ -128,14 +139,22 @@ func clear_for_grant(granted_peer_id: int) -> void:
 # the same stamp-fairness rule the claim-vs-claim path uses, treating the live
 # grab as a claim stamped `now`.
 #
-# Pure decision half, pinned by GUT: CONTESTED when the stamps are within the
-# contest window (a genuine 50/50 → squirt), PENDING_WON when the pending stamp
-# is older than the window (the claimant reached it first in client-time — the
-# grab happening before tick()'s window expiry is just RPC-arrival timing).
+# Pure decision half, pinned by GUT. Both arguments are instants on the host
+# timeline at which a blade reached the puck: `pending_view_time` is when the
+# claimant reached (their self-view instant), `now` is when the live blade did.
+# CONTESTED inside the contest window (a genuine 50/50 → squirt), PENDING_WON
+# when the claimant reached first by more than the window — the grab happening
+# before tick()'s window expiry is just RPC-arrival timing.
+#
+# Since claims are deferred to their own instant (DeferredClaimQueue) a pending
+# claim is never armed before `now` reaches it, so `now - pending_view_time` is
+# always >= 0 here. A live grab EARLIER than a still-parked claim needs no branch:
+# it is granted unopposed, and the parked claim then self-rejects on release
+# because the buffer at its own view time already shows the puck taken.
 enum PresentGrab { CONTESTED = 0, PENDING_WON = 1 }
 
-static func classify_present_grab(pending_stamp: float, now: float) -> int:
-	return PresentGrab.CONTESTED if now - pending_stamp < CONTEST_WINDOW_S \
+static func classify_present_grab(pending_view_time: float, now: float) -> int:
+	return PresentGrab.CONTESTED if now - pending_view_time < CONTEST_WINDOW_S \
 			else PresentGrab.PENDING_WON
 
 
@@ -164,7 +183,7 @@ func arbitrate_present_grab(grabber: Skater, grabber_peer_id: int,
 	var pc: PuckController = _puck_controller_getter.call() as PuckController
 	if pc == null:
 		return false
-	if classify_present_grab(_pending_host_timestamp, now) == PresentGrab.CONTESTED:
+	if classify_present_grab(_pending_view_time, now) == PresentGrab.CONTESTED:
 		# Genuine 50/50 — live grabber's kinematics vs the pending claimant's
 		# stored client-reported blade (its authoritative aim at its view-time),
 		# exactly mirroring the claim-vs-claim contest resolution. The claimant
@@ -233,7 +252,7 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	# calls per entity (curr + one physics tick back) feeds the swept-segment
 	# test below.
 	var blade_rewind_time: float = LagCompRewind.self_view_time(host_timestamp, input_lead_ms)
-	var puck_rewind_time: float = LagCompRewind.puck_view_time(host_timestamp)
+	var puck_rewind_time: float = LagCompRewind.puck_view_time(host_timestamp, input_lead_ms)
 	var puck_snap: WorldSnapshot = _state_buffer.get_state_at(puck_rewind_time)
 	if puck_snap.puck_state == null or puck_snap.puck_state.carrier_peer_id != -1:
 		NetworkManager.send_pickup_claim_nack(peer_id)
@@ -274,12 +293,21 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	# is pinned to within the claimant's physical reach of the server-authoritative
 	# body (skater_snap.position) so a modified client can't teleport its blade.
 	var max_reach: float = _peer_max_reach(peer_id)
+	# The self-view instant is past the newest capture on any link whose one-way
+	# is shorter than the claimant's input lead, so both snapshots above are
+	# silently the newest rather than the requested instant. Catch the body up
+	# and rigid-translate its blade/hand with it, or the clamps below fence an
+	# honest full-extension grab against a stale body. No-op once the link's
+	# one-way exceeds the lead. See LagCompRewind.self_view_catch_up.
+	var self_catch: Vector3 = LagCompRewind.self_view_catch_up(
+			skater_snap, record.controller as SkaterController,
+			blade_rewind_time, _state_buffer.newest_host_timestamp(), _self_fp)
 	var blade_curr: Vector3 = LagCompRewind.clamp_client_blade(
-			client_blade_curr, skater_snap.position, max_reach)
+			client_blade_curr, skater_snap.position + self_catch, max_reach)
 	var blade_prev: Vector3 = LagCompRewind.clamp_client_blade(
-			client_blade_prev, skater_prev_snap.position, max_reach)
+			client_blade_prev, skater_prev_snap.position + self_catch, max_reach)
 	var top_hand: Vector3 = LagCompRewind.clamp_client_blade(
-			client_top_hand, skater_snap.position, max_reach)
+			client_top_hand, skater_snap.position + self_catch, max_reach)
 	# Second, tighter bound: pin each client point to within a plausible continuity
 	# distance of the host's OWN reconstruction of the blade/hand at the rewind
 	# instant (blade_contact_world / top_hand_world, derived from the claimant's
@@ -287,18 +315,24 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	# reconstruction error. No-ops per point when the host has no reconstruction.
 	var continuity: float = LagCompRewind.blade_continuity_tolerance(_peer_blade_speed(peer_id))
 	var pre_continuity_blade: Vector3 = blade_curr
-	blade_curr = LagCompRewind.continuity_clamp(blade_curr, skater_snap.blade_contact_world, continuity)
-	blade_prev = LagCompRewind.continuity_clamp(blade_prev, skater_prev_snap.blade_contact_world, continuity)
-	top_hand = LagCompRewind.continuity_clamp(top_hand, skater_snap.top_hand_world, continuity)
+	blade_curr = LagCompRewind.continuity_clamp(
+			blade_curr, skater_snap.blade_contact_world + self_catch, continuity)
+	blade_prev = LagCompRewind.continuity_clamp(
+			blade_prev, skater_prev_snap.blade_contact_world + self_catch, continuity)
+	top_hand = LagCompRewind.continuity_clamp(
+			top_hand, skater_snap.top_hand_world + self_catch, continuity)
 	# Rewind fidelity, measured directly rather than inferred from the miss rate:
 	# how far the client's blade sat from the host's OWN reconstruction of it, and
 	# whether the clamp had to pull it. Recorded for EVERY claim reaching the
 	# geometry test (hit or miss) so the miss rate has a denominator to read
 	# against — a high miss rate with near-zero divergence is a different problem
-	# from a high miss rate with the clamp biting constantly.
+	# from a high miss rate with the clamp biting constantly. The reference carries
+	# self_catch for the same reason the clamps do: it has to be the host's
+	# reconstruction at the instant the claimant reached, or the metric reports the
+	# self-view gap as if it were client-vs-host disagreement.
 	if skater_snap.blade_contact_world != Vector3.ZERO:
 		NetworkTelemetry.record_claim_blade_divergence(
-				pre_continuity_blade.distance_to(skater_snap.blade_contact_world),
+				pre_continuity_blade.distance_to(skater_snap.blade_contact_world + self_catch),
 				pre_continuity_blade != blade_curr)
 	# Sanity telemetry (host-only, no-op off the host): this claim reached the
 	# rewound geometry test — the client's view said in-range and every
@@ -351,12 +385,14 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 		NetworkManager.send_pickup_claim_nack(peer_id)
 		return
 	if _pending_peer_id != -1:
-		# Gate the contest decision on claim timestamps, not RPC arrival order.
-		# Two RPCs can arrive within the 50ms host-arrival window despite their
-		# claim timestamps being far apart (jitter on one peer's link), and the
-		# fairness model is "two players reaching for the puck at roughly the
-		# same client-time," which is what host_timestamp captures.
-		var claim_delta: float = absf(host_timestamp - _pending_host_timestamp)
+		# Gate the contest decision on when each claimant actually REACHED, not on
+		# RPC arrival order. Two RPCs can arrive within the 50ms host-arrival window
+		# despite their claims being far apart in client-time (jitter on one peer's
+		# link), and the fairness model is "two players reaching for the puck at
+		# roughly the same instant". That instant is the SELF-VIEW time, not the raw
+		# stamp: the lead is per-client and servo-driven, so two raw stamps can be
+		# equal while the reaches were up to MAX_LEAD_EXTRA_S apart.
+		var claim_delta: float = absf(blade_rewind_time - _pending_view_time)
 		if claim_delta < CONTEST_WINDOW_S:
 			# Genuine contest — both claims stamped within window.
 			# Resolve the prior claimant at contest time. If they've disconnected
@@ -381,14 +417,14 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 				NetworkManager.send_pickup_claim_nack(_pending_peer_id)
 				clear()
 			else:
-				_arm_pending(peer_id, host_timestamp, blade_curr, blade_prev)
+				_arm_pending(peer_id, blade_rewind_time, blade_curr, blade_prev)
 		else:
 			# Not contested in client-time. Whichever was stamped earlier wins
 			# outright; the later one would have found the puck already taken on
 			# an ideal network. Doesn't fix the dual case (second RPC arriving
 			# after the host-arrival window expired) — that's the cost of not
 			# adding a fixed pickup latency.
-			if host_timestamp < _pending_host_timestamp:
+			if blade_rewind_time < _pending_view_time:
 				# New claim is actually earlier — apply it now and drop pending.
 				pc.apply_lag_comp_pickup(record.skater)
 				clear()
@@ -396,15 +432,15 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 				# New claim is later — drop it and let pending resolve via tick().
 				NetworkManager.send_pickup_claim_nack(peer_id)
 	else:
-		_arm_pending(peer_id, host_timestamp, blade_curr, blade_prev)
+		_arm_pending(peer_id, blade_rewind_time, blade_curr, blade_prev)
 
 
 # Arm the contest window for a claimant, stashing the (reach-clamped) client blade
 # so a later contender resolves this claimant's squirt from the aim it reported.
-func _arm_pending(peer_id: int, host_timestamp: float,
+func _arm_pending(peer_id: int, view_time: float,
 		blade_curr: Vector3, blade_prev: Vector3) -> void:
 	_pending_peer_id = peer_id
-	_pending_host_timestamp = host_timestamp
+	_pending_view_time = view_time
 	_pending_timer = 0.0
 	_pending_blade_curr = blade_curr
 	_pending_blade_prev = blade_prev

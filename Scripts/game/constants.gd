@@ -68,9 +68,14 @@ const REPLAY_FILE_RATE: int = 30
 const NETWORK_INTERPOLATION_DELAY: float = 0.075
 # Stage-3 remote forward-prediction (see docs/netcode-forward-prediction-plan.md).
 # How far a remote skater is intent-integrated from its interpolated-past base
-# toward host-present, as a fraction of interp_delay: 0.0 = legacy interpolate-in-
-# the-past (render == rewind exactly, the shipped behavior); 1.0 = full ~interp_delay
-# of forward prediction (remote bodies render at ~present). READ BY BOTH the client
+# toward the client's own render instant, as a fraction of (interp_delay + input
+# lead): 0.0 = legacy interpolate-in-the-past (exactly render == rewind, no
+# integration at all); 1.0 = the body lands on estimated_host_time() + lead, the
+# SAME instant this client's own predicted skater occupies. The lead is in the
+# depth because the local body cannot leave that instant (inputs are applied
+# immediately and stamped a lead ahead), so it is the only clock the whole
+# rendered scene can share — and sharing one is what lets the local collision
+# step resolve its own body against remotes without a lead-wide skew. READ BY BOTH the client
 # render (RemoteController) AND every carrier-anchored host claim rewind (hit, poke,
 # stick-lift — via LagCompRewind.forward_predict_skater / forward_predict_ticks), so
 # render stays == rewind at any value — all consumers MUST use the same fraction. Set to 1.0 (full ~interp_delay of forward
@@ -81,8 +86,14 @@ const REMOTE_FORWARD_PREDICT_FRACTION: float = 1.0
 # Rocket-League-style input decay for the forward prediction: over this many ticks
 # the assumed (held) move-intent fades linearly to 0, so the far end of the
 # prediction window coasts on friction instead of thrusting in a possibly-stale
-# direction. This is what tames overshoot when a remote player CUTS mid-window —
-# the single biggest quality lever on the skater lead. Read by BOTH the client
+# direction. Measured, this is a SMALL lever, not the headline one: at skating
+# speed thrust is nearly balanced by friction, so momentum dominates the window
+# and the decay moves only ~2-6% of the predicted displacement (90-degree stale
+# intent at RTT 200: 68mm of lateral drift at decay 0 vs 24mm at 5, against
+# ~1.03 m of forward travel). The prediction's intrinsic error is bounded by
+# skater acceleration — a hard cut can only diverge ~5 cm over an RTT-100 window
+# — so REMOTE_FORWARD_PREDICT_FRACTION is the dominant lever, and reproduction
+# consistency across the three call sites matters far more than either. Read by BOTH the client
 # render (RemoteController) and the host claim rewind (HitClaimResolver) via
 # SkaterMovementRules.integrate_forward, so the decay is identical and render ==
 # rewind holds. 0 = no decay (full intent every tick). ~5 fades over the near half
@@ -91,7 +102,9 @@ const REMOTE_FORWARD_PREDICT_FRACTION: float = 1.0
 const FORWARD_PREDICT_INTENT_DECAY_TICKS: int = 5
 # Phase-3/4b determinism migration (docs/netcode-determinism-migration.md):
 # every client runs the SAME analytic sim the host drives the loose puck with,
-# forward to its estimate of host present — real predict-and-reconcile; the
+# forward to its estimate of host present PLUS its input lead (the shared render
+# instant above, so the puck and the blade reaching for it are judged on one
+# clock) — real predict-and-reconcile; the
 # loose puck is never interpolated except as the stale-data fallback. The
 # source is the newest authoritative snapshot, or — for the shooter's own
 # release, until the host's snapshots reflect it — the local release seed
