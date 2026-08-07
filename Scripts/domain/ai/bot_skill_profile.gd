@@ -46,9 +46,28 @@ var dispatch_period_ticks: int
 
 # Execution error on SHOT releases (radians of release-direction error; one
 # uniform ± sample per release, held through the windup so the blade sweeps
-# smoothly to a slightly wrong spot). The same value feeds the shot-aim entry
-# budget and the score's required-window inset (RoleContext.self_aim_spread_rad),
-# so a wobblier hand also shoots more selectively. THE scoring dial per tier.
+# smoothly to a slightly wrong spot). THE conversion dial per tier — the
+# shot-outcome sim (tests/unit/ai/test_shot_sim.gd) measures goals-per-shot
+# falling smoothly and monotonically with it: 0.010 → 87%, 0.030 → 62%,
+# 0.040 → 53%, 0.050 → 47%, 0.075 → 34%.
+#
+# Two things make it the right dial rather than a way of making bots look drunk,
+# and both have edges worth knowing:
+#
+# The bot is SELF-HONEST — the same value feeds the score's required-window inset
+# (RoleContext.self_aim_spread_rad), so it aims a window it actually fits and its
+# misses land on the GOALIE. Posts+wides stay ~1% of shots up to ~0.05 and only
+# then climb (0.075 → 6%, 0.090 → 12%). Past that edge the tier stops looking
+# beaten and starts looking incompetent. Feeding the score a SMALLER spread than
+# the hand executes was measured and is not the lever it sounds like: goals-per-
+# shot barely moves (62% → 64%) because the extra wobble only walks the aim onto
+# the pipe — 14% posts at believed 0.010 / executed 0.030.
+#
+# The selectivity feedback is REAL BUT WEAK. A wider believed spread demands a
+# wider window, so in principle the bot also shoots less; measured on the sim's
+# grid the shoot rate does not move at all from 0.010 to 0.050, because those
+# spots clear the fire bar either way. It only bites on shots already near the
+# bar. Selectivity is what settle_penalty_frac is for — this knob is conversion.
 var shot_aim_error_rad: float
 
 # Execution error on PASS releases and the dump, sampled the same way.
@@ -185,11 +204,6 @@ func _init(p_carrier_reaction_delay_s: float,
 # goalie sometimes robs. No settle doubt, pace knobs at their no-op baseline,
 # every cognition gate open.
 #
-# Do NOT raise shot_aim_error_rad to trim Hard's scoring. Under the
-# make-probability model scatter is a SELECTIVITY dial, not a save dial: a wider
-# spread demands a wider window, so the bot shoots LESS and buries a HIGHER
-# fraction (tests/unit/ai/test_shot_sim.gd). Trim the finish elsewhere.
-#
 # Tune carrier_reaction_delay_s UP if it matches passes too readily.
 static func hard() -> BotSkillProfile:
 	return BotSkillProfile.new(0.05, 2, 0.01, 0.01, 0.10, 0.0, 0.25,
@@ -199,10 +213,12 @@ static func hard() -> BotSkillProfile:
 
 # Normal is the beatable tier, pushed firmly off the Hard ceiling: a ~220 ms
 # reaction (it recognises a pass a clear beat late and no longer matches
-# one-timers) at a third of Hard's re-decide rate. Shot error ±1.7° ≈ ±0.35 m at
-# the net from 12 m, so a well-picked corner becomes goals AND saves AND the odd
-# wide one, and the score's spread budget stops the from-range snipes entirely;
-# pass error stays near-Hard so the passing game keeps connecting.
+# one-timers) at a third of Hard's re-decide rate. Shot error ±2.3° ≈ ±0.48 m at
+# the net from 12 m, so a well-picked corner becomes goals AND saves, and the
+# score's spread budget stops the from-range snipes entirely; pass error stays
+# near-Hard so the passing game keeps connecting. Measured on
+# the shot-outcome sim it buries 53% of what it takes against 87% for Hard, with
+# the misses landing on the keeper — posts ~1%, wides ~0%.
 #
 # The 0.60 settle doubt is the tier's INDECISION dial: for the first beat of a
 # possession an option must be worth ~2.5× its giveaway bar to be worth the puck
@@ -229,7 +245,7 @@ static func hard() -> BotSkillProfile:
 # it executes too well), that is the settle doubt — raise the frac for a higher
 # bar, the τ for a longer one.
 static func normal() -> BotSkillProfile:
-	return BotSkillProfile.new(0.22, 6, 0.03, 0.015, 0.16, 0.60, 0.30,
+	return BotSkillProfile.new(0.22, 6, 0.04, 0.015, 0.16, 0.60, 0.30,
 			0.75, 1.0, 0.65, 0.6,
 			true, true, true, true, true, true)
 
