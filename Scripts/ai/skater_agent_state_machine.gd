@@ -2180,7 +2180,8 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# the stand's frame rather than the ice's. See RoleDecision.target_velocity.
 		_apply_steering(input, snapshot, self_pos, decision.target_position,
 				not decision.commit_check and not decision.arrive_at_speed,
-				_self_max_speed, decision.target_velocity)
+				_self_max_speed, decision.target_velocity,
+				decision.engaged_peer_id)
 		if decision.commit_check:
 			# Body-check commit: drive THROUGH the carrier at max closing
 			# velocity. Force sprint even at short range — the gap gate would
@@ -4616,7 +4617,8 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 # they either re-pick the anchor continuously or WANT to arrive at speed.
 func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
 		anchor: Vector3, arrive: bool = false, velocity_match_speed: float = 0.0,
-		anchor_velocity: Vector3 = Vector3.ZERO) -> void:
+		anchor_velocity: Vector3 = Vector3.ZERO,
+		engaged_peer_id: int = -1) -> void:
 	# Standard potential-field steering with brake-pivot.
 	# Use the per-team roster published by GameManager._enrich_snapshot_for_ai
 	# instead of re-partitioning snapshot.skater_states every physics tick.
@@ -4638,6 +4640,8 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 				continue
 			var opp_ids: Array = snapshot.teammate_ids_by_team[other_team]
 			for peer_id: int in opp_ids:
+				if peer_id == engaged_peer_id:
+					continue   # the man we were told to close on — see engaged_peer_id
 				_scratch_opponents.append(snapshot.skater_states[peer_id].position)
 				_scratch_opponent_steer_vels.append(snapshot.skater_states[peer_id].velocity)
 	else:
@@ -4647,7 +4651,7 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			if _team_id_by_peer.get(peer_id, -1) == _team_id:
 				_scratch_teammates.append(snapshot.skater_states[peer_id].position)
 				_scratch_teammate_steer_vels.append(snapshot.skater_states[peer_id].velocity)
-			else:
+			elif peer_id != engaged_peer_id:
 				_scratch_opponents.append(snapshot.skater_states[peer_id].position)
 				_scratch_opponent_steer_vels.append(snapshot.skater_states[peer_id].velocity)
 

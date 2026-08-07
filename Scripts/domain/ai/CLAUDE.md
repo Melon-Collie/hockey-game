@@ -113,6 +113,46 @@ time in shape, and whether a defence pair gets blown by) and
 measure the BODY over multi-second rushes, which is the only honest home for a
 claim about a route — a single dispatch cannot see one.
 
+## The gap ladder is one ladder, and both puck-owners read it
+
+`AIRoleRushD` (the rush gap) and `AIRolePressure` (the in-zone puck pressurer)
+size the same gap off the same function, `AIRoleRushD.ladder_gap_m` — ~3 stick
+lengths at their blue line, 2 at the red line, 1 stick at ours, and inside our own
+zone "1 stick / contact: you are on him" (`docs/transition-defense-plan.md` §6).
+This is what makes the TRANS_OD → DZONE re-election stop being a geometry
+discontinuity, which §2.5 of that plan names as a defect in its own right: *the D
+who gapped a carrier through the neutral zone keeps him into the zone; there is no
+handoff at the line.*
+
+PRESSURE held a fixed one-stick stand-off measured off the carrier's LED position
+for a long time, which is not the same thing: the lead is proportional to his
+pace, so the real cushion came out at 3+ sticks against a rush — §2.4's defect
+("the correct gap for the offensive blue line, applied at the defensive blue
+line") surviving in the one role that never got the fix. A defender holding it
+retreated at the carrier's speed indefinitely and could be walked to his own goal
+line by a player who simply skated at him.
+
+Three things had to be true together, and each is load-bearing:
+
+- **No anticipation lead in the anchor.** The lead existed because the anchor used
+  to be a parked point that had to be aimed ahead of a moving man. The route now
+  carries the man's velocity as a feed-forward, so leading as well double-counts
+  his motion and inflates the frame-relative gap by `pace × lookahead`.
+- **The ladder is a FLOOR on the gap, not just where the ring is centred.** The
+  score is "how much does my body deflate his options", which improves
+  monotonically as you close, so an unconstrained argmax collapses onto the man
+  every time — the fixed lead was quietly preventing that. Clamp candidates out
+  onto the gap ring rather than filtering them, or the set empties exactly when it
+  has closed and the bot falls through to standing still.
+- **The last-man approach bound is retired for a live carrier**, exactly as it was
+  for RUSH_D1 and for the same reason. It names a stand at wherever the body
+  already is, so a pressurer being walked backwards is forbidden from closing on
+  the man walking him. A loose puck keeps it.
+
+The house-gate floor that was tried first is gone: with the ladder the defender
+settles at the tops of the circles anyway, as a consequence of gapping rather than
+as a clamp, and the floor only widened the gap past what the ladder asked for.
+
 ## Determinism
 
 Bot decisions must be replay-safe: same situation, same difficulty, same

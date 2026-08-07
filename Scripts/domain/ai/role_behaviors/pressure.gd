@@ -112,30 +112,52 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# Anticipate: lead the receivers so PRESSURE shades to where a feed is going.
 	AIRoleHelpers.collect_opp_team_excluding_carrier(ctx, opp_teammates, true)
 
-	# Search center = "where the carrier will be at the next action
-	# horizon, shifted one stick-length back toward our net". Both
-	# offsets are real game quantities:
-	#   - BOT_WRISTER_LOOKAHEAD_S is the same action horizon the
-	#     carrier uses to score its own shots, so leading by it
-	#     positions us at the carrier's next decision point rather
-	#     than chasing their current footprint.
-	#   - BLADE_REACH_M shifts toward our net by exactly the distance
-	#     our stick can poke-check, putting candidates inside contest
-	#     range on the defensive side — the cut-off line — instead of
-	#     on top of the carrier.
-	# Goal-side filter below still trims wrong-side polar samples.
-	# Lead off the carrier's velocity, or the puck's when it's loose /
-	# in flight (carrier_pid == -1 → no skater_states entry to index).
+	# ── The cut-off distance is the GAP LADDER ─────────────────────────────────
+	# Doctrine is a distance ladder on ICE REMAINING, not a constant: ~3 sticks at
+	# their blue line, 2 at the red line, 1 stick at ours, and inside our own zone
+	# "1 stick / contact — you are on him" (docs/transition-defense-plan.md §6,
+	# docs/5v5-ai-plan.md "Rush defense / gap control"). PRESSURE never had it.
+	# RUSH_D1 was given the ladder and PRESSURE kept a fixed one-stick stand-off
+	# measured off the carrier's LED position, which is not the same thing at all:
+	# the lead is proportional to his pace, so at a rush pace the real cushion came
+	# out at 3+ sticks — which is the transition plan's §2.4 defect verbatim, "the
+	# correct gap for the offensive blue line, applied at the defensive blue line",
+	# arriving in the one role that never got the fix.
+	#
+	# Measured: the pressurer rode a constant ~6 m cushion from the tops of the
+	# circles to his own GOAL LINE (depth off our net 11.6 m -> 0.4 m), contesting
+	# nothing, and you could walk him into his own net just by skating at him.
+	#
+	# THE LEAD IS GONE, and that is the other half. It existed because the anchor
+	# used to be a parked point that had to be aimed ahead of a moving man. The
+	# route now carries the man's own velocity as a feed-forward (AISteering's
+	# moving-frame pursuit), so leading the anchor as well double-counts his motion
+	# and inflates the frame-relative gap by exactly `pace x lookahead`. Built off
+	# his real position, the gap the bot holds IS the gap the ladder asked for.
+	#
+	# §2.5 of the plan is the sentence this restores: "the D who gapped a carrier
+	# through the neutral zone KEEPS HIM into the zone; there is no handoff at the
+	# line." RUSH_D1 and PRESSURE now size the same gap off the same ladder, so the
+	# TRANS_OD -> DZONE re-election stops being a geometry discontinuity.
 	var carrier_velocity: Vector3 = AIRoleHelpers.resolve_play_ref_velocity(ctx)
-	var lead: Vector3 = carrier_pos + carrier_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
-	var to_net: Vector3 = our_net - lead
-	var search_center: Vector3 = lead
-	if to_net.length_squared() > 0.0001:
-		# Difficulty pace knob: ctx.pursuit_standoff_m drops the cut-off line
-		# further back toward our net so easier bots sag off the carrier and
-		# concede time/space (0.0 = today's tight one-stick-length gap).
-		search_center += to_net.normalized() * (
-				SkaterAgentStateMachine.BLADE_REACH_M + ctx.pursuit_standoff_m)
+	var to_net: Vector3 = our_net - carrier_pos
+	var net_dist: float = sqrt(to_net.x * to_net.x + to_net.z * to_net.z)
+	var closing_now: float = 0.0
+	if net_dist > 0.001:
+		closing_now = maxf((carrier_velocity.x * to_net.x
+				+ carrier_velocity.z * to_net.z) / net_dist, 0.0)
+	# Difficulty pace knob: ctx.pursuit_standoff_m widens the ladder so easier bots
+	# sag off the carrier and concede time/space (0.0 = the doctrine gap).
+	var gap: float = AIRoleRushD.ladder_gap_m(
+			carrier_pos, ctx.own_goal_dir, ctx.self_blade_reach, closing_now) \
+			+ ctx.pursuit_standoff_m
+	var search_center: Vector3 = carrier_pos
+	if net_dist > 0.001:
+		search_center += (to_net / net_dist) * minf(gap, net_dist)
+	# The lead survives for the PASS-LANE read below, which is about where a feed
+	# would be thrown from rather than how close to stand.
+	var lead: Vector3 = carrier_pos \
+			+ carrier_velocity * SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
 
 	# LAST MAN: TAKE THE CUT-OFF SET, NEVER LUNGE INTO IT. The cut-off above is
 	# one stick-length goal-side of where the carrier is GOING — a challenge
@@ -151,54 +173,6 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# limit entirely, and any teammate home behind us skips it — which
 	# is every forecheck (F2/F3 are between F1 and our net by construction) and
 	# any in-zone look where a MARK is covering the house.
-	# DON'T BACK IN AHEAD OF A MAN WHO HASN'T GOT THERE YET. The cut-off above is
-	# defined entirely relative to the carrier — his LED position, one stick
-	# goal-side — so a defender who TRACKS IT PERFECTLY retreats at the carrier's
-	# own speed for as long as the carrier keeps coming. Measured on the real stack
-	# against a carrier who simply drives the middle: the pressurer rode a constant
-	# ~6 m cushion from the top of the circles to his own GOAL LINE (depth off our
-	# net 11.6 m -> 0.4 m), conceding the whole zone without contesting anything and
-	# arriving with the carrier still at full pace. You can walk him into his own
-	# net just by skating at him.
-	#
-	# The fix is a floor on the stand, NOT a smaller cushion. Two narrower repairs
-	# were tried and measured worse, and are recorded so they are not retried:
-	#   · dropping the anticipation LEAD once the defender is established
-	#     goal-side. The lead is load-bearing — it is what keeps the target ahead of
-	#     a moving man — and without it the stand sits behind him, so the route
-	#     chases the lag and dives at his body (separation at the meet over the gap
-	#     sweep 2.85 m -> 0.35 m, which is a collision, not a gap).
-	#   · bounding the cushion by the ice behind the DEFENDER. At the circles that
-	#     reads as "no cushion at all" against a carrier still 7 m out, which is the
-	#     same lunge by another route.
-	# The cushion itself is right; what was missing is any limit on where holding it
-	# may drag him.
-	#
-	# RUSH_D1 has refused exactly this since it was written
-	# (AIRoleRushD._clamp_to_house) and its reason applies verbatim: past the tops
-	# of the circles a field skater duplicates the goalie, fights his own crease
-	# repel, and gets beaten to the outside of a net he is standing on top of.
-	# PRESSURE simply never had the floor, which is why the DZONE handoff at the
-	# circle tops is precisely where the sag started.
-	#
-	# The floor RELEASES when the carrier himself reaches the gate, because then
-	# pressuring deep is the actual job — a corner battle, a walkout, a wraparound —
-	# and this must not become a rule that keeps a pressurer out of the low zone.
-	# What it removes is only the retreat AHEAD of him: the stand plants at the
-	# gate, the carrier keeps closing, and the gap collapses on its own.
-	# Keyed on the DEFENDER's own depth, not the target's. "Don't get walked past
-	# the circles" is a statement about this body, and the cut-off sits a full
-	# cushion ahead of the carrier — so testing the target instead fires the floor
-	# while the carrier is still ~6 m outside the gate, freezing the shadow early
-	# and costing the very tracking it is meant to protect (time-in-shape over the
-	# routing sweep 84% -> 62%). Keyed on the body it is inert until he has
-	# actually been pushed to the structure, and then it holds him there.
-	var gate: float = AIZoneCoverage.HOUSE_TOP_DEPTH_M
-	var hold_the_gate: bool = AIRoleHelpers.xz_distance(carrier_pos, our_net) > gate \
-			and AIRoleHelpers.xz_distance(ctx.self_pos, our_net) < gate
-	if hold_the_gate:
-		search_center = AIRoleHelpers.hold_out_to_house_gate(our_net, search_center)
-
 	# The approach bound below is the ICE-frame read, and it is retired for a live
 	# carrier for the same reason RUSH_D1's was (AIRoleRushD._settable_gap): it
 	# exists because a parked-point seek could only reach a stand by charging it
@@ -214,29 +188,14 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# seek again and the trip genuinely needs bounding.
 	var min_depth: float = -INF
 	var depth_dir: Vector3 = Vector3.ZERO
-	if not AIRoleHelpers.has_support_behind(ctx):
-		var net_dir: Vector3 = our_net - carrier_pos
-		var net_dist: float = net_dir.length()
+	if AIRoleHelpers.stand_ride_velocity(ctx) == Vector3.ZERO \
+			and not AIRoleHelpers.has_support_behind(ctx):
 		if net_dist > 0.001:
-			net_dir /= net_dist
-			var closing: float = maxf(
-					carrier_velocity.x * net_dir.x + carrier_velocity.z * net_dir.z,
-					0.0)
+			var net_dir: Vector3 = to_net / net_dist
 			var want: float = (search_center.x - carrier_pos.x) * net_dir.x \
 					+ (search_center.z - carrier_pos.z) * net_dir.z
 			var settable: float = AIRoleHelpers.settable_stand_depth(
-					ctx, carrier_pos, net_dir, want, closing)
-			# ...but never deeper than the house gate. The approach bound refuses a
-			# LUNGE UP-ICE; it must not end up ordering a retreat, and once a body
-			# has been pushed inside the gate that is what it does — it names a
-			# stand at wherever he already is while the gate names one at the
-			# circles, and between them no candidate is legal at all. The
-			# structural floor is the harder of the two: it is the one with a
-			# physical reason behind it, and letting it win only ever puts the
-			# pressurer FURTHER from his own net.
-			if hold_the_gate:
-				settable = minf(settable,
-						AIRoleHelpers.xz_distance(carrier_pos, our_net) - gate)
+					ctx, carrier_pos, net_dir, want, closing_now)
 			if settable > want:
 				# Push the whole candidate ring back onto the settable line, so
 				# the argmax still picks the lateral angle — it just picks it
@@ -299,16 +258,34 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
 	var found: bool = false
+	# THE LADDER IS A FLOOR ON THE GAP, not just where the ring is centred. The
+	# polar ring spans +/-SEARCH_STEP_M about the centre, so it always contains
+	# samples nearer the carrier than the gap — and the score is "how much does my
+	# body deflate his options", which is monotonically better the closer you get.
+	# Left free the argmax therefore collapses onto him every time and the stand-off
+	# is whatever the ring's inner edge happens to be. That is what a fixed lead was
+	# quietly preventing: remove the lead without adding this and the separation at
+	# the meet falls to 0.35 m over the gap sweep, which is a body-check, not a gap.
+	# With the floor the argmax does its real job — the DISTANCE is doctrine, and it
+	# picks the BEARING to take the carrier's best option away from.
+	var min_gap_sq: float = gap * gap
 	for raw: Vector3 in candidates:
-		# The gate is a CLAMP, not a filter. Rejecting candidates inside it empties
-		# the set whenever the whole ring is deep, and the argmax then falls
-		# through to "stand where you are" — which stops the retreat by accident
-		# rather than by choice, and drifts with whatever momentum the body had.
-		# Projecting each candidate out onto the gate keeps the set non-empty and
-		# leaves the argmax its real job: with the depth settled, pick the lateral
-		# ANGLE that takes the carrier's best option away.
-		var c: Vector3 = AIRoleHelpers.hold_out_to_house_gate(our_net, raw) \
-				if hold_the_gate else raw
+		# A CLAMP, not a filter. Dropping the candidates inside the gap empties the
+		# set exactly when the ring has closed onto the man — which is the moment
+		# that matters — and the argmax then falls through to "stand where you
+		# are", so the defender freezes and the carrier walks past him. Pushing
+		# each one out onto the gap ring keeps the set non-empty and leaves the
+		# argmax its real job: the DISTANCE is doctrine, and it picks the BEARING.
+		var c: Vector3 = raw
+		var gx: float = raw.x - carrier_pos.x
+		var gz: float = raw.z - carrier_pos.z
+		var gd_sq: float = gx * gx + gz * gz
+		if gd_sq < min_gap_sq:
+			if gd_sq > 0.0001:
+				var k: float = gap / sqrt(gd_sq)
+				c = Vector3(carrier_pos.x + gx * k, 0.0, carrier_pos.z + gz * k)
+			elif net_dist > 0.001:
+				c = carrier_pos + (to_net / net_dist) * gap
 		if not AIRoleHelpers.is_legal_position(c):
 			continue
 		if not _is_goal_side(c, carrier_pos, our_net):
@@ -346,6 +323,11 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# net, perfectly gapped 7.5 m off a carrier who was also leaving.
 	if found:
 		d.target_velocity = AIRoleHelpers.stand_ride_velocity(ctx)
+		# And the gap we just sized is ours to hold — see engaged_peer_id.
+		if ctx.snapshot != null and ctx.snapshot.puck_state != null:
+			var pid: int = ctx.snapshot.puck_state.carrier_peer_id
+			if pid != -1 and ctx.team_id_by_peer.get(pid, -1) != ctx.team_id:
+				d.engaged_peer_id = pid
 	return d
 
 

@@ -15,55 +15,34 @@ extends GutTest
 # every rush. Same role, same ladder, same stand: the route was the whole
 # difference. AISteering's moving-frame pursuit is the fix.
 #
-# The quantity this file measures is TIME IN SHAPE: the share of the rush, from
-# our blue line in, that the defender spends both within a working gap of his man
-# AND travelling with him rather than at him. It is a share of time rather than a
-# reading at one instant on purpose — the defect was never a bad snapshot, it was
-# a route that only worked from some starting positions, and a single frame
-# cannot tell a defender who is converging from one who is about to be walked
-# around. Two components, and both have to be true at once:
+# What this file pins, after the gap ladder reached AIRolePressure, is THE ROUTE
+# and THE DEPTH — two things a single dispatch cannot see, because both are
+# properties of a body over several seconds:
 #
-#   GAP — is he close enough to contest at all. A defender matched in velocity at
-#     15 m is not defending anybody.
-#   RELATIVE SPEED — how fast he is moving with respect to the man. Neither
-#     position nor gap can see this: a defender parked exactly on his gap reads a
-#     perfect stand and is about to be beaten by the first cut. Near zero means
-#     he is travelling WITH him, gapped up and in shape.
+#   ANGLING — is he on the middle side of his man at the zone entry, steering him
+#     to the boards rather than trailing him to the slot.
+#   DEPTH — how far he lets himself be walked back toward his own net.
+#   THE LAYER — with two defenders, is anybody ever between the puck and the net.
+#   THE NEUTRAL SHAPE — does anybody stay home on a loose puck.
 #
-# Alongside it, the INSIDE OFFSET at the zone entry — his position off the
-# carrier→net line, signed toward the middle of the ice. Positive means he has
-# taken the middle away and is steering the man to the boards, which is what
-# angling IS.
+# It also REPORTS a time-in-shape share (within a working gap AND travelling with
+# the man rather than at him). That reading was this file's original assertion and
+# is now reported only; the note in the sweep below explains why, and where its
+# guard duty went. Short version: doctrine in our own zone is to stand the carrier
+# UP, which is deliberately not travelling with him, so the metric no longer has a
+# stable referent.
 #
-# Reference readings over the 16-start sweep (start depth x attack lane), and
-# from the defence-pair scenario below:
+# Reference readings, all from the sweeps below:
 #
-#                                  parked-point route   moving-frame route
-#   mean share of time in shape            17%                 62%
-#   deep starts (z <= -14)                  0%                 61%
-#   in-zone time with nobody goal-side      5% (worst 48%)      0% (worst 0%)
+#                                      parked-point route   moving frame + ladder
+#   in-zone time with nobody goal-side       5% (worst 48%)     0% (worst 0%)
+#   closest approach to own net, worst       0.1 m              6.8 m
+#   inside offset at the zone entry         +1.65 m            +0.79 m
 #
-# The in-shape figures were 82% / 93% before AIRolePressure gained its house-gate
-# floor, and that drop is a DELIBERATE TRADE, not drift. Shadowing means
-# retreating WITH the man; refusing to be walked to your own net means, at some
-# point, not retreating. The two are opposed, and the floor buys the second at
-# the cost of the first over the last few metres — worst-case depth conceded went
-# 0.1 m (standing in his own crease) to 5.5 m for it. See
-# test_a_defender_is_not_walked_into_his_own_net below, which pins the other side.
-# The bar here stays well clear of the parked-point route's 17%, which is the
-# regression this test exists to catch.
-#
-# The principled way to get both is a GAP LADDER for PRESSURE — a cushion that
-# shrinks as the ice runs out, so the defender arrives on the man at the circles
-# while still travelling with him the whole way — which is what AIRoleRushD does
-# outside the zone and what PRESSURE has never had. That is a larger change than
-# a floor and is not attempted here.
-#
-# The inside offset does NOT improve and is not claimed to: the parked-point
-# route reads a LARGER shade (+1.65 m vs +0.79 m) because it is measured off a
-# body standing still a long way off the man, and a wide shade on someone you are
-# not with is not angling. It is asserted only as a floor — a defender must end
-# up on the middle side of his man, never trailing him to it.
+# The inside offset does NOT improve and is not claimed to: the parked-point route
+# reads a LARGER shade because it is measured off a body standing still a long way
+# off the man, and a wide shade on someone you are not with is not angling. It is
+# asserted only as a floor — a defender must end up on the middle side of his man.
 #
 # WHAT THE HARNESS DOES NOT MODEL: body collisions (the carrier skates through
 # the defender), so "did he stop the rush" is not a question it can answer and is
@@ -91,7 +70,6 @@ const IN_SHAPE_REL_M_S: float = 4.0
 const IN_SHAPE_GAP_M: float = 3.0 * SkaterAgentStateMachine.BLADE_REACH_M \
 		+ AIRoleHelpers.DEFENSIVE_ANTICIPATION_MAX_M \
 		+ SkaterAgentStateMachine.BLADE_REACH_M
-const MIN_SHARE_IN_SHAPE: float = 0.5
 
 
 # The signed offset of `body` off the carrier→our-net line, positive toward the
@@ -134,19 +112,11 @@ func _rush(d_start: Vector3, c_start: Vector3) -> Dictionary:
 		if duel.carrier_id != 1:
 			break
 		var car: Object = duel._skater(1)
-		if car.pos.z > ENTRY_Z:
-			continue
 		var dm: Object = duel._skater(2)
 		# How deep he was walked, over the whole rush — see the depth test below.
-		conceded = minf(conceded, dm.pos.distance_to(net))
-		# SHADOWING ONLY. Once the carrier is inside the house the defender's job
-		# stops being "travel with him" and becomes "contest him", and the two are
-		# different behaviours: standing a man up necessarily means NOT matching
-		# his velocity, so measuring in-shape through the contest reads a correct
-		# stand-up as a failure. That is not a threshold to loosen — it is a
-		# second behaviour, and it gets its own test rather than being averaged
-		# into this one.
-		if car.pos.distance_to(net) < AIZoneCoverage.HOUSE_TOP_DEPTH_M:
+		if car.pos.z <= ENTRY_Z:
+			conceded = minf(conceded, dm.pos.distance_to(net))
+		if car.pos.z > ENTRY_Z:
 			continue
 		if samples == 0:
 			entry_inside = _inside_offset(dm.pos, car.pos, net)
@@ -169,7 +139,6 @@ func test_a_defender_with_a_trip_to_make_still_arrives_in_shape() -> void:
 	var inside_sum: float = 0.0
 	var deep_sum: float = 0.0
 	var deep_n: int = 0
-	var poor: Array[String] = []
 	var killed: int = 0
 	var n: int = 0
 	for dz: float in [2.0, -8.0, -14.0, -20.0]:
@@ -189,8 +158,6 @@ func test_a_defender_with_a_trip_to_make_still_arrives_in_shape() -> void:
 			if dz <= -14.0:
 				deep_sum += r["share"]
 				deep_n += 1
-			if r["share"] < MIN_SHARE_IN_SHAPE:
-				poor.append("z%.0f/x%.0f" % [dz, cx])
 			row += "  x%+5.1f shape%4.0f%% in%+5.1f" % [
 					cx, r["share"] * 100.0, r["inside"]]
 		gut.p(row)
@@ -199,19 +166,36 @@ func test_a_defender_with_a_trip_to_make_still_arrives_in_shape() -> void:
 			deep_sum / float(maxi(deep_n, 1)) * 100.0,
 			inside_sum / float(n), killed])
 
-	# The aggregate is the assertion. A 1v1 with no body contact is a chaotic
-	# sim, so no single start is pinned to a value; what is pinned is that the
-	# population travels WITH the play rather than into it.
-	assert_gt(share_sum / float(n), MIN_SHARE_IN_SHAPE,
-			"defenders are not holding a gap on the man they are defending")
-	assert_lt(poor.size(), n / 2,
-			"most starts never got into shape — the route is a charge: %s"
-					% str(poor))
-	# The whole defect: deep starts behaved differently from shallow ones. They
-	# must not any more, so the deep half is held to the same bar as the mean.
-	assert_gt(deep_sum / float(maxi(deep_n, 1)), MIN_SHARE_IN_SHAPE,
-			"a defender with a long trip to his stand still never settles into it")
-	# And he arrives on the INSIDE of the man, not trailing him to the middle.
+	# ── This reading is REPORTED, NOT ASSERTED, and that is a deliberate retirement.
+	#
+	# It was written to catch the parked-point route, which read 17% against 84%.
+	# It cannot serve that job any more, because the behaviour it calls "in shape"
+	# is one the gap ladder deliberately replaced: in our own zone doctrine is
+	# "1 stick / contact — you are on him", so the defender stands the carrier up
+	# instead of travelling with him, and a correct stand-up scores as a failed
+	# shadow. Re-cutting the window does not rescue it — measured over the rush
+	# phase alone it reads lower still (27%), because there the defender is simply
+	# closing; and relaxing the criterion to "goal-side within a contesting gap"
+	# reads 99% for the parked-point route too, so it stops discriminating at all.
+	#
+	# Retiring a guard while making a change it was failing is the move to be most
+	# suspicious of, so: the job it was doing is covered, and by tests that
+	# discriminate far more sharply than it ever did.
+	#   · "arrives stopped and gets walked" -> test_a_defender_is_not_walked_into_
+	#     his_own_net below (0.1 m vs 6.8 m worst).
+	#   · "meets the rush charging" -> tests/unit/ai/test_rush_gap_discipline.gd,
+	#     which is where that claim lived before this file existed and which still
+	#     separates the models by an order of magnitude (charging 4.2 m/s and 27 of
+	#     35 starts over the lunge bar, against 0.5 m/s and 0 of 35 now).
+	#   · "the layer collapses" -> the defence-pair test below.
+	# The number is still printed because it is the cheapest way to notice the
+	# shadow changing character again.
+	gut.p("  (in-shape is reported only — see the note above; the assertions live in"
+			+ " the depth test and test_rush_gap_discipline)")
+	assert_gt(n, 8, "the sweep produced too few rushes to read anything")
+	# The one claim this file still makes on its own: he ends up on the INSIDE of
+	# his man, not trailing him to the middle. That is angling, it is independent
+	# of whether he shadows or stands up, and it holds either way.
 	assert_gt(inside_sum / float(n), 0.5,
 			"defenders are not angling the carrier off the middle")
 
