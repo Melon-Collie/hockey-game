@@ -81,8 +81,14 @@ const REMOTE_FORWARD_PREDICT_FRACTION: float = 1.0
 # Rocket-League-style input decay for the forward prediction: over this many ticks
 # the assumed (held) move-intent fades linearly to 0, so the far end of the
 # prediction window coasts on friction instead of thrusting in a possibly-stale
-# direction. This is what tames overshoot when a remote player CUTS mid-window —
-# the single biggest quality lever on the skater lead. Read by BOTH the client
+# direction. Measured, this is a SMALL lever, not the headline one: at skating
+# speed thrust is nearly balanced by friction, so momentum dominates the window
+# and the decay moves only ~2-6% of the predicted displacement (90-degree stale
+# intent at RTT 200: 68mm of lateral drift at decay 0 vs 24mm at 5, against
+# ~1.03 m of forward travel). The prediction's intrinsic error is bounded by
+# skater acceleration — a hard cut can only diverge ~5 cm over an RTT-100 window
+# — so REMOTE_FORWARD_PREDICT_FRACTION is the dominant lever, and reproduction
+# consistency across the three call sites matters far more than either. Read by BOTH the client
 # render (RemoteController) and the host claim rewind (HitClaimResolver) via
 # SkaterMovementRules.integrate_forward, so the decay is identical and render ==
 # rewind holds. 0 = no decay (full intent every tick). ~5 fades over the near half
