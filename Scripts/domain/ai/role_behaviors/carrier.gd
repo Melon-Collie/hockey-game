@@ -82,6 +82,49 @@ const PASS_MIN_VALUE: float = 0.02
 # how sure the bot has to be before it concedes, not what it perceives.
 const DUMP_GIVEAWAY_MARGIN_FRAC: float = 0.15
 
+# ── Settle doubt: how sure a FRESH carrier has to be to give the puck up ──────
+# The three bars above say what an ACTIVE option (shoot / pass / dump) is worth
+# releasing the puck for. A bot that has only just gained the puck has not read
+# the ice yet, so for a beat it discounts its own valuation of all three: the
+# option must be worth MORE than the standing bar to be worth the puck
+# (ctx.settle_penalty_frac = 0.5 doubles every bar), and the discount decays as
+# it settles. Difficulty knob — 0.0 at Hard and for the perfect bot.
+#
+# It handicaps the option against its BAR, never against the carry it competes
+# with, and that distinction is the whole design. Carrying is what the bot does
+# while it deliberates, and the stand-still carry candidate is BY CONSTRUCTION
+# worth the same as firing from where it stands (see _best_carry) — so the same
+# handicap applied inside the fire-vs-carry compete could only be a uniform
+# DELAY: it would suppress the doorstep tap-in exactly as hard as the hopeless
+# point shot, which is the "dithers on gimmes, then fires everything at once"
+# shape the flat settle gate this replaced actually had. Against an absolute bar
+# the handicap is a SELECTIVITY dial instead — a slot look out-values any raised
+# bar on the first tick, a feed threaded past two sticks does not and gets taken
+# only once the doubt drains. Obvious plays stay instant; close calls visibly
+# deliberate, which is what a human read looks like from the stands.
+#
+# The flat "may not commit for N seconds" gate is the frac → 1.0 limit of this
+# (nothing clears an infinite bar), so no behavior it produced is out of reach.
+#
+# Constant-hazard decay, the same exp(-t/τ) form as AIActionScoring's delay
+# discount. It never reaches exactly zero, which is harmless HERE (an option
+# sitting within an epsilon of its bar is a coin flip either way) and would NOT
+# have been in the compete, where stand-still ties fire exactly and any residual
+# penalty would suppress firing forever.
+func _settle_penalty(ctx: RoleContext) -> float:
+	if ctx.settle_penalty_frac <= 0.0:
+		return 0.0
+	return ctx.settle_penalty_frac * exp(
+			-_settle_elapsed_s / maxf(ctx.settle_penalty_tau_s, 0.001))
+
+
+# Move `value` away from being chosen by `penalty` of its own magnitude: a
+# positive score shrinks toward zero, a negative one (the dump is a pure
+# concession) deepens. Higher is better everywhere this is read, so the one form
+# handicaps both signs.
+static func _settle_handicap(value: float, penalty: float) -> float:
+	return value - penalty * absf(value)
+
 # Minimum forward distance (m) the PUCK must sit in front of the goal-line plane
 # for a direct shot to be scored at all — below it (on/behind the line, or right
 # at the post plane) the mouth faces away and the only play is a wrap/walk-out
@@ -403,17 +446,14 @@ var intended_action: int = INTENT_CARRY
 # self-extinguishes — the bot takes the available shot — with no fixed timeout.
 var _hold_elapsed_s: float = 0.0
 
-# Settle window (difficulty knob, ctx.carry_settle_delay_s): for this many
-# seconds after gaining possession the carrier may only CARRY — the fire and
-# dump commits in _pick_action are gated until it drains. Armed on the first
-# decide() after reset() (reset marks a genuine possession loss, so the next
-# decide IS a fresh possession — including the very first one after spawn).
-# clear_intent() deliberately does NOT re-arm it: a press-state bail back to
-# CARRY is the same possession, not a new touch. Scores still compute every
-# re-eval during the window (debug + carry anchor stay live), only the commit
-# is held — so the instant the window drains, the current best fire releases.
+# Seconds since this possession began — the clock the settle doubt decays on
+# (see _settle_penalty). Armed to 0 on the first decide() after reset() (reset
+# marks a genuine possession loss, so the next decide IS a fresh possession,
+# including the very first one after spawn). clear_intent() deliberately does
+# NOT re-arm it: a press-state bail back to CARRY is the same possession, not a
+# new touch.
 var _settle_arm_pending: bool = true
-var _settle_remaining_s: float = 0.0
+var _settle_elapsed_s: float = 0.0
 
 # Set when intent commits to PASS. Consumed by the state machine
 # when transitioning into PASS_PRESSED. -1 = no current pass target.
@@ -564,12 +604,6 @@ var _full_eval_pending: bool = true
 # Fire-phase products consumed by the commit phase (instance fields so a
 # sliced eval hands them across the dispatch boundary):
 var _phase_current_safety: float = 0.0
-# Clearance safety AT THE CURRENT SPOT (not the best evade seam) — "is a stick
-# on the puck right now", the pressure the SHOOT settle beat reads for poise. A
-# shooter isn't trying to escape, so evadability (a lane exists) is the wrong
-# read; a defender bearing down rushes the release regardless. Same grounded
-# reach model as _phase_current_safety, evaluated where the carrier stands.
-var _phase_pos_safety: float = 1.0
 var _phase_shoot_score: float = -1.0
 var _phase_best_pass_peer: int = -1
 var _phase_best_pass_score: float = -1.0
@@ -765,14 +799,14 @@ func decide(ctx: RoleContext) -> RoleDecision:
 	# keeps the re-eval cadence ~PICK_ACTION_PERIOD_TICKS of wall time at every
 	# difficulty tier instead of stretching it by the dispatch period.
 	var step_ticks: int = maxi(1, ctx.dispatch_period_ticks)
-	# Settle window: arm from the difficulty knob on the first decide() of a
-	# fresh possession, then drain in real time. _pick_action reads
-	# _settle_remaining_s to hold fire/dump commits while it's positive.
+	# Possession clock: zeroed on the first decide() of a fresh touch, then run in
+	# real time. _pick_commit_phase reads it through _settle_penalty to handicap
+	# the active options against their giveaway bars.
 	if _settle_arm_pending:
 		_settle_arm_pending = false
-		_settle_remaining_s = ctx.carry_settle_delay_s
-	elif _settle_remaining_s > 0.0:
-		_settle_remaining_s -= float(step_ticks) / float(_PhysicsConstants.PHYSICS_TICK)
+		_settle_elapsed_s = 0.0
+	else:
+		_settle_elapsed_s += float(step_ticks) / float(_PhysicsConstants.PHYSICS_TICK)
 	_ticks_since_pick += step_ticks
 	if _commit_phase_pending:
 		# Second dispatch of a sliced re-eval: carry/dump scoring + the commit
@@ -868,15 +902,15 @@ func reset() -> void:
 	_commit_phase_pending = false
 	_full_eval_pending = true
 	# The puck is gone — the next decide() is a fresh possession, so re-arm the
-	# settle window (see _settle_arm_pending).
+	# settle clock (see _settle_arm_pending).
 	_settle_arm_pending = true
-	_settle_remaining_s = 0.0
+	_settle_elapsed_s = 0.0
 
 
 # Clear just the persistent intent (not last_carry_anchor / debug).
 # Called by the state machine when committing to a press state, so
 # the next CARRY entry starts with no stale intent and re-evaluates
-# from scratch. Does NOT re-arm the settle window — a press bail back to
+# from scratch. Does NOT re-arm the settle clock — a press bail back to
 # CARRY is the same possession, not a new touch.
 func clear_intent() -> void:
 	intended_action = INTENT_CARRY
@@ -938,13 +972,6 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 	_phase_current_safety = AIActionScoring.clearance_to_safety(
 			AIActionScoring.reach_clearance(evade_seam, AIActionScoring.EVADE_HORIZON_S,
 					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
-	# Poise pressure: the clearance right where the carrier STANDS (not the escape
-	# seam), so a stick bearing down reads as pressure on the SHOT release even
-	# when an evade lane exists. Feeds the pressure-scaled shot settle beat.
-	_phase_pos_safety = AIActionScoring.clearance_to_safety(
-			AIActionScoring.reach_clearance(cur_puck_pos, AIActionScoring.EVADE_HORIZON_S,
-					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
-
 	# The DIRECTED seam — where to put the puck to get PAST the pressure toward
 	# the spot this carrier actually wants (the live carry anchor; the attacking
 	# goal until the first re-eval of a possession picks one). This is the deke
@@ -1458,6 +1485,11 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	var best_shot_score: float = shoot_score
 	var best_shot_intent: int = INTENT_SHOOT
 
+	# Settle doubt: a fresh carrier's discount on its own read of every ACTIVE
+	# option, charged against that option's giveaway bar only (see _settle_penalty
+	# for why it must not enter the compete itself). 0 for Hard / the perfect bot.
+	var settle_penalty: float = _settle_penalty(ctx)
+
 	# Best fire option — the best of those that clear their OWN giveaway bar
 	# (SHOT_MIN_VALUE / PASS_MIN_VALUE). Qualifying each option before the max
 	# rather than after it is what keeps the two bars independent: taking the
@@ -1465,11 +1497,17 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# veto the whole fire leg, so raising the shot's bar would silently suppress
 	# passing too. Nothing qualifying leaves fire at -INF, which loses every
 	# compete below — the puck is never given away for nothing.
+	#
+	# The bar is cleared by the DOUBTED value, the compete below is entered at the
+	# HONEST one: the doubt says whether this option is worth the puck yet, not
+	# what it is worth. Handicapping the compete score too would just re-time the
+	# option instead of de-selecting it (again, see _settle_penalty).
 	var fire_score: float = -INF
 	var fire_intent: int = best_shot_intent
-	if best_shot_score > SHOT_MIN_VALUE:
+	if _settle_handicap(best_shot_score, settle_penalty) > SHOT_MIN_VALUE:
 		fire_score = best_shot_score
-	if best_pass_score > PASS_MIN_VALUE and best_pass_score > fire_score:
+	if _settle_handicap(best_pass_score, settle_penalty) > PASS_MIN_VALUE \
+			and best_pass_score > fire_score:
 		fire_score = best_pass_score
 		fire_intent = INTENT_PASS
 
@@ -1496,34 +1534,10 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# it until the brief stagger decays — carry still computes normally,
 	# this only blocks fire from winning the compete.
 	#
-	# AND: don't fire (or dump) inside the settle window — the difficulty beat
-	# between the puck hitting the tape and the bot being ALLOWED to move it
-	# (ctx.carry_settle_delay_s; 0 at Hard / for humans of the perfect-bot
-	# baseline). Same shape as the stagger gate: everything still scores, the
-	# commit just waits, so the window draining releases the current best play.
-	#
-	# The beat is applied BY RELEASE TYPE. PASS and DUMP settle FLAT (settling):
-	# a fresh carrier composes an outlet before it can move it, and pressuring one
-	# is a real defensive play. The SHOOT beat is PRESSURE-SCALED (shot_settling)
-	# — poise under pressure: an UNPRESSURED carrier (pos_safety ≈ 1) may finish
-	# the instant it gains the puck (a flat beat here swallows the open backdoor
-	# tap-in), while a HOUNDED one (a stick on the puck, pos_safety → 0) pays the
-	# full beat because rushed hands can't calmly settle-and-snipe. pos_safety is
-	# the clearance right where the carrier STANDS (see _phase_pos_safety) — NOT
-	# the evade-seam safety: a shooter isn't fleeing, so "a lane exists" is the
-	# wrong read; what rushes the release is a stick bearing down. Same grounded
-	# reach model, so no new perception. Reception one-timers stay ungated (the
-	# puck never settles on the tape). The threshold reads off the SAME countdown:
-	# while _settle_remaining_s (base → 0) still exceeds base × pos_safety, the shot
-	# is settling — a fully-clear look (threshold = base) clears at once, a pinned
-	# one (threshold = 0) waits the whole drain. Live each tick: shedding the
-	# pressure mid-window releases the shot immediately.
+	# The settle doubt is NOT a second gate here — a fresh carrier's hesitation is
+	# already spent above, as the raised bar each active option had to clear to
+	# reach this compete at all.
 	var staggered: bool = ctx.self_stagger_timer > 0.0
-	var settling: bool = _settle_remaining_s > 0.0
-	var shot_settling: bool = _settle_remaining_s > ctx.carry_settle_delay_s * _phase_pos_safety
-	# The fire gate blocks the WINNING intent by its OWN beat: a shot by the
-	# pressure-scaled beat, a pass by the flat one (the dump, below, is flat too).
-	var fire_settle_blocked: bool = shot_settling if fire_intent == INTENT_SHOOT else settling
 
 	# Opportunity cost of firing NOW: the value of keeping the puck for a
 	# developing cross-seam one-timer a teammate is staging. Same EV currency as
@@ -1543,9 +1557,14 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 			* keep_prob * AIActionScoring.delay_discount(_hold_elapsed_s))
 
 	# Last-resort DUMP (zone-gated; -INF where none applies). It competes against the
-	# RAW (honest, strip-point-priced) carry — see _best_dump.
+	# RAW (honest, strip-point-priced) carry — see _best_dump. The dump's bar IS
+	# that retention comparison (there is no absolute floor to charge the settle
+	# doubt against), so here the handicap deepens the concession itself: a fresh
+	# carrier will not throw the puck away on a marginal clear, while a free one
+	# (concession 0 — a certain recovery) is unaffected, which is right. Applied
+	# before the debug field so the label shows the value the compete used.
 	var dump_result: Array = _best_dump(ctx, our_goalie)
-	var dump_score: float = dump_result[0]
+	var dump_score: float = _settle_handicap(dump_result[0], settle_penalty)
 	debug_dump_score = dump_score
 
 	var new_intent: int
@@ -1590,7 +1609,7 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# fire arrives here as -INF and loses both branches.
 	if ((fire_score >= carry_score and fire_score >= hold_value)
 			or (retention_hopeless and fire_score >= dump_score)) \
-			and not staggered and not fire_settle_blocked:
+			and not staggered:
 		_hold_elapsed_s = 0.0
 		new_intent = fire_intent
 		if new_intent == INTENT_PASS:
@@ -1686,7 +1705,7 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 						(target_v / coef - min_v)
 							/ maxf(ctx.self_wrister_shot_speed - min_v, 0.001),
 						0.0, 1.0)
-	elif retention_hopeless and not staggered and not settling:
+	elif retention_hopeless and not staggered:
 		# Last resort: even the best carry is doomed in a bad spot (raw carry, honestly
 		# priced, below the safe giveaway), and no qualified fire out-valued the
 		# concession (checked above). Clear our zone, or dump-and-chase.

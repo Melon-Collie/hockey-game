@@ -65,23 +65,29 @@ func test_tiers_form_a_strictly_softening_ladder_on_every_axis() -> void:
 			"Normal's release timing is sloppier than Hard's")
 	assert_gt(easy.shot_timing_error_s, normal.shot_timing_error_s,
 			"Easy's release timing is sloppier than Normal's")
-	# Settle beat: longer holds the release later after a fresh possession.
-	assert_gt(normal.carry_settle_delay_s, hard.carry_settle_delay_s,
-			"Normal settles the puck before playing it, Hard doesn't")
-	assert_gt(easy.carry_settle_delay_s, normal.carry_settle_delay_s,
-			"Easy settles the puck longer than Normal")
+	# Settle doubt: a bigger fraction demands a clearer play before a fresh
+	# carrier will give the puck up, and a longer τ keeps the bar up longer.
+	assert_gt(normal.settle_penalty_frac, hard.settle_penalty_frac,
+			"Normal wants a clearer play than Hard before playing a fresh puck")
+	assert_gt(easy.settle_penalty_frac, normal.settle_penalty_frac,
+			"Easy wants a clearer play than Normal")
+	assert_gt(easy.settle_penalty_tau_s, normal.settle_penalty_tau_s,
+			"Easy stays unsure of a fresh puck longer than Normal")
+	assert_lt(normal.settle_penalty_frac, 1.0,
+			"settle doubt is a raised bar, never the flat gate it replaced")
+	assert_lt(easy.settle_penalty_frac, 1.0,
+			"settle doubt is a raised bar, never the flat gate it replaced")
 	# Pace — pursuit standoff: bigger sags further off the carrier (more time).
 	assert_gt(normal.pursuit_standoff_m, hard.pursuit_standoff_m,
 			"Normal sags further off the carrier than Hard")
 	assert_gt(easy.pursuit_standoff_m, normal.pursuit_standoff_m,
 			"Easy sags further off the carrier than Normal")
-	# Pace — pass speed: RETIRED at 1.0 for every tier. Scaling below 1.0
-	# under-delivered the solved receiver-relative arrival and passes died
-	# short of the tape (missed passes, not softer ones).
-	assert_eq(normal.pass_speed_scale, 1.0,
-			"Normal launches passes at the full solved pace")
-	assert_eq(easy.pass_speed_scale, 1.0,
-			"Easy launches passes at the full solved pace")
+	# Pace — pass speed: a lower tier's puck ARRIVES softer (the launch is solved
+	# for the reduced target, so it still gets there — see pass_launch_speed).
+	assert_lt(normal.pass_speed_scale, hard.pass_speed_scale,
+			"Normal puts the puck on the tape softer than Hard")
+	assert_lt(easy.pass_speed_scale, normal.pass_speed_scale,
+			"Easy puts the puck on the tape softer than Normal")
 	# Pace — check aggression: lower hunts fewer body checks.
 	assert_lt(normal.check_aggression, hard.check_aggression,
 			"Normal hunts fewer checks than Hard")
@@ -111,10 +117,10 @@ func test_hard_pace_knobs_are_the_no_op_baseline() -> void:
 	assert_eq(hard.pass_speed_scale, 1.0, "Hard moves the puck at full pace")
 	assert_eq(hard.check_aggression, 1.0, "Hard hunts checks as today")
 	assert_eq(hard.defensive_anticipation_scale, 1.0, "Hard anticipates as today")
-	# Same for the finish knobs: no settle beat and the pre-split flat error on
+	# Same for the finish knobs: no settle doubt and the pre-split flat error on
 	# both release types (scatter is a selectivity dial, not a save dial — see the
 	# factory doc; it isn't the trim lever).
-	assert_eq(hard.carry_settle_delay_s, 0.0, "Hard releases the tick the compete fires")
+	assert_eq(hard.settle_penalty_frac, 0.0, "Hard releases the tick the compete fires")
 	assert_eq(hard.shot_aim_error_rad, hard.pass_aim_error_rad,
 			"Hard keeps the pre-split flat error on both release types")
 	# Hard's humanisers are small but real — the whole point of the retune is

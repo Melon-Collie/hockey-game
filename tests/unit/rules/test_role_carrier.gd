@@ -1104,120 +1104,115 @@ func test_staggered_carrier_holds_instead_of_firing() -> void:
 			"staggered carrier holds instead of committing the fire")
 
 
-# ─── settle window: a fresh possession only carries until the beat drains ────
+# ─── settle doubt: a fresh carrier's bar for giving the puck up ──────────────
 
-func _settle_skaters(self_pos: Vector3) -> Array:
-	# The pressured-breakout setup that reliably fires a PASS on tick one.
+# The same pressured breakout, with the outlet standing in ice of two different
+# qualities. Both are legal passes that fire on tick one with no doubt; the
+# strong one is worth ~5.7x PASS_MIN_VALUE, the weak one ~1.7x.
+func _settle_skaters(self_pos: Vector3, outlet: Vector3) -> Array:
 	return [
 			[1, TEAM_ID, self_pos],
-			[2, TEAM_ID, Vector3(11, 0, 11)],     # open outlet
+			[2, TEAM_ID, outlet],
 			[3, 1, Vector3(1.5, 0, 18.0)],        # forechecker
 			[4, 1, Vector3(3.0, 0, 17.5)],        # forechecker
 	]
 
 
-func test_settle_window_holds_the_fire_then_releases_it() -> void:
+const _STRONG_OUTLET := Vector3(11, 0, 11)    # open, up the strong wall
+const _MARGINAL_OUTLET := Vector3(13, 0, 24)  # pinned deep in the far corner
+
+
+func _settle_ctx(self_pos: Vector3, outlet: Vector3) -> RoleContext:
+	var ctx: RoleContext = _make_ctx(self_pos, _settle_skaters(self_pos, outlet))
+	ctx.settle_penalty_frac = 0.6   # Normal's own dial
+	ctx.settle_penalty_tau_s = 0.3
+	return ctx
+
+
+# The whole reason the settle knob is a raised bar rather than the flat "may not
+# commit for N seconds" gate it replaced: on the same fresh touch, under the SAME
+# doubt, the obvious play goes at once and the marginal one waits. A flat gate
+# can only hold both.
+
+func test_an_obvious_outlet_beats_the_settle_doubt_outright() -> void:
 	var self_pos := Vector3(3, 0, 20)
-	var ctx := _make_ctx(self_pos, _settle_skaters(self_pos))
-	ctx.carry_settle_delay_s = 0.2   # 24 ticks at 120 Hz
+	var c := AIRoleCarrier.new()
+	c.decide(_settle_ctx(self_pos, _STRONG_OUTLET))
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
+			"a wide-open outlet is worth the puck on the first touch")
+
+
+func test_a_marginal_outlet_pays_the_settle_doubt() -> void:
+	var self_pos := Vector3(3, 0, 20)
+	# Sanity: the weak outlet IS a legal fire — it's the doubt that holds it, not
+	# the standing giveaway bar.
+	var undoubted := AIRoleCarrier.new()
+	undoubted.decide(_make_ctx(self_pos, _settle_skaters(self_pos, _MARGINAL_OUTLET)))
+	assert_eq(undoubted.intended_action, AIRoleCarrier.INTENT_PASS,
+			"sanity: with no doubt the weak outlet fires on tick one")
+
+	var ctx: RoleContext = _settle_ctx(self_pos, _MARGINAL_OUTLET)
 	var c := AIRoleCarrier.new()
 	c.decide(ctx)
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
-			"a fresh possession may only carry inside the settle window")
+			"the weak outlet isn't worth a fresh puck — the raised bar rejects it")
 	assert_gt(c.debug_pass_score, 0.0,
-			"scores keep computing during the window — only the commit waits")
-	# Drain the window in real ticks (decide() steps ctx.dispatch_period_ticks
-	# = 1 tick per call); a re-eval lands within PICK_ACTION_PERIOD_TICKS of
-	# the drain, so 40 calls comfortably covers 0.2 s + one cadence.
-	for _i: int in range(40):
+			"scores keep computing — the doubt only raises the bar they must clear")
+	# Let the doubt decay in real ticks (decide() steps ctx.dispatch_period_ticks
+	# = 1 tick per call). 60 ticks = 0.5 s covers the flip plus a re-eval cadence.
+	for _i: int in range(60):
 		c.decide(ctx)
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
-			"the held-back breakout pass releases once the window drains")
+			"the same outlet is worth the puck once the carrier has settled")
 
 
-func test_settle_window_rearms_on_reset_but_not_on_clear_intent() -> void:
-	var self_pos := Vector3(3, 0, 20)
-	var ctx := _make_ctx(self_pos, _settle_skaters(self_pos))
-	ctx.carry_settle_delay_s = 0.2
+func test_an_obvious_shot_beats_the_settle_doubt_outright() -> void:
+	# The in-tight 1v1 (test_standstill_1v1_winds_up_the_cut), no pressure: a
+	# doorstep look is worth many times SHOT_MIN_VALUE, so a raised bar is nothing
+	# to it. This is the open backdoor tap-in the flat gate used to swallow.
+	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	var self_pos := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z + 3.0)
+	var ctx := _make_ctx(self_pos)
+	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 1.3)
+	ctx.settle_penalty_frac = 0.6
+	ctx.settle_penalty_tau_s = 0.3
 	var c := AIRoleCarrier.new()
-	for _i: int in range(41):
+	c.decide(ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
+			"an obvious shot fires on tick one despite a deep settle doubt")
+
+
+func test_settle_doubt_rearms_on_reset_but_not_on_clear_intent() -> void:
+	var self_pos := Vector3(3, 0, 20)
+	var ctx: RoleContext = _settle_ctx(self_pos, _MARGINAL_OUTLET)
+	var c := AIRoleCarrier.new()
+	for _i: int in range(61):
 		c.decide(ctx)
-	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS, "sanity: window drained")
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS, "sanity: the doubt drained")
 
 	# clear_intent (press-state handoff / bail) is the SAME possession — the
-	# next decide may re-commit immediately, no fresh settle beat.
+	# next decide may re-commit immediately, with no fresh doubt.
 	c.clear_intent()
 	c.decide(ctx)
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
 			"a press bail back to CARRY re-fires without re-settling")
 
-	# reset (puck lost) marks the next decide as a NEW possession — the
-	# settle window re-arms and holds the fire again.
+	# reset (puck lost) marks the next decide as a NEW possession — the doubt
+	# re-arms at full and the marginal outlet is held again.
 	c.reset()
 	c.decide(ctx)
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_CARRY,
-			"regaining the puck starts a fresh settle beat")
+			"regaining the puck starts a fresh settle doubt")
 
 
-func test_zero_settle_delay_is_the_hard_baseline() -> void:
+func test_zero_settle_doubt_is_the_hard_baseline() -> void:
 	# ctx default (0.0) must reproduce the pre-knob behavior exactly: the
 	# pressured carrier fires on its first decide.
 	var self_pos := Vector3(3, 0, 20)
 	var c := AIRoleCarrier.new()
-	c.decide(_make_ctx(self_pos, _settle_skaters(self_pos)))
+	c.decide(_make_ctx(self_pos, _settle_skaters(self_pos, _STRONG_OUTLET)))
 	assert_eq(c.intended_action, AIRoleCarrier.INTENT_PASS,
-			"no settle delay → the tick-one fire is unchanged")
-
-
-# ─── poise under pressure: the SHOOT settle beat is pressure-scaled ──────────
-
-func test_unpressured_shot_bypasses_the_settle_beat() -> void:
-	# The in-tight 1v1 (test_standstill_1v1_winds_up_the_cut) with NO opposing
-	# skaters near the shooter — current_safety ≈ 1. A fresh-possession settle
-	# beat that flat-gated every commit used to hold this look and CARRY through
-	# it; with the shot beat pressure-scaled, an unpressured carrier finishes the
-	# instant it gains the puck (the open backdoor tap-in). This is the fix.
-	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
-	var self_pos := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z + 3.0)
-	var ctx := _make_ctx(self_pos)
-	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 1.3)
-	ctx.carry_settle_delay_s = 0.3   # a full Normal-ish beat
-	var c := AIRoleCarrier.new()
-	c.decide(ctx)
-	assert_eq(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
-			"an unpressured shot fires on tick one despite the settle beat")
-
-
-func test_pressured_shot_still_pays_the_settle_beat() -> void:
-	# Same in-tight look, but a defender draped tight on the shooter (behind the
-	# puck, so it doesn't screen the puck→net line — the shot still scores) tanks
-	# current_safety. The pressure-scaled beat now holds the shot on tick one, then
-	# releases it once the countdown drains below base × safety — poise: rushed
-	# hands can't settle-and-snipe the instant they gain the puck.
-	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
-	var self_pos := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z + 3.0)
-	# Poise reads the clearance where the carrier STANDS (not the evade seam), so a
-	# single checker draped ON the puck is enough — a stick bearing down rushes the
-	# release even though a lane exists. Same z as the shooter → along-sightline
-	# distance ~0, no screen registers, the shot still scores.
-	var checker_pos := Vector3(0.25, 0.0, -GameRules.GOAL_LINE_Z + 3.0)
-	var ctx := _make_ctx(self_pos, [
-			[1, TEAM_ID, self_pos],
-			[9, 1 - TEAM_ID, checker_pos],
-	])
-	ctx.snapshot.goalie_states[1 - TEAM_ID] = _squared_goalie(self_pos, net, 1.3)
-	ctx.carry_settle_delay_s = 0.3
-	var c := AIRoleCarrier.new()
-	c.decide(ctx)
-	assert_lt(c._phase_pos_safety, 1.0,
-			"sanity: a stick on the puck lowers the current-spot poise safety below 1")
-	assert_ne(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
-			"a hounded fresh carrier can't fire on tick one — it pays the beat")
-	# Drain the pressure-scaled window; the held shot then commits.
-	for _i: int in range(60):
-		c.decide(ctx)
-	assert_eq(c.intended_action, AIRoleCarrier.INTENT_SHOOT,
-			"once the settle beat drains, the pressured shot releases")
+			"no settle doubt → the tick-one fire is unchanged")
 
 
 # ─── reset() ──────────────────────────────────────────────────────────────

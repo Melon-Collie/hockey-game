@@ -29,7 +29,7 @@ separate is what makes tiers tunable without a rebalance cascade:
 
 | axis | what it changes | knobs |
 |---|---|---|
-| **PRECISION** | how sharp the bot is | reaction delay, dispatch cadence, aim/timing error, settle beat |
+| **PRECISION** | how sharp the bot is | reaction delay, dispatch cadence, aim/timing error, settle doubt |
 | **PACE** | how much time and space a human gets | pursuit standoff, anticipation lead, check aggression |
 | **COGNITION** | which reads exist in its model at all | the bool gates |
 
@@ -40,6 +40,24 @@ when a tier feels oppressive, precision when it finishes too well.
 The pace knobs further split by what a lower tier concedes: standoff and
 anticipation concede **space** (positioning); check aggression concedes
 **threat** (physicality).
+
+### Hesitation is a raised bar, never a timer
+
+A lower tier is less sure of a puck it has just gained. That is expressed as
+**settle doubt** (`BotSkillProfile.settle_penalty_frac`): a decaying fraction by
+which a fresh carrier handicaps its own read of every ACTIVE option against that
+option's *giveaway bar* — the thing that says what a release has to be worth to
+be worth the puck. An obvious play out-values a raised bar on the first tick; a
+marginal one waits for the doubt to drain. So the bot deliberates over close
+calls and is decisive on clear ones, which is what makes a tier read as *less
+sure* rather than *laggier*.
+
+Charge it against the **bar**, never against the carry it competes with. The
+stand-still carry candidate is by construction worth the same as firing from
+where the bot stands, so a handicap inside the fire-vs-carry compete can only be
+a uniform delay — it holds the doorstep tap-in exactly as hard as the hopeless
+point shot. That is the flat "may not commit for N seconds" gate this replaced,
+and it is what "obvious choices still fast" is a rule against.
 
 ### The rule that keeps cognition gates honest
 

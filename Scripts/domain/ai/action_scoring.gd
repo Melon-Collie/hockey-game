@@ -1006,44 +1006,57 @@ const PASS_CHARGE_SPEED_M_S: float = (
 # Clamped to max_launch — the passer's own max wrister (its hardest possible
 # pass), or the league default for opponent threat modeling.
 #
-# speed_scale is the difficulty pace knob (BotSkillProfile.pass_speed_scale),
-# applied AFTER the clamp so an easier bot's passes drop below the magnet pace —
-# that's the point: a slower puck the human can read and pick off. Defaults to
-# 1.0, so the cross-player threat model (expected_pass_speed) and all unscaled
-# callers see the full magnet pace.
+# speed_scale is the difficulty pace knob (BotSkillProfile.pass_speed_scale). It
+# scales the TARGET ARRIVAL pace — the closing speed this whole function solves a
+# launch for — and everything downstream then runs on the softened target: the
+# receiver-motion quadratic, the friction compensation, and the executable floor.
+# So a lower tier throws a puck that ARRIVES soft and still gets there.
+#
+# It used to multiply the finished LAUNCH instead, which is why the knob was
+# retired at 1.0 for every tier: scaling after the solve discards the solve. A
+# receiver streaking away at 6 m/s needs a 26 m/s world arrival to close at 20;
+# knocking that launch to 0.7 delivers ~12 m/s of closing instead of 20, and the
+# feed dies behind him. Scaling the target hands the same receiver a 23 m/s
+# arrival for a 17 m/s close — softer by exactly the dial, and still caught.
+# Defaults to 1.0, which is bit-identical to the unscaled solve, so the
+# cross-player threat model (expected_pass_speed) is untouched by the knob.
 static func pass_launch_speed(distance: float, max_launch: float,
 		speed_scale: float = 1.0,
 		receiver_vel: Vector3 = Vector3.ZERO,
 		pass_dir: Vector3 = Vector3.ZERO) -> float:
-	var world_arrival: float = PASS_TARGET_CLOSING_M_S
+	# The pace dial rides HERE, on the target the solve aims at (see above).
+	var target_closing: float = PASS_TARGET_CLOSING_M_S * maxf(speed_scale, 0.01)
+	var world_arrival: float = target_closing
 	if pass_dir.length_squared() > 0.0001:
 		var along: float = pass_dir.dot(receiver_vel)
 		var perp_sq: float = maxf(0.0, receiver_vel.length_squared() - along * along)
 		# Two receiver-frame launch bounds, both solving
 		# (world_arrival − along)² + perp² = target² for the world arrival speed:
-		#   soft  — lands at the IDEAL closing pace (PASS_TARGET_CLOSING, a
-		#           comfortable any-angle catch)
+		#   soft  — lands at the IDEAL closing pace (target_closing, a comfortable
+		#           any-angle catch)
 		#   crisp — lands at the catch CEILING (PASS_RECEIVE_CEILING, the hardest
-		#           the squared-up receiver can still corral)
+		#           the squared-up receiver can still corral). NOT scaled by the
+		#           pace dial: it is a fact about what a receiver can handle, not a
+		#           choice about how hard to pass.
 		# Fire at the crisp WORLD pace we'd throw a stationary receiver
-		# (PASS_TARGET_CLOSING), clamped between them. Streaking onto a lead feed
+		# (target_closing), clamped between them. Streaking onto a lead feed
 		# (along > 0) pushes the soft floor ABOVE that pace, so we fire HARDER to
 		# lead — the give-with-the-puck read is preserved. Curling back toward the
 		# passer (along < 0) pulls both bounds down, but the crisp ceiling caps how
 		# far: instead of collapsing to the min-wrister floor (the old "super soft"
 		# floater), the launch only softens to what the receiver can still catch.
 		var soft_arrival: float = along + sqrt(maxf(0.0,
-				PASS_TARGET_CLOSING_M_S * PASS_TARGET_CLOSING_M_S - perp_sq))
+				target_closing * target_closing - perp_sq))
 		var crisp_arrival: float = along + sqrt(maxf(0.0,
 				PASS_RECEIVE_CEILING_M_S * PASS_RECEIVE_CEILING_M_S - perp_sq))
-		world_arrival = clampf(PASS_TARGET_CLOSING_M_S, soft_arrival, crisp_arrival)
+		world_arrival = clampf(target_closing, soft_arrival, crisp_arrival)
 		# A receiver charging the passer harder than the target could drive this
 		# negative/tiny; floor at the soft-pass minimum so we still fire a real pass.
 		world_arrival = maxf(world_arrival, GameRules.DEFAULT_WRISTER_POWER_MIN_M_S)
 	var launch: float = sqrt(
 			world_arrival * world_arrival
 			+ 2.0 * GameRules.PUCK_ICE_DECEL_M_S2 * maxf(distance, 0.0))
-	return clampf(launch, GameRules.DEFAULT_WRISTER_POWER_MIN_M_S, max_launch) * speed_scale
+	return clampf(launch, GameRules.DEFAULT_WRISTER_POWER_MIN_M_S, max_launch)
 
 # ── Saucer pass ──────────────────────────────────────────────────────────────
 # A saucer (LOW-loft) pass lofts the puck off the ice so it flies over a
