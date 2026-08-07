@@ -323,13 +323,15 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 # carries a stale assignment.
 #
 # Backline = our peers slotted MARK (DZONE and TRANS_OD).
-# The carrier is owned separately — PRESSURE in DZONE (transition no longer
-# man-marks at all, so this partition is DZONE-only in practice) — so it's
-# excluded; the men are the opposing carrier's potential
-# receivers (every opponent except the carrier). Each man's value is the raw
-# pass-threat surface (no defenders in the view), so AIThreatAssignment pairs
+#
+# The men are every opponent who is not already owned: while an opponent
+# CARRIES he is PRESSURE's, so he is excluded and the men are his potential
+# receivers; with the puck loose nobody owns anybody and every opponent is a
+# man, the ex-carrier included. Each man's value is the raw pass-threat surface
+# from the feed source (no defenders in the view), so AIThreatAssignment pairs
 # the most dangerous men with the best-positioned defenders. `prev` is last
-# tick's partition, threaded through for switch hysteresis.
+# tick's partition, threaded through for switch hysteresis — which is also what
+# carries a marker across a pass without re-shuffling the whole coverage.
 func _compute_threat_assignments(snapshot: WorldSnapshot,
 		prev: Dictionary) -> Dictionary[int, int]:
 	var empty: Dictionary[int, int] = {}
@@ -339,12 +341,27 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 	if snapshot == null or snapshot.puck_state == null:
 		return empty
 	var carrier_pid: int = snapshot.puck_state.carrier_peer_id
-	# Need a live OPPONENT carrier to define the receivers / score pass threats.
-	if carrier_pid == -1 or _team_id_by_peer.get(carrier_pid, -1) == team_id:
+	# We have it — this is not a coverage problem.
+	if carrier_pid != -1 and _team_id_by_peer.get(carrier_pid, -1) == team_id:
 		return empty
-	if not snapshot.skater_states.has(carrier_pid):
-		return empty
-	var carrier_pos: Vector3 = snapshot.skater_states[carrier_pid].position
+	# THE FEED SOURCE — where the next pass would come from. An opponent carrier
+	# when one holds the puck, otherwise the puck itself: exactly the resolution
+	# AIRoleHelpers.resolve_defensive_play_ref already makes for the roles that
+	# consume this partition, so the brain and the marker read one play.
+	#
+	# Requiring a live carrier was measured at 36% of D-zone time with NO man
+	# assigned to ANY marker — and all-or-nothing, because the condition is
+	# team-wide. Every pass, shot, rebound and dump dissolved the whole coverage
+	# for its flight and dropped both markers into the unassigned fallback. A
+	# man is dangerous because of where he stands relative to our net, which is
+	# true whether or not anybody is holding the puck; the carrier only sharpens
+	# WHICH man matters most. With the puck standing in, the matcher's own
+	# hysteresis then keeps each marker on the man he already had, and the
+	# ex-carrier joins the men as the extra body — which is what a defence does
+	# when the puck leaves his stick.
+	var play_ref: Vector3 = snapshot.puck_state.position
+	if carrier_pid != -1 and snapshot.skater_states.has(carrier_pid):
+		play_ref = snapshot.skater_states[carrier_pid].position
 
 	# Backline man-markers (MARK, in DZONE and TRANS_OD) and their kinematics.
 	var defenders: Array[int] = []
@@ -367,7 +384,7 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 	if defenders.is_empty():
 		return empty
 
-	# Men = non-carrier opponents; value = raw pass-threat surface.
+	# Men = every opponent PRESSURE does not already own (see the header).
 	var our_net := Vector3(0.0, 0.0, _own_goal_z)
 	var our_goalie_pos: Vector3 = _resolve_our_goalie_pos(snapshot)
 	var no_defenders: Array[Vector3] = []
@@ -384,7 +401,7 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		men.append(pid)
 		man_pos[pid] = mp
 		man_value[pid] = AIActionScoring.threat_surface_pass(
-				carrier_pos, mp, our_net, our_goalie_pos,
+				play_ref, mp, our_net, our_goalie_pos,
 				GameRules.NET_HALF_WIDTH, no_defenders)
 		# Finish danger if fed: shot value from his spot with the goalie
 		# PREDICTED OVER THE FEED'S FLIGHT (he starts tracking the carrier;
@@ -393,8 +410,8 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		# field defenders. Feeds the net-front override (drops the lane
 		# factor man_value folds in: a contested feed still becomes a
 		# tap-in if it arrives).
-		var feed_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, mp)
-		var feed_flight: float = carrier_pos.distance_to(mp) / maxf(feed_speed, 1.0)
+		var feed_speed: float = AIActionScoring.expected_pass_speed(play_ref, mp)
+		var feed_flight: float = play_ref.distance_to(mp) / maxf(feed_speed, 1.0)
 		# Predicted post-seal for the man's spot (derive_post_seal_x_sign): a
 		# sharp-angle man fires into the wall a competent keeper adopts, so he
 		# is not a finish threat the assignment must chase.
@@ -410,7 +427,7 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		# reads raw danger; who covers whom is its output, not its input.
 		var g_state: GoalieNetworkState = snapshot.goalie_states.get(team_id)
 		AIActionScoring.resolve_feed_keeper(
-				our_goalie_pos, our_net, feed_flight, mp, carrier_pos,
+				our_goalie_pos, our_net, feed_flight, mp, play_ref,
 				g_state.hands_read(our_net.z) if g_state != null else Vector4.INF,
 				feed_speed)
 		man_danger[pid] = AIActionScoring.score_shoot(

@@ -134,6 +134,52 @@ func test_threat_partition_assigns_distinct_men() -> void:
 				"assigned peer %d is MARK, got slot %d" % [pid, slot])
 
 
+func test_the_partition_survives_the_puck_leaving_a_stick() -> void:
+	# A pass is in flight: same six bodies, no carrier. Coverage must NOT
+	# dissolve — a man is dangerous because of where he stands relative to our
+	# net, which does not depend on anyone holding the puck. Requiring a live
+	# carrier was measured at 36% of D-zone time with no man on ANY marker, and
+	# team-wide all-or-nothing, because every pass / shot / rebound / dump hit
+	# the same condition.
+	var brain: TeamBrain = _make_brain_3v3()
+	brain.force_retick()
+	var snap: WorldSnapshot = _make_dzone_3v3()
+	brain.tick(0.001, snap)
+	var carried: Dictionary = brain.threat_assignments.duplicate()
+	assert_eq(carried.size(), 2, "fixture sanity: both markers start with a man")
+
+	# 200 releases it; the puck is now in flight toward 210.
+	snap.puck_state.carrier_peer_id = -1
+	snap.puck_state.position = Vector3(-3.0, 0.0, 19.0)
+	brain.force_retick()
+	brain.tick(0.001, snap)
+
+	assert_eq(brain.threat_assignments.size(), 2,
+			"coverage holds through the pass; got %s" % str(brain.threat_assignments))
+	var men: Array = brain.threat_assignments.values()
+	assert_ne(men[0], men[1], "still distinct men")
+	for pid: int in brain.threat_assignments:
+		assert_eq(brain.get_slot(pid), AIRoleSlots.Slot.MARK,
+				"only MARK peers are assigned")
+
+
+func test_a_released_carrier_becomes_a_markable_man() -> void:
+	# With nobody carrying, PRESSURE owns nobody, so every opponent is a man —
+	# the ex-carrier included. He is the most dangerous body on the ice in this
+	# fixture (dead centre, 6.7 m out), so the partition must be free to take
+	# him rather than treating him as somebody else's problem.
+	var brain: TeamBrain = _make_brain_3v3()
+	brain.force_retick()
+	var snap: WorldSnapshot = _make_dzone_3v3()
+	snap.puck_state.carrier_peer_id = -1
+	snap.puck_state.position = Vector3(-3.0, 0.0, 19.0)
+	brain.tick(0.001, snap)
+
+	var men: Array = brain.threat_assignments.values()
+	assert_true(men.has(200),
+			"the released carrier is a coverable man; got %s" % str(men))
+
+
 # ── Shared threat memo (threat_shoot_base_by_opp) ───────────────────────────
 
 func test_threat_memo_published_while_markers_live() -> void:
