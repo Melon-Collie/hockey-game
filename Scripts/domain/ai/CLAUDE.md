@@ -116,7 +116,7 @@ claim about a route — a single dispatch cannot see one.
 ## The defensive verbs
 
 A defensive role should read as *pick who is mine, call a verb, add my extras*.
-Two of the verbs exist as shared code; the roles compose them.
+Three verbs exist as shared code; the roles compose them.
 
 | verb | seam | callers |
 |---|---|---|
