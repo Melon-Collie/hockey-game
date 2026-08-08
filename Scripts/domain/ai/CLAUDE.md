@@ -113,6 +113,36 @@ time in shape, and whether a defence pair gets blown by) and
 measure the BODY over multi-second rushes, which is the only honest home for a
 claim about a route — a single dispatch cannot see one.
 
+## The defensive verbs
+
+A defensive role should read as *pick who is mine, call a verb, add my extras*.
+Two of the verbs exist as shared code; the roles compose them.
+
+| verb | seam | callers |
+|---|---|---|
+| **cover a threat** — take the ice between him and our net, in the feed lane, riding him | `AIRoleHelpers.cover_threat` | MARK, the 5v5 zone soft-lock, TRACK_MID, RUSH_D2 |
+| **close the carrier** — read his approach, hold the ladder's gap, angle him off the middle | `read_carrier_approach` + `carrier_stand` | PRESSURE, RUSH_D1, and the read alone for TRACK_PUCK |
+
+`AICarrierApproach` is the carrier half's subject: his position and velocity, the
+line he retreats us down, the route he has left, and his pace along it. Three
+roles derived those five from scratch with three different degenerate-case
+guards; they now share one read filled into caller-owned scratch.
+
+Two things deliberately do NOT go through the second verb. **TRACK_PUCK takes
+the hip, unangled** — a backchecker is behind the play and catching up, so he has
+no inside to take and shading one would only lengthen the chase; he shares the
+read and places his own target. And **PRESSURE cannot simply call a verb that
+fills the decision**, because its argmax sits between the stand and the answer:
+it consumes `carrier_stand` as the ring's centre and `inside_dir` /
+`inside_shade_m` as a floor on the candidates, then sets the target itself.
+
+Still unfactored, and the honest gaps in the vocabulary: **go get the puck**
+(three shapes — `AILoosePuckChase`, PRESSURE's loose branch, TRACK_PUCK's hip)
+and **hold a post** (the per-role fallbacks and their anchor constants). The
+open question on the latter is whether it should be a verb at all: if the
+assigner always names a man, the carrier, or the puck, there is no fourth state
+and the constants go with it.
+
 ## Covering a man is one behavior, and the role only chooses WHO
 
 `AIRoleHelpers.cover_threat` is the whole of it: take the ice between him and

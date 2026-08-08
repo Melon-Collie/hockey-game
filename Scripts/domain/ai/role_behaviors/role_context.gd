@@ -291,3 +291,7 @@ var scratch_opp_receivers: Array[Vector3] = []
 # Per-decide option-value upper bounds for the pruned carrier_best_option
 # (see AIRoleHelpers.carrier_option_bases).
 var scratch_option_bases: Array[float] = []
+# The carrier read shared by every role that closes him
+# (AIRoleHelpers.read_carrier_approach). Refilled in place per decide, never
+# reallocated — same contract as the arrays above.
+var scratch_carrier_approach := AICarrierApproach.new()

@@ -81,21 +81,20 @@ static func _decide_puck(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 	var read: AIRushRead = ctx.rush_read
 
-	var carrier_pos: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
-	if not carrier_pos.is_finite():
+	var ap: AICarrierApproach = ctx.scratch_carrier_approach
+	if not AIRoleHelpers.read_carrier_approach(ctx, ap):
 		d.target_position = ctx.self_pos
 		return d
-	var carrier_vel: Vector3 = AIRoleHelpers.resolve_play_ref_velocity(ctx)
-
-	var our_net: Vector3 = ctx.defending_goal_pos
-	var to_net: Vector3 = our_net - carrier_pos
-	var dist: float = sqrt(to_net.x * to_net.x + to_net.z * to_net.z)
+	var carrier_pos: Vector3 = ap.carrier_pos
 	var hip: Vector3 = carrier_pos
 	var inside: bool = _is_inside(ctx, read)
-	if dist > 0.001:
+	if ap.dir_net != Vector3.ZERO:
 		# The hip, goal-side: arrive between him and the net, not beside him.
-		var dir_net := Vector3(to_net.x / dist, 0.0, to_net.z / dist)
-		hip = carrier_pos + dir_net * _hip_gap(ctx, carrier_pos, dir_net, carrier_vel, dist)
+		# NOT angled, unlike the stands AIRoleHelpers.carrier_stand produces: a
+		# backchecker is behind the play and catching up, so he has no inside to
+		# take — shading one would only lengthen the chase.
+		hip = carrier_pos + ap.dir_net * _hip_gap(
+				ctx, carrier_pos, ap.dir_net, ap.carrier_vel, ap.net_dist)
 
 	# Caught him: finish the check if it is a real, separating one. Gated on
 	# already being goal-side — see CHECK_GOAL_SIDE_MARGIN_M.

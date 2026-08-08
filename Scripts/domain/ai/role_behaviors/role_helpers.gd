@@ -376,14 +376,49 @@ static func inside_dir(carrier_pos: Vector3, dir_net: Vector3) -> Vector3:
 # (AIRolePressure) — so both defend him the same way and the TRANS_OD → DZONE
 # handoff is not a change of doctrine. Falls back to the unshaded stand when the
 # shade would put the body somewhere illegal.
-static func carrier_stand(carrier_pos: Vector3, dir_net: Vector3,
-		gap: float) -> Vector3:
-	var stand: Vector3 = carrier_pos + dir_net * gap
-	var depth: float = inside_shade_m(carrier_pos)
+static func carrier_stand(ap: AICarrierApproach, gap: float) -> Vector3:
+	# Never project the stand past the net — the gap is a cushion in front of
+	# him, and beyond his own route there is no ice to hold.
+	var stand: Vector3 = ap.carrier_pos + ap.dir_net * minf(gap, ap.net_dist)
+	var depth: float = inside_shade_m(ap.carrier_pos)
 	if depth < 0.001:
 		return stand
-	var shaded: Vector3 = stand + inside_dir(carrier_pos, dir_net) * depth
+	var shaded: Vector3 = stand + inside_dir(ap.carrier_pos, ap.dir_net) * depth
 	return shaded if is_legal_position(shaded) else stand
+
+
+# Fills `out` with everything a defender needs about the carrier he owns, and
+# reports whether there is a play to read at all. False means no puck anywhere —
+# the caller holds, because there is nothing to close on.
+#
+# A LOOSE puck is a live read, not a failure: resolve_defensive_play_ref falls
+# back to the puck itself, which is where the next play comes from and what a
+# pressurer is closing on while a pass is in flight.
+#
+# `out.dir_net` is left ZERO when the carrier is on top of our net — the one case
+# with no well-defined retreat line. Roles branch on that themselves rather than
+# being handed a fabricated direction, because what to do there differs: the rush
+# gap collapses onto him, the pressurer keeps its ring centred on him.
+static func read_carrier_approach(ctx: RoleContext,
+		out: AICarrierApproach) -> bool:
+	var carrier_pos: Vector3 = resolve_defensive_play_ref(ctx)
+	if not carrier_pos.is_finite():
+		return false
+	out.carrier_pos = carrier_pos
+	out.carrier_vel = resolve_play_ref_velocity(ctx)
+
+	var to_net: Vector3 = ctx.defending_goal_pos - carrier_pos
+	var dist: float = sqrt(to_net.x * to_net.x + to_net.z * to_net.z)
+	out.net_dist = dist
+	if dist < 0.001:
+		out.dir_net = Vector3.ZERO
+		out.closing = 0.0
+		return true
+	out.dir_net = Vector3(to_net.x / dist, 0.0, to_net.z / dist)
+	out.closing = maxf(
+			out.carrier_vel.x * out.dir_net.x + out.carrier_vel.z * out.dir_net.z,
+			0.0)
+	return true
 
 
 # ── Carrier-best-option (inverse scoring) ────────────────────────────────────

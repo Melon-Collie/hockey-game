@@ -105,24 +105,18 @@ static func _decide_d1(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 	var read: AIRushRead = ctx.rush_read
 
-	var carrier_pos: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
-	if not carrier_pos.is_finite():
+	var ap: AICarrierApproach = ctx.scratch_carrier_approach
+	if not AIRoleHelpers.read_carrier_approach(ctx, ap):
 		d.target_position = ctx.self_pos
 		return d
-	var carrier_vel: Vector3 = AIRoleHelpers.resolve_play_ref_velocity(ctx)
-
+	var carrier_pos: Vector3 = ap.carrier_pos
 	var our_net: Vector3 = ctx.defending_goal_pos
-	var to_net: Vector3 = our_net - carrier_pos
-	var dist: float = sqrt(to_net.x * to_net.x + to_net.z * to_net.z)
-	if dist < 0.001:
-		d.target_position = carrier_pos
+	if ap.dir_net == Vector3.ZERO:
+		d.target_position = carrier_pos   # on top of our net — no line to hold
 		return d
-	var dir_net: Vector3 = Vector3(to_net.x / dist, 0.0, to_net.z / dist)
-
-	# The rush's pace along its own attack line. Lateral drift buys no burst
-	# toward our net — the turn radius pays for that conversion first.
-	var closing: float = maxf(
-			carrier_vel.x * dir_net.x + carrier_vel.z * dir_net.z, 0.0)
+	var dir_net: Vector3 = ap.dir_net
+	var dist: float = ap.net_dist
+	var closing: float = ap.closing
 
 	var gap: float = _gap_for(ctx, read, carrier_pos, closing)
 	gap = minf(gap, dist)   # never project the stand past the net
@@ -156,7 +150,7 @@ static func _decide_d1(ctx: RoleContext) -> RoleDecision:
 	# The stand and its inside shade are the shared closing geometry
 	# (AIRoleHelpers.carrier_stand) — AIRolePressure closes a carrier the same
 	# way, so the TRANS_OD → DZONE handoff is not a change of doctrine.
-	var stand: Vector3 = AIRoleHelpers.carrier_stand(carrier_pos, dir_net, gap)
+	var stand: Vector3 = AIRoleHelpers.carrier_stand(ap, gap)
 
 	# Odd-man: play the pass. The lane fan finds the feed lane from the
 	# evaluators; the numbers read decides WHEN that doctrine applies, rather

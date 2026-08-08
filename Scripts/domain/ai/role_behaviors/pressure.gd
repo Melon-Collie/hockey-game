@@ -78,10 +78,11 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# itself instead of freezing, so PRESSURE keeps closing the play.
 	# Only stand still if there's no puck at all.
 	# (NEUTRAL has no carrier and uses CHASE/FLANK roles instead.)
-	var carrier_pos: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
-	if not carrier_pos.is_finite():
+	var ap: AICarrierApproach = ctx.scratch_carrier_approach
+	if not AIRoleHelpers.read_carrier_approach(ctx, ap):
 		d.target_position = ctx.self_pos
 		return d
+	var carrier_pos: Vector3 = ap.carrier_pos
 
 	# Commit to a body check on the carrier when it's a real, reachable,
 	# separating hit (AIBodyCheck). PRESSURE always has support behind it —
@@ -139,13 +140,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# through the neutral zone KEEPS HIM into the zone; there is no handoff at the
 	# line." RUSH_D1 and PRESSURE now size the same gap off the same ladder, so the
 	# TRANS_OD -> DZONE re-election stops being a geometry discontinuity.
-	var carrier_velocity: Vector3 = AIRoleHelpers.resolve_play_ref_velocity(ctx)
-	var to_net: Vector3 = our_net - carrier_pos
-	var net_dist: float = sqrt(to_net.x * to_net.x + to_net.z * to_net.z)
-	var closing_now: float = 0.0
-	if net_dist > 0.001:
-		closing_now = maxf((carrier_velocity.x * to_net.x
-				+ carrier_velocity.z * to_net.z) / net_dist, 0.0)
+	var carrier_velocity: Vector3 = ap.carrier_vel
+	var closing_now: float = ap.closing
 	# Difficulty pace knob: ctx.pursuit_standoff_m widens the ladder so easier bots
 	# sag off the carrier and concede time/space (0.0 = the doctrine gap).
 	var gap: float = AIRoleRushD.ladder_gap_m(
@@ -164,11 +160,9 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var inside_dir := Vector3.ZERO
 	var inside_shade: float = 0.0
 	var search_center: Vector3 = carrier_pos
-	if net_dist > 0.001:
-		var to_net_dir: Vector3 = to_net / net_dist
-		search_center = AIRoleHelpers.carrier_stand(
-				carrier_pos, to_net_dir, minf(gap, net_dist))
-		inside_dir = AIRoleHelpers.inside_dir(carrier_pos, to_net_dir)
+	if ap.dir_net != Vector3.ZERO:
+		search_center = AIRoleHelpers.carrier_stand(ap, gap)
+		inside_dir = AIRoleHelpers.inside_dir(carrier_pos, ap.dir_net)
 		inside_shade = AIRoleHelpers.inside_shade_m(carrier_pos)
 	# The lead survives for the PASS-LANE read below, which is about where a feed
 	# would be thrown from rather than how close to stand.
@@ -206,8 +200,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var depth_dir: Vector3 = Vector3.ZERO
 	if AIRoleHelpers.stand_ride_velocity(ctx) == Vector3.ZERO \
 			and not AIRoleHelpers.has_support_behind(ctx):
-		if net_dist > 0.001:
-			var net_dir: Vector3 = to_net / net_dist
+		if ap.dir_net != Vector3.ZERO:
+			var net_dir: Vector3 = ap.dir_net
 			var want: float = (search_center.x - carrier_pos.x) * net_dir.x \
 					+ (search_center.z - carrier_pos.z) * net_dir.z
 			var settable: float = AIRoleHelpers.settable_stand_depth(
@@ -300,8 +294,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 			if gd_sq > 0.0001:
 				var k: float = gap / sqrt(gd_sq)
 				c = Vector3(carrier_pos.x + gx * k, 0.0, carrier_pos.z + gz * k)
-			elif net_dist > 0.001:
-				c = carrier_pos + (to_net / net_dist) * gap
+			elif ap.dir_net != Vector3.ZERO:
+				c = carrier_pos + ap.dir_net * gap
 		# THE SHADE IS A FLOOR TOO, for the same reason the gap is. The ring
 		# spans ±SEARCH_STEP_M about a centre the shade moves by at most
 		# ANGLE_INSIDE_M, so re-centring alone is invisible to the argmax — it
