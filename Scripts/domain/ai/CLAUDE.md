@@ -122,6 +122,7 @@ Two of the verbs exist as shared code; the roles compose them.
 |---|---|---|
 | **cover a threat** — take the ice between him and our net, in the feed lane, riding him | `AIRoleHelpers.cover_threat` | MARK, the 5v5 zone soft-lock, TRACK_MID, RUSH_D2 |
 | **close the carrier** — read his approach, hold the ladder's gap, angle him off the middle | `read_carrier_approach` + `carrier_stand` | PRESSURE, RUSH_D1, and the read alone for TRACK_PUCK |
+| **go get the puck** — race it, or hold the pre-contain stand when somebody else has won it | `AIRoleHelpers.chase_puck` | CHASE |
 
 `AICarrierApproach` is the carrier half's subject: his position and velocity, the
 line he retreats us down, the route he has left, and his pace along it. Three
@@ -136,10 +137,21 @@ fills the decision**, because its argmax sits between the stand and the answer:
 it consumes `carrier_stand` as the ring's centre and `inside_dir` /
 `inside_shade_m` as a floor on the candidates, then sets the target itself.
 
-Still unfactored, and the honest gaps in the vocabulary: **go get the puck**
-(three shapes — `AILoosePuckChase`, PRESSURE's loose branch, TRACK_PUCK's hip)
-and **hold a post** (the per-role fallbacks and their anchor constants). The
-open question on the latter is whether it should be a verb at all: if the
+A loose puck is not a fourth subject — it is a carrier nobody is holding. Both
+of the first two verbs already reach it through `resolve_defensive_play_ref`,
+which answers with the puck when no one carries, so PRESSURE closes a loose puck
+on the ladder and TRACK_PUCK takes its hip with no special case. `chase_puck` is
+the same idea from the other side: its DECLINE branch is the closing verb
+applied to the puck (`fill_approach` on the puck, then `carrier_stand`), which
+is what makes the pre-contain point exactly the stand RUSH_D1 will want when
+possession flips rather than merely a similar one.
+
+The election of WHICH body runs the race is not part of the verb and stays in
+`AILoosePuckChase` / `GameManager` — the verb answers "do I go", the election
+answers "am I the one who may".
+
+Still unfactored: **hold a post** — the per-role fallbacks and their anchor
+constants. The open question is whether it should be a verb at all: if the
 assigner always names a man, the carrier, or the puck, there is no fourth state
 and the constants go with it.
 

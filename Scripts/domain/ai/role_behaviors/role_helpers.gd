@@ -404,21 +404,73 @@ static func read_carrier_approach(ctx: RoleContext,
 	var carrier_pos: Vector3 = resolve_defensive_play_ref(ctx)
 	if not carrier_pos.is_finite():
 		return false
-	out.carrier_pos = carrier_pos
-	out.carrier_vel = resolve_play_ref_velocity(ctx)
+	fill_approach(ctx, carrier_pos, resolve_play_ref_velocity(ctx), out)
+	return true
 
-	var to_net: Vector3 = ctx.defending_goal_pos - carrier_pos
+
+# The same read against an EXPLICIT subject rather than the play reference. A
+# loose puck running toward our end is approaching us exactly as a carrier is,
+# and the stand you hold against it is the same stand — see AIRoleChase's
+# pre-contain, which is this read on the puck itself. Split out because "go get
+# the puck" is always about the PUCK, while resolve_defensive_play_ref answers
+# with the carrier whenever one exists.
+static func fill_approach(ctx: RoleContext, subject_pos: Vector3,
+		subject_vel: Vector3, out: AICarrierApproach) -> void:
+	out.carrier_pos = subject_pos
+	out.carrier_vel = subject_vel
+	var to_net: Vector3 = ctx.defending_goal_pos - subject_pos
 	var dist: float = sqrt(to_net.x * to_net.x + to_net.z * to_net.z)
 	out.net_dist = dist
 	if dist < 0.001:
 		out.dir_net = Vector3.ZERO
 		out.closing = 0.0
-		return true
+		return
 	out.dir_net = Vector3(to_net.x / dist, 0.0, to_net.z / dist)
 	out.closing = maxf(
-			out.carrier_vel.x * out.dir_net.x + out.carrier_vel.z * out.dir_net.z,
-			0.0)
-	return true
+			subject_vel.x * out.dir_net.x + subject_vel.z * out.dir_net.z, 0.0)
+
+
+# ── Going to get the puck ────────────────────────────────────────────────────
+
+# The third defensive verb: nobody has it, so do I go?
+#
+# Returns TRUE when we are running the race — `d` gets the puck itself, and the
+# state machine's CHASE_PUCK does the real retrieval (lead intercept, blade gate,
+# contest drive-through) from there. This target is the hint it steers on until
+# then.
+#
+# Returns FALSE when an opponent has already won it (loose_puck_race_lost, which
+# also asks whether declining buys anything — a lost race is only worth declining
+# when there isn't already a body home). `d` then gets the PRE-CONTAIN stand, and
+# that stand is the closing verb applied to the puck: the gap ladder's distance
+# goal-side of it, angled off the middle, with the puck's own closing speed
+# toward our net standing in for a rush's pace. A puck still running at our end
+# keeps the cushion; a dead settle is met tight.
+#
+# The angle is what makes the handoff exact rather than merely similar. This
+# stand exists so the chaser who declines plants where RUSH_D1 will want to be
+# the instant somebody collects and the state flips to TRANS_OD — and RUSH_D1's
+# stand is angled, so an unangled pre-contain was a spot the gap defender then
+# had to correct off, in the direction that concedes the middle.
+static func chase_puck(ctx: RoleContext, d: RoleDecision) -> bool:
+	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
+		d.target_position = ctx.self_pos
+		return false
+	var puck_pos: Vector3 = ctx.snapshot.puck_state.position
+	if not loose_puck_race_lost(
+			ctx.snapshot, ctx.self_pos, ctx.self_velocity, ctx.self_max_speed,
+			ctx.team_id, ctx.team_id_by_peer, ctx.caps_by_peer, ctx.peer_id,
+			ctx.own_goal_dir):
+		d.target_position = puck_pos
+		return true
+	var ap: AICarrierApproach = ctx.scratch_carrier_approach
+	fill_approach(ctx, puck_pos, ctx.snapshot.puck_state.velocity, ap)
+	if ap.dir_net == Vector3.ZERO:
+		d.target_position = puck_pos   # on our own goal line — just go
+		return true
+	d.target_position = carrier_stand(ap, AIRoleRushD.ladder_gap_m(
+			puck_pos, ctx.own_goal_dir, ctx.self_blade_reach, ap.closing))
+	return false
 
 
 # ── Carrier-best-option (inverse scoring) ────────────────────────────────────
