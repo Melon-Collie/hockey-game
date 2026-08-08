@@ -84,6 +84,12 @@ signal intermission_clip_started(
 		scoring_team_id: int, scorer_name: String,
 		assist1_name: String, assist2_name: String)
 signal intermission_ended
+# Fired alongside intermission_started when this peer has no goal clips to
+# reel — the band will stand alone over the live rink for `window_seconds`.
+# The rink's resurfacer crew (IceResurfacer, wired in HockeyRink) fills the
+# empty window. Local-only: a mid-game joiner with fewer clips than the host
+# may run the crew while others watch a reel, which is fine — it's cosmetic.
+signal intermission_idle_started(window_seconds: float)
 # Live tally of unanimous skip-replay votes (emitted on every accepted vote and
 # at replay start with current=0). Shared by the goal cinematic and the
 # intermission reel — only one can be active at a time. HUD listens to keep
@@ -2103,6 +2109,10 @@ func _on_intermission_settle_elapsed() -> void:
 		return
 	intermission_started.emit(_state_machine.current_period,
 			GameRules.INTERMISSION_DURATION - GameRules.INTERMISSION_SETTLE)
+	if _goal_replay_store == null or _goal_replay_store.clips_for_period(
+			_state_machine.current_period).is_empty():
+		intermission_idle_started.emit(
+				GameRules.INTERMISSION_DURATION - GameRules.INTERMISSION_SETTLE)
 	if NetworkManager.is_host:
 		var total: int = _total_skip_voters()
 		NetworkManager.notify_skip_replay_vote_to_all(0, total)
