@@ -13,6 +13,10 @@ const LAMP_RISE_TIME: float = 0.10
 const LAMP_FALL_TIME: float = 0.24
 const LAMP_FADE_TIME: float = 0.6
 const NET_RIPPLE_PEAK: float = 0.22
+# Clamp bracket under the base, wrapping the glass top edge (glass is 0.05
+# thick, centered on the fixture) so the lamp reads as mounted, not floating.
+const BRACKET_SIZE := Vector3(0.14, 0.12, 0.10)
+const FIXTURE_COLOR := Color(0.15, 0.15, 0.17)
 
 var _particles: GPUParticles3D = null
 var _light: OmniLight3D = null
@@ -70,7 +74,7 @@ func _ready() -> void:
 
 # Called by HockeyGoal after this node is in the tree (game runtime only, not
 # in the editor). net_material is the shared ShaderMaterial on the net panels
-# (for the goal ripple); lamp_local_pos places the lamp fixture above the
+# (for the goal ripple); lamp_local_pos places the lamp fixture atop the
 # glass behind this net, expressed relative to this node.
 func setup(net_material: ShaderMaterial, lamp_local_pos: Vector3) -> void:
 	_net_material = net_material
@@ -94,17 +98,27 @@ func _build_lamp(lamp_local_pos: Vector3) -> void:
 	_lamp_light.position = lamp_local_pos
 	add_child(_lamp_light)
 
+	var fixture_mat := StandardMaterial3D.new()
+	fixture_mat.albedo_color = FIXTURE_COLOR
+
 	var base_mesh := CylinderMesh.new()
 	base_mesh.height = 0.10
 	base_mesh.top_radius = 0.11
 	base_mesh.bottom_radius = 0.11
-	var base_mat := StandardMaterial3D.new()
-	base_mat.albedo_color = Color(0.15, 0.15, 0.17)
-	base_mesh.material = base_mat
+	base_mesh.material = fixture_mat
 	var base_inst := MeshInstance3D.new()
 	base_inst.mesh = base_mesh
 	base_inst.position = lamp_local_pos
 	add_child(base_inst)
+
+	var bracket_mesh := BoxMesh.new()
+	bracket_mesh.size = BRACKET_SIZE
+	bracket_mesh.material = fixture_mat
+	var bracket_inst := MeshInstance3D.new()
+	bracket_inst.mesh = bracket_mesh
+	bracket_inst.position = lamp_local_pos \
+			+ Vector3(0.0, -(base_mesh.height + BRACKET_SIZE.y) / 2.0, 0.0)
+	add_child(bracket_inst)
 
 	var dome_mesh := SphereMesh.new()
 	dome_mesh.radius = 0.10
