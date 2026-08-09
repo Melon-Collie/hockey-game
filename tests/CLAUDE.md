@@ -36,6 +36,36 @@ When one fails, the question is *"did the behavior change on purpose?"* — not
 *"which assertion do I loosen?"* Re-pin the table only once you have confirmed
 the new numbers are the intended ones, and say so in the commit.
 
+## Timing harness
+
+`tests/harness/net_timing_harness.gd` is a deterministic simulation of the INPUT
+TIMING PIPELINE — physics-step scheduling against the render loop, stamping, the
+link, the host's dedupe/gate/drain, and the lead servo. It is **not** a physics
+harness: nothing in it skates. It exists because every netcode defect found so
+far has lived in the plumbing (clocks, queues, buffers, ordering), and every one
+of them was found by reading code or post-hoc telemetry rather than by a failing
+test.
+
+It runs the real `NetworkManager.next_sim_offset` and the real `ClockSync` servo;
+the dedupe/gate/drain rules are mirrors of `RemoteController` (a Node that can't
+be stood up headless) pinned to the same constants.
+
+**The load-bearing property is that it can reproduce a KNOWN bug.** `StampMode`
+switches between legacy wall-clock stamping and the shipping tick-domain clock,
+and `test_legacy_wall_stamping_loses_inputs_at_60fps` asserts the legacy mode
+still loses inputs. If that test ever goes green the harness has stopped
+modelling the frame burst, and every other assertion in the file is worthless —
+**fix the harness, don't delete the test.**
+
+`test_net_timing_harness.gd` sweeps client framerates (including 75/100/144,
+which do NOT divide the 120 Hz tick and so produce an irregular step pattern)
+against a latency matrix, asserting: stamps never collide, no input is dropped as
+a duplicate, the drain never fires on a clean link, queue depth stays bounded,
+the lead servo settles below its ceiling, and pop-overdue does not track
+framerate.
+
+When adding netcode timing behaviour, add the assertion here first.
+
 ## Benchmarks
 
 `benchmarks/` holds report-only host-cost scenarios plus a per-evaluator
