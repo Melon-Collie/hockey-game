@@ -1,7 +1,7 @@
 class_name AIRoleTrack
 
 # TRACK_PUCK / TRACK_MID_STRONG / TRACK_MID_WEAK — the backcheck
-# (5v5 TRANS_OD). Design: docs/transition-defense-plan.md §5, §7.
+# (5v5 TRANS_DEFENSE). Design: docs/transition-defense-plan.md §5, §7.
 #
 #   TRACK_PUCK — F1 back. Tracks the CARRIER through mid-ice, all the way to the
 #     net, then drops into low support. When he catches him he attacks the puck,
@@ -14,7 +14,7 @@ class_name AIRoleTrack
 #     and owns whoever enters the middle from either half.
 #
 # ── Why this is a MODE, not just another position ────────────────────────────
-# The old TRANS_OD had two MARK defenders running a cover-position argmax from
+# The old TRANS_DEFENSE had two MARK defenders running a cover-position argmax from
 # wherever they happened to be — including 20 m up-ice, mid-backcheck. A marker
 # in that state is computing where to stand relative to a man he is nowhere near,
 # and the argmax's whole supporting apparatus (arrival brake, anti-crowd

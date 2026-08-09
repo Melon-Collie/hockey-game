@@ -21,7 +21,7 @@ extends RefCounted
 # TeamBrain held the rush shape because the backcheck wasn't home
 # (AIRushRead.coverage_ready). That is a distinct failure surface from either
 # shape's own occupancy — it is time the in-zone coverage was suppressed — so
-# it is counted separately rather than being invisible inside TRANS_OD.
+# it is counted separately rather than being invisible inside TRANS_DEFENSE.
 #
 # Sampled per physics tick against each brain's PUBLISHED state, so the tally
 # measures the shape actually being run (post-downgrade), not the raw table
@@ -185,10 +185,10 @@ static func state_name(state: int) -> String:
 			return "DZONE"
 		AIPossessionState.State.OZONE:
 			return "OZONE"
-		AIPossessionState.State.TRANS_DO:
-			return "TRANS_DO"
-		AIPossessionState.State.TRANS_OD:
-			return "TRANS_OD"
+		AIPossessionState.State.TRANS_OFFENSE:
+			return "TRANS_OFFENSE"
+		AIPossessionState.State.TRANS_DEFENSE:
+			return "TRANS_DEFENSE"
 		AIPossessionState.State.NEUTRAL:
 			return "NEUTRAL"
 		AIPossessionState.State.BREAKOUT:

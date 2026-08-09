@@ -365,7 +365,7 @@ func test_deep_trailer_tracks_the_rush_past_a_beaten_forechecker() -> void:
 
 
 func test_transition_keeps_the_carrier_orbit_trail() -> void:
-	# Carrier still in the neutral zone (TRANS_DO): the high post would be
+	# Carrier still in the neutral zone (TRANS_OFFENSE): the high post would be
 	# ahead of the play, so SUPPORT keeps the old goal-side trail orbit.
 	var carrier_pos := Vector3(0, 0, -2)
 	var self_pos := Vector3(3, 0, 2)

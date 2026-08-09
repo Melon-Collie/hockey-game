@@ -58,7 +58,7 @@ func test_slots_for_ozone() -> void:
 
 
 func test_slots_for_trans_do() -> void:
-	var slots: Array = AIRoleSlots.slots_for_state(AIPossessionState.State.TRANS_DO)
+	var slots: Array = AIRoleSlots.slots_for_state(AIPossessionState.State.TRANS_OFFENSE)
 	assert_true(slots.has(AIRoleSlots.Slot.CARRIER))
 	assert_true(slots.has(AIRoleSlots.Slot.OUTLET))
 	assert_true(slots.has(AIRoleSlots.Slot.SUPPORT))
@@ -75,12 +75,12 @@ func test_slots_for_breakout() -> void:
 
 
 func test_slots_for_trans_od() -> void:
-	# TRANS_OD is the layered rush defense compressed to three bodies
+	# TRANS_DEFENSE is the layered rush defense compressed to three bodies
 	# (docs/transition-defense-plan.md §5.2): RUSH_D1 in front of the carrier
 	# holding a gap, TRACK_PUCK behind him running him down, TRACK_MID owning
 	# the middle lane. Man-marking is gone from transition — the structure is
 	# lanes and layers, and DZONE's coverage owns the settled three-man problem.
-	var slots: Array = AIRoleSlots.slots_for_state(AIPossessionState.State.TRANS_OD)
+	var slots: Array = AIRoleSlots.slots_for_state(AIPossessionState.State.TRANS_DEFENSE)
 	assert_true(slots.has(AIRoleSlots.Slot.RUSH_D1))
 	assert_true(slots.has(AIRoleSlots.Slot.TRACK_PUCK))
 	assert_true(slots.has(AIRoleSlots.Slot.TRACK_MID))
@@ -151,7 +151,7 @@ func test_assign_trans_do_geometry_drives_outlet_and_support() -> void:
 	]
 	var snap := _make_snapshot(skaters, 100)
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
-			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_DO,
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OFFENSE,
 			_resolver(skaters), {})
 	assert_eq(assignments[100], AIRoleSlots.Slot.CARRIER)
 	assert_eq(assignments[110], AIRoleSlots.Slot.OUTLET, "up-ice bot becomes OUTLET")
@@ -159,7 +159,7 @@ func test_assign_trans_do_geometry_drives_outlet_and_support() -> void:
 
 
 func test_breakout_strong_keeps_the_outlet_role_across_the_handoff() -> void:
-	# BREAKOUT→TRANS_DO renames BREAKOUT_STRONG→OUTLET; the peer that was the
+	# BREAKOUT→TRANS_OFFENSE renames BREAKOUT_STRONG→OUTLET; the peer that was the
 	# up-ice strong-side outlet should STAY the up-ice OUTLET across the flip
 	# (hysteresis continuity class), not swap destinations with the trailer.
 	# Two peers tied on ETA to the opp net: the pid tiebreak alone would hand
@@ -176,7 +176,7 @@ func test_breakout_strong_keeps_the_outlet_role_across_the_handoff() -> void:
 			110: AIRoleSlots.Slot.BREAKOUT_WEAK,
 	}
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
-			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_DO,
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OFFENSE,
 			_resolver(skaters), prev)
 	assert_eq(assignments[120], AIRoleSlots.Slot.OUTLET,
 			"the ex-BREAKOUT_STRONG peer stays the up-ice OUTLET")
@@ -249,7 +249,7 @@ func test_assign_forecheck_f1_pressures_puck_f3_is_high() -> void:
 
 
 func test_assign_trans_od_contain_is_last_man_back() -> void:
-	# TRANS_OD: CONTAIN goes to the LAST MAN BACK — the peer soonest to our
+	# TRANS_DEFENSE: CONTAIN goes to the LAST MAN BACK — the peer soonest to our
 	# OWN +Z net (momentum-aware), i.e. the deepest line of defense that's
 	# genuinely in front of the rush. Carrier at z=0; peer 120 (z=20) is deepest
 	# and nearest our net, so it contains, while the up-ice peers (100, 110) mark
@@ -264,7 +264,7 @@ func test_assign_trans_od_contain_is_last_man_back() -> void:
 	]
 	var snap := _make_snapshot(skaters, 200)
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
-			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_DEFENSE,
 			_resolver(skaters), {})
 	assert_eq(assignments[120], AIRoleSlots.Slot.RUSH_D1,
 			"the last man back (soonest to our net) owns the carrier")
@@ -295,7 +295,7 @@ func test_assign_trans_od_contain_is_momentum_aware() -> void:
 	]
 	var snap := _make_snapshot(skaters, 200)
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
-			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_DEFENSE,
 			_resolver(skaters), {})
 	assert_eq(assignments[110], AIRoleSlots.Slot.RUSH_D1,
 			"the peer genuinely arriving home soonest (momentum) contains, not the nearer coaster")
@@ -315,7 +315,7 @@ func test_assign_trans_od_contain_when_whole_team_caught_up_ice() -> void:
 	]
 	var snap := _make_snapshot(skaters, 200)
 	var assignments: Dictionary[int, int] = AIRoleSlots.assign(
-			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_OD,
+			snap, TEAM_ID, OUR_NET_Z, AIPossessionState.State.TRANS_DEFENSE,
 			_resolver(skaters), {})
 	assert_eq(assignments[100], AIRoleSlots.Slot.RUSH_D1,
 			"peer nearest our net recovers as the last man back")

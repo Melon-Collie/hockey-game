@@ -1,7 +1,7 @@
-# Transition defense (TRANS_OD) — reground
+# Transition defense (TRANS_DEFENSE) — reground
 
-Status: **implemented** for 5v5 and 3v3. Phases A–E landed; playtest pending. Supersedes the TRANS_OD sections of
-`docs/5v5-ai-plan.md` (§2 TRANS_OD, and the defensive half of §5); the O-zone,
+Status: **implemented** for 5v5 and 3v3. Phases A–E landed; playtest pending. Supersedes the TRANS_DEFENSE sections of
+`docs/5v5-ai-plan.md` (§2 TRANS_DEFENSE, and the defensive half of §5); the O-zone,
 forecheck and breakout designs in that doc are unchanged, and its D-zone design is
 unchanged *in content* but now gated on coverage readiness (§9).
 
@@ -45,7 +45,7 @@ Reported from play, in the developer's words:
 3. **No gap-up on the 1-on-1.** Defenders sag off a carrier they should be standing up.
 4. **A bot stuck deep (1) defends badly** — bad routes, beaten easily.
 
-These read as four bugs in three states (OZONE/TRANS_DO, TRANS_OD, DZONE). They are one
+These read as four bugs in three states (OZONE/TRANS_OFFENSE, TRANS_DEFENSE, DZONE). They are one
 bug.
 
 ---
@@ -93,7 +93,7 @@ Five last men back is zero defense. This is the load-bearing failure: **there is
 team-level allocation of defensive responsibility**, so responsibility is claimed by
 everyone and discharged by no one.
 
-### 2.3 TRANS_OD's structure is man-marking, with no urgency gradient
+### 2.3 TRANS_DEFENSE's structure is man-marking, with no urgency gradient
 
 - The threat partition (`threat_assignment.gd`) hands each MARK a distinct man. A marker
   20 m up-ice still runs the `cover_man_target` argmax and *steers* to it — there is no
@@ -105,7 +105,7 @@ everyone and discharged by no one.
 - **There is no concept of a backchecker attacking the carrier from behind.** Real F1
   tracks the puck carrier the length of the ice and takes his hands. `AIRoleChase` is
   NEUTRAL-only; `evaluate_body_check` is pressurers-only.
-- 5v5's TRANS_OD is one spec (`CONTAIN`) plus a four-man `MARK` remainder — the thinnest
+- 5v5's TRANS_DEFENSE is one spec (`CONTAIN`) plus a four-man `MARK` remainder — the thinnest
   state in the table, against DZONE's five researched zone roles.
 
 ### 2.4 Gap is a function of pace, and every clamp is one-directional
@@ -130,7 +130,7 @@ the wall, decelerated), so attack. Modern coaching is explicit that you defend b
 
 ### 2.5 The blue line is a geometry discontinuity
 
-TRANS_OD → DZONE re-elects: CONTAIN (a gap point on the carrier→net line) becomes
+TRANS_DEFENSE → DZONE re-elects: CONTAIN (a gap point on the carrier→net line) becomes
 PRESSURE (a cut-off argmax over a polar ring). The body that had a gap gets handed a
 target 6 m up-ice and charges it. `pressure.gd:139–154` documents this exact failure and
 patches it with the same rendezvous clamp. In real hockey the D who gapped a carrier
@@ -212,7 +212,7 @@ measurement, it already exists conceptually, and nothing reads it today.
 
 ## 5. Layered roles
 
-TRANS_OD's slot set becomes layers. Branching 3v3 / 5v5, with precedent
+TRANS_DEFENSE's slot set becomes layers. Branching 3v3 / 5v5, with precedent
 (`AIRoleSlots` vs `AIRoleSlots5`).
 
 ### 5v5 — the researched five
@@ -248,11 +248,11 @@ BACKCHECK both engage forward" failure `role_slots.gd`'s header warns about:
 one rush defended from both ends, not two bodies taking bad angles from the same
 side. And it is affordable because **transition is bounded**: the moment the attack
 becomes a settled three-man threat needing a body on each man, the puck is in our
-zone and DZONE's coverage owns it. TRANS_OD's job is to kill the rush, not to solve
+zone and DZONE's coverage owns it. TRANS_DEFENSE's job is to kill the rush, not to solve
 coverage.
 
 **The coverage gate (§9) applies to 3v3 as well.** The worry that it would leave
-two-on-the-puck under-covering inside our own zone compares TRANS_OD's three roles
+two-on-the-puck under-covering inside our own zone compares TRANS_DEFENSE's three roles
 against DZONE's *nominal* coverage (PRESSURE + MARK×2 = all three men). But that
 coverage is the very fiction §9 exists to expose: with the bodies not home, a MARK
 computes a cover position from 20 m up-ice and escorts. The gate holds the rush
@@ -277,7 +277,7 @@ change is to **extend it up the ice**, with three transition lanes instead of fi
 areas.
 
 The threat partition doesn't die — it keeps running for DZONE. It simply stops being
-TRANS_OD's primary structure.
+TRANS_DEFENSE's primary structure.
 
 ---
 
@@ -548,7 +548,7 @@ A body straddling the blue line to pressure the point is not a broken structure.
   `AIRoleChase`'s lost-race pre-contain shares (that sharing is deliberate: the declining
   chaser plants where `RUSH_D1` will want him).
 - `ThreatSet.CONTAIN_TRAILERS` — `contain.gd` was its only producer.
-- TRANS_OD's dependence on the threat partition (still live for DZONE).
+- TRANS_DEFENSE's dependence on the threat partition (still live for DZONE).
 - The crease-top retreat floor.
 
 **Survived, contrary to the original plan**

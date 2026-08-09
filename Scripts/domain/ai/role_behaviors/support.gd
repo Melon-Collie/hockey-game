@@ -1,6 +1,6 @@
 class_name AIRoleSupport
 
-# SUPPORT role behavior — OZONE + TRANS_DO. The off-puck teammate
+# SUPPORT role behavior — OZONE + TRANS_OFFENSE. The off-puck teammate
 # whose job is "be a pass option AND be in a recoverable position."
 # In the OZ that means the THIRD MAN HIGH of the 3v3 F1-F2-1 shape:
 # stationed at the top of the zone (see HIGH_POST_INSET_M), a point
@@ -217,7 +217,7 @@ static func _is_goal_side_of_carrier(c: Vector3, carrier_pos: Vector3,
 #     on the forecheck), plus the half-wall midpoint toward the carrier (the
 #     classic cycle bump spot) and self. The third man plays HIGH: point
 #     outlet, zone-keeper, first man back.
-#   Carrier still in transit (TRANS_DO / NZ) → the old carrier-orbit samples;
+#   Carrier still in transit (TRANS_OFFENSE / NZ) → the old carrier-orbit samples;
 #     the high post would be AHEAD of the play there and the goal-side filter
 #     would reject the whole set (SUPPORT is the trailer in transition).
 # The score function (pass value × recoverability) picks within the station.

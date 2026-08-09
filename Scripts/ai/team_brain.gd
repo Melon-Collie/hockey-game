@@ -11,7 +11,7 @@ extends TeamStrategyView
 #
 # Blackboard:
 #   state              — AIPossessionState.State enum (DZONE / OZONE /
-#                        TRANS_DO / TRANS_OD / NEUTRAL).
+#                        TRANS_OFFENSE / TRANS_DEFENSE / NEUTRAL).
 #   slot_assignments   — Dictionary[peer_id, AIRoleSlots.Slot].
 #
 # Roles assigned by current geometry per brain tick — no SPRINT_BY
@@ -261,7 +261,7 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 		_coverage_was_set = set_now
 		coverage_downgraded = not set_now
 		if not set_now:
-			state = AIPossessionState.State.TRANS_OD
+			state = AIPossessionState.State.TRANS_DEFENSE
 	else:
 		# Left the zone (or we got it back): the next entry starts fresh, so a
 		# stale "we were set" can't wave a new rush straight into coverage.
@@ -319,10 +319,10 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 
 
 # Builds the backline man-on-threat partition for the current tick. Defensive
-# states only (DZONE + TRANS_OD); every other state returns {} so no defender
+# states only (DZONE + TRANS_DEFENSE); every other state returns {} so no defender
 # carries a stale assignment.
 #
-# Backline = our peers slotted MARK (DZONE and TRANS_OD).
+# Backline = our peers slotted MARK (DZONE and TRANS_DEFENSE).
 #
 # The men are every opponent who is not already owned: while an opponent
 # CARRIES he is PRESSURE's, so he is excluded and the men are his potential
@@ -336,7 +336,7 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		prev: Dictionary) -> Dictionary[int, int]:
 	var empty: Dictionary[int, int] = {}
 	if state != AIPossessionState.State.DZONE \
-			and state != AIPossessionState.State.TRANS_OD:
+			and state != AIPossessionState.State.TRANS_DEFENSE:
 		return empty
 	if snapshot == null or snapshot.puck_state == null:
 		return empty

@@ -192,7 +192,7 @@ built on.
 size the same gap off the same function, `AIRoleRushD.ladder_gap_m` — ~3 stick
 lengths at their blue line, 2 at the red line, 1 stick at ours, and inside our own
 zone "1 stick / contact: you are on him" (`docs/transition-defense-plan.md` §6).
-This is what makes the TRANS_OD → DZONE re-election stop being a geometry
+This is what makes the TRANS_DEFENSE → DZONE re-election stop being a geometry
 discontinuity, which §2.5 of that plan names as a defect in its own right: *the D
 who gapped a carrier through the neutral zone keeps him into the zone; there is no
 handoff at the line.*

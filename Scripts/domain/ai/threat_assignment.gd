@@ -38,7 +38,7 @@ class_name AIThreatAssignment
 # rewards are close — the same oscillation we're fixing, just faster. Mirrors
 # the strong-side / slot-assignment hysteresis already in the brain.
 #
-# Brute-forced over permutations: the backline is ≤ 4 skaters (5v5's TRANS_OD
+# Brute-forced over permutations: the backline is ≤ 4 skaters (5v5's TRANS_DEFENSE
 # MARK crew), so the matching is tiny (≤ 4! orderings). Runs at the 6 Hz brain
 # tick, never the 120 Hz path.
 

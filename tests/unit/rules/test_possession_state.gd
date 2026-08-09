@@ -57,12 +57,12 @@ func test_trans_do_when_we_carry_in_neutral_zone() -> void:
 	var result: AIPossessionState.Result = AIPossessionState.compute(
 			snap, TEAM_ID, OUR_NET_Z,
 			_resolver([[100, 0], [200, 1]]), -1)
-	assert_eq(result.state, AIPossessionState.State.TRANS_DO)
+	assert_eq(result.state, AIPossessionState.State.TRANS_OFFENSE)
 
 
 func test_breakout_when_we_carry_in_our_own_dz() -> void:
 	# Our possession deep in our OWN DZ (puck_z > BLUE_LINE_Z) → BREAKOUT,
-	# not TRANS_DO. This is the case the new state carves out.
+	# not TRANS_OFFENSE. This is the case the new state carves out.
 	var snap := _make_snapshot(100, 22.0)
 	var result: AIPossessionState.Result = AIPossessionState.compute(
 			snap, TEAM_ID, OUR_NET_Z,
@@ -78,12 +78,12 @@ func test_trans_od_when_opp_carries_in_neutral_zone() -> void:
 	var result: AIPossessionState.Result = AIPossessionState.compute(
 			snap, TEAM_ID, OUR_NET_Z,
 			_resolver([[100, 0], [200, 1]]), -1)
-	assert_eq(result.state, AIPossessionState.State.TRANS_OD)
+	assert_eq(result.state, AIPossessionState.State.TRANS_DEFENSE)
 
 
 func test_forecheck_when_opp_carries_in_their_own_dz() -> void:
 	# Opp possession deep in THEIR DZ (puck past their blue line, z <
-	# -BLUE_LINE_Z for team 0's view) → FORECHECK, not TRANS_OD. The
+	# -BLUE_LINE_Z for team 0's view) → FORECHECK, not TRANS_DEFENSE. The
 	# mirror of BREAKOUT.
 	var snap := _make_snapshot(200, -22.0)
 	var result: AIPossessionState.Result = AIPossessionState.compute(
@@ -104,7 +104,7 @@ func test_loose_puck_keeps_last_carrier_team() -> void:
 	var result: AIPossessionState.Result = AIPossessionState.compute(
 			snap, TEAM_ID, OUR_NET_Z,
 			_resolver([[100, 0], [200, 1]]), 1)  # prev was team 1
-	assert_eq(result.state, AIPossessionState.State.TRANS_OD,
+	assert_eq(result.state, AIPossessionState.State.TRANS_DEFENSE,
 			"loose puck inherits last carrier's team — opp possession in NZ")
 	assert_eq(result.carrier_team, 1, "carrier_team stays at 1 (sticky)")
 
@@ -127,8 +127,8 @@ func test_carrier_change_updates_team() -> void:
 
 
 func test_is_transition_helper() -> void:
-	assert_true(AIPossessionState.is_transition(AIPossessionState.State.TRANS_DO))
-	assert_true(AIPossessionState.is_transition(AIPossessionState.State.TRANS_OD))
+	assert_true(AIPossessionState.is_transition(AIPossessionState.State.TRANS_OFFENSE))
+	assert_true(AIPossessionState.is_transition(AIPossessionState.State.TRANS_DEFENSE))
 	assert_false(AIPossessionState.is_transition(AIPossessionState.State.DZONE))
 	assert_false(AIPossessionState.is_transition(AIPossessionState.State.OZONE))
 	assert_false(AIPossessionState.is_transition(AIPossessionState.State.NEUTRAL))
@@ -154,7 +154,7 @@ func test_not_neutral_when_loose_puck_moving_fast() -> void:
 	var result: AIPossessionState.Result = AIPossessionState.compute(
 			snap, TEAM_ID, OUR_NET_Z,
 			_resolver([[100, 0], [200, 1]]), 0)  # we passed it
-	assert_eq(result.state, AIPossessionState.State.TRANS_DO,
+	assert_eq(result.state, AIPossessionState.State.TRANS_OFFENSE,
 			"in-flight pass keeps TRANS state via sticky possession")
 
 

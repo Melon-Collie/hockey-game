@@ -19,7 +19,7 @@ extends CanvasLayer
 #     flagged.
 #   • DOWNGRADE is the share of live play where the raw read wanted D-zone
 #     coverage but the brain held the rush shape because the backcheck wasn't
-#     home. It is counted INSIDE TRANS_OD's share, not alongside it.
+#     home. It is counted INSIDE TRANS_DEFENSE's share, not alongside it.
 #
 # Host-only by nature: the tally samples the team brains, which exist only
 # where the bots are simulated. A client sees the "no brains" notice.

@@ -1,12 +1,12 @@
 extends GutTest
 
-# AIRoleMark — the unified off-puck man-marker (DZONE + TRANS_OD), replacing the
+# AIRoleMark — the unified off-puck man-marker (DZONE + TRANS_DEFENSE), replacing the
 # old ANCHOR / COVER / BACKCHECK, which had converged to identical man-marking.
 #
 # Primary path (brain assigned a man): the shared cover stand,
 # AIRoleHelpers.cover_threat — goal-side of that opponent, in the carrier→man
 # feed lane, riding his cut. Tests:
-#   - Assigned man drives coverage to that man's side (DZONE and TRANS_OD geometry).
+#   - Assigned man drives coverage to that man's side (DZONE + TRANS_DEFENSE).
 #   - Coverage stays ATTACHED to the man (near his cover anchor, not from the slot).
 #   - Coverage is goal-side of the man, and rides his cut rather than leading it.
 #
@@ -287,7 +287,7 @@ func test_fallback_shades_toward_dominant_threat() -> void:
 # ── Fallback: puck-adaptive centering (both zones) ─────────────────────────
 
 func test_fallback_center_is_puck_adaptive_not_fixed_slot() -> void:
-	# TRANS_OD: puck up-ice at z=-15 (we just lost it deep). The unified
+	# TRANS_DEFENSE: puck up-ice at z=-15 (we just lost it deep). The unified
 	# fallback centers on midpoint(puck, our_net), so the recovery target sits
 	# BETWEEN the puck and the net — not pinned at the fixed slot the old
 	# BACKCHECK used. Grounds the marker in the developing play instead of a

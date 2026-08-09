@@ -3139,8 +3139,8 @@ func _on_server_puck_released_by_carrier(peer_id: int) -> void:
 		_possession_tracker.on_puck_lost(peer_id)
 	record.controller.on_puck_released_network()
 	NetworkManager.send_carrier_changed_to_all(-1)
-	# Carrier released — possession state likely flips (TRANS_DO →
-	# NEUTRAL or TRANS_DO → TRANS_OD on a steal). See pickup hook
+	# Carrier released — possession state likely flips (TRANS_OFFENSE →
+	# NEUTRAL or TRANS_OFFENSE → TRANS_DEFENSE on a steal). See pickup hook
 	# for rationale.
 	_force_retick_team_brains()
 

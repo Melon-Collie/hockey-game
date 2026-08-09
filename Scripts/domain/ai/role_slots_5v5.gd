@@ -118,7 +118,7 @@ static func slots_for_state(state: int) -> Array[int]:
 			return [AIRoleSlots.Slot.CARRIER, AIRoleSlots.Slot.POINT_STRONG,
 					AIRoleSlots.Slot.POINT_WEAK, AIRoleSlots.Slot.NET_FRONT,
 					AIRoleSlots.Slot.HIGH_SLOT]
-		AIPossessionState.State.TRANS_DO:
+		AIPossessionState.State.TRANS_OFFENSE:
 			return [AIRoleSlots.Slot.CARRIER, AIRoleSlots.Slot.DVALVE,
 					AIRoleSlots.Slot.WIDE_L, AIRoleSlots.Slot.WIDE_R,
 					AIRoleSlots.Slot.TRAILER]
@@ -130,7 +130,7 @@ static func slots_for_state(state: int) -> Array[int]:
 			return [AIRoleSlots.Slot.F1_PRESSURE, AIRoleSlots.Slot.DP_STRONG,
 					AIRoleSlots.Slot.DP_WEAK, AIRoleSlots.Slot.F2_STRONG,
 					AIRoleSlots.Slot.F2_WEAK]
-		AIPossessionState.State.TRANS_OD:
+		AIPossessionState.State.TRANS_DEFENSE:
 			return [AIRoleSlots.Slot.RUSH_D1, AIRoleSlots.Slot.RUSH_D2,
 					AIRoleSlots.Slot.TRACK_PUCK,
 					AIRoleSlots.Slot.TRACK_MID_STRONG,
@@ -172,7 +172,7 @@ static func assign(
 
 	# Fixed CARRIER for the possession states, exactly like 3v3.
 	if state == AIPossessionState.State.OZONE \
-			or state == AIPossessionState.State.TRANS_DO \
+			or state == AIPossessionState.State.TRANS_OFFENSE \
 			or state == AIPossessionState.State.BREAKOUT:
 		if carrier_pid != -1 and team_id_by_peer.get(carrier_pid, -1) == team_id:
 			result[carrier_pid] = AIRoleSlots.Slot.CARRIER
@@ -182,7 +182,7 @@ static func assign(
 	var specs: Array[SlotSpec] = _specs_for_state(
 			state, own_goal_z, strong_x, puck_pos)
 
-	# TRANS_OD gap feasibility: RUSH_D1's D-scoping only holds while a
+	# TRANS_DEFENSE gap feasibility: RUSH_D1's D-scoping only holds while a
 	# defenseman can actually do the job — beat the carrier home with enough
 	# time in hand to arrive SET (the brake margin: the seconds a skater at
 	# league top speed needs to shed it, the same set-arrival quantity the
@@ -194,7 +194,7 @@ static func assign(
 	# infeasible D group defers RUSH_D1 to the cross-fill pass, where the
 	# deepest feasible body — the classic backchecking third-man-high — picks
 	# the rush up instead, and the caught D fall to MARK duty on the trailers.
-	if state == AIPossessionState.State.TRANS_OD and carrier_pid != -1 \
+	if state == AIPossessionState.State.TRANS_DEFENSE and carrier_pid != -1 \
 			and team_id_by_peer.get(carrier_pid, -1) != team_id \
 			and snapshot.skater_states.has(carrier_pid):
 		var cs: SkaterNetworkState = snapshot.skater_states[carrier_pid]
@@ -242,7 +242,7 @@ static func assign(
 		result[pid] = spec.slot
 		assigned[pid] = true
 
-	# Remainder — peers beyond the spec'd slots. TRANS_OD's MARK crew by
+	# Remainder — peers beyond the spec'd slots. TRANS_DEFENSE's MARK crew by
 	# design; a defensive-shape fallback everywhere else (extra bodies play
 	# the man, never stand slotless).
 	for pid: int in teammates:
@@ -329,7 +329,7 @@ static func _specs_for_state(state: int, own_goal_z: float, strong_x: float,
 			return _breakout_post_specs(own_goal_z, own_dir, strong_x,
 					half_w, our_blue_z)
 
-		AIPossessionState.State.TRANS_OD:
+		AIPossessionState.State.TRANS_DEFENSE:
 			# The layered rush defense (docs/transition-defense-plan.md §5): a D
 			# pair in front, three forwards tracking back through mid-ice. Race
 			# targets are LANE points, not men — the structure is lanes and
@@ -353,7 +353,7 @@ static func _specs_for_state(state: int, own_goal_z: float, strong_x: float,
 						_side_home_f(-strong_x)),
 			]
 
-		AIPossessionState.State.TRANS_DO:
+		AIPossessionState.State.TRANS_OFFENSE:
 			return [
 				SlotSpec.make(AIRoleSlots.Slot.DVALVE, Group.D, our_net),
 				SlotSpec.make(AIRoleSlots.Slot.WIDE_L, Group.F,
@@ -405,7 +405,7 @@ static func _breakout_post_specs(own_goal_z: float, own_dir: float,
 	]
 
 
-# Unit vector from the rush origin toward our net — the axis the TRANS_OD lane
+# Unit vector from the rush origin toward our net — the axis the TRANS_DEFENSE lane
 # targets lay out along, so the whole structure rotates with a rush coming up a
 # wall instead of assuming it comes down the middle.
 static func _rush_axis(our_net: Vector3, puck_pos: Vector3) -> Vector3:

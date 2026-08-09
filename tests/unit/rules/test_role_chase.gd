@@ -55,7 +55,7 @@ func test_lost_race_retreats_to_the_pre_contain_point() -> void:
 	# we're 12 m behind the race. Pushing is skating out of the play — the
 	# chaser retreats to the RUSH GAP LADDER's point on the imminent pickup
 	# instead (the same formula RUSH_D1 holds — AIRoleRushD.ladder_gap_m), so the
-	# TRANS_OD structure is already standing when possession flips.
+	# TRANS_DEFENSE structure is already standing when possession flips.
 	var puck_pos := Vector3(0, 0, -14)          # up-ice (we defend +Z)
 	var self_pos := Vector3(0, 0, -2)
 	var ctx: RoleContext = _make_ctx(self_pos, puck_pos)

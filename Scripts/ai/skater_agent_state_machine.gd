@@ -1769,10 +1769,10 @@ func _team_state_label(state: int) -> String:
 			return "DZ"
 		AIPossessionState.State.OZONE:
 			return "OZ"
-		AIPossessionState.State.TRANS_DO:
-			return "DtoO"
-		AIPossessionState.State.TRANS_OD:
-			return "OtoD"
+		AIPossessionState.State.TRANS_OFFENSE:
+			return "TransOff"
+		AIPossessionState.State.TRANS_DEFENSE:
+			return "TransDef"
 		AIPossessionState.State.NEUTRAL:
 			return "Neutral"
 		AIPossessionState.State.BREAKOUT:

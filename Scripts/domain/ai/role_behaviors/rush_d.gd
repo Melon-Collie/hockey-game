@@ -1,6 +1,6 @@
 class_name AIRoleRushD
 
-# RUSH_D1 / RUSH_D2 — the two defensemen defending a rush (5v5 TRANS_OD).
+# RUSH_D1 / RUSH_D2 — the two defensemen defending a rush (5v5 TRANS_DEFENSE).
 # Design: docs/transition-defense-plan.md §5–§6.
 #
 #   RUSH_D1 — the strong-side D. He OWNS THE CARRIER: hold a gap sized by the
@@ -149,7 +149,7 @@ static func _decide_d1(ctx: RoleContext) -> RoleDecision:
 
 	# The stand and its inside shade are the shared closing geometry
 	# (AIRoleHelpers.carrier_stand) — AIRolePressure closes a carrier the same
-	# way, so the TRANS_OD → DZONE handoff is not a change of doctrine.
+	# way, so the TRANS_DEFENSE → DZONE handoff is not a change of doctrine.
 	var stand: Vector3 = AIRoleHelpers.carrier_stand(ap, gap)
 
 	# Odd-man: play the pass. The lane fan finds the feed lane from the

@@ -18,7 +18,7 @@ class_name AIRoleSlots
 # which marker sits net-front vs. weak-side is emergent from WHICH man
 # the optimal matcher hands each, not a fixed slot.
 #
-# TRANS_OD uses {RUSH_D1, TRACK_PUCK, TRACK_MID} — the layered rush
+# TRANS_DEFENSE uses {RUSH_D1, TRACK_PUCK, TRACK_MID} — the layered rush
 # defense (docs/transition-defense-plan.md §5.2), NOT man coverage.
 # RUSH_D1 goes to the LAST MAN BACK (the peer soonest to our OWN NET,
 # momentum-aware) and owns the carrier on the gap ladder; TRACK_PUCK runs
@@ -35,11 +35,11 @@ class_name AIRoleSlots
 # replaced a PRESSURE+BACKCHECK+CONTAIN triad where TWO peers engaged the
 # carrier FORWARD (overcommit / bad angle / breakaways).
 #
-# MARK unifies the old DZONE ANCHOR/COVER and TRANS_OD BACKCHECK, which
+# MARK unifies the old DZONE ANCHOR/COVER and TRANS_DEFENSE BACKCHECK, which
 # had converged to identical man-marking in the assigned-man path (see
 # AIRoleMark). It is now a DZONE-only role.
 #
-# OZONE replaces OUTLET with SUPPORT; OUTLET stays a TRANS_DO-only
+# OZONE replaces OUTLET with SUPPORT; OUTLET stays a TRANS_OFFENSE-only
 # role. BACKDOOR was renamed to FINISHER (more descriptive of the
 # scoring-threat semantics).
 #
@@ -50,7 +50,7 @@ class_name AIRoleSlots
 enum Slot {
 	NONE,
 	# Shared by multiple states.
-	CARRIER,    # OZONE + TRANS_DO: peer with the puck.
+	CARRIER,    # OZONE + TRANS_OFFENSE: peer with the puck.
 	# Defensive: PRESSURE closes the carrier in DZONE (also reused as
 	# FORECHECK's F1). MARK is the off-puck man-marker — the DZONE defenders
 	# NOT on the puck each cover a distinct assigned opponent (threat
@@ -60,8 +60,8 @@ enum Slot {
 	MARK,       # DZONE: covers an assigned man (threat partition).
 	# Offensive roles.
 	FINISHER,   # OZONE: scoring threat near opp net. Roams the slot.
-	OUTLET,     # TRANS_DO: stretch-pass option at opp blue line.
-	SUPPORT,    # OZONE + TRANS_DO: weak-side trail / cycle support.
+	OUTLET,     # TRANS_OFFENSE: stretch-pass option at opp blue line.
+	SUPPORT,    # OZONE + TRANS_OFFENSE: weak-side trail / cycle support.
 	# BREAKOUT (we possess in our OWN DZ). Two outlet options for the
 	# carrier breaking the puck out:
 	BREAKOUT_STRONG,  # strong-side-wall outlet, free to advance up-ice.
@@ -95,7 +95,7 @@ enum Slot {
 	BREAKOUT_D2,      # D: net-front/opposite post — the D-to-D "over" valve.
 	BREAKOUT_C,       # F: center's low swing — the second outlet.
 	BREAKOUT_STRETCH, # F: weak-side winger — mid-ice cross / stretch option.
-	# TRANS_DO rush shape (CARRIER fixed; MARK reused in TRANS_OD).
+	# TRANS_OFFENSE rush shape (CARRIER fixed; MARK reused in TRANS_DEFENSE).
 	WIDE_L,         # F: left wide lane, paced to the carrier.
 	WIDE_R,         # F: right wide lane.
 	TRAILER,        # ANY: high-slot trailer (the activating fourth man).
@@ -103,7 +103,7 @@ enum Slot {
 	# NEUTRAL back shape (CHASE/FLANK reused).
 	DBACK_L,        # D: left goal-side hold inside the dots.
 	DBACK_R,        # D: right goal-side hold.
-	# TRANS_OD rush defense — the layered replacement for CONTAIN + MARK
+	# TRANS_DEFENSE rush defense — the layered replacement for CONTAIN + MARK
 	# (docs/transition-defense-plan.md §5). Both team sizes; 3v3 uses
 	# RUSH_D1 / TRACK_PUCK / TRACK_MID, 5v5 adds RUSH_D2 and splits the mid
 	# trackers strong/weak.
@@ -163,13 +163,13 @@ static func slots_for_state(state: int) -> Array[int]:
 			return [Slot.PRESSURE, Slot.MARK]
 		AIPossessionState.State.OZONE:
 			return [Slot.CARRIER, Slot.FINISHER, Slot.SUPPORT]
-		AIPossessionState.State.TRANS_DO:
+		AIPossessionState.State.TRANS_OFFENSE:
 			return [Slot.CARRIER, Slot.OUTLET, Slot.SUPPORT]
 		AIPossessionState.State.BREAKOUT:
 			return [Slot.CARRIER, Slot.BREAKOUT_STRONG, Slot.BREAKOUT_WEAK]
 		AIPossessionState.State.FORECHECK:
 			return [Slot.F1_PRESSURE, Slot.F2_MID, Slot.F3_HIGH]
-		AIPossessionState.State.TRANS_OD:
+		AIPossessionState.State.TRANS_DEFENSE:
 			return [Slot.RUSH_D1, Slot.TRACK_PUCK, Slot.TRACK_MID]
 		AIPossessionState.State.NEUTRAL:
 			return [Slot.CHASE, Slot.FLANK_L, Slot.FLANK_R]
@@ -185,12 +185,12 @@ static func slots_for_state(state: int) -> Array[int]:
 # momentum-aware time_to_arrive election at each peer's real Speed cap):
 #   DZONE     PRESSURE = soonest to puck;  MARK = remaining two (a man each)
 #   OZONE     CARRIER fixed;  FINISHER = soonest to opp net;  SUPPORT = remaining
-#   TRANS_DO  CARRIER fixed;  OUTLET = soonest to opp net;  SUPPORT = remaining
-#   TRANS_OD  RUSH_D1 = last man back (peer soonest to OUR net, momentum-aware);
+#   TRANS_OFFENSE  CARRIER fixed;  OUTLET = soonest to opp net;  SUPPORT = remaining
+#   TRANS_DEFENSE  RUSH_D1 = last man back (peer soonest to OUR net, momentum-aware);
 #             TRACK_PUCK = soonest to the puck of the rest; TRACK_MID = leftover
 #   NEUTRAL   CHASE = soonest to puck;  FLANK_L / FLANK_R = X-axis split of remaining
 #
-# TRANS_OD encodes the compressed three-layer rush defense: RUSH_D1 goes to
+# TRANS_DEFENSE encodes the compressed three-layer rush defense: RUSH_D1 goes to
 # the last man back — the peer soonest to our own net (momentum-aware), the
 # deepest line of defense — and owns the carrier on the gap ladder; whoever of
 # the remaining two reaches the puck soonest takes TRACK_PUCK and runs the
@@ -226,9 +226,9 @@ static func assign(
 
 	var fixed_peers: Dictionary = {}
 
-	# Fixed CARRIER for OZONE / TRANS_DO / BREAKOUT.
+	# Fixed CARRIER for OZONE / TRANS_OFFENSE / BREAKOUT.
 	if state == AIPossessionState.State.OZONE \
-			or state == AIPossessionState.State.TRANS_DO \
+			or state == AIPossessionState.State.TRANS_OFFENSE \
 			or state == AIPossessionState.State.BREAKOUT:
 		var carrier_pid: int = snapshot.puck_state.carrier_peer_id if snapshot.puck_state else -1
 		if carrier_pid != -1 and team_id_by_peer.get(carrier_pid, -1) == team_id:
@@ -250,7 +250,7 @@ static func assign(
 					Slot.PRESSURE, puck_pos,
 					Slot.MARK, caps_by_peer)
 
-		AIPossessionState.State.TRANS_OD:
+		AIPossessionState.State.TRANS_DEFENSE:
 			# The layered rush defense, compressed to three bodies
 			# (docs/transition-defense-plan.md §5.2). Same modules 5v5 runs; the
 			# only difference is that with three skaters there is no D pair, so
@@ -264,7 +264,7 @@ static func assign(
 			# bad angles from the same side. It is affordable because transition
 			# is BOUNDED — the moment the attack becomes a settled three-man
 			# threat that needs a body on each man, the puck is in our zone and
-			# DZONE's coverage takes over. TRANS_OD's job is to kill the rush,
+			# DZONE's coverage takes over. TRANS_DEFENSE's job is to kill the rush,
 			# not to solve coverage.
 			#
 			# RUSH_D1 elects first (most structurally important): the peer
@@ -283,7 +283,7 @@ static func assign(
 					Slot.FINISHER, opp_net,
 					Slot.SUPPORT, caps_by_peer)
 
-		AIPossessionState.State.TRANS_DO:
+		AIPossessionState.State.TRANS_OFFENSE:
 			_assign_one_then_remainder(
 					snapshot, teammates, fixed_peers, prev_assignments, result,
 					Slot.OUTLET, opp_net,
@@ -425,7 +425,7 @@ static func _assign_pair_then_remainder(
 
 
 # Assigns slot1 to soonest-to-target1 peer, then dumps any remainder
-# into slot_remainder. Used by DZONE, OZONE, TRANS_DO and BREAKOUT
+# into slot_remainder. Used by DZONE, OZONE, TRANS_OFFENSE and BREAKOUT
 # (after CARRIER fix).
 static func _assign_one_then_remainder(
 		snapshot: WorldSnapshot,

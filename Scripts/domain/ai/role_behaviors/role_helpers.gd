@@ -373,7 +373,7 @@ static func inside_dir(carrier_pos: Vector3, dir_net: Vector3) -> Vector3:
 # The stand for a defender who owns the carrier: `gap` metres up the carrier→our
 # -net line, shaded to the inside. Shared by every role that closes a puck
 # carrier — the rush gap (AIRoleRushD) and the in-zone pressurer
-# (AIRolePressure) — so both defend him the same way and the TRANS_OD → DZONE
+# (AIRolePressure) — so both defend him the same way and the TRANS_DEFENSE → DZONE
 # handoff is not a change of doctrine. Falls back to the unshaded stand when the
 # shade would put the body somewhere illegal.
 static func carrier_stand(ap: AICarrierApproach, gap: float) -> Vector3:
@@ -449,7 +449,7 @@ static func fill_approach(ctx: RoleContext, subject_pos: Vector3,
 #
 # The angle is what makes the handoff exact rather than merely similar. This
 # stand exists so the chaser who declines plants where RUSH_D1 will want to be
-# the instant somebody collects and the state flips to TRANS_OD — and RUSH_D1's
+# the instant somebody collects and the state flips to TRANS_DEFENSE — and RUSH_D1's
 # stand is angled, so an unangled pre-contain was a spot the gap defender then
 # had to correct off, in the direction that concedes the middle.
 static func chase_puck(ctx: RoleContext, d: RoleDecision) -> bool:
@@ -485,7 +485,7 @@ static func chase_puck(ctx: RoleContext, d: RoleDecision) -> bool:
 # Uses the threat-surface helpers so the gradient survives when score_shoot /
 # score_pass collapse to 0 (carrier far from net or all receivers far from
 # net). The position_potential floor pulls the defender tight to the carrier
-# in TRANS_OD scenarios where there's no immediate scoring threat to defend —
+# in TRANS_DEFENSE scenarios where there's no immediate scoring threat to defend —
 # without it the score is flat across goal-side candidates and the argmax
 # picks arbitrarily.
 #
@@ -1030,7 +1030,7 @@ static func may_hold_forward_stand(ctx: RoleContext, was_holding: bool,
 # True when the puck is genuinely ours right now — the branch that decides whether
 # a station is making a PINCH decision at all. Once the opponent has it (or it is
 # loose), there is nothing to pinch on: the answer is the ordinary retreat to
-# structure, and TRANS_OD takes over as soon as the puck reaches the neutral zone.
+# structure, and TRANS_DEFENSE takes over as soon as the puck reaches the neutral zone.
 static func _we_possess(ctx: RoleContext) -> bool:
 	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
 		return false

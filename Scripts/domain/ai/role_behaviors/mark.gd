@@ -7,7 +7,7 @@ class_name AIRoleMark
 # layers, and MARK survives only as the extra-body fallback in the 5v5
 # election's remainder.
 #
-# Unifies the old ANCHOR / COVER (DZONE) and BACKCHECK (TRANS_OD) roles, which
+# Unifies the old ANCHOR / COVER (DZONE) and BACKCHECK (TRANS_DEFENSE) roles, which
 # had converged: when TeamBrain's threat partition assigns a man (the normal
 # case) all three ran byte-for-byte identical code — cover the assigned man
 # goal-side, in the carrier→man feed lane. They differed only in a rarely-run
@@ -33,7 +33,7 @@ class_name AIRoleMark
 #
 # so an extra marker with no man still races home and helps at the net. The
 # search center is the midpoint between the puck and our net, which interpolates
-# correctly across both states this role serves — puck NZ-side (TRANS_OD) pulls
+# correctly across both states this role serves — puck NZ-side (TRANS_DEFENSE) pulls
 # the center out toward our blue line, puck deep (DZONE) pulls it to the slot —
 # so one fallback covers both zones without a per-state branch.
 
@@ -63,7 +63,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, our_team_excluding_self)
 
 	# Search center: midpoint between puck and our net. Pure in-game refs — the
-	# region interpolates between TRANS_OD (puck NZ-side → midpoint at our blue
+	# region interpolates between TRANS_DEFENSE (puck NZ-side → midpoint at our blue
 	# line) and DZONE (puck deep → midpoint near net). Falls back to slot when
 	# puck_state is unavailable so a missing snapshot doesn't strand MARK at
 	# (0, 0, 0).

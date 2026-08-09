@@ -1,6 +1,6 @@
 extends GutTest
 
-# AIRolePressure — DZONE + TRANS_OD puck pressurer. Tests cover:
+# AIRolePressure — DZONE + TRANS_DEFENSE puck pressurer. Tests cover:
 #   - Loose puck (no carrier) → pressures the puck, never freezes.
 #   - Goal-side filter rejects wrong-side candidates.
 #   - Argmax picks a position that blocks the shot lane when

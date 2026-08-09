@@ -69,7 +69,7 @@ func test_renders_a_populated_table() -> void:
 	t.accumulate(0, AIPossessionState.State.OZONE, 30.0)
 	t.accumulate(0, AIPossessionState.State.NEUTRAL, 10.0)
 	t.accumulate(1, AIPossessionState.State.DZONE, 25.0)
-	t.accumulate(1, AIPossessionState.State.TRANS_OD, 15.0, true)
+	t.accumulate(1, AIPossessionState.State.TRANS_DEFENSE, 15.0, true)
 	_overlay._refresh()
 	var txt: String = _text()
 	assert_string_contains(txt, "[table=7]", "laid out as a 7-column table")

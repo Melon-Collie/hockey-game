@@ -140,8 +140,8 @@ constants (`GOAL_LINE_Z = 26.65`, `BLUE_LINE_Z = 7.29`, dots at x = ±6.71, slot
 | **FORECHECK** | F1_PRESSURE (F) + F2_STRONG (F) + F2_WEAK (F) + DP_STRONG (D) + DP_WEAK (D) | **1-2-2** |
 | **DZONE** | ZONE_D_STRONG (D) + ZONE_D_WEAK (D) + ZONE_C (F) + ZONE_W_STRONG (F) + ZONE_W_WEAK (F) | hybrid zone, soft-lock (§3) |
 | **BREAKOUT** | CARRIER + BREAKOUT_D2 (D) + BREAKOUT_STRONG (F) + BREAKOUT_C (F) + BREAKOUT_STRETCH (F) | 5-man breakout |
-| **TRANS_OD** | CONTAIN (D) + MARK ×4 | D gap + backcheck through the middle |
-| **TRANS_DO** | CARRIER + DVALVE (D) + WIDE_L (F) + WIDE_R (F) + TRAILER (ANY) | rush: wide lanes + trailer + valve |
+| **TRANS_DEFENSE** | CONTAIN (D) + MARK ×4 | D gap + backcheck through the middle |
+| **TRANS_OFFENSE** | CARRIER + DVALVE (D) + WIDE_L (F) + WIDE_R (F) + TRAILER (ANY) | rush: wide lanes + trailer + valve |
 | **NEUTRAL** | CHASE (ANY, global) + DBACK_L (D) + DBACK_R (D) + FLANK_L (F) + FLANK_R (F) | race + 1-2-2-ish shape |
 
 Per-state specs (behavior module in parentheses; **bold = new code**, others reuse):
@@ -194,7 +194,7 @@ Per-state specs (behavior module in parentheses; **bold = new code**, others reu
   blue line at a pace the carrier's advance justifies and handles offside; from a deep
   breakout it hovers mid-NZ weak-side, which is the researched "cross or stretch" post.
 
-- **TRANS_OD** — CONTAIN (reuses `AIRoleContain` verbatim — its gap-control ladder,
+- **TRANS_DEFENSE** — CONTAIN (reuses `AIRoleContain` verbatim — its gap-control ladder,
   blue-line stand, lane fan, and last-man-back election are already the researched
   behavior) is elected **within the D group** by soonest-to-our-net: the deepest D takes
   the carrier; MARK ×4 (reuses `AIRoleMark` + `AIThreatAssignment`): everyone else
@@ -204,7 +204,7 @@ Per-state specs (behavior module in parentheses; **bold = new code**, others reu
   trailer/wide lanes by reachability. The brute-force matcher's "≤ 3 backline" comment
   updates — at 4 defenders × 4 men it's ≤ 24 leaf orderings at 6 Hz, still trivial.
 
-- **TRANS_DO** — the rush shape: WIDE_L / WIDE_R (**new thin decide, `AIRoleWide`**)
+- **TRANS_OFFENSE** — the rush shape: WIDE_L / WIDE_R (**new thin decide, `AIRoleWide`**)
   drive the outside lanes (x ≈ ±(half-width − 4), paced to the carrier like OUTLET so
   they hit the line in stride, never offside); TRAILER (reuses `AIRoleSupport` — its
   weak-side-trail logic is the high-slot trailer job); DVALVE (`AIRoleDefenseman`): the
@@ -285,7 +285,7 @@ because anchors move continuously with `d_p` and the boundary tests use the live
   query) is the pure evaluator `zone_coverage.gd` (§5); `AIRoleZoneDefense.decide(ctx,
   role)` consumes it. The per-region man query replaces the team-global
   `AIThreatAssignment` partition in 5v5 DZONE (distinctness falls out of disjoint
-  areas); TRANS_OD keeps the global partition.
+  areas); TRANS_DEFENSE keeps the global partition.
 
 ## 4. New behavior: `defenseman.gd` (off-puck point play)
 
@@ -302,7 +302,7 @@ all the same player-type doing the same philosophy at different game moments:
 - **FORECHECK line-hold** (DP_STRONG / DP_WEAK): hold the offensive blue line inside
   the dots; sag down the NZ when the race home is no longer winnable (F3's existing
   bounded-hold logic, applied per-side).
-- **TRANS_DO safety valve** (DVALVE): trail the rush centrally, ~a zone behind the
+- **TRANS_OFFENSE safety valve** (DVALVE): trail the rush centrally, ~a zone behind the
   carrier, always inside the race-home bound — the reset/D-to-D option and the first
   man back if the rush dies.
 - **NEUTRAL back shape** (DBACK_L / DBACK_R): staggered goal-side pair inside the dots
@@ -442,7 +442,7 @@ done against the codebase; the load-bearing items:
 - **Reuse as-is** (size-agnostic): `carrier.gd`, `pass_lead`, `shot_aim`, `steering`,
   `loose_puck_chase`, `body_check`, `action_scoring` EV models, `possession_state`,
   `contain.gd` (the D gap-control job, verbatim), `mark.gd` + `threat_assignment.gd`
-  (TRANS_OD backcheck), `pressure.gd` (F1), `finisher.gd` (NET_FRONT), `support.gd`
+  (TRANS_DEFENSE backcheck), `pressure.gd` (F1), `finisher.gd` (NET_FRONT), `support.gd`
   (TRAILER), `outlet.gd` (BREAKOUT_STRETCH), `breakout.gd` (strong wall + D2 valve),
   `chase.gd`/`flank.gd` (NEUTRAL).
 - **3v3 role path**: reused **verbatim** behind the `team_size == 3` branch.

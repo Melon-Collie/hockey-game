@@ -1,6 +1,6 @@
 class_name AIRolePressure
 
-# PRESSURE role behavior — DZONE + TRANS_OD. The puck pressurer:
+# PRESSURE role behavior — DZONE + TRANS_DEFENSE. The puck pressurer:
 # get goal-side of the carrier and take away their best option.
 #
 # Inverse scoring. PRESSURE's value isn't an intrinsic positional
@@ -139,7 +139,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# §2.5 of the plan is the sentence this restores: "the D who gapped a carrier
 	# through the neutral zone KEEPS HIM into the zone; there is no handoff at the
 	# line." RUSH_D1 and PRESSURE now size the same gap off the same ladder, so the
-	# TRANS_OD -> DZONE re-election stops being a geometry discontinuity.
+	# TRANS_DEFENSE -> DZONE re-election stops being a geometry discontinuity.
 	var carrier_velocity: Vector3 = ap.carrier_vel
 	var closing_now: float = ap.closing
 	# Difficulty pace knob: ctx.pursuit_standoff_m widens the ladder so easier bots

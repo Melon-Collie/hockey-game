@@ -198,7 +198,7 @@ func test_dp_sags_off_a_stretch_threat() -> void:
 			"the stand sags off the line when the race home tightens")
 
 
-# ── TRANS_DO valve ───────────────────────────────────────────────────────────
+# ── TRANS_OFFENSE valve ───────────────────────────────────────────────────────────
 
 func test_valve_trails_the_rush_at_speed() -> void:
 	var ctx: RoleContext = _make_ctx(Vector3(0.0, 0.0, 6.0),

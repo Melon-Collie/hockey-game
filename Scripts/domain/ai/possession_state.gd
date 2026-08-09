@@ -7,27 +7,27 @@ class_name AIPossessionState
 # State table (per team) — symmetric in puck zone × possession:
 #                  we possess        opp possesses
 #   their DZ       OZONE             FORECHECK
-#   neutral zone   TRANS_DO          TRANS_OD
+#   neutral zone   TRANS_OFFENSE          TRANS_DEFENSE
 #   our DZ         BREAKOUT          DZONE
 #
 #   OZONE     — we possess in their DZ (push / cycle)
 #   FORECHECK — opp possesses in their DZ (pin them in, recover deep)
-#   TRANS_DO  — we possess in the NZ (D→O rush)
-#   TRANS_OD  — opp possesses in the NZ (O→D retreat)
+#   TRANS_OFFENSE  — we possess in the NZ (D→O rush)
+#   TRANS_DEFENSE  — opp possesses in the NZ (O→D retreat)
 #   BREAKOUT  — we possess in our DZ (break it out)
 #   DZONE     — opp possesses in our DZ (in-zone defense)
 #
 # Both splits exist because possession alone doesn't name the job — puck
 # position decides it, and collapsing either pair inverts the behavior:
 #
-#   FORECHECK vs TRANS_OD — both are "opp possesses, not in our DZ". Deep in
+#   FORECHECK vs TRANS_DEFENSE — both are "opp possesses, not in our DZ". Deep in
 #     their end the job is to forecheck (pin them, force a turnover); once the
-#     puck reaches the NZ it's a retreat (TRANS_OD's Sprinting-Through
+#     puck reaches the NZ it's a retreat (TRANS_DEFENSE's Sprinting-Through
 #     backcheck). One bucket for both retreats from a sloppy opponent deep in
 #     his own zone — the exact opposite of a forecheck.
-#   BREAKOUT vs TRANS_DO — both are "we possess, not in their DZ". Deep in our
+#   BREAKOUT vs TRANS_OFFENSE — both are "we possess, not in their DZ". Deep in our
 #     own end the job is to break out safely (supports present strong-side-wall
-#     + weak-side-reverse outlets); in the NZ it's a rush, where TRANS_DO's
+#     + weak-side-reverse outlets); in the NZ it's a rush, where TRANS_OFFENSE's
 #     stretch OUTLET at the far blue line makes sense. One bucket for both fires
 #     that OUTLET from deep in our own zone.
 #
@@ -45,7 +45,7 @@ class_name AIPossessionState
 # oscillation (e.g., stick-on-stick contact during a strip) naturally —
 # we sample at the brain tick, not every physics tick.
 
-enum State { DZONE, OZONE, TRANS_DO, TRANS_OD, NEUTRAL, BREAKOUT, FORECHECK }
+enum State { DZONE, OZONE, TRANS_OFFENSE, TRANS_DEFENSE, NEUTRAL, BREAKOUT, FORECHECK }
 
 # ── Coverage readiness (docs/transition-defense-plan.md §9) ──────────────────
 # DZONE is a SHAPE, not a location. The raw table above flips to it the instant
@@ -161,14 +161,14 @@ static func compute(
 		elif in_our_dz:
 			state = State.BREAKOUT
 		else:
-			state = State.TRANS_DO
+			state = State.TRANS_OFFENSE
 	else:
 		if in_our_dz:
 			state = State.DZONE
 		elif in_their_dz:
 			state = State.FORECHECK
 		else:
-			state = State.TRANS_OD
+			state = State.TRANS_DEFENSE
 
 	return Result.make(state, carrier_team)
 
@@ -176,4 +176,4 @@ static func compute(
 # Helper: returns true if `state` is a TRANS state (used by SPRINT_BY
 # locking logic in role_slots).
 static func is_transition(state: State) -> bool:
-	return state == State.TRANS_DO or state == State.TRANS_OD
+	return state == State.TRANS_OFFENSE or state == State.TRANS_DEFENSE
