@@ -160,11 +160,22 @@ and the constants go with it.
 `AIRoleHelpers.cover_threat` is the whole of it: take the ice between him and
 our net, from inside the lane the puck would be fed to him through, riding him.
 Every off-puck defensive role in the game calls it and differs *only* in which
-man it names — MARK from the threat partition, the 5v5 zone soft-lock from
-whoever is most dangerous in its area, TRACK_MID from whoever entered its lane,
-RUSH_D2 from whoever is driving the middle. **Man defense and zone defense are
-the same behavior under different assigners**, so a new coverage scheme is a new
-answer to "who is mine", never new positioning code.
+man it names — MARK and the five 5v5 zone roles from the threat partition,
+TRACK_MID from whoever entered its lane, RUSH_D2 from whoever is driving the
+middle. **Man defense and zone defense are the same behavior under different
+assigners**, so a new coverage scheme is a new answer to "who is mine", never
+new positioning code.
+
+Since the zone roles joined the partition it is not even a different assigner:
+`TeamBrain` matches every man-covering body at once, and a zone role's AREA
+enters as ELIGIBILITY — which men it may be handed — rather than as a private
+search. That is not bookkeeping. Five independent argmaxes over deliberately
+OVERLAPPING areas double-covered somebody on 61% of D-zone ticks, so the same
+five bodies reached only 1.98 distinct attackers per tick and left the best
+uncovered man at 0.064 finish danger; one matching reaches 2.64 and leaves
+0.022. Its remaining hole is a man standing in NOBODY's area — eligibility
+cannot reach him however free a defender is, which is the fallback-assigner
+question rather than this one.
 
 The seam is also what makes the frame rule above enforceable rather than
 aspirational. When the four sites were four copies, each drifted its own way:
