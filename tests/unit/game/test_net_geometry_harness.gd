@@ -80,6 +80,49 @@ func test_prediction_error_grows_with_latency() -> void:
 			"10ms=%s / 120ms=%s" % [rn.summary(), rf.summary()])
 
 
+# ── Modelling fidelity ───────────────────────────────────────────────────────
+
+func test_the_broadcast_interval_costs_prediction_accuracy() -> void:
+	# Snapshots leave at STATE_RATE, not at PHYSICS_TICK, so the client's freshest
+	# sample is up to a broadcast interval older than the host's newest tick and
+	# the prediction span is that much longer.
+	#
+	# This is also the guard on a subtle trap. Deflections used to fire on a fixed
+	# PERIOD; every even period shares a factor with the 2-tick snapshot cadence,
+	# so every deflection landed on a broadcast tick, the client heard about all
+	# of them at the earliest possible instant, and the interval cost exactly
+	# nothing — hiding ~15% of the prediction error behind a number that looked
+	# deliberate. If deflection timing is ever made periodic again this goes green
+	# and the harness quietly starts flattering itself.
+	var fast: RefCounted = _cfg(60.0)
+	fast.deflect_every_ticks = 12
+	fast.snapshot_every_ticks = 1
+	var real: RefCounted = _cfg(60.0)
+	real.deflect_every_ticks = 12
+	real.snapshot_every_ticks = 2
+
+	var acc_fast: float = 0.0
+	var acc_real: float = 0.0
+	for k: int in range(8):
+		fast.seed = 991 + k * 7
+		real.seed = 991 + k * 7
+		acc_fast += H.new().run(fast).mean_puck_error_m
+		acc_real += H.new().run(real).mean_puck_error_m
+	assert_gt(acc_real, acc_fast * 1.05,
+			"a 60 Hz snapshot stream must predict measurably worse than a 120 Hz one "
+			+ "— if it does not, deflection timing has aliased against the cadence: "
+			+ "120Hz=%.4f 60Hz=%.4f" % [acc_fast / 8.0, acc_real / 8.0])
+
+
+func test_an_unplanned_blade_tick_cannot_confirm_a_claim() -> void:
+	# The blade's fallback pose for a tick the client never planned has to be
+	# unreachable. Defaulting it to the puck's own position — which is what it
+	# used to do — hands out a guaranteed confirm on exactly the ticks where the
+	# harness knows least, and reads as a clean result.
+	assert_gt(H.new()._BLADE_UNPLANNED.length(), 100.0,
+			"the unplanned-blade sentinel must be far outside any pickup radius")
+
+
 # ── Bounds ───────────────────────────────────────────────────────────────────
 
 func test_miss_rate_stays_tolerable_under_realistic_disturbance() -> void:

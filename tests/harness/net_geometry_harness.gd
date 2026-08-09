@@ -40,6 +40,28 @@ extends RefCounted
 # longer span measurably raises the miss rate — the regression flagged when the
 # clock unification landed, which could not be proven from a single playtest.
 #
+# VALIDATION — the thing that makes the rest of it worth reading. Run at the
+# conditions the 45%-miss playtest actually had (lead servo pinned at the 50 ms
+# ceiling, so a 75 ms lead, 30-60 ms RTT, contested-puck deflection rate) the
+# harness produces 33-41%, and the same conditions at the designed 25 ms lead
+# produce 6-15%. It reproduces the observed number and attributes most of it to
+# the pinned lead, which is a prediction the next playtest can falsify.
+#
+# WHAT IT IS NOT. The client puts its blade on the puck it rendered, so its own
+# view connects on EVERY eligible tick — `miss_rate` is therefore the fraction of
+# ticks whose prediction error exceeded the radius, an error-exceedance curve,
+# not a simulation of how often a player reaches for a puck. That is a
+# well-defined quantity and the right one for comparing arrangements; it is not
+# a forecast of any particular player's felt miss rate. Also absent: jitter,
+# packet loss, and any second claimant — so nothing here says what a
+# favor-the-actor grant does to the OTHER player in a scramble.
+#
+# SINGLE RUNS ARE NOISY. A run turns on ~60 random deflection directions, and
+# across seeds the miss rate moves +/-20-25% relative (13.8% median becoming
+# anywhere from 10.3% to 16.5%). Average a dozen seeds before quoting a number,
+# and do not read a crossover between two arrangements to better than about
+# +/-30 ms of RTT.
+#
 # A REFUSAL IS ONLY HALF THE SCORE. Every way of not refusing an earned claim
 # grants something the world had already moved past, so a miss rate on its own
 # ranks the most permissive option first. The grant metrics below are the other
@@ -48,6 +70,11 @@ extends RefCounted
 # grants by everyone else, and an option is only picked by reading both.
 
 const _PEER: int = 3
+
+# Where the blade sits on a tick the client never planned a pose for. Must be far
+# enough that no check_pickup can pass: defaulting it to the puck's own position
+# instead silently hands out a guaranteed confirm on every unplanned tick.
+const _BLADE_UNPLANNED := Vector3(0.0, 0.0, 1000.0)
 
 
 enum RenderMode {
@@ -80,8 +107,15 @@ class Config:
 	# deriving it from the RTT estimate, which is the thing that decides whether
 	# REPRODUCE_CLIENT_VIEW reproduces anything at all.
 	var base_stamp_error_ticks: int = 0
-	# How often the host perturbs the puck in a way the client cannot predict —
-	# a deflection off a stick or body. 0 disables.
+	# MEAN ticks between host perturbations the client cannot predict — a
+	# deflection off a stick or body. 0 disables. Each tick rolls independently,
+	# so the intervals are geometric rather than periodic.
+	#
+	# Periodic was the obvious choice and it was wrong: a fixed period sharing a
+	# factor with snapshot_every_ticks lands every single deflection on a
+	# broadcast tick, so the client hears about all of them at the earliest
+	# possible instant and the broadcast interval costs exactly nothing. That
+	# aliasing hid ~15% of the prediction error at every even period.
 	var deflect_every_ticks: int = 0
 	# Impulse magnitude of that velocity change, applied and then renormalised
 	# back to puck_speed — a deflection REDIRECTS the puck, it does not pump
@@ -104,6 +138,12 @@ class Config:
 	# miss is prediction error rather than aim.
 	var blade_offset_m: float = 0.05
 	var pickup_radius: float = 0.30
+	# Ticks between snapshots. The host broadcasts at STATE_RATE, not at
+	# PHYSICS_TICK, so the client's newest sample is up to a full broadcast
+	# interval older than the last simulated tick — and that interval is part of
+	# the prediction span. Delivering every tick instead makes the client look
+	# fresher than it can ever be and understates every error below.
+	var snapshot_every_ticks: int = Constants.PHYSICS_TICK / Constants.STATE_RATE
 	var seed: int = 991
 
 
@@ -149,7 +189,8 @@ class Result:
 				render_skew_m]
 
 
-static func _push(buf: StateBufferManager, blade: Vector3, puck: Vector3, ts: float) -> void:
+static func _push(buf: StateBufferManager, blade: Vector3, puck: Vector3,
+		puck_vel: Vector3, ts: float) -> void:
 	# Mirror of StateBufferManager.capture()'s ring writes. capture() pulls from
 	# live controllers, which cannot be stood up headless; every lookup the tests
 	# actually exercise is the shipping implementation reading what this wrote.
@@ -170,6 +211,7 @@ static func _push(buf: StateBufferManager, blade: Vector3, puck: Vector3, ts: fl
 			buf._puck_buffer[i] = PuckNetworkState.new()
 	var pslot: PuckNetworkState = buf._puck_buffer[buf._puck_ptr]
 	pslot.position = puck
+	pslot.velocity = puck_vel
 	pslot.carrier_peer_id = -1
 	pslot.host_timestamp = ts
 	buf._puck_ptr = (buf._puck_ptr + 1) % StateBufferManager.BUFFER_SIZE
@@ -224,6 +266,7 @@ func run(cfg: Config) -> Result:
 	var puck_pos := Vector3.ZERO
 	var puck_vel := Vector3(0.0, 0.0, -cfg.puck_speed)
 	var truth: Array[Vector3] = []
+	var vel_truth: Array[Vector3] = []
 	# Blade pose the client committed to for a future instant. The host applies
 	# the client's inputs when their stamp comes due, so by the time it captures
 	# that instant the pose is already decided — no prediction on either side.
@@ -236,19 +279,24 @@ func run(cfg: Config) -> Result:
 		var now: float = float(i) * tick
 
 		# ── Host: unmodelled perturbation, advance, capture ──────────────────
-		if cfg.deflect_every_ticks > 0 and i > 0 and i % cfg.deflect_every_ticks == 0:
+		if cfg.deflect_every_ticks > 0 and i > 0 \
+				and rng.randf() < 1.0 / float(cfg.deflect_every_ticks):
 			puck_vel = (puck_vel + Vector3(rng.randf_range(-1.0, 1.0), 0.0,
 					rng.randf_range(-1.0, 1.0)).normalized() * cfg.deflect_speed) \
 					.normalized() * cfg.puck_speed
 		puck_pos += puck_vel * tick
 		truth.append(puck_pos)
-		_push(host_buf, blade_plan.get(i, puck_pos), puck_pos, now)
+		_push(host_buf, blade_plan.get(i, _BLADE_UNPLANNED), puck_pos, puck_vel, now)
+		vel_truth.append(puck_vel)
 
 		# ── Link ─────────────────────────────────────────────────────────────
+		# Snapshots leave the host at STATE_RATE, so the client's freshest sample
+		# is one broadcast interval behind the host's newest tick on top of the
+		# trip. That interval is part of the prediction span and has to be here.
 		var deliver_i: int = i - delay_ticks
-		if deliver_i >= 0:
-			_push(client_buf, blade_plan.get(deliver_i, truth[deliver_i]),
-					truth[deliver_i], float(deliver_i) * tick)
+		if deliver_i >= 0 and deliver_i % cfg.snapshot_every_ticks == 0:
+			_push(client_buf, blade_plan.get(deliver_i, _BLADE_UNPLANNED),
+					truth[deliver_i], vel_truth[deliver_i], float(deliver_i) * tick)
 		if not client_buf.is_ready() or not host_buf.is_ready():
 			continue
 
@@ -257,13 +305,18 @@ func run(cfg: Config) -> Result:
 		# real client runs the shared analytic solver, which is identical on both
 		# sides and so cannot diverge; what neither side can do is know about a
 		# perturbation the client has not been told about yet.
+		#
+		# Velocity comes off the snapshot, as it does on the wire. Finite
+		# differencing two samples instead would make the client's estimate
+		# depend on its own sample SPACING, so a deflection between two snapshots
+		# would leave client and host holding different velocities for the same
+		# instant — an artifact of the harness, indistinguishable in the results
+		# from the prediction error it exists to measure.
 		var newest_client: float = client_buf.newest_host_timestamp()
 		var base: WorldSnapshot = client_buf.get_state_at(newest_client)
-		var base_prev: WorldSnapshot = client_buf.get_state_at(
-				LagCompRewind.prev_tick(newest_client))
-		if base.puck_state == null or base_prev.puck_state == null:
+		if base.puck_state == null:
 			continue
-		var est_vel: Vector3 = (base.puck_state.position - base_prev.puck_state.position) / tick
+		var est_vel: Vector3 = base.puck_state.velocity
 		var target_i: int = i + ahead_ticks
 		var target_t: float = float(target_i) * tick
 		var span: float = target_t - newest_client
@@ -274,10 +327,17 @@ func run(cfg: Config) -> Result:
 		# stamp regardless, which is exactly the pre-v59 mismatch when the puck
 		# is drawn somewhere else.
 		var blade: Vector3 = rendered + Vector3(cfg.blade_offset_m, 0.0, 0.0)
-		var blade_prev: Vector3 = rendered_prev + Vector3(cfg.blade_offset_m, 0.0, 0.0)
+		var had_prev_pose: bool = blade_plan.has(i + blade_ticks - 1)
+		# The swept test needs the pose one tick EARLIER, and that is the pose
+		# planned on the PREVIOUS frame — not a same-frame back-extrapolation of
+		# this one. They differ whenever a snapshot landed in between, and using
+		# the extrapolation would hand the client a blade segment the host never
+		# sees, quietly turning blade disagreement into a second error source in
+		# a harness whose whole claim is that it has only one.
+		var blade_prev: Vector3 = blade_plan.get(i + blade_ticks - 1, _BLADE_UNPLANNED)
 		blade_plan[i + blade_ticks] = blade
 
-		if PuckInteractionRules.check_pickup(
+		if had_prev_pose and PuckInteractionRules.check_pickup(
 				rendered_prev, rendered, blade_prev, blade, cfg.pickup_radius):
 			var p := _Pending.new()
 			p.stamp = now
@@ -300,19 +360,15 @@ func run(cfg: Config) -> Result:
 				keep.append(p)
 				continue
 
-			res.client_hits += 1
-			var truth_i: int = clampi(int(round(p.target_t / tick)), 0, truth.size() - 1)
-			var err: float = p.rendered.distance_to(truth[truth_i])
-			res.max_puck_error_m = maxf(res.max_puck_error_m, err)
-			err_sum += err
-			res.samples += 1
-
+			# Everything that can disqualify this claim is checked BEFORE any
+			# counter moves. Incrementing first and decrementing on a bail-out
+			# leaves the error sample behind, so a claim that was thrown away
+			# still shifts the reported mean.
 			var hb: WorldSnapshot = host_buf.get_state_at(blade_t)
 			var hb_prev: WorldSnapshot = host_buf.get_state_at(LagCompRewind.prev_tick(blade_t))
 			var hbs: SkaterNetworkState = hb.get_skater_state(_PEER)
 			var hbs_prev: SkaterNetworkState = hb_prev.get_skater_state(_PEER)
 			if hbs == null or hbs_prev == null:
-				res.client_hits -= 1
 				continue
 
 			# The two ways of answering "where was the puck". Both fill the same
@@ -328,12 +384,9 @@ func run(cfg: Config) -> Result:
 				var base_t: float = p.base_t \
 						+ float(cfg.base_stamp_error_ticks) * tick
 				var rb: WorldSnapshot = host_buf.get_state_at(base_t)
-				var rb_prev: WorldSnapshot = host_buf.get_state_at(
-						LagCompRewind.prev_tick(base_t))
-				if rb.puck_state == null or rb_prev.puck_state == null:
-					res.client_hits -= 1
+				if rb.puck_state == null:
 					continue
-				var rv: Vector3 = (rb.puck_state.position - rb_prev.puck_state.position) / tick
+				var rv: Vector3 = rb.puck_state.velocity
 				var rspan: float = puck_t - base_t
 				at = rb.puck_state.position + rv * rspan
 				at_prev = rb.puck_state.position + rv * (rspan - tick)
@@ -342,10 +395,17 @@ func run(cfg: Config) -> Result:
 				var hp_prev: WorldSnapshot = host_buf.get_state_at(
 						LagCompRewind.prev_tick(puck_t))
 				if hp.puck_state == null or hp_prev.puck_state == null:
-					res.client_hits -= 1
 					continue
 				at = hp.puck_state.position
 				at_prev = hp_prev.puck_state.position
+
+			# Past every bail-out, so this claim is definitely scored.
+			res.client_hits += 1
+			var truth_i: int = clampi(int(round(p.target_t / tick)), 0, truth.size() - 1)
+			var err: float = p.rendered.distance_to(truth[truth_i])
+			res.max_puck_error_m = maxf(res.max_puck_error_m, err)
+			err_sum += err
+			res.samples += 1
 
 			if PuckInteractionRules.check_pickup(at_prev, at,
 					hbs_prev.blade_contact_world, hbs.blade_contact_world, cfg.pickup_radius):

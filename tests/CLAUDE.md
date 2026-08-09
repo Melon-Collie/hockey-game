@@ -138,6 +138,35 @@ near-constant: with the default 12 m/s puck and 25 ms lead, puck-at-host-present
 is stale by within float noise of the 0.30 m pickup radius, so its phantom rate
 sits *at* the boundary. That coincidence is the finding; assert on the staleness.
 
+**It reproduces the playtest.** At the conditions that session actually ran at —
+lead servo pinned at the 50 ms-extra ceiling, 30–60 ms RTT, contested-puck
+deflection rate — it produces 33–41% against the observed ~45%, and the same
+conditions at the designed 25 ms lead give 6–15%. That is the validation that
+makes the rest of its numbers worth quoting, and it makes the clock fix's effect
+a falsifiable prediction rather than a hope.
+
+**Quoting numbers from it.** One run turns on ~60 random deflection directions
+and the miss rate moves ±20–25% relative across seeds. Average a dozen seeds
+before quoting, and don't read a crossover between two arrangements to better
+than ~±30 ms of RTT.
+
+**Two traps it has already fallen into**, both of which flattered the result and
+neither of which announced itself:
+
+- *Deflections on a fixed period.* Every even period shares a factor with the
+  2-tick snapshot cadence, so every deflection landed on a broadcast tick and the
+  broadcast interval cost nothing — hiding ~15% of the prediction error. Timing
+  is geometric now, and `test_the_broadcast_interval_costs_prediction_accuracy`
+  fails if periodicity ever comes back.
+- *The unplanned-blade fallback sitting on the puck.* A tick the client never
+  planned a pose for defaulted the blade to the puck's own position, i.e. a
+  guaranteed confirm precisely where the harness knew least.
+
+`miss_rate` is an **error-exceedance curve**, not a player's felt miss rate: the
+client aims at what it renders, so its own view connects on every eligible tick.
+Also absent — jitter, packet loss, and any second claimant, so nothing here says
+what a favor-the-actor grant does to the *other* player in a scramble.
+
 When adding netcode timing, rewind, or claim-geometry behaviour, add the
 assertion here first.
 

@@ -449,7 +449,7 @@ var _connect_timer: float = -1.0
 var input_delta: float = 1.0 / Constants.INPUT_RATE
 var state_delta: float = 1.0 / Constants.STATE_RATE
 # Number of physics ticks between broadcasts. PHYSICS_TICK / STATE_RATE
-# (120/120 = 1 — every tick). Recomputed by `set_broadcast_rate`, a runtime
+# (120/60 = 2 — every other tick). Recomputed by `set_broadcast_rate`, a runtime
 # knob with no callers today (the per-phase dead-puck downshift was removed:
 # stoppage phases are seconds long so it saved nothing meaningful, starved
 # client interpolation buffers right before the faceoff drop, and polluted
