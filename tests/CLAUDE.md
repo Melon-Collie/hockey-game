@@ -108,20 +108,35 @@ The puck SOLVER is deliberately not modelled: client and host run the identical
 shared step from the identical snapshot, so it contributes zero divergence by
 construction. What decides a miss is prediction SPAN against events the client
 could not know about, so the puck moves at constant velocity and the host injects
-unmodelled deflections. The threshold is geometric and worth remembering:
+unmodelled deflections — which REDIRECT the puck at constant speed rather than
+adding energy, or every distance in the result grows with run length. The
+threshold is geometric and worth remembering:
 
     a miss needs   velocity error > pickup_radius / (one_way + lead)
 
 about 5.5 m/s at 30 ms RTT — which is why gentle perturbations produce a 0% miss
 rate rather than a small one.
 
-`RenderMode` selects the puck's render target: host-present (pre-v59) or
-host-present + input lead (shipping). That comparison is this harness's teeth,
-and it measured the regression a single playtest could not separate.
+Two flags, and the pairing is the point:
 
-**What it does NOT measure:** the visual coherence that puck-at-`H + L` was
-adopted for. It scores claim adjudication only, so read it as one side of that
-trade, not the whole verdict.
+- `RenderMode` — where the CLIENT draws the puck: host-present (pre-v59) or
+  host-present + input lead (shipping). This comparison is the harness's teeth,
+  and it measured the regression a single playtest could not separate.
+- `AdjudicationMode` — how the HOST answers "where was the puck": look up truth
+  (shipping) or reproduce the client's own dead reckon (the treatment remote
+  skaters already get). The second cannot refuse an honest claim.
+
+**A refusal is only half the score.** Every way of not refusing grants something
+the world moved past, so ranking on miss rate alone puts the most permissive
+option first. `mean_grant_staleness_m` is the other half — how far the puck the
+host ruled on sat from the true puck at the instant the blade was there — plus
+`render_skew_m`, the on-screen gap between the puck's timeline and the player's
+own body's, which is a property of the picture rather than of any claim.
+
+Read `phantom_grants` as a distribution and not a count when staleness is
+near-constant: with the default 12 m/s puck and 25 ms lead, puck-at-host-present
+is stale by within float noise of the 0.30 m pickup radius, so its phantom rate
+sits *at* the boundary. That coincidence is the finding; assert on the staleness.
 
 When adding netcode timing, rewind, or claim-geometry behaviour, add the
 assertion here first.

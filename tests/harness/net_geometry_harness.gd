@@ -39,6 +39,13 @@ extends RefCounted
 # (pre-v59) and host-present + input lead (shipping), and the suite asserts the
 # longer span measurably raises the miss rate — the regression flagged when the
 # clock unification landed, which could not be proven from a single playtest.
+#
+# A REFUSAL IS ONLY HALF THE SCORE. Every way of not refusing an earned claim
+# grants something the world had already moved past, so a miss rate on its own
+# ranks the most permissive option first. The grant metrics below are the other
+# half: how far the puck the host adjudicated against sat from the TRUE puck at
+# the instant the blade was physically there. Refusals are felt by the claimant,
+# grants by everyone else, and an option is only picked by reading both.
 
 const _PEER: int = 3
 
@@ -49,21 +56,47 @@ enum RenderMode {
 }
 
 
+enum AdjudicationMode {
+	# Shipping: the host LOOKS UP the puck at the view time and compares.
+	# Authoritative by construction, so it refuses whenever the client's
+	# prediction was wrong — which the client had no way to avoid.
+	LOOKUP_TRUTH,
+	# The host REPRODUCES the client's puck view: same base snapshot, same dead
+	# reckon, same target instant — the treatment remote skaters already get, so
+	# the two entity classes stop being adjudicated by different rules. Cannot
+	# refuse an honest claim; grants whatever the client's prediction said.
+	REPRODUCE_CLIENT_VIEW,
+}
+
+
 class Config:
 	var rtt_ms: float = 30.0
 	var input_lead_ms: float = 25.0
 	var duration_s: float = 6.0
 	var render_mode: RenderMode = RenderMode.AT_INPUT_STAMP
+	var adjudication: AdjudicationMode = AdjudicationMode.LOOKUP_TRUTH
+	# Ticks of error in the host's idea of WHICH snapshot the client predicted
+	# from. Zero models a claim that carries its own base stamp; nonzero models
+	# deriving it from the RTT estimate, which is the thing that decides whether
+	# REPRODUCE_CLIENT_VIEW reproduces anything at all.
+	var base_stamp_error_ticks: int = 0
 	# How often the host perturbs the puck in a way the client cannot predict —
 	# a deflection off a stick or body. 0 disables.
 	var deflect_every_ticks: int = 0
-	# Magnitude of that velocity change. What decides whether it costs a claim is
-	# geometric and worth stating: the rendered puck is wrong by roughly
-	# (velocity error x span), where span = one_way + lead, so a miss needs
+	# Impulse magnitude of that velocity change, applied and then renormalised
+	# back to puck_speed — a deflection REDIRECTS the puck, it does not pump
+	# energy into it. Letting speed random-walk instead makes every distance in
+	# the result grow with run length and reads as a much worse netcode than the
+	# one being measured.
+	#
+	# What decides whether a deflection costs a claim is geometric and worth
+	# stating: the rendered puck is wrong by roughly (velocity error x span), so
+	# a miss needs
 	#     velocity error > pickup_radius / span
-	# — about 5.5 m/s at 30 ms RTT with a 0.30 m radius. A real deflection off a
-	# stick or skate clears that easily; a graze does not, which is why gentle
-	# perturbations produce a 0% miss rate rather than a small one.
+	# — about 5.5 m/s at 30 ms RTT with a 0.30 m radius and the full one_way +
+	# lead span. A real deflection off a stick or skate clears that easily; a
+	# graze does not, which is why gentle perturbations produce a 0% miss rate
+	# rather than a small one.
 	var deflect_speed: float = 10.0
 	var puck_speed: float = 12.0
 	# How far off the puck's CENTRE the player actually places the blade — their
@@ -81,15 +114,39 @@ class Result:
 	var max_puck_error_m: float = 0.0
 	var mean_puck_error_m: float = 0.0
 	var samples: int = 0
+	# The cost side. For each CONFIRMED claim, how far the puck the host
+	# adjudicated against sat from the true puck at the instant the blade was
+	# physically there. Zero means the grant was earned against the real world;
+	# beyond a pickup radius it is a puck that had already gone somewhere else.
+	#
+	# Read phantom_grants as a distribution, not a count, when the staleness is
+	# near-constant: at the default 12 m/s puck and 25 ms lead the fixed
+	# puck-at-host-present staleness lands within float noise of the 0.30 m
+	# radius, so its phantom rate is a coin flip AT the boundary rather than a
+	# measurement. That coincidence is itself the finding — assert on the
+	# staleness there, not on the count.
+	var phantom_grants: int = 0
+	var mean_grant_staleness_m: float = 0.0
+	var max_grant_staleness_m: float = 0.0
+	# What the player looks at: the on-screen gap between the puck's timeline and
+	# their own body's, averaged over every rendered frame. Independent of claims
+	# — it is there whether or not anyone reaches for the puck.
+	var render_skew_m: float = 0.0
 
 	func miss_rate() -> float:
 		return 0.0 if client_hits == 0 else float(false_negatives) / float(client_hits)
 
+	func phantom_rate() -> float:
+		return 0.0 if host_confirms == 0 else float(phantom_grants) / float(host_confirms)
+
 	func summary() -> String:
 		return ("client_hits=%d confirms=%d false_neg=%d miss_rate=%.1f%% "
-				+ "puck_err_mean=%.3fm max=%.3fm") % [
+				+ "puck_err_mean=%.3fm max=%.3fm phantom=%d (%.1f%%) "
+				+ "stale_mean=%.3fm max=%.3fm skew=%.3fm") % [
 				client_hits, host_confirms, false_negatives, miss_rate() * 100.0,
-				mean_puck_error_m, max_puck_error_m]
+				mean_puck_error_m, max_puck_error_m, phantom_grants,
+				phantom_rate() * 100.0, mean_grant_staleness_m, max_grant_staleness_m,
+				render_skew_m]
 
 
 static func _push(buf: StateBufferManager, blade: Vector3, puck: Vector3, ts: float) -> void:
@@ -137,6 +194,7 @@ static func _push(buf: StateBufferManager, blade: Vector3, puck: Vector3, ts: fl
 class _Pending:
 	var stamp: float = 0.0          # claim stamp (the client's host-time at send)
 	var target_t: float = 0.0       # the instant the client rendered
+	var base_t: float = 0.0         # newest snapshot the client predicted FROM
 	var rendered: Vector3 = Vector3.ZERO
 	var rendered_prev: Vector3 = Vector3.ZERO
 
@@ -179,8 +237,9 @@ func run(cfg: Config) -> Result:
 
 		# ── Host: unmodelled perturbation, advance, capture ──────────────────
 		if cfg.deflect_every_ticks > 0 and i > 0 and i % cfg.deflect_every_ticks == 0:
-			puck_vel += Vector3(rng.randf_range(-1.0, 1.0), 0.0,
-					rng.randf_range(-1.0, 1.0)).normalized() * cfg.deflect_speed
+			puck_vel = (puck_vel + Vector3(rng.randf_range(-1.0, 1.0), 0.0,
+					rng.randf_range(-1.0, 1.0)).normalized() * cfg.deflect_speed) \
+					.normalized() * cfg.puck_speed
 		puck_pos += puck_vel * tick
 		truth.append(puck_pos)
 		_push(host_buf, blade_plan.get(i, puck_pos), puck_pos, now)
@@ -223,6 +282,7 @@ func run(cfg: Config) -> Result:
 			var p := _Pending.new()
 			p.stamp = now
 			p.target_t = target_t
+			p.base_t = newest_client
 			p.rendered = rendered
 			p.rendered_prev = rendered_prev
 			pending.append(p)
@@ -247,24 +307,83 @@ func run(cfg: Config) -> Result:
 			err_sum += err
 			res.samples += 1
 
-			var hp: WorldSnapshot = host_buf.get_state_at(puck_t)
-			var hp_prev: WorldSnapshot = host_buf.get_state_at(LagCompRewind.prev_tick(puck_t))
 			var hb: WorldSnapshot = host_buf.get_state_at(blade_t)
 			var hb_prev: WorldSnapshot = host_buf.get_state_at(LagCompRewind.prev_tick(blade_t))
 			var hbs: SkaterNetworkState = hb.get_skater_state(_PEER)
 			var hbs_prev: SkaterNetworkState = hb_prev.get_skater_state(_PEER)
-			if hp.puck_state == null or hp_prev.puck_state == null \
-					or hbs == null or hbs_prev == null:
+			if hbs == null or hbs_prev == null:
 				res.client_hits -= 1
 				continue
 
-			if PuckInteractionRules.check_pickup(
-					hp_prev.puck_state.position, hp.puck_state.position,
+			# The two ways of answering "where was the puck". Both fill the same
+			# pair, so the comparison below is identical and only the SOURCE of
+			# the positions differs — which is the whole question being scored.
+			var at: Vector3 = Vector3.ZERO
+			var at_prev: Vector3 = Vector3.ZERO
+			if cfg.adjudication == AdjudicationMode.REPRODUCE_CLIENT_VIEW:
+				# Re-run the client's dead reckon from the snapshot it predicted
+				# from. Exactly what forward_predict_skater already does for a
+				# remote body; the point of the mode is that the puck stops being
+				# the one entity class adjudicated by a different rule.
+				var base_t: float = p.base_t \
+						+ float(cfg.base_stamp_error_ticks) * tick
+				var rb: WorldSnapshot = host_buf.get_state_at(base_t)
+				var rb_prev: WorldSnapshot = host_buf.get_state_at(
+						LagCompRewind.prev_tick(base_t))
+				if rb.puck_state == null or rb_prev.puck_state == null:
+					res.client_hits -= 1
+					continue
+				var rv: Vector3 = (rb.puck_state.position - rb_prev.puck_state.position) / tick
+				var rspan: float = puck_t - base_t
+				at = rb.puck_state.position + rv * rspan
+				at_prev = rb.puck_state.position + rv * (rspan - tick)
+			else:
+				var hp: WorldSnapshot = host_buf.get_state_at(puck_t)
+				var hp_prev: WorldSnapshot = host_buf.get_state_at(
+						LagCompRewind.prev_tick(puck_t))
+				if hp.puck_state == null or hp_prev.puck_state == null:
+					res.client_hits -= 1
+					continue
+				at = hp.puck_state.position
+				at_prev = hp_prev.puck_state.position
+
+			if PuckInteractionRules.check_pickup(at_prev, at,
 					hbs_prev.blade_contact_world, hbs.blade_contact_world, cfg.pickup_radius):
 				res.host_confirms += 1
+				# What the grant cost: the gap between the puck the host ruled on
+				# and the real puck at the instant the blade was there. Zero when
+				# the host both looks up truth AND looks it up at the blade's own
+				# instant; everything else pays something here.
+				var blade_i: int = clampi(int(round(blade_t / tick)), 0, truth.size() - 1)
+				var stale: float = at.distance_to(truth[blade_i])
+				res.mean_grant_staleness_m += stale
+				res.max_grant_staleness_m = maxf(res.max_grant_staleness_m, stale)
+				if stale > cfg.pickup_radius:
+					res.phantom_grants += 1
 			else:
 				res.false_negatives += 1
 		pending = keep
 
 	res.mean_puck_error_m = err_sum / float(maxi(res.samples, 1))
+	res.mean_grant_staleness_m /= float(maxi(res.host_confirms, 1))
+	res.render_skew_m = _render_skew(truth, ahead_ticks, blade_ticks)
 	return res
+
+
+# On-screen distance between the puck's timeline and the player's own body's.
+# The player reaches for a puck drawn at `ahead_ticks`; the body that does the
+# reaching occupies `blade_ticks`. When those differ, the puck they are aiming at
+# is not the puck their body will meet, and the gap is a constant tax on aim
+# rather than an occasional error. Measured on every frame, not just on claims —
+# it is a property of the picture, not of the adjudication.
+static func _render_skew(truth: Array[Vector3], ahead_ticks: int, blade_ticks: int) -> float:
+	if ahead_ticks == blade_ticks:
+		return 0.0
+	var lo: int = maxi(ahead_ticks, blade_ticks)
+	var n: int = truth.size() - lo
+	if n <= 0:
+		return 0.0
+	var sum: float = 0.0
+	for i: int in n:
+		sum += truth[i + ahead_ticks].distance_to(truth[i + blade_ticks])
+	return sum / float(n)
