@@ -186,6 +186,17 @@ func _ready() -> void:
 		# unbind the int — without this, Godot errors silently each emit
 		# ("Expected 0 arguments, got 1") and the ice never resets.
 		GameManager.period_synced.connect(_scratch_map.clear.unbind(1))
+		# Resurfacer crew for scoreless intermissions. Both teardown signals are
+		# needed: a reel break ends with intermission_ended, but a scoreless one
+		# never emits it — the next faceoff prep is its exit (same dismissal the
+		# HUD band uses), and it also covers a skip vote cutting the break short.
+		var resurfacer := IceResurfacer.new()
+		resurfacer.name = "IceResurfacer"
+		resurfacer.setup(rink_width, rink_length, _scratch_map)
+		add_child(resurfacer)
+		GameManager.intermission_idle_started.connect(resurfacer.start_lap)
+		GameManager.intermission_ended.connect(resurfacer.abort)
+		GameManager.faceoff_prep_announced.connect(resurfacer.abort)
 
 # Release the SubViewport render targets and their ViewportTexture shader
 # bindings explicitly, before Godot finalizes the RenderingServer on quit. The

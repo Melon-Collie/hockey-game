@@ -40,10 +40,13 @@ const NET_TEXTURE_TILE_SIZE: float = 0.164  # 4 diamonds × 41mm each
 # drive a single ripple uniform on goal. Rebuilt per _rebuild().
 const NET_SHADER_PATH: String = "res://Shaders/goal_net.gdshader"
 
-# Goal lamp fixture placement: above the glass on the end boards behind this
-# net (glass tops out around 2.9 m — wall 1.07 + glass 1.83).
-const LAMP_HEIGHT: float = 3.2
-const LAMP_BEHIND_BOARDS: float = 0.35
+# Goal lamp fixture placement: seated on the top edge of the end glass behind
+# this net (glass tops out around 2.9 m — wall 1.07 + glass 1.83). Height is
+# the base cylinder's center, so its underside rests flush on the glass top;
+# zero outward offset centers the fixture on the board perimeter line, which
+# is also the glass centerline.
+const LAMP_HEIGHT: float = 2.95
+const LAMP_BEHIND_BOARDS: float = 0.0
 
 var defending_team_id: int = -1  # set by GameManager when goals are assigned to teams
 var _net_material: ShaderMaterial = null  # shared across all net panels; GoalVFX tweens its ripple uniform

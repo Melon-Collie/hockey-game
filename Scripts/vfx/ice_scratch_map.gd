@@ -39,10 +39,17 @@ const GLIDE_ALPHA_FRAC: float = 0.35
 
 var _viewport: SubViewport
 var _painter: Node2D
+# Eraser canvas item, drawn after the painter with a multiply blend: a black
+# stroke drives the accumulated framebuffer's RGB to zero, and the ice shader
+# reads only scratch_tex.r — so the resurfacer's squeegee genuinely cleans.
+var _eraser: Node2D
 # Pending line segments flattened as [from0, to0, from1, to1, ...], with one
 # alpha per segment alongside.
 var _pending_segments: PackedVector2Array = PackedVector2Array()
 var _pending_alpha: PackedFloat32Array = PackedFloat32Array()
+# Pending wipe strokes, same flattened layout, with one width (px) per segment.
+var _pending_wipes: PackedVector2Array = PackedVector2Array()
+var _pending_wipe_widths: PackedFloat32Array = PackedFloat32Array()
 # Per-skater previous state: value is [center_world: Vector3, left_blade_px:
 # Vector2, right_blade_px: Vector2], used to draw a continuous stroke between
 # frames. Keyed by Skater.get_instance_id() rather than the Skater node — a
@@ -80,6 +87,15 @@ func _ready() -> void:
 	_painter.draw.connect(_on_painter_draw)
 	_viewport.add_child(_painter)
 
+	# Sibling after the painter so a same-frame wipe wins over a stroke drawn
+	# under the machine; the stroke simply repaints next frame.
+	_eraser = Node2D.new()
+	var eraser_mat := CanvasItemMaterial.new()
+	eraser_mat.blend_mode = CanvasItemMaterial.BLEND_MODE_MUL
+	_eraser.material = eraser_mat
+	_eraser.draw.connect(_on_eraser_draw)
+	_viewport.add_child(_eraser)
+
 func get_texture() -> ViewportTexture:
 	return _viewport.get_texture()
 
@@ -87,7 +103,27 @@ func clear() -> void:
 	_viewport.render_target_clear_mode = SubViewport.CLEAR_MODE_ONCE
 	_pending_segments.clear()
 	_pending_alpha.clear()
+	_pending_wipes.clear()
+	_pending_wipe_widths.clear()
 	_prev_state.clear()
+
+
+# Queue an eraser stroke (world-space endpoints, width in meters) — the
+# resurfacer's squeegee. Dropped while the map is disabled: the viewport
+# isn't repainting, so pendings would only pile up.
+func queue_wipe_segment(from_world: Vector3, to_world: Vector3, width_m: float) -> void:
+	if _viewport == null \
+			or _viewport.render_target_update_mode == SubViewport.UPDATE_DISABLED:
+		return
+	var px_x: float = float(_viewport.size.x) / rink_width
+	var px_z: float = float(_viewport.size.y) / rink_length
+	var half_w: float = rink_width * 0.5
+	var half_l: float = rink_length * 0.5
+	_pending_wipes.push_back(Vector2(
+			(from_world.x + half_w) * px_x, (from_world.z + half_l) * px_z))
+	_pending_wipes.push_back(Vector2(
+			(to_world.x + half_w) * px_x, (to_world.z + half_l) * px_z))
+	_pending_wipe_widths.push_back(width_m * px_x)
 
 # Toggled from PlayerPrefs.apply_video(). When disabled, the viewport stops
 # repainting and existing scratches are wiped so the ice shader samples an
@@ -112,8 +148,11 @@ func _process(_delta: float) -> void:
 	if NetworkManager.is_replay_mode():
 		_pending_segments.clear()
 		_pending_alpha.clear()
+		_pending_wipes.clear()
+		_pending_wipe_widths.clear()
 		_prev_state.clear()
 		_painter.queue_redraw()
+		_eraser.queue_redraw()
 		return
 
 	var skaters: Array = _live_skaters()
@@ -222,8 +261,11 @@ func _process(_delta: float) -> void:
 	# the previous frame's strokes onto the accumulated framebuffer and saturate
 	# pixels almost immediately. Forcing a redraw replaces the cached list (with
 	# an empty one when there are no pending segments), so old strokes don't
-	# re-stamp themselves.
+	# re-stamp themselves. The eraser needs the same treatment or a stale wipe
+	# would re-erase its lane every frame and new scratches there could never
+	# accumulate.
 	_painter.queue_redraw()
+	_eraser.queue_redraw()
 
 func _on_painter_draw() -> void:
 	var width_px: float = blade_width_m * (float(_viewport.size.x) / rink_width)
@@ -236,6 +278,24 @@ func _on_painter_draw() -> void:
 		seg += 1
 	_pending_segments.clear()
 	_pending_alpha.clear()
+
+
+# Multiply-blend black: RGB × 0 = clean ice. Hard-edged (no AA) — a fresh
+# resurfacer lane has a crisp boundary anyway — with round end caps so
+# successive segments join seamlessly through the U-turn.
+func _on_eraser_draw() -> void:
+	const BLACK := Color(0.0, 0.0, 0.0, 1.0)
+	var i: int = 0
+	var seg: int = 0
+	while i < _pending_wipes.size():
+		var w: float = _pending_wipe_widths[seg]
+		_eraser.draw_line(_pending_wipes[i], _pending_wipes[i + 1], BLACK, w, false)
+		_eraser.draw_circle(_pending_wipes[i], w * 0.5, BLACK)
+		_eraser.draw_circle(_pending_wipes[i + 1], w * 0.5, BLACK)
+		i += 2
+		seg += 1
+	_pending_wipes.clear()
+	_pending_wipe_widths.clear()
 
 
 # The live Skater list, rebuilt only when the roster actually changes — the
