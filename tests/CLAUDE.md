@@ -38,14 +38,13 @@ the new numbers are the intended ones, and say so in the commit.
 
 ## Netcode harnesses
 
-Two deterministic simulations under `tests/harness/`, covering the two halves of
-the netcode plumbing. Neither is a physics harness — nothing in either one
-skates. They exist because every netcode defect found so far has lived in the
+Three deterministic simulations under `tests/harness/`. None is a physics
+harness — nothing in any of them skates. They exist because every netcode defect found so far has lived in the
 plumbing (clocks, queues, buffers, ordering), and every one was found by reading
 code or post-hoc telemetry rather than by a failing test.
 
-**Both share one load-bearing property: each can reproduce a KNOWN bug on
-demand.** Each has a mode flag selecting the legacy behaviour, and a test
+**All three share one load-bearing property: each can reproduce a KNOWN effect
+on demand.** Each has a mode flag selecting the legacy behaviour, and a test
 asserting the legacy mode still fails. If one of those tests ever goes green, the
 harness has stopped modelling the effect and every other assertion in the file is
 worthless — **fix the harness, don't delete the test.**
@@ -91,7 +90,41 @@ before the ring is deep enough to hold its own rewind can only say "the session
 just started", so a test can tell "excluded a warmup claim" from "asserted
 nothing".
 
-When adding netcode timing or rewind behaviour, add the assertion here first.
+### Claim geometry
+
+`net_geometry_harness.gd` answers what the other two deliberately leave open:
+they assert the lookup was in RANGE, this asserts the ANSWER was right. When the
+client sees its blade reach the puck, does the host's rewind agree? A false
+negative is a claim the player earned and the host refused — the quantity behind
+the host row's `pickup_claim_misses`.
+
+The player aims at what they SEE (blade placed on the rendered puck), so the
+client's own view always connects and the host's verdict is the entire
+measurement. The blade is exact on both sides — locally predicted, then read
+from the buffer rather than re-predicted — so **every disagreement is puck
+prediction error and nothing else.**
+
+The puck SOLVER is deliberately not modelled: client and host run the identical
+shared step from the identical snapshot, so it contributes zero divergence by
+construction. What decides a miss is prediction SPAN against events the client
+could not know about, so the puck moves at constant velocity and the host injects
+unmodelled deflections. The threshold is geometric and worth remembering:
+
+    a miss needs   velocity error > pickup_radius / (one_way + lead)
+
+about 5.5 m/s at 30 ms RTT — which is why gentle perturbations produce a 0% miss
+rate rather than a small one.
+
+`RenderMode` selects the puck's render target: host-present (pre-v59) or
+host-present + input lead (shipping). That comparison is this harness's teeth,
+and it measured the regression a single playtest could not separate.
+
+**What it does NOT measure:** the visual coherence that puck-at-`H + L` was
+adopted for. It scores claim adjudication only, so read it as one side of that
+trade, not the whole verdict.
+
+When adding netcode timing, rewind, or claim-geometry behaviour, add the
+assertion here first.
 
 ## Benchmarks
 
