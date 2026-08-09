@@ -362,3 +362,61 @@ func test_missing_positions_default_to_forward_group() -> void:
 			_make_snapshot(skaters, -1, -12.0), TEAM_ID, OUR_NET_Z,
 			AIPossessionState.State.FORECHECK, _resolver(skaters), {}, 1.0, {}, {})
 	assert_eq(a.size(), 5, "all five slotted even with no position data")
+
+
+# ── The spare body while our own pass is in flight ───────────────────────────
+
+# Our-possession lineup deep in THEIR zone (we defend +Z, so attack -Z).
+func _ozone_lineup() -> Array:
+	return [
+		[1, TEAM_ID, Vector3(0.0, 0.0, -18.0)],    # C
+		[2, TEAM_ID, Vector3(-7.0, 0.0, -20.0)],   # LW
+		[3, TEAM_ID, Vector3(7.0, 0.0, -20.0)],    # RW
+		[4, TEAM_ID, Vector3(-5.0, 0.0, -8.0)],    # LD
+		[5, TEAM_ID, Vector3(5.0, 0.0, -8.0)],     # RD
+		[90, 1 - TEAM_ID, Vector3(0.0, 0.0, -24.0)],
+	]
+
+
+func test_our_pass_in_flight_leaves_a_spare_body() -> void:
+	# OZONE specs four slots; CARRIER is assigned separately and only when one
+	# of OURS actually holds the puck. So the moment we pass, a body is spare —
+	# measured at 46% of our offensive-possession ticks, in 0.40 s episodes.
+	var lineup: Array = _ozone_lineup()
+	var carried: Dictionary = _assign(lineup, AIPossessionState.State.OZONE, 1)
+	assert_eq(_slot_of(carried, AIRoleSlots.Slot.CARRIER), 1,
+			"while we carry, the puck holder is CARRIER")
+	assert_eq(_slot_of(carried, AIRoleSlots.Slot.SUPPORT), -1,
+			"…and nobody is spare")
+
+	# Same bodies, puck in flight between them.
+	var flight: Dictionary = _assign(lineup, AIPossessionState.State.OZONE, -1,
+			-19.0, 3.0)
+	assert_eq(_slot_of(flight, AIRoleSlots.Slot.CARRIER), -1,
+			"no carrier to slot while it is in the air")
+	assert_ne(_slot_of(flight, AIRoleSlots.Slot.SUPPORT), -1,
+			"the spare body gets SUPPORT; got %s" % str(flight))
+	assert_eq(flight.size(), lineup.size() - 1, "everybody still has a job")
+
+
+func test_the_spare_body_is_never_given_a_defensive_role_while_we_attack() -> void:
+	# MARK is the wrong job here twice over: the threat partition only runs in
+	# DZONE / TRANS_DEFENSE, so it could never be assigned a man, and its
+	# unassigned fallback is a defender's recovery read pointed at our own end —
+	# during our own offensive possession.
+	for state: int in [AIPossessionState.State.OZONE,
+			AIPossessionState.State.TRANS_OFFENSE,
+			AIPossessionState.State.BREAKOUT]:
+		var got: Dictionary = _assign(_ozone_lineup(), state, -1, -19.0, 3.0)
+		assert_eq(_slot_of(got, AIRoleSlots.Slot.MARK), -1,
+				"state %d handed the spare body MARK: %s" % [state, str(got)])
+
+
+func test_a_defensive_remainder_still_marks() -> void:
+	# The other side of the same branch: an EXTRA body in a defensive state is a
+	# genuine spare marker, and there the partition can actually give him a man.
+	var lineup: Array = _ozone_lineup()
+	lineup.append([6, TEAM_ID, Vector3(2.0, 0.0, 20.0)])   # sixth skater
+	var got: Dictionary = _assign(lineup, AIPossessionState.State.DZONE, 90)
+	assert_ne(_slot_of(got, AIRoleSlots.Slot.MARK), -1,
+			"the extra defensive body marks; got %s" % str(got))

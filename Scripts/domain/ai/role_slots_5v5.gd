@@ -242,12 +242,43 @@ static func assign(
 		result[pid] = spec.slot
 		assigned[pid] = true
 
-	# Remainder — peers beyond the spec'd slots. TRANS_DEFENSE's MARK crew by
-	# design; a defensive-shape fallback everywhere else (extra bodies play
-	# the man, never stand slotless).
+	# Remainder — peers beyond the spec'd slots. Extra bodies play a real job,
+	# never stand slotless.
+	#
+	# WHICH job depends on the phase, because the two situations that produce a
+	# remainder are opposites. The defensive states all spec five slots, so a
+	# remainder there means a genuinely extra body and MARK is right: it is the
+	# man-marking role, and the threat partition runs in those states so it can
+	# actually be given somebody.
+	#
+	# The OUR-POSSESSION states are the common case and MARK is wrong for them.
+	# They spec only four, because CARRIER is assigned separately and only when
+	# one of ours is really holding the puck — so every pass we make leaves a
+	# body over for the duration of the flight. Measured on the real stack, that
+	# is 46% of our offensive-possession ticks, in episodes averaging 0.40 s.
+	# Handing those a defensive role is doubly wrong: the threat partition does
+	# not run outside DZONE / TRANS_DEFENSE, so MARK can never be assigned a man
+	# there and always falls to its recovery argmax — a defender's read, pointed
+	# at our own end, during our own offensive possession.
+	#
+	# SUPPORT is the job that fits: an off-puck attacker who is a pass option and
+	# a recoverable body, and one that already expects this exact moment — it
+	# orients off resolve_offensive_play_ref, which answers with the puck when
+	# nobody is carrying, so a pass in flight is a situation it flows into rather
+	# than a hole it falls through.
+	#
+	# (The drift this costs is small — the stranded body barely moves in 0.4 s,
+	# 5 cm at worst toward our own end. This is a correctness fix, not a visible
+	# one; the honest reason to make it is that a role which can never work
+	# should not be handed out half of our possession time.)
+	var attacking: bool = state == AIPossessionState.State.OZONE \
+			or state == AIPossessionState.State.TRANS_OFFENSE \
+			or state == AIPossessionState.State.BREAKOUT
+	var spare_slot: int = AIRoleSlots.Slot.SUPPORT if attacking \
+			else AIRoleSlots.Slot.MARK
 	for pid: int in teammates:
 		if not assigned.has(pid):
-			result[pid] = AIRoleSlots.Slot.MARK
+			result[pid] = spare_slot
 
 	return result
 
