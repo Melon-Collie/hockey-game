@@ -96,7 +96,8 @@ static func assign(
 		our_net: Vector3,
 		prev: Dictionary,
 		defender_caps: Dictionary = {},
-		man_danger: Dictionary = {}) -> Dictionary[int, int]:
+		man_danger: Dictionary = {},
+		eligible_men: Dictionary = {}) -> Dictionary[int, int]:
 	var result: Dictionary[int, int] = {}
 	if defenders.is_empty() or men.is_empty():
 		return result
@@ -111,9 +112,13 @@ static func assign(
 	var open_men: Array[int] = men
 	var house_man: int = _most_dangerous_house_man(men, man_danger)
 	if house_man != -1:
+		# Eligibility binds the pin as well: pulling a winger off the point to
+		# the net front because he happens to be nearest is the double-commit
+		# the areas exist to prevent, and the box already has an owner.
 		var house_def: int = _pick_house_defender(
 				defenders, defender_pos, defender_vel, defender_caps,
-				man_pos.get(house_man, Vector3.ZERO), house_man, our_net, prev)
+				man_pos.get(house_man, Vector3.ZERO), house_man, our_net, prev,
+				eligible_men)
 		if house_def != -1:
 			result[house_def] = house_man
 			open_defenders = _without(defenders, house_def)
@@ -132,8 +137,20 @@ static func assign(
 		var d_caps: AISkaterCaps = defender_caps.get(d)
 		var d_speed: float = d_caps.max_speed if d_caps != null \
 				else AIActionScoring.SKATER_REF_SPEED_M_S
+		# ZONE ELIGIBILITY. A defender who owns a patch of ice may only be given
+		# men standing in it — his coverage is defined by the area, not by the
+		# whole rink. Omitting the pair from the row is the whole mechanism:
+		# _best_matching skips men the row does not carry, _matching_reward
+		# already rejects a mapping naming one, and _restrict_prev already drops
+		# a stale pair — so hysteresis and the idle branch need no changes.
+		# An absent/empty entry means "no restriction", which is the man-marking
+		# backline's case and leaves it byte-identical.
+		var allowed: Dictionary = eligible_men.get(d, {})
+		var restricted: bool = not allowed.is_empty()
 		var row: Dictionary = {}
 		for m: int in open_men:
+			if restricted and not allowed.has(m):
+				continue
 			var anchor: Vector3 = cover_anchor(man_pos.get(m, Vector3.ZERO), our_net)
 			var t: float = AIActionScoring.time_to_arrive(d_pos, anchor, d_vel, d_speed)
 			var reach: float = 1.0 / (1.0 + maxf(t, 0.0))
@@ -198,14 +215,19 @@ static func _pick_house_defender(
 		house_man_pos: Vector3,
 		house_man: int,
 		our_net: Vector3,
-		prev: Dictionary) -> int:
+		prev: Dictionary,
+		eligible_men: Dictionary = {}) -> int:
 	for d: int in defenders:
+		if not _may_cover(d, house_man, eligible_men):
+			continue
 		if prev.get(d, -1) == house_man:
 			return d
 	var anchor: Vector3 = cover_anchor(house_man_pos, our_net)
 	var best_def: int = -1
 	var best_t: float = INF
 	for d: int in defenders:
+		if not _may_cover(d, house_man, eligible_men):
+			continue
 		var d_caps: AISkaterCaps = defender_caps.get(d)
 		var d_speed: float = d_caps.max_speed if d_caps != null \
 				else AIActionScoring.SKATER_REF_SPEED_M_S
@@ -216,6 +238,13 @@ static func _pick_house_defender(
 			best_t = t
 			best_def = d
 	return best_def
+
+
+# May defender `d` be given man `m`? True when `d` carries no area restriction
+# (the man-marking backline) or when `m` stands inside the area it owns.
+static func _may_cover(d: int, m: int, eligible_men: Dictionary) -> bool:
+	var allowed: Dictionary = eligible_men.get(d, {})
+	return allowed.is_empty() or allowed.has(m)
 
 
 # Typed copy of `arr` with `exclude` removed.
@@ -290,7 +319,9 @@ static func _best_matching(
 	# Option A: this defender covers some unused man.
 	var row: Dictionary = reward[d]
 	for m: int in men:
-		if used.has(m):
+		# `not row.has(m)` is the eligibility skip — see assign()'s ZONE
+		# ELIGIBILITY note. Unrestricted defenders carry every man.
+		if used.has(m) or not row.has(m):
 			continue
 		used[m] = true
 		var sub: Array = _best_matching(idx + 1, defenders, men, used, reward)

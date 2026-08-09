@@ -2,6 +2,12 @@ extends GutTest
 
 # AIRoleZoneDefense — the 5v5 DZONE hybrid-zone behavior (plan §3). Team 0
 # defends +Z; peer 1 is the defender under test, team 1 attacks.
+#
+# WHICH man a zone defender covers is TeamBrain's decision now (one matching
+# across all five areas, so no two defenders can take the same body) — these
+# tests supply it via ctx.assigned_threat_peer, exactly as the MARK tests do,
+# and cover what the ROLE does with it. That the brain picks distinct men and
+# respects area eligibility is pinned in test_team_brain.gd.
 
 const TEAM_ID: int = 0
 const NET_Z: float = 26.65
@@ -84,6 +90,7 @@ func test_soft_lock_covers_the_backdoor_man() -> void:
 			[10, 1, _pt(9.0, 3.0)],
 			[11, 1, man_pos],
 	], 10)
+	ctx.assigned_threat_peer = 11
 	var d: RoleDecision = AIRoleZoneDefense.decide(ctx, AIRoleSlots.Slot.ZONE_D_WEAK)
 	assert_eq(d.locked_man_pid, 11, "the box man is the lock")
 	assert_lt(d.target_position.distance_to(man_pos), 4.0,
@@ -101,6 +108,7 @@ func test_the_soft_lock_rides_the_man_it_covers() -> void:
 			[10, 1, _pt(9.0, 3.0)],
 			[11, 1, _pt(-1.5, 2.5), cut],
 	], 10)
+	ctx.assigned_threat_peer = 11
 	var d: RoleDecision = AIRoleZoneDefense.decide(ctx, AIRoleSlots.Slot.ZONE_D_WEAK)
 	assert_eq(d.locked_man_pid, 11, "still the box man")
 	assert_eq(d.target_velocity, cut, "the lock rides him at his own pace")
@@ -136,18 +144,20 @@ func test_center_insures_the_seam() -> void:
 			[10, 1, _pt(9.0, 3.0)],
 			[11, 1, cutter_pos],
 	], 10)
+	ctx.assigned_threat_peer = 11
 	var d: RoleDecision = AIRoleZoneDefense.decide(ctx, AIRoleSlots.Slot.ZONE_C)
 	assert_eq(d.locked_man_pid, 11)
 
 
 func test_lock_releases_at_the_boundary_and_reverts_to_shape() -> void:
-	# The previously-locked man has left ZONE_C's ice for the wall: the
-	# center releases (no lock in the decision) and breathes on his anchor.
+	# The man has left ZONE_C's ice for the wall, so the brain stops assigning
+	# him (his area eligibility lapsed) and the centre reverts to shape rather
+	# than chasing. Release is the ASSIGNER's job now; the role's contract is
+	# only that no assignment means the anchor.
 	var ctx: RoleContext = _make_ctx(_pt(1.5, 5.5), [
 			[10, 1, _pt(9.0, 3.0)],
 			[11, 1, _pt(10.0, 9.0)],   # gone to the strong wall
 	], 10)
-	ctx.prev_locked_man = 11
 	var d: RoleDecision = AIRoleZoneDefense.decide(ctx, AIRoleSlots.Slot.ZONE_C)
 	assert_eq(d.locked_man_pid, -1, "release at the boundary — don't chase")
 	var anchor: Vector3 = AIZoneCoverage.anchor_of(

@@ -306,3 +306,90 @@ func test_5v5_dzone_fills_the_five_zone_slots() -> void:
 			AIRoleSlots.Slot.ZONE_C, AIRoleSlots.Slot.ZONE_W_STRONG,
 			AIRoleSlots.Slot.ZONE_W_WEAK]:
 		assert_true(seen.has(slot), "5v5 DZONE left slot %d unfilled" % slot)
+
+
+# ── 5v5 zone partition (the matching that replaced five per-role argmaxes) ───
+
+func _make_5v5_zone_snapshot() -> WorldSnapshot:
+	# Opp carrier in the strong corner plus three attackers spread across
+	# distinct areas: the net-front box, the slot, and the weak high ice.
+	var snap := WorldSnapshot.new()
+	for entry: Array in [
+			[100, 0, Vector3(0.0, 0.0, 19.0)],    # us — C, slot
+			[110, 0, Vector3(-7.0, 0.0, 15.0)],   # us — LW, weak high
+			[120, 0, Vector3(7.0, 0.0, 15.0)],    # us — RW, strong high
+			[130, 0, Vector3(3.0, 0.0, 23.0)],    # us — LD
+			[140, 0, Vector3(-1.0, 0.0, 24.5)],   # us — RD, net front
+			[200, 1, Vector3(9.0, 0.0, 23.5)],    # opp carrier, strong corner
+			[210, 1, Vector3(-1.5, 0.0, 24.0)],   # opp — net-front box
+			[220, 1, Vector3(0.5, 0.0, 20.5)],    # opp — the slot
+			[230, 1, Vector3(-6.0, 0.0, 16.0)]]:  # opp — weak high
+		var s := SkaterNetworkState.new()
+		s.position = entry[2]
+		snap.skater_states[entry[0]] = s
+	var puck := PuckNetworkState.new()
+	puck.carrier_peer_id = 200
+	puck.position = Vector3(9.0, 0.0, 23.5)
+	snap.puck_state = puck
+	return snap
+
+
+func _zone_brain() -> TeamBrain:
+	var team_map: Dictionary = {100: 0, 110: 0, 120: 0, 130: 0, 140: 0,
+			200: 1, 210: 1, 220: 1, 230: 1}
+	var positions: Dictionary = {100: 0, 110: 1, 120: 2, 130: 3, 140: 4}
+	return TeamBrain.new(TEAM_ID, team_map, {}, 5, positions)
+
+
+func test_zone_defenders_never_cover_the_same_man() -> void:
+	# The defect this replaced: five roles each ran an independent argmax over
+	# deliberately OVERLAPPING areas, so 61% of D-zone ticks had a man covered
+	# twice and 52% of all locks were stacked on somebody else's body. A single
+	# matching makes distinct men structural.
+	var brain: TeamBrain = _zone_brain()
+	brain.force_retick()
+	brain.tick(0.001, _make_5v5_zone_snapshot())
+	assert_eq(brain.state, AIPossessionState.State.DZONE, "fixture sanity: DZONE")
+
+	var men: Array = brain.threat_assignments.values()
+	assert_gt(men.size(), 1, "fixture sanity: more than one defender got a man")
+	var seen: Dictionary = {}
+	for m: int in men:
+		assert_false(seen.has(m), "man %d was assigned twice: %s"
+				% [m, str(brain.threat_assignments)])
+		seen[m] = true
+
+
+func test_a_zone_defender_is_only_given_a_man_in_his_own_area() -> void:
+	# Areas enter the matcher as ELIGIBILITY. Whatever the reward says, a
+	# defender may not be handed a body standing outside the ice he owns —
+	# chasing out of the structure is the thing the zone exists to prevent.
+	var brain: TeamBrain = _zone_brain()
+	brain.force_retick()
+	var snap: WorldSnapshot = _make_5v5_zone_snapshot()
+	brain.tick(0.001, snap)
+
+	for def_pid: int in brain.threat_assignments:
+		var slot: int = brain.get_slot(def_pid)
+		if not AIRoleSlots5.is_zone_slot(slot):
+			continue
+		var man_pos: Vector3 = snap.skater_states[
+				brain.threat_assignments[def_pid]].position
+		assert_true(AIZoneCoverage.in_area(slot, brain.strong_x(),
+				GameRules.GOAL_LINE_Z, man_pos, AIZoneCoverage.AREA_RELEASE_MARGIN_M),
+				"peer %d (slot %d) was given a man outside its area at %s"
+				% [def_pid, slot, str(man_pos)])
+
+
+func test_the_area_owning_the_puck_covers_nobody() -> void:
+	# Whoever pressure_owner names is on the carrier, not on a man — handing
+	# him one too is the double-commit the area split exists to prevent.
+	var brain: TeamBrain = _zone_brain()
+	brain.force_retick()
+	var snap: WorldSnapshot = _make_5v5_zone_snapshot()
+	brain.tick(0.001, snap)
+	var owner_slot: int = AIZoneCoverage.pressure_owner(
+			brain.strong_x(), GameRules.GOAL_LINE_Z, snap.puck_state.position)
+	for def_pid: int in brain.threat_assignments:
+		assert_ne(brain.get_slot(def_pid), owner_slot,
+				"the pressure owner (slot %d) was also assigned a man" % owner_slot)

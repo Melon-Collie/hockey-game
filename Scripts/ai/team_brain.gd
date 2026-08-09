@@ -363,17 +363,43 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 	if carrier_pid != -1 and snapshot.skater_states.has(carrier_pid):
 		play_ref = snapshot.skater_states[carrier_pid].position
 
-	# Backline man-markers (MARK, in DZONE and TRANS_OD) and their kinematics.
+	# THE DEFENDERS ARE EVERY BODY WHOSE JOB IS A MAN: the man-marking backline
+	# (MARK) and, in 5v5 D-zone coverage, the four zone roles not currently on
+	# the puck. Both cover a man; they differ only in whether the man may be
+	# anywhere (MARK) or must be standing in the ice they own (zone).
+	#
+	# The zone half used to choose alone — five roles each running an
+	# independent argmax over deliberately OVERLAPPING areas, with nothing
+	# coordinating them. ZONE_D_STRONG's area (everything below 8 m, no lateral
+	# bound) contains the whole net-front box and 3.5 m of the slot, so measured
+	# on the real stack 61% of D-zone ticks had at least one man covered twice
+	# and 52% of all locks issued were stacked on a man somebody else already
+	# had — including 236 ticks of three defenders on one body. Every redundant
+	# lock is a man left open somewhere else.
+	#
+	# One matching fixes it by construction, the same way the 3v3 backline has
+	# always been safe: distinct men, and the areas enter as ELIGIBILITY rather
+	# than as five separate searches.
+	var pressure_slot: int = AIZoneCoverage.pressure_owner(
+			_strong_x, _own_goal_z, snapshot.puck_state.position)
 	var defenders: Array[int] = []
 	var defender_pos: Dictionary = {}
 	var defender_vel: Dictionary = {}
 	var defender_caps: Dictionary = {}
+	var eligible_men: Dictionary = {}
+	var zone_slot_by_def: Dictionary = {}
 	for pid: int in slot_assignments:
 		var slot: int = slot_assignments[pid]
-		if slot != AIRoleSlots.Slot.MARK:
+		var is_zone: bool = AIRoleSlots5.is_zone_slot(slot)
+		if slot != AIRoleSlots.Slot.MARK and not is_zone:
+			continue
+		# The area that owns the puck is pressuring it, not covering a man.
+		if is_zone and slot == pressure_slot:
 			continue
 		if not snapshot.skater_states.has(pid):
 			continue
+		if is_zone:
+			zone_slot_by_def[pid] = slot
 		var s: SkaterNetworkState = snapshot.skater_states[pid]
 		defenders.append(pid)
 		defender_pos[pid] = s.position
@@ -400,6 +426,19 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		var mp: Vector3 = snapshot.skater_states[pid].position
 		men.append(pid)
 		man_pos[pid] = mp
+		# Area eligibility, built as the men are collected. The incumbent keeps
+		# the release margin he had under the old per-role lock, so a man
+		# skating a seam is still held a metre past the edge rather than
+		# flickering between two defenders — that hysteresis moves here and the
+		# matcher's own switch margin covers the rest.
+		for def_pid: int in zone_slot_by_def:
+			var margin: float = AIZoneCoverage.AREA_RELEASE_MARGIN_M \
+					if prev.get(def_pid, -1) == pid else 0.0
+			if AIZoneCoverage.in_area(zone_slot_by_def[def_pid], _strong_x,
+					_own_goal_z, mp, margin):
+				if not eligible_men.has(def_pid):
+					eligible_men[def_pid] = {}
+				(eligible_men[def_pid] as Dictionary)[pid] = true
 		man_value[pid] = AIActionScoring.threat_surface_pass(
 				play_ref, mp, our_net, our_goalie_pos,
 				GameRules.NET_HALF_WIDTH, no_defenders)
@@ -441,9 +480,17 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 	if men.is_empty():
 		return empty
 
+	# A zone defender with nobody in his ice carries an EMPTY eligibility set,
+	# which assign() would read as "no restriction". Give him a sentinel the
+	# men can never match so he stays idle and his rest anchor takes over.
+	for def_pid: int in zone_slot_by_def:
+		if not eligible_men.has(def_pid):
+			eligible_men[def_pid] = {-1: true}
+
 	return AIThreatAssignment.assign(
 			defenders, defender_pos, defender_vel,
-			men, man_pos, man_value, our_net, prev, defender_caps, man_danger)
+			men, man_pos, man_value, our_net, prev, defender_caps, man_danger,
+			eligible_men)
 
 
 # Refills threat_shoot_base_by_opp (see its doc). Runs only while at least one

@@ -175,45 +175,6 @@ static func anchor_of(slot: int, strong_x: float, own_goal_z: float,
 	# (unreachable — every zone slot returns above)
 
 
-# The most dangerous opponent inside `slot`'s area — the soft-lock target.
-# Danger is the finish-if-fed read (score_shoot from the man's spot, goalie
-# where it is, no field defenders — the same measurement the house pin and
-# RUSH_D1's lane gate use). `incumbent_pid` (last dispatch's man, -1 none)
-# is tested against the area + release margin and wins ties, so the lock
-# holds until the man genuinely leaves the ice this role owns. The carrier
-# (`carrier_pid`) is excluded — pressure handles him.
-static func most_dangerous_man_in_area(
-		slot: int, strong_x: float, own_goal_z: float,
-		snapshot: WorldSnapshot, team_id: int, team_id_by_peer: Dictionary,
-		our_goalie_pos: Vector3, carrier_pid: int,
-		incumbent_pid: int = -1) -> int:
-	if snapshot == null:
-		return -1
-	var our_net := Vector3(0.0, 0.0, own_goal_z)
-	var no_defenders: Array[Vector3] = _scratch_no_defenders
-	var best_pid: int = -1
-	var best_danger: float = 0.0
-	for pid: int in snapshot.skater_states:
-		if pid == carrier_pid or team_id_by_peer.get(pid, -1) == team_id:
-			continue
-		var pos: Vector3 = snapshot.skater_states[pid].position
-		var margin: float = AREA_RELEASE_MARGIN_M if pid == incumbent_pid else 0.0
-		if not in_area(slot, strong_x, own_goal_z, pos, margin):
-			continue
-		# FIELDED finish-danger read (AIDangerField memoized core; no field
-		# defenders, so the fielded value IS the core). Also aligns this read
-		# with the threat family's derived post-seal — a dead-angle man walled
-		# by the keeper's RVH/VH no longer out-dangers a live mid-ice man.
-		var danger: float = AIActionScoring.score_shoot_threat_fielded(
-				pos, our_net, our_goalie_pos, GameRules.NET_HALF_WIDTH,
-				no_defenders)
-		# Incumbent wins ties (>=); a challenger needs strictly more danger.
-		if danger > best_danger or (pid == incumbent_pid and danger >= best_danger):
-			best_danger = danger
-			best_pid = pid
-	return best_pid
-
-
 # Defensive-responsibility anchor — where a player's defensive post is
 # (plan §5: shared by the zone roles' geometry, the defenseman's retreat
 # bounds, and the transition-exposure back-cover read). A defenseman's post
@@ -227,11 +188,6 @@ static func defensive_anchor(is_defense: bool, side_sign: float,
 		return Vector3(side_sign * D_HOME_U_M, 0.0, own_dir * GameRules.BLUE_LINE_Z)
 	return Vector3(side_sign * D_HOME_U_M, 0.0,
 			own_dir * (GameRules.BLUE_LINE_Z - F_HOME_DEPTH_INTO_NZ_M))
-
-
-# Shared empty-defenders array for the finish-danger reads (no per-call
-# allocation; never mutated).
-static var _scratch_no_defenders: Array[Vector3] = []
 
 
 # World point at lateral u (strong-signed) and depth d in the defended zone.

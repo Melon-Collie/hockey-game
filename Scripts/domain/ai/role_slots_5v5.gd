@@ -96,6 +96,17 @@ class SlotSpec:
 		return s
 
 
+# Is `slot` one of the five D-zone hybrid-coverage areas? The brain uses this to
+# pull the zone roles into the man partition (they cover a man like MARK does,
+# just restricted to the ice they own).
+static func is_zone_slot(slot: int) -> bool:
+	return slot == AIRoleSlots.Slot.ZONE_D_STRONG \
+			or slot == AIRoleSlots.Slot.ZONE_D_WEAK \
+			or slot == AIRoleSlots.Slot.ZONE_C \
+			or slot == AIRoleSlots.Slot.ZONE_W_STRONG \
+			or slot == AIRoleSlots.Slot.ZONE_W_WEAK
+
+
 # Canonical slot list per state (mirrors AIRoleSlots.slots_for_state).
 static func slots_for_state(state: int) -> Array[int]:
 	match state:
