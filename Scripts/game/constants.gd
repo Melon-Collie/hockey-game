@@ -136,6 +136,10 @@ const TIME_WIRE_SCALE: float = 10000.0
 # which is a SEPARATE knob — to change the tick rate, edit BOTH. `_ready()` below
 # push_errors at boot if they drift (a mismatch silently dilates the sim).
 const PHYSICS_TICK: int = 120
+# One physics step, in seconds. Derived here so the tick-domain clocks (the sim
+# clock in NetworkManager, ClockSync's lead servo) and the rules that quantize to
+# the tick grid all read the same value PHYSICS_TICK defines.
+const TICK_DURATION: float = 1.0 / float(PHYSICS_TICK)
 
 # ── Scenes ────────────────────────────────────────────────────────────────────
 const SCENE_BOOT: String          = "res://Scenes/Boot.tscn"
