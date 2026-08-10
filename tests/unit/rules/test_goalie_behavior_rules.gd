@@ -9,7 +9,6 @@ func _shot_cfg() -> GoalieBehaviorRules.ShotDetectionConfig:
 	cfg.net_half_width = 0.915
 	cfg.net_margin = 1.0
 	cfg.reaction_delay = 0.10
-	cfg.low_shot_threshold = 0.45
 	cfg.elevated_threshold = 0.45
 	return cfg
 
@@ -52,7 +51,7 @@ func test_slow_on_net_puck_classifies_without_speed_floor() -> void:
 		Vector3(0, 0, 25), Vector3(0, 0, 2),   # 2 m/s, ~0.8s from the +Z goal line
 		26.6, 0.0, cfg)
 	assert_true(result.is_shot, "slow on-net puck should classify once the speed floor is removed")
-	assert_true(result.is_low, "a grounded trickler is a low shot → butterfly drop")
+	assert_false(result.is_elevated, "a grounded trickler is a low shot → butterfly drop")
 
 # The RELEASE path keeps the speed floor — the SAME slow puck is NOT a shot with
 # the default threshold, so slow dribbled passes don't fire a release reaction
@@ -97,7 +96,6 @@ func test_shot_classifies_low() -> void:
 		Vector3(0, 0, 10), Vector3(0, 0, 20),
 		26.6, 0.0, _shot_cfg())
 	assert_true(result.is_shot)
-	assert_true(result.is_low)
 	assert_false(result.is_elevated)
 
 func test_shot_classifies_elevated() -> void:
@@ -106,7 +104,6 @@ func test_shot_classifies_elevated() -> void:
 		Vector3(0, 0.05, 10), Vector3(0, 6.0, 20),
 		26.6, 0.0, _shot_cfg())
 	assert_true(result.is_shot)
-	assert_false(result.is_low)
 	assert_true(result.is_elevated)
 
 func test_long_range_elevated_arcs_to_low() -> void:
@@ -118,7 +115,6 @@ func test_long_range_elevated_arcs_to_low() -> void:
 		Vector3(0, 0.05, 0), Vector3(0, 6.0, 20),
 		26.6, 0.0, _shot_cfg())
 	assert_true(result.is_shot)
-	assert_true(result.is_low, "long-range elevated should land low after gravity arc")
 	assert_false(result.is_elevated)
 
 func test_short_range_elevated_stays_elevated() -> void:

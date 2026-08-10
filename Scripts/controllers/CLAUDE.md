@@ -26,9 +26,10 @@ execute; they never reach up. Goalie *math* is pure and lives in
 ## Beatable realism
 
 The goalie should look and move like a real goalie while staying deliberately
-scorable. **Realism additions may only ever open scoring windows, never buff a
-set goalie into a brick wall.** When a change makes him better, that is the
-signal to check it, not to ship it.
+scorable. **Realism should not produce an unbeatable goalie; it should produce
+one who gets beaten the way an NHL goalie gets beaten.** Making him better is
+not the failure mode — closing off a way he *ought* to be beatable is, and a
+save count alone cannot tell the two apart.
 
 Two recurring traps, both measured:
 

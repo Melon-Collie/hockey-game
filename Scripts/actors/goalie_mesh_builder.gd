@@ -173,7 +173,8 @@ static func apply_goalie(goalie: Goalie) -> void:
 #
 # The absorbed nodes are resolved by path rather than kept as Goalie fields:
 # they are freed here, so a field would be left dangling for anyone who reached
-# for it later.
+# for it later. A part that must stay addressable therefore has to stay OUT of
+# its merge — see _merge_stick and the blade.
 #
 # The part transforms are read off the scene and BAKED into a mesh that every
 # goalie shares. That is safe because every goalie is the same scene, but it
@@ -193,21 +194,24 @@ static func _merge_glove(goalie: Goalie) -> void:
 	detail.free()
 
 
+# THE BLADE IS NOT IN THIS MERGE, and that is the whole reason the merge stops at
+# two parts. Merging requires the group to be rigid relative to each other, and
+# the blade no longer is: Goalie._seat_blade counter-pitches it every tick so its
+# face stays square to the shooter while the paddle tilts down (see that method
+# for why — a face-down blade was scoring on its own goalie). Baking it into the
+# shaft would freeze it at the authored angle and desync the visible blade from
+# the collider that actually makes the save.
 static func _merge_stick(goalie: Goalie) -> void:
 	var paddle: MeshInstance3D = goalie.get_node(
 			"BlockArm/Stick/StickPaddleMesh") as MeshInstance3D
-	var blade: MeshInstance3D = goalie.get_node(
-			"BlockArm/Stick/StickBladeMesh") as MeshInstance3D
-	# The stick's three boxes are the only goalie parts still rendering the
-	# scene's own primitives — there is no low-poly build to swap in, so the
-	# merge bakes what the nodes are already carrying.
-	_merge_rigid(goalie.stick_shaft_mesh, "goalie_stick_assembly", [
+	# The stick's boxes are the only goalie parts still rendering the scene's own
+	# primitives — there is no low-poly build to swap in, so the merge bakes what
+	# the nodes are already carrying.
+	_merge_rigid(goalie.stick_shaft_mesh, "goalie_stick_shaft_paddle", [
 		[goalie.stick_shaft_mesh.mesh, goalie.stick_shaft_mesh.transform],
 		[paddle.mesh, paddle.transform],
-		[blade.mesh, blade.transform],
 	])
 	paddle.free()
-	blade.free()
 
 
 # The hand is a sibling of the blocker BODY, not of its mesh, so its transform

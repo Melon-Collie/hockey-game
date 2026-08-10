@@ -137,6 +137,16 @@ static func torso_span(down: bool) -> Vector2:
 	return _span(TORSO_CENTER_Y_STANDING_M, TORSO_BOX_HEIGHT_M)
 
 
+# The height at which GOING DOWN STOPS COVERING THE SHOT — the top of the trunk
+# in the save stances, above which the butterfly silhouette holds nothing until
+# the mask. This is the anatomical line coaching states as "drop for shots below
+# the belly button": below it the seal is the wider answer, above it dropping
+# concedes the very band it was meant to take away. Derived from the stance so a
+# resize moves the fork with it (GoalieController.elevated_threshold).
+static func butterfly_cover_ceiling() -> float:
+	return torso_span(true).y
+
+
 static func head_span(down: bool) -> Vector2:
 	if down:
 		return _span(HEAD_CENTER_Y_BUTTERFLY_M, HEAD_BOX_M)

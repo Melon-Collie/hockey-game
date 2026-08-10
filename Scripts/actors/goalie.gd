@@ -19,6 +19,7 @@ extends Node3D
 @onready var _blocker: StaticBody3D = $BlockArm/Blocker
 @onready var _stick: StaticBody3D = $BlockArm/Stick
 @onready var _stick_blade: CollisionShape3D = $BlockArm/Stick/StickBladeCollider
+@onready var _stick_blade_mesh: MeshInstance3D = $BlockArm/Stick/StickBladeMesh
 
 # Visual mesh refs — public so GoalieUniformCoordinator can read them directly
 # without a growing parameter list, matching the SkaterUniformCoordinator pattern.
@@ -87,6 +88,7 @@ func _ready() -> void:
 	# set (colliders untouched). Before the uniform coordinator only by
 	# convention — painting is material_override / ShaderMaterial, mesh-free.
 	GoalieMeshBuilder.apply_goalie(self)
+	_apply_blade_lie()
 	_init_stick_knob()
 	_init_connectors()
 	_init_arm_bones()
@@ -289,6 +291,17 @@ func apply_network_pose(state: GoalieNetworkState) -> void:
 	_glove.rotation = Vector3(state.glove_pitch, state.glove_yaw, _glove.rotation.z)
 	_block_arm.position = state.blocker_offset
 	_block_arm.rotation = Vector3(state.blocker_pitch, state.blocker_yaw, _block_arm.rotation.z)
+
+# Seat the blade at its lie angle — the fixed shaft-to-blade angle the authored
+# geometry is missing (see GoalieStickRules.BLADE_LIE_DEG for what it cost). Once,
+# at build time: a lie is a property of the stick, so the blade stays rigid to the
+# shaft and every stance inherits it through the assembly transform. Collider and
+# mesh together, which is why the blade is held out of the stick mesh merge.
+func _apply_blade_lie() -> void:
+	var lie: float = deg_to_rad(GoalieStickRules.BLADE_LIE_DEG)
+	_stick_blade.rotation.x += lie
+	_stick_blade_mesh.rotation.x += lie
+
 
 func _lerp_part(part: Node3D, target_pos: Vector3, target_rot_deg: Vector3, t: float) -> void:
 	part.position = part.position.lerp(target_pos, t)

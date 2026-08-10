@@ -188,6 +188,28 @@ func test_advance_slide_finishes_below_min_speed() -> void:
 	assert_eq(sb.arc_t, 1.0)
 	assert_eq(sb.cooldown_timer, 0.0, "cooldown reset on finish")
 
+# ARRIVAL ends the slide, not the decay of the push. A short committed path is
+# covered long before the push has bled off, and the goalie used to stay pinned in
+# SLIDING for the remainder — unable to recover (RECOVERING only fires from idle
+# BUTTERFLY) or to commit a second slide. Measured on a real post seal: arrived at
+# 0.61 s, released at 1.38 s.
+func test_advance_slide_finishes_on_arrival_not_on_decay() -> void:
+	# A 0.2 m path against a 4.5 m/s push: covered in ~0.045 s, while the push
+	# needs ~0.7 s to fall under slide_min_speed.
+	sb.commit_slide(0.0, 0.1, 0.2, 0.915, 0.0, 0.1)
+	sb.tick_coil(sb.coil_duration)
+	var ticks: int = 0
+	while not sb.is_slide_finished() and ticks < 200:
+		sb.advance_slide(1.0 / 120.0, 0.0, 0.915)
+		ticks += 1
+	var elapsed: float = float(ticks) / 120.0
+	assert_lt(elapsed, 0.15,
+			"the seal is complete once the body is there — not when the push dies")
+	assert_eq(sb.arc_t, 1.0)
+	assert_eq(sb.velocity_x, 0.0, "leftover push is zeroed on arrival")
+	assert_eq(sb.cooldown_timer, 0.0, "a second slide can be committed immediately")
+
+
 # Deep slide (committed from challenge depth): progress is normalized by the
 # FULL path length, so the metre-plus depth leg travels at the push speed
 # instead of riding the short lateral leg's schedule. Backward speed is

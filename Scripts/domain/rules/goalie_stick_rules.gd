@@ -92,6 +92,34 @@ const TILT_READY_DEG: float = 22.0
 const TILT_BUTTERFLY_DEG: float = 72.0   # hand y=0.49 → ~72°, near-flat
 const TILT_RVH_DEG: float = 65.0
 
+# ── The lie angle ────────────────────────────────────────────────────────────
+# The fixed angle between the blade and the shaft. Every real stick has one; the
+# authored geometry has none — Goalie.tscn hangs the blade at (−0.15, −0.67, 0)
+# inside Stick, essentially straight below the wrist and COLLINEAR with the
+# shaft, so the blade's face is whatever the shaft's tilt makes it.
+#
+# What that cost: the tilts above are solved to swing the blade down to the ice,
+# and with a collinear blade the only way to get there is to lay the whole stick
+# over (hence the butterfly's 72°). At 72° the blade's broad face ends up pointing
+# nearly straight DOWN — measured face normal (−0.15, −0.95, −0.27). The stick is
+# the one surface GoalieSaveRules never deadens, so every blade contact is a live
+# reflection off whichever face the sweep picks; face-down, the reachable surfaces
+# are the heel and the UNDERSIDE, and an underside normal reflects a shot down and
+# GOALWARD. Measured: (0, 0, −26) → (+1.4, −12.7, −20.8), the goalie's own blade
+# putting the puck in his net at 24 m/s, on 8 of 72 in-tight shots. The
+# upward-facing side wedged the rest skyward at 10–21 m/s.
+#
+# The value is the shaft angle at which the face comes vertical, so it is the same
+# quantity a stick's lie number encodes (~55° off vertical for a goalie stick).
+# Swept over the in-tight grid it is also where the artifacts bottom out — own
+# goals 8 → 1 and pop-ups 33 → 4, with the contact count unchanged at 71, so it
+# removes the artifact without making him a better goalie.
+#
+# It does NOT move the blade centre (a CollisionShape3D rotates about its own
+# origin), so blade_center_x and standing_lateral_reach are unaffected and the
+# planner's cover number still matches the posed stick.
+const BLADE_LIE_DEG: float = -55.0
+
 # Yaw cap for active blade intent — how far the assembly may swing the blade
 # toward a threat before the rigidly-attached blocker pad comes off the body.
 const ACTIVE_YAW_CAP_DEG: float = 25.0

@@ -102,3 +102,52 @@ func test_a_pull_that_comes_back_does_not_sell_him_out() -> void:
 	var back: float = _pull_across(0.3, 0.08)
 	assert_true(is_inf(out) and is_inf(back),
 			"a transient pull is a stickhandle, not a beat — stay up and track it")
+
+
+# THE SHOT DOES NOT UN-BEAT HIM. The beat is a coverage fact, and the moment the
+# beaten player releases is the moment the goalie has least time to lose — yet the
+# seal used to be unreachable exactly there, twice over: `_seal_beaten_wide_post`
+# rode the block's `not _reaction.reacting` gate, and the verdict itself required
+# a hostile CARRIER, so releasing the puck erased it outright. Measured before:
+# beaten wide and then a release sealed NEVER, against 0.33 s with no shot.
+#
+# The release is timed into the confirmation window — after the beat arms, before
+# it confirms — because that is the gap. Release later and he has already sealed;
+# release earlier and he was not beaten yet.
+func test_a_release_inside_the_confirmation_window_still_seals() -> void:
+	_settle(GOAL_Z + 8.0, GOAL_Z + 3.2, 180)
+	var from_x: float = _puck.global_position.x
+	var ticks: int = int(0.30 / DT)
+	var released: bool = false
+	var committed: bool = false
+	for i: int in ticks + 60:
+		_shooter.global_position.z -= 3.0 * DT
+		_shooter.velocity = Vector3(0.0, 0.0, -3.0)
+		if released:
+			_puck.global_position += _puck.linear_velocity * DT
+		else:
+			var t: float = clampf(float(i + 1) / float(ticks), 0.0, 1.0)
+			_puck.global_position = Vector3(
+					lerpf(from_x, -1.15, t), 0.0, _shooter.global_position.z + 0.4)
+		_ctrl._physics_process(DT)
+		# Fire as soon as the beat has ARMED but not yet confirmed.
+		if not released and _ctrl._beaten_wide_armed and not _ctrl._beaten_wide_committed:
+			released = true
+			_shooter.current_shot_state = SkaterStateMachine.State.FOLLOW_THROUGH
+			_puck.clear_carrier()
+			# Deliberately unhurried, so the puck is still in front of him while
+			# the window runs out — the seal has to be able to fire mid-read.
+			var v := Vector3(-1.0, 0.0, -7.0)
+			_puck.apply_release_velocity(v)
+			_puck.puck_released.emit()
+			_puck.linear_velocity = v
+			assert_true(_ctrl._reaction.reacting, "precondition: he is reading the shot")
+		var st: int = _ctrl._sm.current
+		if st == GoalieStateMachine.State.COILING \
+				or st == GoalieStateMachine.State.SLIDING:
+			committed = true
+			break
+	assert_true(released, "precondition: the beat armed and a shot was taken inside the window")
+	assert_true(committed,
+			"a shot in flight does not give him back the lateral race — seal anyway")
+	assert_lt(_ctrl._slide.dir, 0.0, "the seal goes the way the PUCK went")
