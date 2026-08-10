@@ -91,7 +91,7 @@ func test_backcheck_is_not_dissolved_at_the_blue_line() -> void:
 		[210, Vector3(-7.0, 0.0, 9.0), Vector3(0.0, 0.0, 7.0)],    # unmarked
 		[220, Vector3(7.0, 0.0, 9.5), Vector3(0.0, 0.0, 7.0)],     # unmarked
 	], 200))
-	assert_eq(brain.state, AIPossessionState.State.TRANS_OD,
+	assert_eq(brain.state, AIPossessionState.State.TRANS_DEFENSE,
 			"an outnumbered entry stays in the rush shape, not zone coverage")
 	# And the shape is the layered rush, not zone posts.
 	assert_ne(_slot_of(brain, AIRoleSlots.Slot.RUSH_D1), -1,
@@ -158,7 +158,7 @@ func test_a_loose_puck_in_our_zone_is_not_gated() -> void:
 		[200, Vector3(0.0, 0.0, 9.0)],
 		[210, Vector3(-7.0, 0.0, 9.0)],
 	], -1))
-	assert_ne(brain.state, AIPossessionState.State.TRANS_OD,
+	assert_ne(brain.state, AIPossessionState.State.TRANS_DEFENSE,
 			"a loose puck in our zone is not a rush being defended")
 
 
@@ -187,7 +187,7 @@ func test_the_gate_applies_to_3v3_too() -> void:
 		[210, Vector3(-7.0, 0.0, 9.0), Vector3(0.0, 0.0, 7.0)],
 		[220, Vector3(7.0, 0.0, 10.0), Vector3(0.0, 0.0, 7.0)],
 	], 200))
-	assert_eq(brain.state, AIPossessionState.State.TRANS_OD,
+	assert_eq(brain.state, AIPossessionState.State.TRANS_DEFENSE,
 			"3v3 holds the rush shape through an unaccounted-for entry")
 	assert_ne(_slot_of(brain, AIRoleSlots.Slot.RUSH_D1), -1,
 			"and runs the 3v3 rush layers")

@@ -1,6 +1,6 @@
 class_name AIRoleOutlet
 
-# OUTLET role behavior — TRANS_DO only. Stretch-pass option waiting
+# OUTLET role behavior — TRANS_OFFENSE only. Stretch-pass option waiting
 # at the opp blue line (NZ-side) for the breakout pass. Same
 # candidate-set argmax pattern as AIRoleSupport, minus the exposure
 # half — OUTLET is intentionally up-ice and accepts being past the
@@ -22,7 +22,7 @@ class_name AIRoleOutlet
 # lane × potential keeps a live gradient out here: reachable-by-the-
 # carrier gates the spot, open-ice/up-ice value ranks it.
 #
-# Adds an offside filter: TRANS_DO is defined as "puck NZ-side of
+# Adds an offside filter: TRANS_OFFENSE is defined as "puck NZ-side of
 # opp blue line" — any candidate past that line would ghost the
 # bot until tag-up. Filter at the candidate level, before scoring.
 #
@@ -124,7 +124,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# of the carrier's live x. The magnitude still mirrors how wide the carrier
 	# is (|carrier.x|), but the SIDE holds through a carrier wheeling across
 	# center — a raw -carrier.x flips the stretch spot to the other side the
-	# instant the puck crosses the middle, which on the BREAKOUT→TRANS_DO
+	# instant the puck crosses the middle, which on the BREAKOUT→TRANS_OFFENSE
 	# handoff sent this bot cutting across the SUPPORT trailer's path through
 	# center ice. strong_x matches the side the BREAKOUT outlets and SUPPORT
 	# already use, so the whole rotation agrees on which side is weak.
@@ -192,7 +192,7 @@ static func _paced_depth_z(ctx: RoleContext, carrier_pos: Vector3,
 	return lerpf(line_z, lead_z, rush)
 
 
-# Offside filter: in TRANS_DO the puck is NZ-side of opp blue line
+# Offside filter: in TRANS_OFFENSE the puck is NZ-side of opp blue line
 # by definition. A candidate past that line would put OUTLET in OZ
 # and trigger ghosting. Reject so the bot doesn't drift offside
 # while waiting for the breakout to develop.

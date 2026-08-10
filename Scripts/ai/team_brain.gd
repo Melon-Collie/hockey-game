@@ -11,7 +11,7 @@ extends TeamStrategyView
 #
 # Blackboard:
 #   state              — AIPossessionState.State enum (DZONE / OZONE /
-#                        TRANS_DO / TRANS_OD / NEUTRAL).
+#                        TRANS_OFFENSE / TRANS_DEFENSE / NEUTRAL).
 #   slot_assignments   — Dictionary[peer_id, AIRoleSlots.Slot].
 #
 # Roles assigned by current geometry per brain tick — no SPRINT_BY
@@ -27,9 +27,9 @@ const TICK_PERIOD: float = 1.0 / 6.0
 # Strong-side X is sign(puck.x) but with a hysteresis band so the
 # strong/weak side doesn't flip every tick when the puck cycles
 # through center. Once we've picked +1, only flip to -1 when puck.x
-# crosses below -STRONG_SIDE_HYSTERESIS_M, and vice versa. Without
-# this, ANCHOR / FINISHER / etc. anchors flip strong-side rapidly on
-# a corner-to-corner cycle and bots try to switch sides every brain tick.
+# crosses below -STRONG_SIDE_HYSTERESIS_M, and vice versa. Without this,
+# every strong/weak-sided role's geometry flips on a corner-to-corner cycle
+# and bots try to switch sides every brain tick.
 const STRONG_SIDE_HYSTERESIS_M: float = 1.5
 
 var team_id: int = 0
@@ -116,9 +116,9 @@ var _cadence_offset_s: float = 0.0
 # puck-carrier change makes the current slot assignment stale.
 var _force_tick_pending: bool = false
 # Set of peer_ids that should NOT receive a slot assignment. Used by the
-# tutorial to puppet a bot in scripted mode — the puppeted bot's slot
-# would otherwise drag it back to a role anchor each brain tick. Kept as
-# a Dictionary[int, bool] for O(1) `has()` lookups.
+# tutorial to puppet a bot in scripted mode — the puppeted bot's slot would
+# otherwise have its role behavior steering it each brain tick. Kept as a
+# Dictionary[int, bool] for O(1) `has()` lookups.
 var _excluded_peers: Dictionary = {}
 var _team_id_by_peer: Dictionary = {}
 # Live per-peer AISkaterCaps from PlayerRegistry (memoized), so man-marking reads
@@ -193,8 +193,8 @@ func force_retick() -> void:
 
 # Exclude a peer from slot assignment. Used by the tutorial when a bot is
 # put into scripted/puppet mode — without this the brain would assign it a
-# role and downstream get_slot / get_anchor calls would yank it toward an
-# anchor each tick. Include is the inverse.
+# role and its behavior module would steer it each tick. Include is the
+# inverse.
 func exclude_skater(peer_id: int) -> void:
 	_excluded_peers[peer_id] = true
 	slot_assignments.erase(peer_id)
@@ -261,7 +261,7 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 		_coverage_was_set = set_now
 		coverage_downgraded = not set_now
 		if not set_now:
-			state = AIPossessionState.State.TRANS_OD
+			state = AIPossessionState.State.TRANS_DEFENSE
 	else:
 		# Left the zone (or we got it back): the next entry starts fresh, so a
 		# stale "we were set" can't wave a new rush straight into coverage.
@@ -293,9 +293,9 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 				snapshot, team_id, _own_goal_z, state, _team_id_by_peer,
 				prev_assignments, _strong_x, _caps_by_peer)
 	# Drop excluded peers (puppeted tutorial bots) so neither they nor any
-	# downstream consumer of get_slot / get_anchor pulls them toward a slot
-	# anchor. AIRoleSlots.assign already may have given them a slot — erase
-	# after the fact rather than touching the call signature.
+	# downstream consumer of get_slot steers them. AIRoleSlots.assign already
+	# may have given them a slot — erase after the fact rather than touching
+	# the call signature.
 	for excluded_pid: int in _excluded_peers:
 		slot_assignments.erase(excluded_pid)
 
@@ -319,44 +319,87 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 
 
 # Builds the backline man-on-threat partition for the current tick. Defensive
-# states only (DZONE + TRANS_OD); every other state returns {} so no defender
+# states only (DZONE + TRANS_DEFENSE); every other state returns {} so no defender
 # carries a stale assignment.
 #
-# Backline = our peers slotted MARK (DZONE and TRANS_OD).
-# The carrier is owned separately — PRESSURE in DZONE (transition no longer
-# man-marks at all, so this partition is DZONE-only in practice) — so it's
-# excluded; the men are the opposing carrier's potential
-# receivers (every opponent except the carrier). Each man's value is the raw
-# pass-threat surface (no defenders in the view), so AIThreatAssignment pairs
+# Backline = our peers slotted MARK (DZONE and TRANS_DEFENSE).
+#
+# The men are every opponent who is not already owned: while an opponent
+# CARRIES he is PRESSURE's, so he is excluded and the men are his potential
+# receivers; with the puck loose nobody owns anybody and every opponent is a
+# man, the ex-carrier included. Each man's value is the raw pass-threat surface
+# from the feed source (no defenders in the view), so AIThreatAssignment pairs
 # the most dangerous men with the best-positioned defenders. `prev` is last
-# tick's partition, threaded through for switch hysteresis.
+# tick's partition, threaded through for switch hysteresis — which is also what
+# carries a marker across a pass without re-shuffling the whole coverage.
 func _compute_threat_assignments(snapshot: WorldSnapshot,
 		prev: Dictionary) -> Dictionary[int, int]:
 	var empty: Dictionary[int, int] = {}
 	if state != AIPossessionState.State.DZONE \
-			and state != AIPossessionState.State.TRANS_OD:
+			and state != AIPossessionState.State.TRANS_DEFENSE:
 		return empty
 	if snapshot == null or snapshot.puck_state == null:
 		return empty
 	var carrier_pid: int = snapshot.puck_state.carrier_peer_id
-	# Need a live OPPONENT carrier to define the receivers / score pass threats.
-	if carrier_pid == -1 or _team_id_by_peer.get(carrier_pid, -1) == team_id:
+	# We have it — this is not a coverage problem.
+	if carrier_pid != -1 and _team_id_by_peer.get(carrier_pid, -1) == team_id:
 		return empty
-	if not snapshot.skater_states.has(carrier_pid):
-		return empty
-	var carrier_pos: Vector3 = snapshot.skater_states[carrier_pid].position
+	# THE FEED SOURCE — where the next pass would come from. An opponent carrier
+	# when one holds the puck, otherwise the puck itself: exactly the resolution
+	# AIRoleHelpers.resolve_defensive_play_ref already makes for the roles that
+	# consume this partition, so the brain and the marker read one play.
+	#
+	# Requiring a live carrier was measured at 36% of D-zone time with NO man
+	# assigned to ANY marker — and all-or-nothing, because the condition is
+	# team-wide. Every pass, shot, rebound and dump dissolved the whole coverage
+	# for its flight and dropped both markers into the unassigned fallback. A
+	# man is dangerous because of where he stands relative to our net, which is
+	# true whether or not anybody is holding the puck; the carrier only sharpens
+	# WHICH man matters most. With the puck standing in, the matcher's own
+	# hysteresis then keeps each marker on the man he already had, and the
+	# ex-carrier joins the men as the extra body — which is what a defence does
+	# when the puck leaves his stick.
+	var play_ref: Vector3 = snapshot.puck_state.position
+	if carrier_pid != -1 and snapshot.skater_states.has(carrier_pid):
+		play_ref = snapshot.skater_states[carrier_pid].position
 
-	# Backline man-markers (MARK, in DZONE and TRANS_OD) and their kinematics.
+	# THE DEFENDERS ARE EVERY BODY WHOSE JOB IS A MAN: the man-marking backline
+	# (MARK) and, in 5v5 D-zone coverage, the four zone roles not currently on
+	# the puck. Both cover a man; they differ only in whether the man may be
+	# anywhere (MARK) or must be standing in the ice they own (zone).
+	#
+	# The zone half used to choose alone — five roles each running an
+	# independent argmax over deliberately OVERLAPPING areas, with nothing
+	# coordinating them. ZONE_D_STRONG's area (everything below 8 m, no lateral
+	# bound) contains the whole net-front box and 3.5 m of the slot, so measured
+	# on the real stack 61% of D-zone ticks had at least one man covered twice
+	# and 52% of all locks issued were stacked on a man somebody else already
+	# had — including 236 ticks of three defenders on one body. Every redundant
+	# lock is a man left open somewhere else.
+	#
+	# One matching fixes it by construction, the same way the 3v3 backline has
+	# always been safe: distinct men, and the areas enter as ELIGIBILITY rather
+	# than as five separate searches.
+	var pressure_slot: int = AIZoneCoverage.pressure_owner(
+			_strong_x, _own_goal_z, snapshot.puck_state.position)
 	var defenders: Array[int] = []
 	var defender_pos: Dictionary = {}
 	var defender_vel: Dictionary = {}
 	var defender_caps: Dictionary = {}
+	var eligible_men: Dictionary = {}
+	var zone_slot_by_def: Dictionary = {}
 	for pid: int in slot_assignments:
 		var slot: int = slot_assignments[pid]
-		if slot != AIRoleSlots.Slot.MARK:
+		var is_zone: bool = AIRoleSlots5.is_zone_slot(slot)
+		if slot != AIRoleSlots.Slot.MARK and not is_zone:
+			continue
+		# The area that owns the puck is pressuring it, not covering a man.
+		if is_zone and slot == pressure_slot:
 			continue
 		if not snapshot.skater_states.has(pid):
 			continue
+		if is_zone:
+			zone_slot_by_def[pid] = slot
 		var s: SkaterNetworkState = snapshot.skater_states[pid]
 		defenders.append(pid)
 		defender_pos[pid] = s.position
@@ -367,7 +410,7 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 	if defenders.is_empty():
 		return empty
 
-	# Men = non-carrier opponents; value = raw pass-threat surface.
+	# Men = every opponent PRESSURE does not already own (see the header).
 	var our_net := Vector3(0.0, 0.0, _own_goal_z)
 	var our_goalie_pos: Vector3 = _resolve_our_goalie_pos(snapshot)
 	var no_defenders: Array[Vector3] = []
@@ -383,8 +426,21 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		var mp: Vector3 = snapshot.skater_states[pid].position
 		men.append(pid)
 		man_pos[pid] = mp
+		# Area eligibility, built as the men are collected. The incumbent keeps
+		# the release margin he had under the old per-role lock, so a man
+		# skating a seam is still held a metre past the edge rather than
+		# flickering between two defenders — that hysteresis moves here and the
+		# matcher's own switch margin covers the rest.
+		for def_pid: int in zone_slot_by_def:
+			var margin: float = AIZoneCoverage.AREA_RELEASE_MARGIN_M \
+					if prev.get(def_pid, -1) == pid else 0.0
+			if AIZoneCoverage.in_area(zone_slot_by_def[def_pid], _strong_x,
+					_own_goal_z, mp, margin):
+				if not eligible_men.has(def_pid):
+					eligible_men[def_pid] = {}
+				(eligible_men[def_pid] as Dictionary)[pid] = true
 		man_value[pid] = AIActionScoring.threat_surface_pass(
-				carrier_pos, mp, our_net, our_goalie_pos,
+				play_ref, mp, our_net, our_goalie_pos,
 				GameRules.NET_HALF_WIDTH, no_defenders)
 		# Finish danger if fed: shot value from his spot with the goalie
 		# PREDICTED OVER THE FEED'S FLIGHT (he starts tracking the carrier;
@@ -393,8 +449,8 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		# field defenders. Feeds the net-front override (drops the lane
 		# factor man_value folds in: a contested feed still becomes a
 		# tap-in if it arrives).
-		var feed_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, mp)
-		var feed_flight: float = carrier_pos.distance_to(mp) / maxf(feed_speed, 1.0)
+		var feed_speed: float = AIActionScoring.expected_pass_speed(play_ref, mp)
+		var feed_flight: float = play_ref.distance_to(mp) / maxf(feed_speed, 1.0)
 		# Predicted post-seal for the man's spot (derive_post_seal_x_sign): a
 		# sharp-angle man fires into the wall a competent keeper adopts, so he
 		# is not a finish threat the assignment must chase.
@@ -410,7 +466,7 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		# reads raw danger; who covers whom is its output, not its input.
 		var g_state: GoalieNetworkState = snapshot.goalie_states.get(team_id)
 		AIActionScoring.resolve_feed_keeper(
-				our_goalie_pos, our_net, feed_flight, mp, carrier_pos,
+				our_goalie_pos, our_net, feed_flight, mp, play_ref,
 				g_state.hands_read(our_net.z) if g_state != null else Vector4.INF,
 				feed_speed)
 		man_danger[pid] = AIActionScoring.score_shoot(
@@ -424,9 +480,17 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 	if men.is_empty():
 		return empty
 
+	# A zone defender with nobody in his ice carries an EMPTY eligibility set,
+	# which assign() would read as "no restriction". Give him a sentinel the
+	# men can never match so he stays idle and his rest anchor takes over.
+	for def_pid: int in zone_slot_by_def:
+		if not eligible_men.has(def_pid):
+			eligible_men[def_pid] = {-1: true}
+
 	return AIThreatAssignment.assign(
 			defenders, defender_pos, defender_vel,
-			men, man_pos, man_value, our_net, prev, defender_caps, man_danger)
+			men, man_pos, man_value, our_net, prev, defender_caps, man_danger,
+			eligible_men)
 
 
 # Refills threat_shoot_base_by_opp (see its doc). Runs only while at least one
@@ -550,25 +614,6 @@ func ping_pass_target(peer_id: int) -> int:
 	return ping_directives.pass_target_for(peer_id)
 
 
-# Computes the world-space anchor for a given peer's current slot.
-# Returns Vector3.ZERO if the peer isn't assigned a slot.
-func get_anchor(peer_id: int, snapshot: WorldSnapshot) -> Vector3:
-	var slot: int = slot_assignments.get(peer_id, AIRoleSlots.Slot.NONE)
-	if slot == AIRoleSlots.Slot.NONE:
-		return Vector3.ZERO
-	if snapshot == null or snapshot.puck_state == null:
-		return Vector3.ZERO
-	var puck_pos: Vector3 = snapshot.puck_state.position
-	var carrier_pos: Vector3 = puck_pos
-	var carrier_pid: int = snapshot.puck_state.carrier_peer_id
-	if carrier_pid != -1 and snapshot.skater_states.has(carrier_pid):
-		carrier_pos = snapshot.skater_states[carrier_pid].position
-	if team_size >= 5:
-		return AIRoleSlots5.slot_anchor(
-				slot, _own_goal_z, _strong_x, puck_pos, carrier_pos)
-	return AIRoleSlots.slot_anchor(slot, carrier_pos)
-
-
 # TeamStrategyView interface: expose the two fields the role context reads so the
 # frozen TeamBrainView can mirror them behind the same method surface.
 func get_team_size() -> int:
@@ -597,7 +642,7 @@ func get_view() -> TeamBrainView:
 	return _view
 
 
-func build_view(snapshot: WorldSnapshot) -> void:
+func build_view() -> void:
 	if _view == null:
 		_view = TeamBrainView.new()
 	var v: TeamBrainView = _view
@@ -611,14 +656,11 @@ func build_view(snapshot: WorldSnapshot) -> void:
 	_freeze_bool_dict(_one_timer_ready_by_peer, v.one_timer_ready_by_peer)
 	_freeze_float_dict(threat_shoot_base_by_opp, v.threat_shoot_base)
 	v.rush.copy_from(rush_read)
-	# Per-slotted-peer reads: the anchor (recomputed here against the live frame
-	# so it stays per-frame fresh) and the resolved ping directives.
-	v.anchor_by_peer.clear()
+	# Per-slotted-peer reads: the resolved ping directives.
 	v.ping_move_by_peer.clear()
 	v.ping_shoot_by_peer.clear()
 	v.ping_pass_by_peer.clear()
 	for pid: int in slot_assignments:
-		v.anchor_by_peer[pid] = get_anchor(pid, snapshot)
 		v.ping_move_by_peer[pid] = ping_directives.move_target_for(pid)
 		v.ping_shoot_by_peer[pid] = ping_directives.shoot_ping_for(pid)
 		v.ping_pass_by_peer[pid] = ping_directives.pass_target_for(pid)

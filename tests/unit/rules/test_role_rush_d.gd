@@ -11,12 +11,13 @@ const STICK: float = 2.0
 
 # `support_behind` puts a teammate home between us and our net. It is ON by
 # default because it makes the LAST-MAN STEP-UP BOUND inert
-# (AIRoleRushD._settable_gap), and every case below except the one that pins
-# that bound is about the ladder, the numbers rungs, or the angling — one
-# variable each, per this file's premise. Without it the fixtures read the
-# bound instead: they place the D 9-16 m goal-side of the stand he is being
-# asked to take, which is a step-up no body arrives at set, so the bound
-# legitimately dominates the reading and the ladder underneath is invisible.
+# (AIRoleRushD._settable_gap), and every case below is about the ladder, the
+# numbers rungs, or the angling — one variable each, per this file's premise.
+# The bound now only survives for a LOOSE puck (a live carrier is a frame the
+# route regulates on its own), and there it still dominates these fixtures:
+# they place the D 9-16 m goal-side of the stand he is being asked to take,
+# which is a step-up no ice-frame seek arrives at set, so the ladder underneath
+# would be invisible.
 func _ctx(self_pos: Vector3, skaters: Array, carrier_pid: int,
 		numbers: int = AIRushRead.Numbers.EVEN_OR_UP,
 		backpressure: float = INF, support_behind: bool = true) -> RoleContext:
@@ -67,18 +68,20 @@ func _ctx(self_pos: Vector3, skaters: Array, carrier_pid: int,
 	return ctx
 
 
-# The gap the model actually holds, measured against the carrier's VELOCITY-LED
-# point — the reference the role builds its stand off (AIRoleHelpers.lead_threat).
-# Measuring off the raw body instead folds the lead distance into every reading,
-# which at rush speeds is a couple of metres of pure artifact.
-func _led(carrier: Vector3, vel: Vector3) -> Vector3:
-	return AIRoleHelpers.lead_threat(carrier, vel, 1.0)
-
-
-func _gap(d: RoleDecision, carrier: Vector3, vel: Vector3 = Vector3.ZERO) -> float:
-	var ref: Vector3 = _led(carrier, vel)
+# The gap the model actually holds, measured against the carrier's REAL body —
+# which is the only reference the carrier can be beaten off.
+#
+# This used to measure against his velocity-LED point, on the grounds that the
+# role built its stand there and folding the lead into every reading was "a
+# couple of metres of pure artifact". That was true for isolating the ladder and
+# false for the behaviour: the lead was a real part of the gap the bot held, and
+# measuring around it is exactly why nobody noticed the held gap was 86% wider
+# than the ladder asked for. The role no longer leads the reference at all (the
+# route carries the carrier's velocity instead), so the two agree again — but the
+# reading stays on the real body so it cannot hide a lead if one comes back.
+func _gap(d: RoleDecision, carrier: Vector3, _vel: Vector3 = Vector3.ZERO) -> float:
 	return Vector2(d.target_position.x, d.target_position.z).distance_to(
-			Vector2(ref.x, ref.z))
+			Vector2(carrier.x, carrier.z))
 
 
 # ── The gap ladder: ice remaining, not pace ──────────────────────────────────
@@ -169,50 +172,75 @@ func test_backpressure_lets_the_d_stand_up() -> void:
 			"a backchecker on his hip lets the D tighten and stand up")
 
 
-# ── The last-man step-up bound ───────────────────────────────────────────────
-# The ladder says where the stand IS; it does not authorize the trip to it. A D
-# already home with the rush still in neutral ice is being asked for a 10-18 m
-# step-up, and taking it means meeting the carrier with a full stride of up-ice
-# momentum — he gets walked and trails the play home. So the last man may only
-# close as fast as the rendezvous leaves room for, and the stand he is given is
-# the one that enforces that speed (AIRoleHelpers.settable_stand_depth).
+# ── The stand rides the carrier ──────────────────────────────────────────────
+# The ladder says where the stand IS. What used to answer "may I take the trip to
+# it?" was a stand-PLACEMENT bound (AIRoleHelpers.settable_stand_depth): hold the
+# stand back to where a charge would end set, because an ice-frame seek could only
+# ever reach a spot by charging it and braking to zero.
+#
+# The route answers it now. RUSH_D1 publishes the stand's own velocity and the
+# steering flies the whole approach in that frame (AISteering, "moving-frame
+# pursuit"), where the commanded velocity is the stand's plus a closing term that
+# decays to nothing on arrival — so the trip ENDS matched to the rush by
+# construction, and there is no charge left to bound. Running both put two
+# controllers on one axis: the bound charges for a pivot the route no longer
+# performs, which placed the stand within 0.3 m of wherever the D already stood,
+# and a D whose stand is always where he is never closes on anybody.
+#
+# The behavioural half of this — how much up-ice speed he actually carries into
+# the meet — is pinned in tests/unit/ai/test_rush_gap_discipline.gd, which
+# measures the body over multi-second rushes. That is the only place it can
+# honestly live; a single dispatch cannot see a route. Here we pin the contract
+# the route is built on.
 
-func test_the_last_man_does_not_take_a_step_up_he_cannot_arrive_set_at() -> void:
+func test_the_stand_publishes_the_carriers_velocity() -> void:
+	var carrier := Vector3(0.0, 0.0, 0.0)
+	var vel := Vector3(0.0, 0.0, 7.0)
+	var ctx: RoleContext = _ctx(Vector3(0.0, 0.0, 20.0),
+			[[10, 1, carrier, vel]], 10, AIRushRead.Numbers.DOWN_ONE, INF, false)
+	var d: RoleDecision = AIRoleRushD.decide(ctx, AIRoleSlots.Slot.RUSH_D1)
+	assert_almost_eq(d.target_velocity.z, vel.z, 0.01,
+			"the gap stand rides the man it gaps; got %.2f" % d.target_velocity.z)
+
+
+func test_the_ladder_is_the_stand_whether_or_not_anyone_is_home() -> void:
+	# The last man reads the SAME gap as a D with a layer behind him: the route
+	# regulates his approach, so his depth no longer has to. (The numbers rungs
+	# still move the gap — that is the shared read, and a different question.)
 	var carrier := Vector3(0.0, 0.0, 0.0)      # red line, coming at pace
 	var vel := Vector3(0.0, 0.0, 7.0)
 	var alone: RoleContext = _ctx(Vector3(0.0, 0.0, 20.0),
 			[[10, 1, carrier, vel]], 10, AIRushRead.Numbers.DOWN_ONE, INF, false)
 	var layered: RoleContext = _ctx(Vector3(0.0, 0.0, 20.0),
 			[[10, 1, carrier, vel]], 10, AIRushRead.Numbers.DOWN_ONE, INF, true)
-	var bounded: float = _gap(
-			AIRoleRushD.decide(alone, AIRoleSlots.Slot.RUSH_D1), carrier, vel)
-	var free: float = _gap(
-			AIRoleRushD.decide(layered, AIRoleSlots.Slot.RUSH_D1), carrier, vel)
-	assert_gt(bounded, free,
-			"the last man holds ice he cannot cover set; got %.2f vs %.2f"
-			% [bounded, free])
-	# And the bound is a hold, not a retreat: it never asks him to give up depth
-	# he already owns (he stands 18 m goal-side of the led carrier).
-	assert_lte(bounded, 18.1,
-			"the bound may hold the stand, never push it back; got %.2f" % bounded)
-
-
-func test_a_properly_gapped_last_man_is_not_bounded_at_all() -> void:
-	# Inert where it should be: a D already holding his gap is asking for no
-	# step-up, so the bound returns the ladder untouched whether or not anyone
-	# is home behind him.
-	var carrier := Vector3(0.0, 0.0, 0.0)
-	var vel := Vector3(0.0, 0.0, 7.0)
-	var led: Vector3 = _led(carrier, vel)
-	var stand_z: float = led.z + AIRoleRushD.ladder_gap_m(led, 1.0, STICK, 7.0)
-	var alone: RoleContext = _ctx(Vector3(0.0, 0.0, stand_z),
-			[[10, 1, carrier, vel]], 10, AIRushRead.Numbers.DOWN_ONE, INF, false)
-	var layered: RoleContext = _ctx(Vector3(0.0, 0.0, stand_z),
-			[[10, 1, carrier, vel]], 10, AIRushRead.Numbers.DOWN_ONE, INF, true)
 	assert_almost_eq(
 			_gap(AIRoleRushD.decide(alone, AIRoleSlots.Slot.RUSH_D1), carrier, vel),
 			_gap(AIRoleRushD.decide(layered, AIRoleSlots.Slot.RUSH_D1), carrier, vel),
-			0.05, "a gapped D reads the same bounded or not")
+			0.05, "the last man reads the ladder, not a depth bound")
+
+
+func test_a_loose_puck_keeps_the_ice_frame_bound() -> void:
+	# There is no man to ride when the puck is loose — a puck is decelerating and
+	# unowned, and nobody gaps up on one — so the stand is a point on the ice
+	# again and the last-man bound is still the thing that governs the trip.
+	var puck := Vector3(0.0, 0.0, 0.0)
+	var alone: RoleContext = _ctx(Vector3(0.0, 0.0, 20.0),
+			[[10, 1, puck, Vector3(0.0, 0.0, 7.0)]], -1,
+			AIRushRead.Numbers.DOWN_ONE, INF, false)
+	alone.snapshot.puck_state.position = puck
+	alone.snapshot.puck_state.velocity = Vector3(0.0, 0.0, 7.0)
+	var layered: RoleContext = _ctx(Vector3(0.0, 0.0, 20.0),
+			[[10, 1, puck, Vector3(0.0, 0.0, 7.0)]], -1,
+			AIRushRead.Numbers.DOWN_ONE, INF, true)
+	layered.snapshot.puck_state.position = puck
+	layered.snapshot.puck_state.velocity = Vector3(0.0, 0.0, 7.0)
+	var d_alone: RoleDecision = AIRoleRushD.decide(alone, AIRoleSlots.Slot.RUSH_D1)
+	assert_eq(d_alone.target_velocity, Vector3.ZERO,
+			"a loose puck is not a frame to hold station in")
+	assert_gt(_gap(d_alone, puck, Vector3(0.0, 0.0, 7.0)),
+			_gap(AIRoleRushD.decide(layered, AIRoleSlots.Slot.RUSH_D1), puck,
+					Vector3(0.0, 0.0, 7.0)),
+			"the last man still holds ice he cannot cover set")
 
 
 # ── Gap up ───────────────────────────────────────────────────────────────────
@@ -266,10 +294,8 @@ func test_stand_shades_inside_to_steer_him_wide() -> void:
 			[[10, 1, carrier, Vector3(0.0, 0.0, 7.0)]], 10,
 			AIRushRead.Numbers.DOWN_ONE)
 	var d: RoleDecision = AIRoleRushD.decide(ctx, AIRoleSlots.Slot.RUSH_D1)
-	var led: Vector3 = _led(carrier, Vector3(0.0, 0.0, 7.0))
-	var on_line_x: float = led.x + (0.0 - led.x) \
-			* (_gap(d, carrier, Vector3(0.0, 0.0, 7.0))
-					/ led.distance_to(Vector3(0, 0, OUR_NET_Z)))
+	var on_line_x: float = carrier.x + (0.0 - carrier.x) \
+			* (_gap(d, carrier) / carrier.distance_to(Vector3(0, 0, OUR_NET_Z)))
 	assert_lt(d.target_position.x, on_line_x,
 			"the stand shades to the inside of the retreat line")
 

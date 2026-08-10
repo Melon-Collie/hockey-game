@@ -190,3 +190,74 @@ func test_lone_mid_tracker_owns_both_halves() -> void:
 		assert_lt(absf(d.target_position.x - man_x), 5.0,
 				("a man at x=%.1f must be picked up by the lone tracker; got %s")
 				% [man_x, d.target_position])
+
+
+# ── Bounds: a tracker defends his own ice ────────────────────────────────────
+
+func test_the_mid_tracker_does_not_leave_the_structure_for_a_man_up_ice() -> void:
+	# "Pick up whoever has entered my lane… never chase out of the structure."
+	# The pick used to be the deepest attacker on my half of the RINK however far
+	# up-ice, and the cover geometry then put the target goal-side of HIM — which
+	# sent a mid tracker past the far blue line to cover a trailer who was no part
+	# of anything yet. A man outside the pickup bound is not mine; hold the post.
+	var carrier := Vector3(0.0, 0.0, 8.0)
+	var far_man := Vector3(2.0, 0.0, -12.0)      # ~38 m off our net, up-ice
+	var ctx: RoleContext = _ctx(Vector3(0.0, 0.0, 16.0), [
+		[10, 1, carrier, Vector3(0.0, 0.0, 7.0)],
+		[11, 1, far_man, Vector3(0.0, 0.0, 8.0)],
+	], 10)
+	var d: RoleDecision = AIRoleTrack.decide(ctx, AIRoleSlots.Slot.TRACK_MID)
+	var our_net := Vector3(0.0, 0.0, OUR_NET_Z)
+	assert_lt(d.target_position.distance_to(our_net), 14.5,
+			"the mid tracker chased a man out of his own structure; target sat %.1f m off our net"
+			% d.target_position.distance_to(our_net))
+
+
+func test_the_mid_tracker_still_picks_up_a_man_who_has_arrived() -> void:
+	# The bound must not turn into blindness: a man inside the tracker's ice is
+	# exactly who the role exists to take, and he still gets covered.
+	var carrier := Vector3(0.0, 0.0, 8.0)
+	# ~12 m off our net (inside the pickup bound) and well off centre, so
+	# covering him is visibly a different answer from holding the centre post.
+	var near_man := Vector3(7.0, 0.0, 15.0)
+	var ctx: RoleContext = _ctx(Vector3(0.0, 0.0, 18.0), [
+		[10, 1, carrier, Vector3(0.0, 0.0, 7.0)],
+		[11, 1, near_man, Vector3(0.0, 0.0, 5.0)],
+	], 10)
+	var d: RoleDecision = AIRoleTrack.decide(ctx, AIRoleSlots.Slot.TRACK_MID)
+	assert_gt(d.target_position.x, 2.0,
+			"a man who has entered the tracker's ice is still picked up; got %s"
+			% d.target_position)
+
+
+func test_a_tracker_already_goal_side_holds_a_gap_instead_of_running_the_hip() -> void:
+	# The hip is a CATCH-UP target: 0.8 m goal-side is where you take the puck
+	# from a man you are chasing. For a tracker who is already goal-side it is a
+	# step-up — the election hands this slot to whoever reaches the puck soonest,
+	# which in a shape that is home means somebody in FRONT of the play. So the
+	# hip's gap is bounded by the gap ladder, and the sprint override (which
+	# exists because a backchecker is behind by definition) stands down.
+	var carrier := Vector3(0.0, 0.0, 0.0)
+	var ctx: RoleContext = _ctx(Vector3(0.0, 0.0, 20.0),
+			[[10, 1, carrier, Vector3(0.0, 0.0, 7.0)]], 10)
+	var d: RoleDecision = AIRoleTrack.decide(ctx, AIRoleSlots.Slot.TRACK_PUCK)
+	# Measured off his REAL body — the role no longer leads the reference, because
+	# the route carries his velocity instead (see the HIP_GOAL_SIDE_M note).
+	var gap: float = d.target_position.distance_to(carrier)
+	assert_gt(gap, AIRoleTrack.HIP_GOAL_SIDE_M * 2.0,
+			"a tracker in front of the play still ran at the hip; gap %.2f m" % gap)
+	assert_false(d.sprint_override,
+			"a tracker who is already back is not sprinting a recovery")
+
+
+func test_a_tracker_behind_the_play_still_runs_the_hip_down() -> void:
+	# The other side of the same bound: a genuine backchecker is unchanged — the
+	# depth term is nil, so he gets the hip and the sprint override.
+	var carrier := Vector3(0.0, 0.0, 0.0)
+	var ctx: RoleContext = _ctx(Vector3(0.0, 0.0, -6.0),
+			[[10, 1, carrier, Vector3(0.0, 0.0, 7.0)]], 10)
+	var d: RoleDecision = AIRoleTrack.decide(ctx, AIRoleSlots.Slot.TRACK_PUCK)
+	assert_almost_eq(d.target_position.distance_to(carrier),
+			AIRoleTrack.HIP_GOAL_SIDE_M, 0.1,
+			"the backchecker's target is still the hip")
+	assert_true(d.sprint_override, "and he is still sprinting to catch him")

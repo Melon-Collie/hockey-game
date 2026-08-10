@@ -3652,8 +3652,6 @@ func _best_developing_feed(ctx: RoleContext) -> float:
 			# scoring skips ghosts, so holding for one would be waiting
 			# for a feed we're never allowed to make. Already-flagged —
 			# the normal pass scoring feeds it; nothing to wait for.
-			# (slot_anchor returns ZERO for FINISHER, so we read the
-			# teammate's live motion, not a brain anchor.)
 			#
 			# The play that WILL exist, not just the one that does: a
 			# finisher still skating to his staging spot is valued at the

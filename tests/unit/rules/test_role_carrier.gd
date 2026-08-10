@@ -53,7 +53,6 @@ func _make_ctx(self_pos: Vector3, skaters: Array = []) -> RoleContext:
 	ctx.attacking_goal_pos = Vector3(0.0, 0.0, OPP_NET_Z)
 	ctx.defending_goal_pos = Vector3(0.0, 0.0, OUR_NET_Z)
 	ctx.own_goal_dir = 1.0
-	ctx.anchor = Vector3.ZERO
 	ctx.team_id_by_peer = team_map
 	return ctx
 

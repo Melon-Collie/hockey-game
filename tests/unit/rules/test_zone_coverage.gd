@@ -128,75 +128,38 @@ func test_anchors_mirror_with_strong_side_and_net() -> void:
 	assert_lt(a.x, 0.0, "strong-side anchor follows the strong sign")
 	assert_lt(a.z, 0.0, "anchor is in team 1's zone")
 
+# WHICH man a zone defender covers moved to TeamBrain's matching (one partition
+# across all five areas, so two defenders can never take the same body); the
+# per-area argmax that used to live here is gone with it. What stays here is the
+# GEOMETRY that matching consumes as eligibility — see test_team_brain.gd for the
+# partition itself.
 
-# ── Soft-lock man query ──────────────────────────────────────────────────────
-
-func _snapshot_with_men(men: Array) -> WorldSnapshot:
-	var snap := WorldSnapshot.new()
-	for entry: Array in men:
-		var s := SkaterNetworkState.new()
-		s.position = entry[1]
-		snap.skater_states[entry[0]] = s
-	var puck := PuckNetworkState.new()
-	puck.position = _pt(9.0, 3.0)
-	puck.carrier_peer_id = 100
-	snap.puck_state = puck
-	return snap
-
-
-func test_locks_the_most_dangerous_man_in_area() -> void:
-	# Two opponents in the net-front box, goalie tracking the corner
-	# carrier (strong-side shade): the backdoor man with the open half of
-	# the net out-dangers the man parked on the goalie's side.
-	var snap: WorldSnapshot = _snapshot_with_men([
-		[100, _pt(9.0, 3.0)],    # carrier (excluded)
-		[101, _pt(-1.5, 2.0)],   # backdoor — net open to his side
-		[102, _pt(2.4, 4.0)],    # goalie-side box edge
-	])
-	var team_map: Dictionary = {100: 1, 101: 1, 102: 1}
-	var goalie_pos: Vector3 = Vector3(0.8, 0.0, NET_Z - 0.6)  # shaded to the carrier
-	var man: int = AIZoneCoverage.most_dangerous_man_in_area(
-			AIRoleSlots.Slot.ZONE_D_WEAK, 1.0, NET_Z, snap, 0, team_map,
-			goalie_pos, 100)
-	assert_eq(man, 101)
-
-
-func test_lock_releases_when_the_man_leaves_the_area() -> void:
-	# The incumbent walked out past the box + release margin: the query
-	# must let him go (the neighbor's area inherits him).
-	var snap: WorldSnapshot = _snapshot_with_men([
-		[100, _pt(9.0, 3.0)],
-		[101, _pt(0.0, 8.0)],   # left the net-front box for the slot
-	])
-	var team_map: Dictionary = {100: 1, 101: 1}
-	var man: int = AIZoneCoverage.most_dangerous_man_in_area(
-			AIRoleSlots.Slot.ZONE_D_WEAK, 1.0, NET_Z, snap, 0, team_map,
-			Vector3(0, 0, NET_Z - 1.0), 100, 101)
-	assert_eq(man, -1, "boundary release: never chase him out of the box")
-	# ...and ZONE_C, whose ice he entered, picks him up.
-	var c_man: int = AIZoneCoverage.most_dangerous_man_in_area(
-			AIRoleSlots.Slot.ZONE_C, 1.0, NET_Z, snap, 0, team_map,
-			Vector3(0, 0, NET_Z - 1.0), 100)
-	assert_eq(c_man, 101)
-
-
-func test_incumbent_held_just_past_the_edge() -> void:
-	# A man half a metre past the box edge: a fresh query ignores him, but
-	# the incumbent margin keeps the lock alive (no seam flicker).
+func test_the_release_margin_holds_a_man_just_past_the_edge() -> void:
+	# A man half a metre outside the net-front box. A fresh read excludes him,
+	# but the incumbent margin keeps him eligible so a man skating the seam is
+	# not handed back and forth between two defenders every tick.
 	var edge_pos: Vector3 = _pt(NET_FRONT_EDGE_X + 0.5, 2.0)
-	var snap: WorldSnapshot = _snapshot_with_men([
-		[100, _pt(9.0, 3.0)],
-		[101, edge_pos],
-	])
-	var team_map: Dictionary = {100: 1, 101: 1}
-	var fresh: int = AIZoneCoverage.most_dangerous_man_in_area(
-			AIRoleSlots.Slot.ZONE_D_WEAK, 1.0, NET_Z, snap, 0, team_map,
-			Vector3(0, 0, NET_Z - 1.0), 100)
-	assert_eq(fresh, -1)
-	var held: int = AIZoneCoverage.most_dangerous_man_in_area(
-			AIRoleSlots.Slot.ZONE_D_WEAK, 1.0, NET_Z, snap, 0, team_map,
-			Vector3(0, 0, NET_Z - 1.0), 100, 101)
-	assert_eq(held, 101)
+	assert_false(AIZoneCoverage.in_area(
+			AIRoleSlots.Slot.ZONE_D_WEAK, 1.0, NET_Z, edge_pos),
+			"a fresh read does not reach past the box edge")
+	assert_true(AIZoneCoverage.in_area(
+			AIRoleSlots.Slot.ZONE_D_WEAK, 1.0, NET_Z, edge_pos,
+			AIZoneCoverage.AREA_RELEASE_MARGIN_M),
+			"the incumbent margin holds him")
+
+
+func test_a_man_who_leaves_the_box_is_the_neighbours() -> void:
+	# Out past the box AND past the margin: the net-front D can no longer be
+	# given him at all, and the slot's area has him instead.
+	var gone: Vector3 = _pt(0.0, 8.0)
+	assert_false(AIZoneCoverage.in_area(
+			AIRoleSlots.Slot.ZONE_D_WEAK, 1.0, NET_Z, gone,
+			AIZoneCoverage.AREA_RELEASE_MARGIN_M),
+			"never chase him out of the box")
+	assert_true(AIZoneCoverage.in_area(
+			AIRoleSlots.Slot.ZONE_C, 1.0, NET_Z, gone),
+			"the ice he entered owns him")
+
 
 const NET_FRONT_EDGE_X: float = 2.6  # AIZoneCoverage.NET_FRONT_HALF_WIDTH_M
 

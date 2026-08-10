@@ -1769,10 +1769,10 @@ func _team_state_label(state: int) -> String:
 			return "DZ"
 		AIPossessionState.State.OZONE:
 			return "OZ"
-		AIPossessionState.State.TRANS_DO:
-			return "DtoO"
-		AIPossessionState.State.TRANS_OD:
-			return "OtoD"
+		AIPossessionState.State.TRANS_OFFENSE:
+			return "TransOff"
+		AIPossessionState.State.TRANS_DEFENSE:
+			return "TransDef"
 		AIPossessionState.State.NEUTRAL:
 			return "Neutral"
 		AIPossessionState.State.BREAKOUT:
@@ -2056,8 +2056,8 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 	else:
 		# Role dispatch: each TeamBrain-assigned slot maps to a behavior
 		# module that produces a RoleDecision (target_position +
-		# optional aim override + optional fire intents). The default
-		# fallback (AIRoleAnchorFollow) just steers to the brain anchor.
+		# optional aim override + optional fire intents). Only Slot.NONE
+		# reaches the default branch — every real slot has a module.
 		var ctx: RoleContext = _build_role_context(snapshot, self_pos, self_state)
 		# Throttle the expensive positioning argmax to ~30 Hz (ROLE_DECISION_
 		# PERIOD_TICKS), reusing the cached decision between re-evals — the same
@@ -2158,6 +2158,7 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# order says go THERE, not through someone).
 		if ctx.ping_move_target.is_finite():
 			decision.target_position = _clamp_anchor(ctx.ping_move_target)
+			decision.target_velocity = Vector3.ZERO  # an ordered SPOT, not a man
 			decision.commit_check = false
 		# Station-keeping: arrive AT the role destination (arrival brake)
 		# instead of overshooting a spot that stopped moving — EXCEPT on a
@@ -2173,9 +2174,14 @@ func _state_off_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# composes with the arrival brake (which still stops the station) and
 		# with the commit/at-speed drives (which keep their momentum straight
 		# at the target). See AISteering velocity-matched seek.
+		#
+		# A role whose stand RIDES A MAN publishes that stand's own velocity, and
+		# the route — pursuit heading and arrival brake alike — is then flown in
+		# the stand's frame rather than the ice's. See RoleDecision.target_velocity.
 		_apply_steering(input, snapshot, self_pos, decision.target_position,
 				not decision.commit_check and not decision.arrive_at_speed,
-				_self_max_speed)
+				_self_max_speed, decision.target_velocity,
+				decision.engaged_peer_id)
 		if decision.commit_check:
 			# Body-check commit: drive THROUGH the carrier at max closing
 			# velocity. Force sprint even at short range — the gap gate would
@@ -2381,8 +2387,6 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 	# rules; stamped every build since the ctx instance is reused.
 	ctx.offsides_enforced = rule_set != GameRules.RuleSet.OFF
 	if _current_strategy != null:
-		var brain_anchor: Vector3 = _current_strategy.get_anchor(_peer_id, snapshot)
-		ctx.anchor = brain_anchor if brain_anchor != Vector3.ZERO else self_pos
 		ctx.strong_x = _current_strategy.strong_x()
 		ctx.assigned_threat_peer = _current_strategy.assigned_threat(_peer_id)
 		# The brain's shared threat memo, read off the strategy view (a frozen
@@ -2406,7 +2410,6 @@ func _build_role_context(snapshot: WorldSnapshot, self_pos: Vector3,
 		ctx.ping_shoot_active = _current_strategy.ping_shoot(_peer_id)
 		ctx.ping_pass_target_peer = _current_strategy.ping_pass_target(_peer_id)
 	else:
-		ctx.anchor = self_pos
 		# Match RoleContext.new()'s default when no brain is wired (tests),
 		# since the reused instance would otherwise carry a stale value.
 		ctx.strong_x = 1.0
@@ -2527,7 +2530,10 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 			# High-slot trailer — SUPPORT's goal-side trail read.
 			decision = AIRoleSupport.decide(ctx)
 		_:
-			decision = AIRoleAnchorFollow.decide(ctx)
+			# Slot.NONE only — the brain has not assigned this peer yet, so
+			# there is nothing to be in position FOR. Hold.
+			decision = RoleDecision.new()
+			decision.target_position = ctx.self_pos
 	_prev_role_slot = slot
 	_prev_role_target = decision.target_position
 	_prev_locked_man_pid = decision.locked_man_pid
@@ -4610,7 +4616,9 @@ func _pass_aim_point(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 # callers (carry steps, puck chase, check commits, tag-up) leave it false —
 # they either re-pick the anchor continuously or WANT to arrive at speed.
 func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vector3,
-		anchor: Vector3, arrive: bool = false, velocity_match_speed: float = 0.0) -> void:
+		anchor: Vector3, arrive: bool = false, velocity_match_speed: float = 0.0,
+		anchor_velocity: Vector3 = Vector3.ZERO,
+		engaged_peer_id: int = -1) -> void:
 	# Standard potential-field steering with brake-pivot.
 	# Use the per-team roster published by GameManager._enrich_snapshot_for_ai
 	# instead of re-partitioning snapshot.skater_states every physics tick.
@@ -4632,6 +4640,8 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 				continue
 			var opp_ids: Array = snapshot.teammate_ids_by_team[other_team]
 			for peer_id: int in opp_ids:
+				if peer_id == engaged_peer_id:
+					continue   # the man we were told to close on — see engaged_peer_id
 				_scratch_opponents.append(snapshot.skater_states[peer_id].position)
 				_scratch_opponent_steer_vels.append(snapshot.skater_states[peer_id].velocity)
 	else:
@@ -4641,7 +4651,7 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 			if _team_id_by_peer.get(peer_id, -1) == _team_id:
 				_scratch_teammates.append(snapshot.skater_states[peer_id].position)
 				_scratch_teammate_steer_vels.append(snapshot.skater_states[peer_id].velocity)
-			else:
+			elif peer_id != engaged_peer_id:
 				_scratch_opponents.append(snapshot.skater_states[peer_id].position)
 				_scratch_opponent_steer_vels.append(snapshot.skater_states[peer_id].velocity)
 
@@ -4682,12 +4692,20 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		var self_st: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
 		if self_st != null:
 			match_self_vel = self_st.velocity
+	# A stand that RIDES A MAN is flown in its own frame: the anchor term
+	# tracks a velocity rather than visiting a point, and the arrival brake
+	# stands down (it is an actuator on our own speed and cannot slow an
+	# approaching anchor). See AISteering's moving-frame pursuit.
+	var moving_anchor: bool = velocity_match_speed > 0.0 \
+			and Vector2(anchor_velocity.x, anchor_velocity.z).length() \
+					> AISteering.MOVING_FRAME_MIN_SPEED \
+			and AISteering.is_rideable_anchor(anchor)
 	var desired: Vector2 = AISteering.compute_move_vector(
 			self_pos, anchor, _scratch_teammates, _scratch_opponents,
 			lane_start, lane_end,
 			GameRules.RINK_HALF_WIDTH, GameRules.RINK_HALF_LENGTH,
 			opp_repel, steer_vels, _scratch_teammate_steer_vels,
-			match_self_vel, velocity_match_speed)
+			match_self_vel, velocity_match_speed, anchor_velocity)
 
 	# Brake-pivot: if our current velocity is roughly opposite the desired
 	# direction (~180° transition), stopping hard beats carving a wide arc.
@@ -4705,8 +4723,10 @@ func _apply_steering(input: InputState, snapshot: WorldSnapshot, self_pos: Vecto
 		# Arrival brake (opt-in per call site): stop AT a station target
 		# instead of overshooting one that slowed down and doubling back.
 		# The pivot brake wins when both would fire (it already implies
-		# maximal braking).
-		if arrive and not _pivot_braking:
+		# maximal braking). A MOVING anchor never takes it — see
+		# AISteering.should_arrival_brake; there the closing profile is the
+		# arrival law and the pivot brake is the only actuator needed.
+		if arrive and not _pivot_braking and not moving_anchor:
 			_arrival_braking = AISteering.should_arrival_brake(
 					self_pos, anchor, Vector2(v.x, v.z), _arrival_braking)
 		else:

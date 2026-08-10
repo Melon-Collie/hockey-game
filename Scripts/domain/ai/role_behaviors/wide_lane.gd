@@ -1,6 +1,6 @@
 class_name AIRoleWideLane
 
-# WIDE_L / WIDE_R role behavior — TRANS_DO, 5v5 only. The rush's wide
+# WIDE_L / WIDE_R role behavior — TRANS_OFFENSE, 5v5 only. The rush's wide
 # drivers: fill the outside lanes at pace so the entry has width (defenders
 # must respect three lanes, which is what opens the middle for the carrier
 # and the trailer). Paced to the play like OUTLET — lead the carrier up-ice,

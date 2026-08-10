@@ -8,6 +8,20 @@ extends RefCounted
 # for CARRIER it's the chosen carry destination.
 var target_position: Vector3 = Vector3.ZERO
 
+# How fast `target_position` is ITSELF moving, world m/s. Set by the roles whose
+# stand rides an opponent — a gap point, a cover point, a backchecker's hip —
+# where the spot sweeps toward our net at the man's pace. The steering then flies
+# the route in the stand's own frame instead of treating it as a parked point
+# (AISteering, "moving-frame pursuit"), which is the difference between arriving
+# matched to the play and arriving stopped in front of it.
+#
+# Vector3.ZERO (the default) means a spot on the ice: stations, zone anchors,
+# carry waypoints and puck chases all leave it alone and steer exactly as before.
+# It is the stand's velocity, NOT the man's — usually they are the same, but a
+# stand whose geometry is doing something else (a shade tightening, a gap
+# closing) is entitled to say so.
+var target_velocity: Vector3 = Vector3.ZERO
+
 # Optional aim override. When `has_aim_override` is true,
 # `aim_world_pos` replaces the state machine's default mouse target
 # (the ready-stance look-at toward `target_position`). Used by
@@ -48,6 +62,22 @@ var is_one_timer_ready: bool = false
 # agree even if a consumer ignores the flag.
 var commit_check: bool = false
 var check_target: Vector3 = Vector3.ZERO
+
+# The opponent this decision is deliberately CLOSING ON, or -1. Steering drops
+# him from the off-puck proximity repel (AISteering's plain opponent field),
+# because that force models "keep formation space against a checker" and this bot
+# has been told the exact distance to hold instead.
+#
+# Without it the two fight: the repel reaches 4 m at weight 0.6 against an anchor
+# pull of 1.0, and the in-zone gap ladder asks for ~2.7 m — so the whole gap sits
+# inside a force pushing the defender off it, and he ends up wherever the two
+# balance rather than where his role decided. One axis, one controller; the role
+# owns the gap.
+#
+# Only the man being ENGAGED is dropped. Every other opponent still repels
+# normally, so a defender closing his man still avoids skating through anybody
+# else.
+var engaged_peer_id: int = -1
 
 # The opponent this decision soft-locked onto (5v5 zone defense), or -1.
 # The state machine round-trips it into RoleContext.prev_locked_man on the

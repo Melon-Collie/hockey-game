@@ -7,7 +7,7 @@ class_name AIRoleMark
 # layers, and MARK survives only as the extra-body fallback in the 5v5
 # election's remainder.
 #
-# Unifies the old ANCHOR / COVER (DZONE) and BACKCHECK (TRANS_OD) roles, which
+# Unifies the old ANCHOR / COVER (DZONE) and BACKCHECK (TRANS_DEFENSE) roles, which
 # had converged: when TeamBrain's threat partition assigns a man (the normal
 # case) all three ran byte-for-byte identical code — cover the assigned man
 # goal-side, in the carrier→man feed lane. They differed only in a rarely-run
@@ -33,7 +33,7 @@ class_name AIRoleMark
 #
 # so an extra marker with no man still races home and helps at the net. The
 # search center is the midpoint between the puck and our net, which interpolates
-# correctly across both states this role serves — puck NZ-side (TRANS_OD) pulls
+# correctly across both states this role serves — puck NZ-side (TRANS_DEFENSE) pulls
 # the center out toward our blue line, puck deep (DZONE) pulls it to the slot —
 # so one fallback covers both zones without a per-state branch.
 
@@ -45,17 +45,9 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# (deny the carrier's feed to him). Needs a live carrier (the feed source);
 	# resolve_defensive_play_ref returns INF when there's no puck, dropping us
 	# to the recovery fallback below.
-	var man_pid: int = ctx.assigned_threat_peer
-	if man_pid != -1 and ctx.snapshot != null \
-			and ctx.snapshot.skater_states.has(man_pid):
-		var carrier_pos: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
-		if carrier_pos.is_finite():
-			# Anticipate: cover where the man is cutting, not his current spot.
-			var man: SkaterNetworkState = ctx.snapshot.skater_states[man_pid]
-			var man_pos: Vector3 = AIRoleHelpers.lead_threat(
-					man.position, man.velocity, ctx.defensive_anticipation_scale)
-			d.target_position = AIRoleHelpers.cover_man_target(ctx, man_pos, carrier_pos)
-			return d
+	if AIRoleHelpers.cover_threat(ctx, d, ctx.assigned_threat_peer,
+			AIRoleHelpers.resolve_defensive_play_ref(ctx)):
+		return d
 
 	var opp_positions: Array[Vector3] = ctx.scratch_opp_positions
 	var opp_states: Array[SkaterNetworkState] = ctx.scratch_opp_states
@@ -71,7 +63,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, our_team_excluding_self)
 
 	# Search center: midpoint between puck and our net. Pure in-game refs — the
-	# region interpolates between TRANS_OD (puck NZ-side → midpoint at our blue
+	# region interpolates between TRANS_DEFENSE (puck NZ-side → midpoint at our blue
 	# line) and DZONE (puck deep → midpoint near net). Falls back to slot when
 	# puck_state is unavailable so a missing snapshot doesn't strand MARK at
 	# (0, 0, 0).

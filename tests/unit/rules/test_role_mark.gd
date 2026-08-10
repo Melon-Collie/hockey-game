@@ -1,13 +1,14 @@
 extends GutTest
 
-# AIRoleMark — the unified off-puck man-marker (DZONE + TRANS_OD), replacing the
+# AIRoleMark — the unified off-puck man-marker (DZONE + TRANS_DEFENSE), replacing the
 # old ANCHOR / COVER / BACKCHECK, which had converged to identical man-marking.
 #
-# Primary path (brain assigned a man): cover that opponent goal-side, in the
-# carrier→man feed lane, anticipating his cut. Tests:
-#   - Assigned man drives coverage to that man's side (DZONE and TRANS_OD geometry).
+# Primary path (brain assigned a man): the shared cover stand,
+# AIRoleHelpers.cover_threat — goal-side of that opponent, in the carrier→man
+# feed lane, riding his cut. Tests:
+#   - Assigned man drives coverage to that man's side (DZONE + TRANS_DEFENSE).
 #   - Coverage stays ATTACHED to the man (near his cover anchor, not from the slot).
-#   - Coverage is goal-side of the man and leads his cut.
+#   - Coverage is goal-side of the man, and rides his cut rather than leading it.
 #
 # Fallback path (unassigned — more markers than receivers, loose puck, no brain):
 # recover to the most dangerous ice via a shot-threat minimax centered on the
@@ -143,9 +144,14 @@ func test_assigned_man_is_covered_tight_not_from_the_slot() -> void:
 			"…and on the defensive side of him; got z=%f" % d.target_position.z)
 
 
-func test_man_coverage_anticipates_a_moving_man() -> void:
-	# Same assigned man, stationary vs cutting toward center (+x). Coverage
-	# should shade toward where he's GOING, not his current spot.
+func test_man_coverage_rides_a_moving_man_instead_of_leading_him() -> void:
+	# Same assigned man, stationary vs cutting toward center (+x). The
+	# anticipation is real but it lives in the FRAME, not in the point: the
+	# stand stays pinned on his real body and the route flies it at his
+	# velocity (AISteering's moving-frame pursuit). Doing both — aiming the
+	# anchor downrange AND riding him — double-counts his motion and covers
+	# him from further off the faster he skates, which is the defect the gap
+	# ladder and the backchecker's hip were already fixed for.
 	var carrier := Vector3(0, 0, 20)
 	var man := Vector3(-7, 0, 19)
 	var skaters: Array = [
@@ -155,15 +161,20 @@ func test_man_coverage_anticipates_a_moving_man() -> void:
 	]
 	var ctx_still: RoleContext = _make_ctx(Vector3(0, 0, 16), skaters, 200)
 	ctx_still.assigned_threat_peer = 210
-	var still_x: float = AIRoleMark.decide(ctx_still).target_position.x
+	var still: RoleDecision = AIRoleMark.decide(ctx_still)
 
 	var ctx_move: RoleContext = _make_ctx(Vector3(0, 0, 16), skaters, 200)
 	ctx_move.assigned_threat_peer = 210
-	ctx_move.snapshot.skater_states[210].velocity = Vector3(10, 0, 0)  # cutting +x
-	var moved_x: float = AIRoleMark.decide(ctx_move).target_position.x
+	var cut := Vector3(10, 0, 0)  # cutting +x
+	ctx_move.snapshot.skater_states[210].velocity = cut
+	var moved: RoleDecision = AIRoleMark.decide(ctx_move)
 
-	assert_gt(moved_x, still_x,
-			"coverage leads the man's cut toward center; still=%f moved=%f" % [still_x, moved_x])
+	assert_almost_eq(moved.target_position.x, still.target_position.x, 0.001,
+			"the stand is pinned on his real body, not aimed downrange of it")
+	assert_eq(still.target_velocity, Vector3.ZERO,
+			"a still man's stand does not move")
+	assert_eq(moved.target_velocity, cut,
+			"a cutting man's stand rides him at his own pace")
 
 
 func test_wide_man_coverage_stays_in_the_sealing_lane() -> void:
@@ -276,7 +287,7 @@ func test_fallback_shades_toward_dominant_threat() -> void:
 # ── Fallback: puck-adaptive centering (both zones) ─────────────────────────
 
 func test_fallback_center_is_puck_adaptive_not_fixed_slot() -> void:
-	# TRANS_OD: puck up-ice at z=-15 (we just lost it deep). The unified
+	# TRANS_DEFENSE: puck up-ice at z=-15 (we just lost it deep). The unified
 	# fallback centers on midpoint(puck, our_net), so the recovery target sits
 	# BETWEEN the puck and the net — not pinned at the fixed slot the old
 	# BACKCHECK used. Grounds the marker in the developing play instead of a

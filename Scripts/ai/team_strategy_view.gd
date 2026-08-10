@@ -17,9 +17,6 @@ extends RefCounted
 func get_slot(_peer_id: int) -> int:
 	return AIRoleSlots.Slot.NONE
 
-func get_anchor(_peer_id: int, _snapshot: WorldSnapshot) -> Vector3:
-	return Vector3.ZERO
-
 func strong_x() -> float:
 	return 1.0
 

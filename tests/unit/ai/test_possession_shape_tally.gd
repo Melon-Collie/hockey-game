@@ -60,12 +60,12 @@ func test_out_of_range_input_is_ignored() -> void:
 
 
 func test_coverage_downgrade_is_counted_alongside_the_shape() -> void:
-	# The downgrade rides on TRANS_OD samples — it is time the D-zone coverage
+	# The downgrade rides on TRANS_DEFENSE samples — it is time the D-zone coverage
 	# was suppressed, so it must be visible without being a shape of its own.
-	_t.accumulate(0, AIPossessionState.State.TRANS_OD, 1.0, true)
-	_t.accumulate(0, AIPossessionState.State.TRANS_OD, 3.0, false)
-	assert_almost_eq(_t.share(0, AIPossessionState.State.TRANS_OD), 1.0, 0.0001,
-			"all four seconds are still TRANS_OD occupancy")
+	_t.accumulate(0, AIPossessionState.State.TRANS_DEFENSE, 1.0, true)
+	_t.accumulate(0, AIPossessionState.State.TRANS_DEFENSE, 3.0, false)
+	assert_almost_eq(_t.share(0, AIPossessionState.State.TRANS_DEFENSE), 1.0, 0.0001,
+			"all four seconds are still TRANS_DEFENSE occupancy")
 	assert_almost_eq(_t.downgrade_seconds(0), 1.0, 0.0001,
 			"only the flagged second was a suppressed DZONE")
 	assert_almost_eq(_t.downgrade_share(0), 0.25, 0.0001, "1 of 4 s suppressed")

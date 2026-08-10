@@ -17,7 +17,7 @@ const OUR_NET_Z: float = 26.65   # Team 0 defends +Z, attacks -Z
 const OPP_NET_Z: float = -OUR_NET_Z
 
 
-func _make_ctx(self_pos: Vector3, anchor: Vector3, carrier_pid: int = -1,
+func _make_ctx(self_pos: Vector3, carrier_pid: int = -1,
 		skaters: Array = []) -> RoleContext:
 	var snap := WorldSnapshot.new()
 	if skaters.is_empty():
@@ -55,7 +55,6 @@ func _make_ctx(self_pos: Vector3, anchor: Vector3, carrier_pid: int = -1,
 	ctx.attacking_goal_pos = Vector3(0.0, 0.0, OPP_NET_Z)
 	ctx.defending_goal_pos = Vector3(0.0, 0.0, OUR_NET_Z)
 	ctx.own_goal_dir = 1.0
-	ctx.anchor = anchor
 	ctx.team_id_by_peer = team_map
 	return ctx
 
@@ -68,7 +67,7 @@ func test_presents_outlet_on_loose_puck_instead_of_freezing() -> void:
 	# get up-ice to present the stretch option. Bot starts buried deep
 	# in our own end; target must advance up-ice, never self_pos.
 	var self_pos := Vector3(4, 0, 20)   # buried deep in our own end
-	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO)   # loose puck at origin
+	var ctx: RoleContext = _make_ctx(self_pos)   # loose puck at origin
 	var d: RoleDecision = AIRoleOutlet.decide(ctx)
 	assert_ne(d.target_position, self_pos,
 			"loose puck → get up-ice for the outlet, don't freeze")
@@ -82,7 +81,7 @@ func test_falls_back_to_self_pos_when_opp_has_puck() -> void:
 		[1, TEAM_ID, self_pos, Vector3.ZERO],
 		[200, 1 - TEAM_ID, Vector3(0, 0, 0), Vector3.ZERO],
 	]
-	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 200, skaters)
+	var ctx: RoleContext = _make_ctx(self_pos, 200, skaters)
 	var d: RoleDecision = AIRoleOutlet.decide(ctx)
 	assert_eq(d.target_position, self_pos,
 			"opp carrier → no offensive context, fall back to self_pos")
@@ -97,7 +96,7 @@ func test_returns_legal_position_with_teammate_carrier() -> void:
 		[1, TEAM_ID, self_pos, Vector3.ZERO],
 		[100, TEAM_ID, carrier_pos, Vector3.ZERO],
 	]
-	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	var ctx: RoleContext = _make_ctx(self_pos, 100, skaters)
 	var d: RoleDecision = AIRoleOutlet.decide(ctx)
 	assert_true(absf(d.target_position.x) <= GameRules.RINK_HALF_WIDTH,
 			"x within rink bounds")
@@ -120,14 +119,14 @@ func test_outlet_side_follows_strong_x_not_the_carrier_wobble() -> void:
 			[1, TEAM_ID, self_pos, Vector3.ZERO],
 			[100, TEAM_ID, Vector3(1, 0, 0), Vector3.ZERO],   # carrier +X of center
 	]
-	var ctx_plus: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, sk_plus)
+	var ctx_plus: RoleContext = _make_ctx(self_pos, 100, sk_plus)
 	ctx_plus.strong_x = 1.0
 	var d_plus: RoleDecision = AIRoleOutlet.decide(ctx_plus)
 	var sk_minus: Array = [
 			[1, TEAM_ID, self_pos, Vector3.ZERO],
 			[100, TEAM_ID, Vector3(-1, 0, 0), Vector3.ZERO],  # carrier wheeled to -X
 	]
-	var ctx_minus: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, sk_minus)
+	var ctx_minus: RoleContext = _make_ctx(self_pos, 100, sk_minus)
 	ctx_minus.strong_x = 1.0
 	var d_minus: RoleDecision = AIRoleOutlet.decide(ctx_minus)
 	assert_almost_eq(d_minus.target_position.x, d_plus.target_position.x, 0.01,
@@ -148,7 +147,7 @@ func test_offside_filter_rejects_oz_candidates() -> void:
 		[1, TEAM_ID, self_pos, Vector3.ZERO],
 		[100, TEAM_ID, carrier_pos, Vector3.ZERO],
 	]
-	var ctx: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, skaters)
+	var ctx: RoleContext = _make_ctx(self_pos, 100, skaters)
 	var d: RoleDecision = AIRoleOutlet.decide(ctx)
 	assert_gt(d.target_position.z, -GameRules.BLUE_LINE_Z,
 			"OUTLET stays NZ-side of opp blue line; got %s" % d.target_position)
@@ -170,13 +169,13 @@ func test_velocity_buffer_pushes_target_back_at_speed() -> void:
 		[1, TEAM_ID, self_pos, Vector3.ZERO],
 		[100, TEAM_ID, carrier_pos, Vector3.ZERO],
 	]
-	var ctx_static: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, stationary_skaters)
+	var ctx_static: RoleContext = _make_ctx(self_pos, 100, stationary_skaters)
 	ctx_static.self_velocity = Vector3.ZERO
 	var stationary_target: Vector3 = AIRoleOutlet.decide(ctx_static).target_position
 
 	# Same setup but bot is moving at near top speed toward opp net
 	# (own_goal_dir = +1, so attacking is -Z; velocity.z negative).
-	var ctx_moving: RoleContext = _make_ctx(self_pos, Vector3.ZERO, 100, stationary_skaters)
+	var ctx_moving: RoleContext = _make_ctx(self_pos, 100, stationary_skaters)
 	ctx_moving.self_velocity = Vector3(0.0, 0.0, -10.0)
 	var moving_target: Vector3 = AIRoleOutlet.decide(ctx_moving).target_position
 
@@ -208,7 +207,7 @@ func test_avoids_defender_camped_on_the_stretch_spot() -> void:
 		[100, TEAM_ID, carrier_pos, Vector3.ZERO],
 		[200, 1 - TEAM_ID, defender, Vector3.ZERO],
 	]
-	var ctx: RoleContext = _make_ctx(Vector3(-3, 0, 3), Vector3.ZERO, 100, skaters)
+	var ctx: RoleContext = _make_ctx(Vector3(-3, 0, 3), 100, skaters)
 	var d: RoleDecision = AIRoleOutlet.decide(ctx)
 	assert_gt(d.target_position.distance_to(defender), 2.0,
 			"outlet must stage clear of a defender camped on the stretch spot; got %s vs defender %s" \
@@ -228,10 +227,10 @@ func _rush_skaters(carrier_vel: Vector3) -> Array:
 
 func test_rush_sets_arrive_at_speed_but_set_play_does_not() -> void:
 	var moving: RoleDecision = AIRoleOutlet.decide(
-			_make_ctx(Vector3(-2, 0, -2), Vector3.ZERO, 100,
+			_make_ctx(Vector3(-2, 0, -2), 100,
 					_rush_skaters(Vector3(0, 0, -8))))
 	var still: RoleDecision = AIRoleOutlet.decide(
-			_make_ctx(Vector3(-2, 0, -2), Vector3.ZERO, 100,
+			_make_ctx(Vector3(-2, 0, -2), 100,
 					_rush_skaters(Vector3.ZERO)))
 	assert_true(moving.arrive_at_speed,
 			"a live rush arrives at speed (no arrival brake) to hit the line in stride")
@@ -245,10 +244,10 @@ func test_rush_paces_outlet_behind_the_parked_stretch_spot() -> void:
 	# the carrier's advance — meaningfully further NZ-side (higher z for Team
 	# 0) so it arrives in stride instead of standing at the line.
 	var rush_z: float = AIRoleOutlet.decide(
-			_make_ctx(Vector3(-2, 0, -2), Vector3.ZERO, 100,
+			_make_ctx(Vector3(-2, 0, -2), 100,
 					_rush_skaters(Vector3(0, 0, -8)))).target_position.z
 	var set_z: float = AIRoleOutlet.decide(
-			_make_ctx(Vector3(-2, 0, -2), Vector3.ZERO, 100,
+			_make_ctx(Vector3(-2, 0, -2), 100,
 					_rush_skaters(Vector3.ZERO))).target_position.z
 	assert_gt(rush_z, set_z + 1.0,
 			"rush paces the OUTLET back off the line vs the parked stretch spot; got rush=%f set=%f" \
@@ -269,7 +268,7 @@ func test_anti_crowding_avoids_candidates_near_teammates() -> void:
 		[100, TEAM_ID, carrier_pos, Vector3.ZERO],        # carrier
 		[110, TEAM_ID, search_center, Vector3.ZERO],      # squatting on the center
 	]
-	var ctx: RoleContext = _make_ctx(Vector3(8, 0, 5), Vector3.ZERO, 100, skaters)
+	var ctx: RoleContext = _make_ctx(Vector3(8, 0, 5), 100, skaters)
 	var d: RoleDecision = AIRoleOutlet.decide(ctx)
 	var dist_to_teammate: float = d.target_position.distance_to(search_center)
 	assert_gt(dist_to_teammate, AIRoleHelpers.ANTI_CROWD_RADIUS_M - 0.01,

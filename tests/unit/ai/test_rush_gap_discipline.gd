@@ -24,22 +24,32 @@ extends GutTest
 #
 # Thresholds are coarse on purpose (the harness's assertion philosophy) — they
 # bound the pathology, not the tuning. Reference readings over the 35-start
-# sweep, for the unbounded ladder, the step-up PLAN that first bounded it, and
-# the approach-SPEED limit that replaced the plan:
+# sweep, across the four models this has had: the unbounded ladder, the step-up
+# PLAN that first bounded it, the approach-SPEED limit that replaced the plan,
+# and the MOVING-FRAME ROUTE that retired all three:
 #
-#                              charging   step-up plan   approach limit
-#   mean up-ice speed at meet   4.2 m/s      2.4 m/s        2.2 m/s
-#   starts meeting at >3 m/s     27/35        12/35          12/35
-#   mean excursion off own net   10.9 m       4.2 m          5.1 m
-#   worst single excursion       28.5 m      10.8 m          9.2 m
-#   separation at the meet       0.69 m      0.57 m         0.84 m
+#                              charging   step-up plan   approach limit   route
+#   mean up-ice speed at meet   4.2 m/s      2.4 m/s        2.2 m/s       0.6 m/s
+#   starts meeting at >3 m/s     27/35        12/35          12/35          0/35
+#   mean excursion off own net   10.9 m       4.2 m          5.1 m         0.9 m
+#   worst single excursion       28.5 m      10.8 m          9.2 m         5.1 m
+#   separation at the meet       0.69 m      0.57 m         0.84 m        0.53 m
 #
-# The limit trades ~1 m of mean wander for the best worst case and the best
-# terminal speed, and its per-start spread is far tighter — a properly-gapped D
-# now reads 0.0-0.9 m/s at the meet where the plan read 1.0-3.0. That shape is
-# the point: a speed limit is negative feedback (closing shrinks the spare
-# depth, which lowers the cap), where the plan it replaced was re-derived from
-# scratch each dispatch and could wind itself up.
+# The first three columns are all attempts to bound a CHARGE by placing the stand
+# somewhere a charge would end set. The fourth removes the charge instead: the
+# stand rides the carrier and the steering flies the route in its frame
+# (AISteering, "moving-frame pursuit"), so the approach is a commanded velocity
+# that decays onto the rush's own by arrival, and RUSH_D1 no longer runs a
+# stand-placement bound at all (AIRoleRushD._settable_gap). The excursion
+# collapsing to under a metre is the visible shape of that: a defender who
+# understands the stand is coming to him does not go and fetch it.
+#
+# The route column read 1.0 m/s and 2.85 m of separation until AIRolePressure
+# gained its house-gate floor, which stops a defender being walked toward his own
+# net. He therefore MEETS the carrier instead of retreating in front of him, and
+# the separation falls accordingly. That is a contest, not a lunge — the up-ice
+# speed at the meet fell at the same time and no start is over the lunge bar now,
+# so he is closing while set.
 
 const Duel := preload("res://tests/unit/ai/duel_harness.gd")
 
@@ -87,7 +97,7 @@ func _rush(d_start: Vector3, carrier_start: Vector3) -> Dictionary:
 			# Speed along "away from my own net" at the closest approach — the
 			# momentum he has to reverse before he can defend anything.
 			up_ice_at_meet = maxf(dman.vel.dot((dman.pos - net).normalized()), 0.0)
-	return {"up_ice": up_ice_at_meet,
+	return {"up_ice": up_ice_at_meet, "sep": min_sep,
 			"excursion": max_net_dist - d_start.distance_to(net)}
 
 
@@ -96,6 +106,7 @@ func test_gap_defender_does_not_charge_a_neutral_zone_rush() -> void:
 	var over_excursion: Array[String] = []
 	var up_sum: float = 0.0
 	var exc_sum: float = 0.0
+	var sep_sum: float = 0.0
 	var worst_exc: float = 0.0
 	var n: int = 0
 	for dz: float in [-22.0, -20.0, -18.0, -16.0, -14.0, -12.0, -10.0]:
@@ -108,6 +119,7 @@ func test_gap_defender_does_not_charge_a_neutral_zone_rush() -> void:
 			n += 1
 			up_sum += r["up_ice"]
 			exc_sum += r["excursion"]
+			sep_sum += r["sep"]
 			worst_exc = maxf(worst_exc, r["excursion"])
 			var tag: String = "z%.0f/x%.0f" % [dz, cx]
 			if r["up_ice"] > LUNGE_M_S:
@@ -116,8 +128,9 @@ func test_gap_defender_does_not_charge_a_neutral_zone_rush() -> void:
 				over_excursion.append(tag)
 			row += "  x%+5.1f up%4.1f exc%+5.1f" % [cx, r["up_ice"], r["excursion"]]
 		gut.p(row)
-	gut.p("  → mean up-ice at meet %.1f m/s | mean excursion %.1f m | worst %.1f m" % [
-			up_sum / float(n), exc_sum / float(n), worst_exc])
+	gut.p("  → mean up-ice at meet %.1f m/s | over the lunge bar %d/%d | mean excursion %.1f m | worst %.1f m | mean separation %.2f m" % [
+			up_sum / float(n), lunges.size(), n, exc_sum / float(n), worst_exc,
+			sep_sum / float(n)])
 
 	# The aggregate is the assertion: a defender meeting the rush with some speed
 	# on is ordinary gap control (he closed the last metres as the budget opened

@@ -16,7 +16,6 @@ var strong_x_val: float = 1.0
 var team_size_val: int = GameRules.DEFAULT_TEAM_SIZE
 var ping_chase_peer_val: int = -1
 var slot_by_peer: Dictionary[int, int] = {}
-var anchor_by_peer: Dictionary[int, Vector3] = {}
 var assigned_threat_by_peer: Dictionary[int, int] = {}
 var position_by_peer: Dictionary[int, int] = {}
 var one_timer_ready_by_peer: Dictionary[int, bool] = {}
@@ -31,12 +30,6 @@ var rush: AIRushRead = AIRushRead.new()
 
 func get_slot(peer_id: int) -> int:
 	return slot_by_peer.get(peer_id, AIRoleSlots.Slot.NONE)
-
-
-func get_anchor(peer_id: int, _snapshot: WorldSnapshot) -> Vector3:
-	# The anchor was frozen against the build-time snapshot; the live snapshot
-	# arg is ignored (the whole point is not to recompute off-thread).
-	return anchor_by_peer.get(peer_id, Vector3.ZERO)
 
 
 func strong_x() -> float:

@@ -62,7 +62,7 @@ func _slot_of(assignments: Dictionary, slot: int) -> int:
 
 func test_every_state_fields_five_distinct_jobs() -> void:
 	# Every possession state must give 5 peers 5 assignments (MARK repeats
-	# by design in TRANS_OD; all other states hand out distinct slots).
+	# by design in TRANS_DEFENSE; all other states hand out distinct slots).
 	var skaters: Array = [
 		[1, 0, Vector3(0, 0, 5)], [2, 0, Vector3(-5, 0, 8)],
 		[3, 0, Vector3(5, 0, 8)], [4, 0, Vector3(-4, 0, 16)],
@@ -70,7 +70,7 @@ func test_every_state_fields_five_distinct_jobs() -> void:
 		[10, 1, Vector3(0, 0, -10)],
 	]
 	for state: int in [AIPossessionState.State.DZONE, AIPossessionState.State.OZONE,
-			AIPossessionState.State.TRANS_DO, AIPossessionState.State.TRANS_OD,
+			AIPossessionState.State.TRANS_OFFENSE, AIPossessionState.State.TRANS_DEFENSE,
 			AIPossessionState.State.NEUTRAL, AIPossessionState.State.BREAKOUT,
 			AIPossessionState.State.FORECHECK]:
 		var a: Dictionary = _assign(skaters, state, -1, -12.0)
@@ -181,7 +181,7 @@ func test_trans_do_trailer_is_the_activating_d_when_a_forward_carries() -> void:
 		[4, 0, Vector3(-3, 0, 6)],
 		[5, 0, Vector3(3, 0, 8)],
 	]
-	var a: Dictionary = _assign(skaters, AIPossessionState.State.TRANS_DO, 1)
+	var a: Dictionary = _assign(skaters, AIPossessionState.State.TRANS_OFFENSE, 1)
 	assert_eq(a[1], AIRoleSlots.Slot.CARRIER)
 	assert_eq(a[2], AIRoleSlots.Slot.WIDE_L)
 	assert_eq(a[3], AIRoleSlots.Slot.WIDE_R)
@@ -192,7 +192,7 @@ func test_trans_do_trailer_is_the_activating_d_when_a_forward_carries() -> void:
 	assert_ne(trailer, valve)
 
 
-# ── TRANS_OD: contain from the D group, everyone else marks ──────────────────
+# ── TRANS_DEFENSE: contain from the D group, everyone else marks ──────────────────
 
 func test_trans_od_is_the_layered_rush_shape() -> void:
 	# The 5v5 rush structure (docs/transition-defense-plan.md §5): a D pair in
@@ -206,7 +206,7 @@ func test_trans_od_is_the_layered_rush_shape() -> void:
 		[5, 0, Vector3(2, 0, 8)],      # RD
 		[10, 1, Vector3(0, 0, -2)],    # opp carrier at center
 	]
-	var a: Dictionary = _assign(skaters, AIPossessionState.State.TRANS_OD, 10)
+	var a: Dictionary = _assign(skaters, AIPossessionState.State.TRANS_DEFENSE, 10)
 	for slot: int in [AIRoleSlots.Slot.RUSH_D1, AIRoleSlots.Slot.RUSH_D2,
 			AIRoleSlots.Slot.TRACK_PUCK, AIRoleSlots.Slot.TRACK_MID_STRONG,
 			AIRoleSlots.Slot.TRACK_MID_WEAK]:
@@ -229,7 +229,7 @@ func test_trans_od_d_pair_is_d_scoped() -> void:
 		[5, 0, Vector3(2, 0, 8)],      # RD
 		[10, 1, Vector3(0, 0, -2)],
 	]
-	var a: Dictionary = _assign(skaters, AIPossessionState.State.TRANS_OD, 10)
+	var a: Dictionary = _assign(skaters, AIPossessionState.State.TRANS_DEFENSE, 10)
 	assert_true(_slot_of(a, AIRoleSlots.Slot.RUSH_D1) in [4, 5],
 			"RUSH_D1 is D-scoped")
 	assert_true(_slot_of(a, AIRoleSlots.Slot.RUSH_D2) in [4, 5],
@@ -251,7 +251,7 @@ func test_trans_od_rush_d1_cross_fills_when_both_d_are_caught() -> void:
 		[5, 0, Vector3(5, 0, -7.8)],     # RD caught at their blue line
 		[10, 1, Vector3(0, 0, 0), Vector3(0, 0, 8.0)],  # carrier flying at our net
 	]
-	var a: Dictionary = _assign(skaters, AIPossessionState.State.TRANS_OD, 10)
+	var a: Dictionary = _assign(skaters, AIPossessionState.State.TRANS_DEFENSE, 10)
 	assert_eq(a[1], AIRoleSlots.Slot.RUSH_D1,
 			"the feasible backchecker picks up the carrier, not a caught D")
 	for caught: int in [4, 5]:
@@ -275,7 +275,7 @@ func test_trans_od_rush_d1_stays_d_scoped_when_a_d_can_beat_the_rush_home() -> v
 		[5, 0, Vector3(5, 0, -7.8)],     # RD caught at their line
 		[10, 1, Vector3(0, 0, -6), Vector3(0, 0, 7.0)],  # carrier entering the NZ
 	]
-	var a: Dictionary = _assign(skaters, AIPossessionState.State.TRANS_OD, 10)
+	var a: Dictionary = _assign(skaters, AIPossessionState.State.TRANS_DEFENSE, 10)
 	assert_eq(a[4], AIRoleSlots.Slot.RUSH_D1,
 			"a feasible D keeps the front layer over a deeper forward")
 
@@ -362,3 +362,61 @@ func test_missing_positions_default_to_forward_group() -> void:
 			_make_snapshot(skaters, -1, -12.0), TEAM_ID, OUR_NET_Z,
 			AIPossessionState.State.FORECHECK, _resolver(skaters), {}, 1.0, {}, {})
 	assert_eq(a.size(), 5, "all five slotted even with no position data")
+
+
+# ── The spare body while our own pass is in flight ───────────────────────────
+
+# Our-possession lineup deep in THEIR zone (we defend +Z, so attack -Z).
+func _ozone_lineup() -> Array:
+	return [
+		[1, TEAM_ID, Vector3(0.0, 0.0, -18.0)],    # C
+		[2, TEAM_ID, Vector3(-7.0, 0.0, -20.0)],   # LW
+		[3, TEAM_ID, Vector3(7.0, 0.0, -20.0)],    # RW
+		[4, TEAM_ID, Vector3(-5.0, 0.0, -8.0)],    # LD
+		[5, TEAM_ID, Vector3(5.0, 0.0, -8.0)],     # RD
+		[90, 1 - TEAM_ID, Vector3(0.0, 0.0, -24.0)],
+	]
+
+
+func test_our_pass_in_flight_leaves_a_spare_body() -> void:
+	# OZONE specs four slots; CARRIER is assigned separately and only when one
+	# of OURS actually holds the puck. So the moment we pass, a body is spare —
+	# measured at 46% of our offensive-possession ticks, in 0.40 s episodes.
+	var lineup: Array = _ozone_lineup()
+	var carried: Dictionary = _assign(lineup, AIPossessionState.State.OZONE, 1)
+	assert_eq(_slot_of(carried, AIRoleSlots.Slot.CARRIER), 1,
+			"while we carry, the puck holder is CARRIER")
+	assert_eq(_slot_of(carried, AIRoleSlots.Slot.SUPPORT), -1,
+			"…and nobody is spare")
+
+	# Same bodies, puck in flight between them.
+	var flight: Dictionary = _assign(lineup, AIPossessionState.State.OZONE, -1,
+			-19.0, 3.0)
+	assert_eq(_slot_of(flight, AIRoleSlots.Slot.CARRIER), -1,
+			"no carrier to slot while it is in the air")
+	assert_ne(_slot_of(flight, AIRoleSlots.Slot.SUPPORT), -1,
+			"the spare body gets SUPPORT; got %s" % str(flight))
+	assert_eq(flight.size(), lineup.size() - 1, "everybody still has a job")
+
+
+func test_the_spare_body_is_never_given_a_defensive_role_while_we_attack() -> void:
+	# MARK is the wrong job here twice over: the threat partition only runs in
+	# DZONE / TRANS_DEFENSE, so it could never be assigned a man, and its
+	# unassigned fallback is a defender's recovery read pointed at our own end —
+	# during our own offensive possession.
+	for state: int in [AIPossessionState.State.OZONE,
+			AIPossessionState.State.TRANS_OFFENSE,
+			AIPossessionState.State.BREAKOUT]:
+		var got: Dictionary = _assign(_ozone_lineup(), state, -1, -19.0, 3.0)
+		assert_eq(_slot_of(got, AIRoleSlots.Slot.MARK), -1,
+				"state %d handed the spare body MARK: %s" % [state, str(got)])
+
+
+func test_a_defensive_remainder_still_marks() -> void:
+	# The other side of the same branch: an EXTRA body in a defensive state is a
+	# genuine spare marker, and there the partition can actually give him a man.
+	var lineup: Array = _ozone_lineup()
+	lineup.append([6, TEAM_ID, Vector3(2.0, 0.0, 20.0)])   # sixth skater
+	var got: Dictionary = _assign(lineup, AIPossessionState.State.DZONE, 90)
+	assert_ne(_slot_of(got, AIRoleSlots.Slot.MARK), -1,
+			"the extra defensive body marks; got %s" % str(got))

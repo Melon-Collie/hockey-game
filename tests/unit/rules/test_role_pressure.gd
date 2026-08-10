@@ -1,6 +1,6 @@
 extends GutTest
 
-# AIRolePressure — DZONE + TRANS_OD puck pressurer. Tests cover:
+# AIRolePressure — DZONE + TRANS_DEFENSE puck pressurer. Tests cover:
 #   - Loose puck (no carrier) → pressures the puck, never freezes.
 #   - Goal-side filter rejects wrong-side candidates.
 #   - Argmax picks a position that blocks the shot lane when
@@ -284,12 +284,19 @@ func test_wrong_side_candidates_are_filtered() -> void:
 # PRESSURE's cut-off sits one stick goal-side of where the carrier is GOING —
 # a challenge position, and the right one while a layer is home behind. As the
 # genuine LAST man it is also a step-up, and a rush at pace is exactly when that
-# step-up cannot be made: charge it and the reversal leaves the pressurer's
-# momentum pointing the wrong way with the carrier walking around him.
+# step-up cannot be made.
 #
-# These pin the DOCTRINE, not the arithmetic — the clamp has been re-derived
-# once already and the properties below are what must survive any version of it.
-# The clamp had no direct coverage at all before them.
+# That bound is now RETIRED for a live carrier and survives only for a loose puck
+# — see test_the_last_man_bound_is_retired_for_a_live_carrier below for why. What
+# these pin instead is the GAP LADDER (docs/transition-defense-plan.md §6), which
+# PRESSURE never had: ~3 sticks at their blue line, 1 stick at ours, "1 stick /
+# contact — you are on him" inside our own zone. §2.5 is the sentence it restores
+# — "the D who gapped a carrier through the neutral zone KEEPS HIM into the zone;
+# there is no handoff at the line" — since RUSH_D1 and PRESSURE now size the same
+# gap off the same ladder.
+#
+# These pin the DOCTRINE, not the arithmetic. The clamp has been re-derived twice
+# and then retired; the properties below are what must survive any version.
 
 # Depth of the chosen stand, goal-side of the carrier along the carrier→our-net
 # line. Larger = deeper = further from the carrier.
@@ -305,8 +312,14 @@ func _stand_depth(d: RoleDecision, carrier: Vector3) -> float:
 # A last man 12 m goal-side of a carrier flying at our net, vs the same
 # geometry with a teammate home behind him.
 func _rush_ctx(support_behind: bool, carrier_speed: float) -> Dictionary:
+	return _rush_ctx_at(Vector3(0.0, 0.0, 0.0), carrier_speed, support_behind)
+
+
+# The same, with the carrier placed explicitly — the ladder is a function of
+# where he is, so its cases need to move him.
+func _rush_ctx_at(carrier: Vector3, carrier_speed: float,
+		support_behind: bool = true) -> Dictionary:
 	var self_pos := Vector3(0.0, 0.0, 12.0)
-	var carrier := Vector3(0.0, 0.0, 0.0)
 	var vel := Vector3(0.0, 0.0, carrier_speed)
 	var skaters: Array = [
 			[1, TEAM_ID, self_pos],
@@ -321,45 +334,74 @@ func _rush_ctx(support_behind: bool, carrier_speed: float) -> Dictionary:
 	return {"ctx": ctx, "carrier": carrier}
 
 
-func test_last_man_does_not_lunge_at_a_rush_at_pace() -> void:
+func test_the_stand_is_the_gap_ladder() -> void:
+	# The doctrine distance, and the defect it replaced. PRESSURE used to hold a
+	# fixed one-stick stand-off measured off the carrier's LED position, so the
+	# real cushion was `one stick + pace x lookahead` — 3+ sticks at a rush pace,
+	# which is docs/transition-defense-plan.md §2.4 verbatim: "the correct gap for
+	# the offensive blue line, applied at the defensive blue line". The ladder
+	# (§6) is a function of ICE REMAINING and reads ~1 stick in our own zone.
+	var ctx: Dictionary = _rush_ctx(true, 7.0)
+	var d: RoleDecision = AIRolePressure.decide(ctx["ctx"])
+	var want: float = AIRoleRushD.ladder_gap_m(
+			ctx["carrier"], 1.0, ctx["ctx"].self_blade_reach, 7.0)
+	assert_almost_eq(_stand_depth(d, ctx["carrier"]), want, 1.2,
+			"the cut-off distance is the gap ladder; wanted ~%.2f m" % want)
+
+
+func test_the_ladder_tightens_as_the_carrier_gets_deeper() -> void:
+	# ~3 sticks at their blue line, 1 stick at ours. The old fixed stand-off could
+	# not express this at all, which is why the bot held an O-zone gap at its own
+	# net.
+	var far: Dictionary = _rush_ctx_at(Vector3(0.0, 0.0, -7.29), 7.0)
+	var near: Dictionary = _rush_ctx_at(Vector3(0.0, 0.0, 7.29), 7.0)
+	assert_gt(_stand_depth(AIRolePressure.decide(far["ctx"]), far["carrier"]),
+			_stand_depth(AIRolePressure.decide(near["ctx"]), near["carrier"]),
+			"the gap must tighten as the carrier eats the ice")
+
+
+func test_the_stand_rides_the_carrier() -> void:
+	# The route is flown in the carrier's frame (AISteering's moving-frame
+	# pursuit), which is what lets a ~1-stick gap be HELD rather than lunged at.
+	var ctx: Dictionary = _rush_ctx(true, 7.0)
+	var d: RoleDecision = AIRolePressure.decide(ctx["ctx"])
+	assert_almost_eq(d.target_velocity.z, 7.0, 0.01,
+			"the cut-off rides the man it is cutting off")
+	assert_eq(d.engaged_peer_id, 200,
+			"the man we are closing on is dropped from the proximity repel")
+
+
+func test_the_last_man_bound_is_retired_for_a_live_carrier() -> void:
+	# It exists because a parked-point seek could only reach a stand by charging
+	# it; the moving-frame route regulates the approach instead, so running both
+	# is two controllers on one axis — and the second wins in the worst place, by
+	# naming a stand at wherever the body already is. That is what walked the
+	# pressurer to his own goal line: a defender whose stand is always where he
+	# stands can never close, so the carrier simply pushes him back. Same
+	# retirement, same reason, as AIRoleRushD._settable_gap.
 	var alone: Dictionary = _rush_ctx(false, 7.0)
 	var layered: Dictionary = _rush_ctx(true, 7.0)
+	assert_almost_eq(
+			_stand_depth(AIRolePressure.decide(alone["ctx"]), alone["carrier"]),
+			_stand_depth(AIRolePressure.decide(layered["ctx"]), layered["carrier"]),
+			0.05, "the last man reads the ladder, not a depth bound")
+
+
+func test_a_loose_puck_keeps_the_last_man_bound() -> void:
+	# No man to ride means the route is a point seek again, and the trip to the
+	# stand genuinely needs bounding.
+	var alone: Dictionary = _rush_ctx(false, 7.0)
+	alone["ctx"].snapshot.puck_state.carrier_peer_id = -1
+	alone["ctx"].snapshot.puck_state.position = alone["carrier"]
+	alone["ctx"].snapshot.puck_state.velocity = Vector3(0.0, 0.0, 7.0)
+	var layered: Dictionary = _rush_ctx(true, 7.0)
+	layered["ctx"].snapshot.puck_state.carrier_peer_id = -1
+	layered["ctx"].snapshot.puck_state.position = layered["carrier"]
+	layered["ctx"].snapshot.puck_state.velocity = Vector3(0.0, 0.0, 7.0)
 	var bounded: float = _stand_depth(
 			AIRolePressure.decide(alone["ctx"]), alone["carrier"])
 	var free: float = _stand_depth(
 			AIRolePressure.decide(layered["ctx"]), layered["carrier"])
 	assert_gt(bounded, free,
-			"the last man holds ice the layered pressurer may take; %.2f vs %.2f"
+			"the last man still holds ice he cannot cover set; %.2f vs %.2f"
 			% [bounded, free])
-
-
-func test_the_clamp_is_a_hold_never_a_retreat() -> void:
-	# It may refuse to spend depth; it may never spend MORE than the pressurer
-	# already has. He stands 12 m goal-side of the carrier.
-	var alone: Dictionary = _rush_ctx(false, 7.0)
-	var bounded: float = _stand_depth(
-			AIRolePressure.decide(alone["ctx"]), alone["carrier"])
-	assert_lte(bounded, 12.05,
-			"the clamp never pushes the stand back past our own feet; got %.2f"
-			% bounded)
-
-
-func test_a_carrier_who_is_not_coming_leaves_the_clamp_inert() -> void:
-	# A stalled or regrouping carrier's stand isn't going anywhere, so there is
-	# no rendezvous to lose and the pressurer closes right up.
-	var stalled: Dictionary = _rush_ctx(false, 0.0)
-	var layered: Dictionary = _rush_ctx(true, 0.0)
-	assert_almost_eq(
-			_stand_depth(AIRolePressure.decide(stalled["ctx"]), stalled["carrier"]),
-			_stand_depth(AIRolePressure.decide(layered["ctx"]), layered["carrier"]),
-			0.05, "against a stalled carrier the last man reads like anyone else")
-
-
-func test_a_faster_rush_concedes_more_ground() -> void:
-	# Monotonicity is the whole shape of the bound: the less time the rush
-	# leaves, the less of the step-up is available.
-	var slow: Dictionary = _rush_ctx(false, 3.0)
-	var fast: Dictionary = _rush_ctx(false, 8.0)
-	assert_gt(_stand_depth(AIRolePressure.decide(fast["ctx"]), fast["carrier"]),
-			_stand_depth(AIRolePressure.decide(slow["ctx"]), slow["carrier"]),
-			"a faster rush leaves the last man less step-up")

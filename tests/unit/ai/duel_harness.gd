@@ -259,7 +259,7 @@ func step() -> void:
 	# GameManager, so the dispatch exercises the same frozen-view path production
 	# uses rather than the live-brain fallback.
 	for tid: int in brains:
-		brains[tid].build_view(snapshot)
+		brains[tid].build_view()
 	# Decide.
 	for s: SimSkater in skaters:
 		if s.agent == null:

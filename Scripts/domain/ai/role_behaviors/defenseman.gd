@@ -16,7 +16,7 @@ class_name AIRoleDefenseman
 #     end-zone circles, per lane, and abandon it for the defensive home post
 #     the moment their breakout is genuinely under way — exactly like the 3v3
 #     forecheck's F3, which runs the same read.
-#   TRANS_DO safety valve (DVALVE) — trail the rush centrally about a zone
+#   TRANS_OFFENSE safety valve (DVALVE) — trail the rush centrally about a zone
 #     behind the play, bounded by the shared pinch read: always the reset
 #     option, never beaten home.
 #   NEUTRAL back shape (DBACK_L / DBACK_R) — the staggered goal-side pair
@@ -86,8 +86,10 @@ static func decide(ctx: RoleContext, slot: int) -> RoleDecision:
 		AIRoleSlots.Slot.DBACK_R:
 			return _decide_back(ctx, 1.0)
 		_:
+			# Unreachable: the dispatcher routes exactly the seven slots above
+			# here. Hold rather than return a target of (0, 0, 0).
 			var d := RoleDecision.new()
-			d.target_position = ctx.anchor if ctx.anchor != Vector3.ZERO else ctx.self_pos
+			d.target_position = ctx.self_pos
 			return d
 
 
@@ -220,7 +222,7 @@ static func _decide_line_hold(ctx: RoleContext, lane_x: float) -> RoleDecision:
 	return d
 
 
-# ── TRANS_DO: the safety valve ───────────────────────────────────────────────
+# ── TRANS_OFFENSE: the safety valve ───────────────────────────────────────────────
 static func _decide_valve(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 	var own_dir: float = ctx.own_goal_dir

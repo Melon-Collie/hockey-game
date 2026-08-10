@@ -96,6 +96,17 @@ class SlotSpec:
 		return s
 
 
+# Is `slot` one of the five D-zone hybrid-coverage areas? The brain uses this to
+# pull the zone roles into the man partition (they cover a man like MARK does,
+# just restricted to the ice they own).
+static func is_zone_slot(slot: int) -> bool:
+	return slot == AIRoleSlots.Slot.ZONE_D_STRONG \
+			or slot == AIRoleSlots.Slot.ZONE_D_WEAK \
+			or slot == AIRoleSlots.Slot.ZONE_C \
+			or slot == AIRoleSlots.Slot.ZONE_W_STRONG \
+			or slot == AIRoleSlots.Slot.ZONE_W_WEAK
+
+
 # Canonical slot list per state (mirrors AIRoleSlots.slots_for_state).
 static func slots_for_state(state: int) -> Array[int]:
 	match state:
@@ -107,7 +118,7 @@ static func slots_for_state(state: int) -> Array[int]:
 			return [AIRoleSlots.Slot.CARRIER, AIRoleSlots.Slot.POINT_STRONG,
 					AIRoleSlots.Slot.POINT_WEAK, AIRoleSlots.Slot.NET_FRONT,
 					AIRoleSlots.Slot.HIGH_SLOT]
-		AIPossessionState.State.TRANS_DO:
+		AIPossessionState.State.TRANS_OFFENSE:
 			return [AIRoleSlots.Slot.CARRIER, AIRoleSlots.Slot.DVALVE,
 					AIRoleSlots.Slot.WIDE_L, AIRoleSlots.Slot.WIDE_R,
 					AIRoleSlots.Slot.TRAILER]
@@ -119,7 +130,7 @@ static func slots_for_state(state: int) -> Array[int]:
 			return [AIRoleSlots.Slot.F1_PRESSURE, AIRoleSlots.Slot.DP_STRONG,
 					AIRoleSlots.Slot.DP_WEAK, AIRoleSlots.Slot.F2_STRONG,
 					AIRoleSlots.Slot.F2_WEAK]
-		AIPossessionState.State.TRANS_OD:
+		AIPossessionState.State.TRANS_DEFENSE:
 			return [AIRoleSlots.Slot.RUSH_D1, AIRoleSlots.Slot.RUSH_D2,
 					AIRoleSlots.Slot.TRACK_PUCK,
 					AIRoleSlots.Slot.TRACK_MID_STRONG,
@@ -161,7 +172,7 @@ static func assign(
 
 	# Fixed CARRIER for the possession states, exactly like 3v3.
 	if state == AIPossessionState.State.OZONE \
-			or state == AIPossessionState.State.TRANS_DO \
+			or state == AIPossessionState.State.TRANS_OFFENSE \
 			or state == AIPossessionState.State.BREAKOUT:
 		if carrier_pid != -1 and team_id_by_peer.get(carrier_pid, -1) == team_id:
 			result[carrier_pid] = AIRoleSlots.Slot.CARRIER
@@ -171,7 +182,7 @@ static func assign(
 	var specs: Array[SlotSpec] = _specs_for_state(
 			state, own_goal_z, strong_x, puck_pos)
 
-	# TRANS_OD gap feasibility: RUSH_D1's D-scoping only holds while a
+	# TRANS_DEFENSE gap feasibility: RUSH_D1's D-scoping only holds while a
 	# defenseman can actually do the job — beat the carrier home with enough
 	# time in hand to arrive SET (the brake margin: the seconds a skater at
 	# league top speed needs to shed it, the same set-arrival quantity the
@@ -183,7 +194,7 @@ static func assign(
 	# infeasible D group defers RUSH_D1 to the cross-fill pass, where the
 	# deepest feasible body — the classic backchecking third-man-high — picks
 	# the rush up instead, and the caught D fall to MARK duty on the trailers.
-	if state == AIPossessionState.State.TRANS_OD and carrier_pid != -1 \
+	if state == AIPossessionState.State.TRANS_DEFENSE and carrier_pid != -1 \
 			and team_id_by_peer.get(carrier_pid, -1) != team_id \
 			and snapshot.skater_states.has(carrier_pid):
 		var cs: SkaterNetworkState = snapshot.skater_states[carrier_pid]
@@ -231,12 +242,43 @@ static func assign(
 		result[pid] = spec.slot
 		assigned[pid] = true
 
-	# Remainder — peers beyond the spec'd slots. TRANS_OD's MARK crew by
-	# design; a defensive-shape fallback everywhere else (extra bodies play
-	# the man, never stand slotless).
+	# Remainder — peers beyond the spec'd slots. Extra bodies play a real job,
+	# never stand slotless.
+	#
+	# WHICH job depends on the phase, because the two situations that produce a
+	# remainder are opposites. The defensive states all spec five slots, so a
+	# remainder there means a genuinely extra body and MARK is right: it is the
+	# man-marking role, and the threat partition runs in those states so it can
+	# actually be given somebody.
+	#
+	# The OUR-POSSESSION states are the common case and MARK is wrong for them.
+	# They spec only four, because CARRIER is assigned separately and only when
+	# one of ours is really holding the puck — so every pass we make leaves a
+	# body over for the duration of the flight. Measured on the real stack, that
+	# is 46% of our offensive-possession ticks, in episodes averaging 0.40 s.
+	# Handing those a defensive role is doubly wrong: the threat partition does
+	# not run outside DZONE / TRANS_DEFENSE, so MARK can never be assigned a man
+	# there and always falls to its recovery argmax — a defender's read, pointed
+	# at our own end, during our own offensive possession.
+	#
+	# SUPPORT is the job that fits: an off-puck attacker who is a pass option and
+	# a recoverable body, and one that already expects this exact moment — it
+	# orients off resolve_offensive_play_ref, which answers with the puck when
+	# nobody is carrying, so a pass in flight is a situation it flows into rather
+	# than a hole it falls through.
+	#
+	# (The drift this costs is small — the stranded body barely moves in 0.4 s,
+	# 5 cm at worst toward our own end. This is a correctness fix, not a visible
+	# one; the honest reason to make it is that a role which can never work
+	# should not be handed out half of our possession time.)
+	var attacking: bool = state == AIPossessionState.State.OZONE \
+			or state == AIPossessionState.State.TRANS_OFFENSE \
+			or state == AIPossessionState.State.BREAKOUT
+	var spare_slot: int = AIRoleSlots.Slot.SUPPORT if attacking \
+			else AIRoleSlots.Slot.MARK
 	for pid: int in teammates:
 		if not assigned.has(pid):
-			result[pid] = AIRoleSlots.Slot.MARK
+			result[pid] = spare_slot
 
 	return result
 
@@ -318,7 +360,7 @@ static func _specs_for_state(state: int, own_goal_z: float, strong_x: float,
 			return _breakout_post_specs(own_goal_z, own_dir, strong_x,
 					half_w, our_blue_z)
 
-		AIPossessionState.State.TRANS_OD:
+		AIPossessionState.State.TRANS_DEFENSE:
 			# The layered rush defense (docs/transition-defense-plan.md §5): a D
 			# pair in front, three forwards tracking back through mid-ice. Race
 			# targets are LANE points, not men — the structure is lanes and
@@ -342,7 +384,7 @@ static func _specs_for_state(state: int, own_goal_z: float, strong_x: float,
 						_side_home_f(-strong_x)),
 			]
 
-		AIPossessionState.State.TRANS_DO:
+		AIPossessionState.State.TRANS_OFFENSE:
 			return [
 				SlotSpec.make(AIRoleSlots.Slot.DVALVE, Group.D, our_net),
 				SlotSpec.make(AIRoleSlots.Slot.WIDE_L, Group.F,
@@ -394,7 +436,7 @@ static func _breakout_post_specs(own_goal_z: float, own_dir: float,
 	]
 
 
-# Unit vector from the rush origin toward our net — the axis the TRANS_OD lane
+# Unit vector from the rush origin toward our net — the axis the TRANS_DEFENSE lane
 # targets lay out along, so the whole structure rotates with a rush coming up a
 # wall instead of assuming it comes down the middle.
 static func _rush_axis(our_net: Vector3, puck_pos: Vector3) -> Vector3:
@@ -416,111 +458,6 @@ static func _side_home_d(side_x: float) -> int:
 # Same for the side-signed F wall slots: LW (1) rests -X, RW (2) +X.
 static func _side_home_f(side_x: float) -> int:
 	return 1 if side_x < 0.0 else 2
-
-
-# ── Anchors ──────────────────────────────────────────────────────────────────
-
-# Positional anchor for a 5v5 slot — the spot AnchorFollow-dispatched roles
-# skate to (TeamBrain.get_anchor). Mostly the same geometry as the election
-# race targets, with play-relative tweaks where "where you stand" differs
-# from "who should take the job" (DVALVE trails the play; ZONE_D_STRONG
-# plays the puck). Allocation-free (called per AI dispatch, not 6 Hz).
-# Slots with real behavior modules never read this. Phase 3 replaces most
-# AnchorFollow mappings with real brains; the anchors then stay as the
-# skeleton fallback.
-static func slot_anchor(slot: int, own_goal_z: float, strong_x: float,
-		puck_pos: Vector3, carrier_pos: Vector3) -> Vector3:
-	var own_dir: float = signf(own_goal_z)
-	var half_w: float = GameRules.RINK_HALF_WIDTH
-	var opp_goal_z: float = -own_goal_z
-	var opp_blue_z: float = -own_dir * GameRules.BLUE_LINE_Z
-	var our_blue_z: float = own_dir * GameRules.BLUE_LINE_Z
-	match slot:
-		AIRoleSlots.Slot.CARRIER:
-			return carrier_pos
-		AIRoleSlots.Slot.POINT_STRONG:
-			return Vector3(strong_x * GameRules.END_ZONE_FACEOFF_DOT_X, 0.0,
-					opp_blue_z - own_dir * _POINT_INSET_M)
-		AIRoleSlots.Slot.POINT_WEAK:
-			return Vector3(-strong_x * _POINT_WEAK_X_M, 0.0,
-					opp_blue_z - own_dir * _POINT_INSET_M)
-		AIRoleSlots.Slot.NET_FRONT:
-			return Vector3(0.0, 0.0, opp_goal_z + own_dir * _NET_FRONT_OFF_M)
-		AIRoleSlots.Slot.HIGH_SLOT:
-			return Vector3(0.0, 0.0, opp_goal_z + own_dir * _HIGH_SLOT_DEPTH_M)
-		AIRoleSlots.Slot.F2_STRONG:
-			return Vector3(strong_x * (half_w - _F2_WALL_INSET_M), 0.0,
-					opp_goal_z + own_dir * _F2_STRONG_DEPTH_M)
-		AIRoleSlots.Slot.F2_WEAK:
-			return Vector3(0.0, 0.0, opp_blue_z - own_dir * _F2_WEAK_LEAD_M)
-		AIRoleSlots.Slot.DP_STRONG:
-			return Vector3(strong_x * GameRules.END_ZONE_FACEOFF_DOT_X, 0.0,
-					opp_blue_z + own_dir * _DP_STAND_BACK_M)
-		AIRoleSlots.Slot.DP_WEAK:
-			return Vector3(-strong_x * _DP_WEAK_X_M, 0.0,
-					opp_blue_z + own_dir * _DP_STAND_BACK_M)
-		AIRoleSlots.Slot.ZONE_D_STRONG:
-			# The corner battle: play the puck when it's low on our side.
-			return puck_pos
-		AIRoleSlots.Slot.ZONE_D_WEAK:
-			return Vector3(-strong_x * 1.0, 0.0,
-					own_goal_z - own_dir * _ZONE_NET_FRONT_M)
-		AIRoleSlots.Slot.ZONE_C:
-			return Vector3(strong_x * 1.5, 0.0,
-					own_goal_z - own_dir * _ZONE_SLOT_DEPTH_M)
-		AIRoleSlots.Slot.ZONE_W_STRONG:
-			return Vector3(strong_x * _ZONE_WALL_X_M, 0.0,
-					own_goal_z - own_dir * _ZONE_WALL_DEPTH_M)
-		AIRoleSlots.Slot.ZONE_W_WEAK:
-			return Vector3(-strong_x * _ZONE_WEAK_X_M, 0.0,
-					own_goal_z - own_dir * _ZONE_WEAK_DEPTH_M)
-		AIRoleSlots.Slot.BREAKOUT_D2:
-			return Vector3(0.0, 0.0, own_goal_z - own_dir * 1.0)
-		AIRoleSlots.Slot.BREAKOUT_C:
-			return Vector3(0.0, 0.0, own_goal_z - own_dir * _BREAKOUT_SWING_DEPTH_M)
-		AIRoleSlots.Slot.BREAKOUT_STRETCH:
-			return Vector3(-strong_x * (half_w - _STRETCH_WALL_INSET_M), 0.0, 0.0)
-		AIRoleSlots.Slot.WIDE_L:
-			return Vector3(-(half_w - _WIDE_LANE_INSET_M), 0.0, puck_pos.z)
-		AIRoleSlots.Slot.WIDE_R:
-			return Vector3(half_w - _WIDE_LANE_INSET_M, 0.0, puck_pos.z)
-		AIRoleSlots.Slot.TRAILER:
-			return Vector3(0.0, 0.0, puck_pos.z + own_dir * 6.0)
-		AIRoleSlots.Slot.DVALVE:
-			# Trail the play centrally, capped so the valve never retreats
-			# behind its own goal line chasing a deep puck.
-			var trail_z: float = puck_pos.z + own_dir * 10.0
-			var cap: float = GameRules.GOAL_LINE_Z - 2.0
-			return Vector3(0.0, 0.0, clampf(trail_z, -cap, cap))
-		AIRoleSlots.Slot.DBACK_L:
-			return Vector3(-_DBACK_X_M, 0.0, our_blue_z)
-		AIRoleSlots.Slot.DBACK_R:
-			return Vector3(_DBACK_X_M, 0.0, our_blue_z)
-		# TRANS_OD rush layers. All four have real behavior modules, so these are
-		# the skeleton fallback only — but they must still be REAL ice: an
-		# unmapped slot falls through to Vector3.ZERO, which is centre ice, and a
-		# rush defender standing at centre ice is the exact failure this whole
-		# design exists to remove.
-		AIRoleSlots.Slot.RUSH_D1:
-			# The gap point on the carrier→net line, one stick off him.
-			var to_net: Vector3 = Vector3(0.0, 0.0, own_goal_z) - puck_pos
-			var d: float = sqrt(to_net.x * to_net.x + to_net.z * to_net.z)
-			if d < 0.001:
-				return puck_pos
-			return puck_pos + to_net * (minf(SkaterAgentStateMachine.BLADE_REACH_M, d) / d)
-		AIRoleSlots.Slot.RUSH_D2:
-			return Vector3(-strong_x * 2.0, 0.0,
-					own_goal_z - own_dir * AIRoleRushD.D2_MID_DEPTH_M)
-		AIRoleSlots.Slot.TRACK_PUCK:
-			return puck_pos
-		AIRoleSlots.Slot.TRACK_MID_STRONG:
-			return Vector3(strong_x * _TRACK_MID_SPLIT_M, 0.0,
-					own_goal_z - own_dir * AIZoneCoverage.HOUSE_TOP_DEPTH_M)
-		AIRoleSlots.Slot.TRACK_MID_WEAK:
-			return Vector3(-strong_x * _TRACK_MID_SPLIT_M, 0.0,
-					own_goal_z - own_dir * AIZoneCoverage.HOUSE_TOP_DEPTH_M)
-		_:
-			return Vector3.ZERO
 
 
 # ── Election ─────────────────────────────────────────────────────────────────

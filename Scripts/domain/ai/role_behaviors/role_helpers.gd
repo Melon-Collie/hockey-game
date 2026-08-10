@@ -50,24 +50,10 @@ const POLAR_ANGLES: Array[float] = [
 
 # ── Candidate generation ─────────────────────────────────────────────────────
 
-# Returns the standard off-puck candidate set: anchor + self
-# (stand-still) + 8 polar samples around the anchor at SEARCH_STEP_M.
-# Polar pattern is fixed-cardinal (0°, 45°, ..., 315°) — roles that
-# need slot-oriented search (like CARRIER) roll their own.
-#
-# Phase 4d / Step 2 of the no-anchors refactor: roles increasingly
-# compute their own search center from in-game refs (carrier pos,
-# nets, etc.) instead of leaning on ctx.anchor. New code should
-# call `generate_candidates_around(self_pos, center)` directly.
-static func generate_candidates(ctx: RoleContext) -> Array[Vector3]:
-	return generate_candidates_around(ctx.self_pos, ctx.anchor)
-
-
 # Returns the standard 10-candidate set centered on `center`:
 # `center` itself + `self_pos` (stand-still) + 8 polar samples
-# around `center` at SEARCH_STEP_M. Use this when a role wants to
-# pick its own search center from in-game references rather than
-# inheriting whatever ctx.anchor happens to be.
+# around `center` at SEARCH_STEP_M. Every role picks its own search
+# center from in-game references (the carrier, a man, our net).
 #
 # `with_inner_ring` appends 8 more polar samples at half step so the
 # argmax can express small corrections instead of jumping in 3 m
@@ -311,6 +297,182 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 	return best_pos
 
 
+# THE stand for a defender who has been given somebody to cover — and the only
+# one. Every off-puck defensive role in the game does this one job and differs
+# only in WHO hands it the man: MARK gets him from the threat partition, the
+# zone soft-lock from whoever is most dangerous in its area, TRACK_MID from
+# whoever entered its lane, RUSH_D2 from whoever is driving the middle. Man
+# defense and zone defense are the same behavior under different assigners.
+#
+# Returns false when there is no man to cover, or no play to cover him from,
+# which is the caller's cue to fall back to its own post. A cover stand with
+# nobody in it is not a stand — see the ride-velocity note below.
+#
+# The man's POSITION and his VELOCITY are read from one snapshot entry, so the
+# point and the frame it rides cannot name different bodies. Three of the four
+# call sites sourced them separately and each carried a comment worrying about
+# exactly that; the worry is now structural.
+#
+# NO ANTICIPATION LEAD. The stand rides him (RoleDecision.target_velocity), so
+# the route already carries his motion as a feed-forward, and aiming the anchor
+# downrange as well double-counts it — the same defect the gap ladder and the
+# backchecker's hip were fixed for, surviving in the four roles nobody revisited.
+# Leading and riding together inflate the frame-relative gap by pace x lookahead:
+# a defender covering from up to DEFENSIVE_ANTICIPATION_MAX_M further off his man
+# the faster that man skates, which is backwards.
+static func cover_threat(ctx: RoleContext, d: RoleDecision, man_pid: int,
+		play_ref: Vector3) -> bool:
+	if man_pid == -1 or ctx.snapshot == null \
+			or not ctx.snapshot.skater_states.has(man_pid):
+		return false
+	if not play_ref.is_finite():
+		return false
+	var man: SkaterNetworkState = ctx.snapshot.skater_states[man_pid]
+	d.target_position = cover_man_target(ctx, man.position, play_ref)
+	d.target_velocity = man.velocity
+	return true
+
+
+# ── Closing the carrier: the angle ───────────────────────────────────────────
+
+# How far to the INSIDE of the carrier→our-net line a defender who owns the
+# carrier stands. The stand is deliberately NOT on that line: shading to the
+# middle steers his retreat path toward the boards — take away the middle, give
+# the outside. A defender sitting dead on the line offers both lanes equally,
+# which is how a carrier walks straight into the slot.
+const ANGLE_INSIDE_M: float = 1.5
+# Lateral offset at which the shade reaches full depth — the end-zone dot lane.
+# Inside the dots a carrier is still IN the middle and there is no outside to
+# concede yet; at the dots the inside/outside split is real.
+const ANGLE_INSIDE_FULL_X_M: float = GameRules.END_ZONE_FACEOFF_DOT_X
+# The shade's depth for a carrier at `carrier_pos` — nil at centre ice, full at
+# the dot lane and beyond.
+#
+# Scaling to zero at centre is load-bearing, not a taper for feel: a carrier in
+# the middle has no inside to take away (both lanes are the same lane), so a
+# fixed shade there has to pick a side arbitrarily and flips a full
+# 2 x ANGLE_INSIDE_M the instant he crosses x = 0. That discontinuity lands
+# exactly on the mid-lane drive. Where the sign is ambiguous the magnitude is
+# nil, so the two sides meet continuously instead of needing damping.
+static func inside_shade_m(carrier_pos: Vector3) -> float:
+	return ANGLE_INSIDE_M * minf(
+			absf(carrier_pos.x) / ANGLE_INSIDE_FULL_X_M, 1.0)
+
+
+# Unit vector perpendicular to the carrier's retreat line, pointing toward the
+# middle of the ice. ZERO when the carrier is dead centre — there is no inside
+# to take, and no side to pick.
+static func inside_dir(carrier_pos: Vector3, dir_net: Vector3) -> Vector3:
+	var side: float = -signf(carrier_pos.x)
+	if side == 0.0:
+		return Vector3.ZERO
+	var perp := Vector3(-dir_net.z, 0.0, dir_net.x)
+	return perp if perp.x * side > 0.0 else -perp
+
+
+# The stand for a defender who owns the carrier: `gap` metres up the carrier→our
+# -net line, shaded to the inside. Shared by every role that closes a puck
+# carrier — the rush gap (AIRoleRushD) and the in-zone pressurer
+# (AIRolePressure) — so both defend him the same way and the TRANS_DEFENSE → DZONE
+# handoff is not a change of doctrine. Falls back to the unshaded stand when the
+# shade would put the body somewhere illegal.
+static func carrier_stand(ap: AICarrierApproach, gap: float) -> Vector3:
+	# Never project the stand past the net — the gap is a cushion in front of
+	# him, and beyond his own route there is no ice to hold.
+	var stand: Vector3 = ap.carrier_pos + ap.dir_net * minf(gap, ap.net_dist)
+	var depth: float = inside_shade_m(ap.carrier_pos)
+	if depth < 0.001:
+		return stand
+	var shaded: Vector3 = stand + inside_dir(ap.carrier_pos, ap.dir_net) * depth
+	return shaded if is_legal_position(shaded) else stand
+
+
+# Fills `out` with everything a defender needs about the carrier he owns, and
+# reports whether there is a play to read at all. False means no puck anywhere —
+# the caller holds, because there is nothing to close on.
+#
+# A LOOSE puck is a live read, not a failure: resolve_defensive_play_ref falls
+# back to the puck itself, which is where the next play comes from and what a
+# pressurer is closing on while a pass is in flight.
+#
+# `out.dir_net` is left ZERO when the carrier is on top of our net — the one case
+# with no well-defined retreat line. Roles branch on that themselves rather than
+# being handed a fabricated direction, because what to do there differs: the rush
+# gap collapses onto him, the pressurer keeps its ring centred on him.
+static func read_carrier_approach(ctx: RoleContext,
+		out: AICarrierApproach) -> bool:
+	var carrier_pos: Vector3 = resolve_defensive_play_ref(ctx)
+	if not carrier_pos.is_finite():
+		return false
+	fill_approach(ctx, carrier_pos, resolve_play_ref_velocity(ctx), out)
+	return true
+
+
+# The same read against an EXPLICIT subject rather than the play reference. A
+# loose puck running toward our end is approaching us exactly as a carrier is,
+# and the stand you hold against it is the same stand — see AIRoleChase's
+# pre-contain, which is this read on the puck itself. Split out because "go get
+# the puck" is always about the PUCK, while resolve_defensive_play_ref answers
+# with the carrier whenever one exists.
+static func fill_approach(ctx: RoleContext, subject_pos: Vector3,
+		subject_vel: Vector3, out: AICarrierApproach) -> void:
+	out.carrier_pos = subject_pos
+	out.carrier_vel = subject_vel
+	var to_net: Vector3 = ctx.defending_goal_pos - subject_pos
+	var dist: float = sqrt(to_net.x * to_net.x + to_net.z * to_net.z)
+	out.net_dist = dist
+	if dist < 0.001:
+		out.dir_net = Vector3.ZERO
+		out.closing = 0.0
+		return
+	out.dir_net = Vector3(to_net.x / dist, 0.0, to_net.z / dist)
+	out.closing = maxf(
+			subject_vel.x * out.dir_net.x + subject_vel.z * out.dir_net.z, 0.0)
+
+
+# ── Going to get the puck ────────────────────────────────────────────────────
+
+# The third defensive verb: nobody has it, so do I go?
+#
+# Returns TRUE when we are running the race — `d` gets the puck itself, and the
+# state machine's CHASE_PUCK does the real retrieval (lead intercept, blade gate,
+# contest drive-through) from there. This target is the hint it steers on until
+# then.
+#
+# Returns FALSE when an opponent has already won it (loose_puck_race_lost, which
+# also asks whether declining buys anything — a lost race is only worth declining
+# when there isn't already a body home). `d` then gets the PRE-CONTAIN stand, and
+# that stand is the closing verb applied to the puck: the gap ladder's distance
+# goal-side of it, angled off the middle, with the puck's own closing speed
+# toward our net standing in for a rush's pace. A puck still running at our end
+# keeps the cushion; a dead settle is met tight.
+#
+# The angle is what makes the handoff exact rather than merely similar. This
+# stand exists so the chaser who declines plants where RUSH_D1 will want to be
+# the instant somebody collects and the state flips to TRANS_DEFENSE — and RUSH_D1's
+# stand is angled, so an unangled pre-contain was a spot the gap defender then
+# had to correct off, in the direction that concedes the middle.
+static func chase_puck(ctx: RoleContext, d: RoleDecision) -> bool:
+	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
+		d.target_position = ctx.self_pos
+		return false
+	var puck_pos: Vector3 = ctx.snapshot.puck_state.position
+	if not loose_puck_race_lost(
+			ctx.snapshot, ctx.self_pos, ctx.self_velocity, ctx.self_max_speed,
+			ctx.team_id, ctx.team_id_by_peer, ctx.caps_by_peer, ctx.peer_id,
+			ctx.own_goal_dir):
+		d.target_position = puck_pos
+		return true
+	var ap: AICarrierApproach = ctx.scratch_carrier_approach
+	fill_approach(ctx, puck_pos, ctx.snapshot.puck_state.velocity, ap)
+	if ap.dir_net == Vector3.ZERO:
+		d.target_position = puck_pos   # on our own goal line — just go
+		return true
+	d.target_position = carrier_stand(ap, AIRoleRushD.ladder_gap_m(
+			puck_pos, ctx.own_goal_dir, ctx.self_blade_reach, ap.closing))
+	return false
+
+
 # ── Carrier-best-option (inverse scoring) ────────────────────────────────────
 
 # Computes the opposing carrier's best option — shoot at our net, or pass to
@@ -323,7 +485,7 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 # Uses the threat-surface helpers so the gradient survives when score_shoot /
 # score_pass collapse to 0 (carrier far from net or all receivers far from
 # net). The position_potential floor pulls the defender tight to the carrier
-# in TRANS_OD scenarios where there's no immediate scoring threat to defend —
+# in TRANS_DEFENSE scenarios where there's no immediate scoring threat to defend —
 # without it the score is flat across goal-side candidates and the argmax
 # picks arbitrarily.
 #
@@ -691,6 +853,30 @@ static func resolve_play_ref_velocity(ctx: RoleContext) -> Vector3:
 	return ctx.snapshot.puck_state.velocity
 
 
+# The velocity a defensive stand built off the play reference is ITSELF moving at
+# — what a role publishes as RoleDecision.target_velocity so the steering flies
+# the route in the stand's frame (AISteering, "moving-frame pursuit").
+#
+# A stand riding a live opposing CARRIER moves at his pace, and that is a frame a
+# defender can hold station in: the whole job is travelling with him. A stand
+# built off a LOOSE PUCK is not — a puck is decelerating, unowned, and nobody
+# "gaps up" on one; the answer there is the ordinary chase/contain, which the
+# point seek already expresses. So this returns ZERO for anything but a live
+# opposing carrier, and every consumer degrades to today's routing exactly when
+# there is no man to ride.
+static func stand_ride_velocity(ctx: RoleContext) -> Vector3:
+	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
+		return Vector3.ZERO
+	var pid: int = ctx.snapshot.puck_state.carrier_peer_id
+	if pid == -1 or pid == ctx.peer_id:
+		return Vector3.ZERO
+	if ctx.team_id_by_peer.get(pid, -1) == ctx.team_id:
+		return Vector3.ZERO   # our own carrier — not a man anyone is defending
+	if not ctx.snapshot.skater_states.has(pid):
+		return Vector3.ZERO
+	return ctx.snapshot.skater_states[pid].velocity
+
+
 # Fills `out` with positions of opp peers other than the puck carrier — i.e.,
 # the carrier's potential pass receivers. Defensive roles use this to score
 # "carrier's best pass" when evaluating how much a candidate defender position
@@ -844,7 +1030,7 @@ static func may_hold_forward_stand(ctx: RoleContext, was_holding: bool,
 # True when the puck is genuinely ours right now — the branch that decides whether
 # a station is making a PINCH decision at all. Once the opponent has it (or it is
 # loose), there is nothing to pinch on: the answer is the ordinary retreat to
-# structure, and TRANS_OD takes over as soon as the puck reaches the neutral zone.
+# structure, and TRANS_DEFENSE takes over as soon as the puck reaches the neutral zone.
 static func _we_possess(ctx: RoleContext) -> bool:
 	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
 		return false
@@ -860,10 +1046,10 @@ static func _we_possess(ctx: RoleContext) -> bool:
 static func numbers_floor(ctx: RoleContext, stand: Vector3) -> Vector3:
 	var read: AIRushRead = ctx.rush_read
 	var our_net: Vector3 = ctx.defending_goal_pos
-	var stand_d: float = _xz_distance(stand, our_net)
+	var stand_d: float = xz_distance(stand, our_net)
 	var deepest: float = stand_d
 	for lead: Vector3 in read.attacker_leads:
-		var d: float = _xz_distance(lead, our_net)
+		var d: float = xz_distance(lead, our_net)
 		if d < deepest:
 			deepest = d
 	if deepest >= stand_d:
@@ -943,21 +1129,82 @@ static func offensive_station_target(ctx: RoleContext, stand: Vector3,
 # crease repel. Both candidates lie on the net → `stand` ray, so the clamp is a
 # distance compare rather than a second projection.
 static func neutral_station_target(ctx: RoleContext, stand: Vector3,
-		was_holding: bool) -> Vector3:
-	if may_hold_forward_stand(ctx, was_holding, stand):
+		was_holding: bool, layer_stand: Vector3 = Vector3.INF) -> Vector3:
+	if may_hold_forward_stand(ctx, was_holding, stand) \
+			and (not layer_stand.is_finite() or home_layer_behind_me(ctx)):
 		return stand
 	var our_net: Vector3 = ctx.defending_goal_pos
 	var sagged: Vector3 = numbers_floor(ctx, stand)
-	if _xz_distance(sagged, our_net) >= AIZoneCoverage.HOUSE_TOP_DEPTH_M:
+	# The LAYER's own stand, when the caller has one. numbers_floor answers "a man
+	# has beaten me, restore the layer against HIM" and returns the stand untouched
+	# when nobody has — which is silence, not an answer, in the one state where the
+	# puck belongs to nobody yet. Take whichever is deeper so both reasons bind.
+	if layer_stand.is_finite() \
+			and xz_distance(layer_stand, our_net) < xz_distance(sagged, our_net):
+		sagged = layer_stand
+	if xz_distance(sagged, our_net) >= AIZoneCoverage.HOUSE_TOP_DEPTH_M:
 		return sagged
-	return house_gate_floor(our_net, stand)
+	return house_gate_floor(our_net, sagged)
+
+
+# ── "If I go, is anybody home?" ──────────────────────────────────────────────
+#
+# The clause the neutral shape was missing, and it is one character of logic:
+# `may_hold_forward_stand` is `has_support_behind OR not _attacker_behind`, so a
+# station holds its forward stand whenever nobody has ALREADY got behind it —
+# the genuine last man included. That is right where it is used (an offensive
+# station with the puck ours has something to be forward FOR), and wrong in the
+# one state where the puck belongs to nobody: both teams converge on a loose
+# puck, so nobody is behind anybody yet, every station reads clear, the whole
+# shape steps up together, and the man gets behind them BECAUSE they did.
+#
+# Measured on the real stack: a 3v3 whose two flanks both held their puck-side
+# stand spent 66% of the following threat window with nobody between the opposing
+# carrier and our own net — a coast-to-coast — with the elected RUSH_D1 already
+# up-ice of the puck when the state flipped, and therefore unable to be a gap
+# defender at all.
+#
+# So NEUTRAL demands both clauses: somebody home behind me AND nobody already
+# past me. The depth read is `has_support_behind`'s (the risk priced is "beaten
+# wide, nobody home", which is positional), with two differences that matter for
+# a whole shape rather than one body:
+#
+#   · THE ELECTED CHASER DOES NOT COUNT. He is committed to the puck and is not
+#     holding anything. Counting him is how a three-man team convinces itself it
+#     has a defender while all three are on the same puck.
+#   · A COVER ENVELOPE OF MARGIN, so "behind me" means meaningfully behind rather
+#     than a metre nearer the net — the same quantity and the same reasoning as
+#     `_attacker_behind`'s margin. Two flanks level with each other cover nothing
+#     for one another, so both stay home; over-covering the house on a coin flip
+#     is the safe direction, and the band is what stops the pair trading the job
+#     back and forth every dispatch.
+#
+# Antisymmetric by construction — the deepest man cannot have anyone behind him —
+# so exactly one body draws the layer and no two can each appoint the other.
+static func home_layer_behind_me(ctx: RoleContext) -> bool:
+	if ctx.snapshot == null:
+		return false
+	var chaser: int = ctx.snapshot.closest_to_puck_by_team.get(ctx.team_id, -1)
+	var my_depth: float = ctx.own_goal_dir * ctx.self_pos.z \
+			+ AIRushRead.cover_envelope_m()
+	for pid: int in ctx.snapshot.skater_states:
+		if pid == ctx.peer_id or pid == chaser:
+			continue
+		if ctx.team_id_by_peer.get(pid, -1) != ctx.team_id:
+			continue
+		var mate: SkaterNetworkState = ctx.snapshot.skater_states[pid]
+		if mate.is_ghost:
+			continue
+		if ctx.own_goal_dir * mate.position.z > my_depth:
+			return true
+	return false
 
 
 # Is any attacker currently deeper (nearer our net) than `stand`?
 static func _attacker_behind(ctx: RoleContext, stand: Vector3,
 		was_holding: bool = false) -> bool:
 	var our_net: Vector3 = ctx.defending_goal_pos
-	var stand_d: float = _xz_distance(stand, our_net)
+	var stand_d: float = xz_distance(stand, our_net)
 	# "Behind me" means MEANINGFULLY behind, not merely a metre nearer the net: a
 	# defending winger covering the point sits LEVEL with a D and must not read as
 	# a man who has beaten him. The grounded span for "same layer" is the cover
@@ -967,7 +1214,7 @@ static func _attacker_behind(ctx: RoleContext, stand: Vector3,
 	if was_holding:
 		margin += BEHIND_HOLD_EXTRA_M
 	for lead: Vector3 in ctx.rush_read.attacker_leads:
-		if _xz_distance(lead, our_net) < stand_d - margin:
+		if xz_distance(lead, our_net) < stand_d - margin:
 			return true
 	return false
 
@@ -988,7 +1235,7 @@ static func self_race_vmax(ctx: RoleContext) -> float:
 			else AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
 	return BotSprintRules.race_speed(
 			ctx.self_max_speed, mult, s.stamina, s.sprint_locked,
-			_xz_distance(ctx.self_pos, ctx.defending_goal_pos))
+			xz_distance(ctx.self_pos, ctx.defending_goal_pos))
 
 
 # ── Last-man step-up discipline ──────────────────────────────────────────────
@@ -1144,6 +1391,29 @@ static func station_retreat_floor(ctx: RoleContext, fwd: Vector3,
 	return house_gate_floor(our_net, fwd)
 
 
+# The other side of the same line: hold `pos` OUT at the top of the circles when
+# it has been placed deeper than that. Where house_gate_floor bounds how far a
+# retreating station may sag, this bounds how far a defender may be PUSHED, and
+# the reason is the same one AIRoleRushD has always given for it — past the gate a
+# field skater duplicates the goalie, fights his own crease repel, and gets beaten
+# to the outside of a net he is standing on top of.
+#
+# Returns `pos` untouched when it is already outside the gate, and projects it out
+# along the net → pos ray otherwise (degenerate at the net itself: straight out
+# along the rink axis).
+static func hold_out_to_house_gate(our_net: Vector3, pos: Vector3) -> Vector3:
+	var dx: float = pos.x - our_net.x
+	var dz: float = pos.z - our_net.z
+	var dsq: float = dx * dx + dz * dz
+	var gate: float = AIZoneCoverage.HOUSE_TOP_DEPTH_M
+	if dsq >= gate * gate:
+		return pos
+	var dl: float = sqrt(dsq)
+	if dl < 0.001:
+		return Vector3(our_net.x, 0.0, our_net.z - signf(our_net.z) * gate)
+	return Vector3(our_net.x + dx * (gate / dl), 0.0, our_net.z + dz * (gate / dl))
+
+
 # The point on the net → `fwd` ray at the top of the circles: the deepest a field
 # skater should ever be pushed by a last-man bound. Below it he duplicates the
 # goalie, fights his own crease repel, and overshoots behind the goal line.
@@ -1157,7 +1427,7 @@ static func house_gate_floor(our_net: Vector3, fwd: Vector3) -> Vector3:
 	return Vector3(our_net.x + dx * k, 0.0, our_net.z + dz * k)
 
 
-static func _xz_distance(a: Vector3, b: Vector3) -> float:
+static func xz_distance(a: Vector3, b: Vector3) -> float:
 	var dx: float = b.x - a.x
 	var dz: float = b.z - a.z
 	return sqrt(dx * dx + dz * dz)

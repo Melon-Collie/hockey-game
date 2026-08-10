@@ -18,9 +18,6 @@ var defending_goal_pos: Vector3 = Vector3.ZERO
 # +1 if own goal sits at +GOAL_LINE_Z (Team 0), -1 otherwise. "Forward"
 # (toward attacking goal) along Z is `-own_goal_dir`.
 var own_goal_dir: float = 1.0
-# TeamBrain anchor for this bot's current slot. May be Vector3.ZERO when
-# unassigned (first ticks); roles fall back to self_pos in that case.
-var anchor: Vector3 = Vector3.ZERO
 # Team-strategy read surface for queries like get_slot(other_peer_id). Holds the
 # live TeamBrain in unit tests and the frozen TeamBrainView in production dispatch
 # (both are TeamStrategyView) — see docs/ai-threading-plan.md, Phase 3a.
@@ -176,8 +173,9 @@ var pass_speed_scale: float = 1.0
 # How hard the on-puck pressurer hunts body checks. 1.0 = today; 0.0 = never
 # commits a check (pure containment). Consumed in evaluate_body_check.
 var check_aggression: float = 1.0
-# Multiplier on DEFENSIVE_ANTICIPATION_S — how much the backline leads a moving
-# man. 1.0 = today; lower = defenders sit a step behind (more space). lead_threat.
+# Multiplier on DEFENSIVE_ANTICIPATION_S — how far ahead a defender reads the
+# other attackers when pricing the carrier's options (lead_threat, via the
+# anticipating collect_opponents callers). 1.0 = today. Never moves a stand.
 var defensive_anticipation_scale: float = 1.0
 # SETTLE DOUBT: fraction by which a freshly-possessed carrier handicaps its own
 # read of every ACTIVE option (shoot / pass / dump) against that option's
@@ -293,3 +291,7 @@ var scratch_opp_receivers: Array[Vector3] = []
 # Per-decide option-value upper bounds for the pruned carrier_best_option
 # (see AIRoleHelpers.carrier_option_bases).
 var scratch_option_bases: Array[float] = []
+# The carrier read shared by every role that closes him
+# (AIRoleHelpers.read_carrier_approach). Refilled in place per decide, never
+# reallocated — same contract as the arrays above.
+var scratch_carrier_approach := AICarrierApproach.new()

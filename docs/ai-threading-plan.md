@@ -273,7 +273,7 @@ the snapshot-age the agents currently read.
 
 During dispatch, the agent reads ~10 fields off the live `TeamBrain` in
 `_build_role_context` (`skater_agent_state_machine.gd:2158-2236`): `get_slot`,
-`get_anchor`, `strong_x`, `assigned_threat`, `threat_shoot_base_by_opp`,
+`strong_x`, `assigned_threat`, `threat_shoot_base_by_opp`,
 `team_size`, `position_of`, the three ping targets, and `is_one_timer_ready`.
 On the worker, those reads race against **main-thread** brain mutations:
 `apply_ping` (RPC-driven, any time), `_force_retick_team_brains` (on carrier

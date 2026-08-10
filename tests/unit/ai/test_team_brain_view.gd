@@ -33,7 +33,7 @@ func test_view_mirrors_slots_and_flags() -> void:
 	brain._strong_x = -1.0
 	brain.threat_shoot_base_by_opp[OPP] = 0.42
 
-	brain.build_view(_make_snapshot(Vector3(3.0, 0.0, 5.0)))
+	brain.build_view()
 	var view: TeamBrainView = brain.get_view()
 
 	assert_not_null(view, "build_view populated the view")
@@ -47,26 +47,14 @@ func test_view_mirrors_slots_and_flags() -> void:
 			"threat memo frozen")
 
 
-func test_view_anchor_matches_live_brain() -> void:
-	var brain := _make_brain()
-	brain.slot_assignments[P1] = AIRoleSlots.Slot.FINISHER
-	var snap := _make_snapshot(Vector3(-2.0, 0.0, 8.0))
-
-	var live_anchor: Vector3 = brain.get_anchor(P1, snap)
-	brain.build_view(snap)
-	var frozen_anchor: Vector3 = brain.get_view().get_anchor(P1, snap)
-
-	assert_eq(frozen_anchor, live_anchor, "frozen anchor matches the live compute")
-
-
 func test_view_is_reused_across_builds() -> void:
 	# The view object is reused (refilled), not reallocated, each build.
 	var brain := _make_brain()
 	brain.slot_assignments[P1] = AIRoleSlots.Slot.SUPPORT
 	var snap := _make_snapshot(Vector3.ZERO)
-	brain.build_view(snap)
+	brain.build_view()
 	var first: TeamBrainView = brain.get_view()
-	brain.build_view(snap)
+	brain.build_view()
 	assert_same(first, brain.get_view(), "same view instance is refilled, not replaced")
 
 
@@ -77,11 +65,11 @@ func test_view_mirrors_ping_chase_peer() -> void:
 	# worker while main-thread apply_ping / advance mutated the same dictionary.
 	var brain := _make_brain()
 	var snap := _make_snapshot(Vector3(1.0, 0.0, 2.0))
-	brain.build_view(snap)
+	brain.build_view()
 	assert_eq(brain.get_view().ping_chase_peer(), -1, "no order -> -1")
 
 	brain.apply_ping(PingRules.Type.GET_PUCK, P2, P1, P1, Vector3.ZERO)
-	brain.build_view(snap)
+	brain.build_view()
 	assert_eq(brain.get_view().ping_chase_peer(), brain.ping_chase_peer(),
 			"chase order frozen to match the live brain")
 	assert_eq(brain.get_view().ping_chase_peer(), P1, "P1 is the ordered chaser")
@@ -134,14 +122,15 @@ func test_agent_never_reads_live_brain_off_thread() -> void:
 
 
 func test_stale_slot_cleared_on_rebuild() -> void:
-	# A peer that loses its slot must drop out of the frozen view's ping/anchor
-	# maps (those are cleared and refilled from the current slot set each build).
+	# A peer that loses its slot must drop out of the frozen view's ping maps
+	# (those are cleared and refilled from the current slot set each build).
 	var brain := _make_brain()
 	brain.slot_assignments[P1] = AIRoleSlots.Slot.FINISHER
-	var snap := _make_snapshot(Vector3(1.0, 0.0, 3.0))
-	brain.build_view(snap)
-	assert_true(brain.get_view().anchor_by_peer.has(P1), "P1 anchor present while slotted")
+	brain.build_view()
+	assert_true(brain.get_view().ping_move_by_peer.has(P1),
+			"P1 ping present while slotted")
 
 	brain.slot_assignments.erase(P1)
-	brain.build_view(snap)
-	assert_false(brain.get_view().anchor_by_peer.has(P1), "P1 anchor dropped after losing its slot")
+	brain.build_view()
+	assert_false(brain.get_view().ping_move_by_peer.has(P1),
+			"P1 ping dropped after losing its slot")
