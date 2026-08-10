@@ -8,6 +8,16 @@ const TELEPORT_THRESHOLD: float = 1.0 # skip frame if skater moved this far (rec
 # Hockey stop VFX — two-layer effect (surface marks + airborne spray) per blade side.
 const STOP_MIN_SPEED: float = 2.5        # minimum speed at trigger time
 
+# Acceleration chips — a hard forward push bites the ice and kicks chips back
+# off the loaded blade. Thrust tops out at ~10.5 m/s²
+# (GameRules.DEFAULT_SKATER_THRUST_M_S2) and net acceleration decays toward 0
+# at cruise, so the gate splits "digging in" from "holding speed". The
+# instantaneous quotient is smoothed because velocity steps at the 120 Hz tick
+# while _process samples between ticks at render rate.
+const ACCEL_SPRAY_MIN_ACCEL: float = 3.5   # m/s² smoothed forward accel to spray at all
+const ACCEL_SMOOTH_RATE: float = 10.0      # 1/s exponential smoothing toward the live value
+const ACCEL_SPRAY_MIN_SPEED: float = 0.8   # standing-start scuffle stays quiet
+
 # Body-check feedback scales with hit strength (the impact_force = weight x
 # closing-speed the signal carries), normalized 0..1 between a light bump and a
 # big hit. Burst size/velocity read this so a freight-train check throws bigger,
@@ -74,6 +84,8 @@ const BLADE_TRAIL_AABB_HALF_Y: float = 6.0
 var _blade_trail_emitters: Array[GPUParticles3D] = []
 var _blade_trail_particles: Array[GPUParticles3D] = []
 var _stop_spray_emitter: CPUParticles3D = null  # forward fan spray on brake
+var _accel_spray_emitter: CPUParticles3D = null  # backward chips on a hard push
+var _accel_fwd_avg: float = 0.0
 var _speed_lines: CPUParticles3D = null
 var _body_check_burst: CPUParticles3D = null
 var _prev_pos: Vector3 = Vector3.ZERO
@@ -101,6 +113,9 @@ func _ready() -> void:
 	_stop_spray_emitter = _make_stop_spray_emitter()
 	add_child(_stop_spray_emitter)
 
+	_accel_spray_emitter = _make_accel_spray_emitter()
+	add_child(_accel_spray_emitter)
+
 	_speed_lines = _make_speed_lines_emitter()
 	_speed_lines.position = Vector3(0.0, 0.3, 0.0)
 	add_child(_speed_lines)
@@ -115,7 +130,7 @@ func _ready() -> void:
 
 	_prev_pos = global_position
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	# Pose-capture freeze (see cosmetic_freeze.gd). Emitters are silenced ON the
 	# transition, not merely left alone: an early return skips the
 	# _set_blade_trails_emitting(false) below, so trails that were live when the
@@ -127,6 +142,7 @@ func _process(_delta: float) -> void:
 			_frozen = true
 			_set_blade_trails_emitting(false)
 			_stop_spray_emitter.emitting = false
+			_accel_spray_emitter.emitting = false
 			_speed_lines.emitting = false
 		return
 	_frozen = false
@@ -142,7 +158,9 @@ func _process(_delta: float) -> void:
 	if (curr_pos - _prev_pos).length() > TELEPORT_THRESHOLD:
 		_prev_pos = curr_pos
 		_prev_vel = curr_vel
+		_accel_fwd_avg = 0.0
 		_set_blade_trails_emitting(false)
+		_accel_spray_emitter.emitting = false
 		_speed_lines.emitting = false
 		return
 
@@ -150,11 +168,19 @@ func _process(_delta: float) -> void:
 
 	var flat_vel: Vector3 = Vector3(curr_vel.x, 0.0, curr_vel.z)
 	var speed: float = flat_vel.length()
+	# Forward acceleration, smoothed (see ACCEL_SMOOTH_RATE): the flat-velocity
+	# delta since last frame projected on the travel direction.
+	var accel_fwd: float = 0.0
+	if speed > 0.1:
+		var prev_flat: Vector3 = Vector3(_prev_vel.x, 0.0, _prev_vel.z)
+		accel_fwd = (flat_vel - prev_flat).dot(flat_vel / speed) / delta
+	_accel_fwd_avg = lerpf(_accel_fwd_avg, accel_fwd, minf(delta * ACCEL_SMOOTH_RATE, 1.0))
 	_prev_vel = curr_vel
 
 	# Suppress all VFX when ghosted (offsides / icing)
 	if skater.is_ghost:
 		_set_blade_trails_emitting(false)
+		_accel_spray_emitter.emitting = false
 		_speed_lines.emitting = false
 		return
 
@@ -177,6 +203,15 @@ func _process(_delta: float) -> void:
 		_emit_hockey_stop(skater, flat_vel)
 	else:
 		_stop_spray_emitter.emitting = false
+
+	# Acceleration chips: kicked backward off the pushing blade while digging
+	# in. Braking owns the spray channel when both could fire — a stop's plow
+	# reads louder than a push.
+	if not skater.is_braking and speed > ACCEL_SPRAY_MIN_SPEED \
+			and _accel_fwd_avg > ACCEL_SPRAY_MIN_ACCEL:
+		_emit_accel_spray(skater, flat_vel, blade_l, blade_r, blade_base_y)
+	else:
+		_accel_spray_emitter.emitting = false
 
 	# Speed lines: small streaks behind the skater at high speed.
 	# direction is in local space — convert world-space backward vector via basis inverse
@@ -345,6 +380,50 @@ func _emit_hockey_stop(skater: Skater, flat_vel: Vector3) -> void:
 	_stop_spray_emitter.global_position = skater.global_position + forward * 0.7 + Vector3(0.0, 0.005, 0.0)
 	_stop_spray_emitter.direction = local_dir
 	_stop_spray_emitter.emitting = true
+
+# Spray from the pushing blade: the grounded one carrying the higher edge
+# load (the gait publishes per-blade load exactly for the ice VFX to read).
+# Both airborne — mid-stride swap, a bump — emits nothing this frame.
+func _emit_accel_spray(skater: Skater, flat_vel: Vector3,
+		blade_l: Vector3, blade_r: Vector3, blade_base_y: float) -> void:
+	var l_grounded: bool = blade_l.y - blade_base_y < LIFT_EPS_M
+	var r_grounded: bool = blade_r.y - blade_base_y < LIFT_EPS_M
+	var use_left: bool
+	if l_grounded and r_grounded:
+		use_left = skater.edge_load(true) >= skater.edge_load(false)
+	elif l_grounded or r_grounded:
+		use_left = l_grounded
+	else:
+		_accel_spray_emitter.emitting = false
+		return
+	var blade: Vector3 = blade_l if use_left else blade_r
+	var backward: Vector3 = -flat_vel.normalized()
+	var world_dir: Vector3 = (backward + Vector3(0.0, 0.5, 0.0)).normalized()
+	_accel_spray_emitter.global_position = Vector3(blade.x, ICE_Y, blade.z)
+	_accel_spray_emitter.direction = \
+			_accel_spray_emitter.global_transform.basis.inverse() * world_dir
+	_accel_spray_emitter.emitting = true
+
+
+func _make_accel_spray_emitter() -> CPUParticles3D:
+	var e := CPUParticles3D.new()
+	e.emitting = false
+	e.amount = 45
+	e.lifetime = 0.28
+	e.one_shot = false
+	e.explosiveness = 0.0
+	e.randomness = 0.35
+	e.local_coords = false
+	e.direction = Vector3(0.0, 0.0, 1.0)  # overwritten per frame
+	e.spread = 35.0
+	e.initial_velocity_min = 1.5
+	e.initial_velocity_max = 4.0
+	e.gravity = Vector3(0.0, -25.0, 0.0)
+	e.scale_amount_min = 0.02
+	e.scale_amount_max = 0.045
+	e.mesh = _make_sphere_mesh(Color(0.95, 0.93, 0.88, 0.7))
+	return e
+
 
 func _make_stop_spray_emitter() -> CPUParticles3D:
 	var e := CPUParticles3D.new()
