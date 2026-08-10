@@ -328,10 +328,10 @@ func _drive_from_input(delta: float) -> void:
 	# every gap. Fall through when clock isn't ready to preserve behaviour during
 	# NTP warmup.
 	if NetworkManager.is_clock_ready():
-		_drain_backlog(NetworkManager.estimated_host_time())
+		_drain_backlog(NetworkManager.sim_time())
 	var input_due: bool = _input_queue.size() > 0 and (
 			not NetworkManager.is_clock_ready() or
-			_input_queue.front().host_timestamp <= NetworkManager.estimated_host_time())
+			_input_queue.front().host_timestamp <= NetworkManager.sim_time())
 	if input_due:
 		var input: InputState = _input_queue.pop_front()
 		last_processed_host_timestamp = input.host_timestamp
@@ -339,8 +339,11 @@ func _drive_from_input(delta: float) -> void:
 			# Recorded for LIVE pops only: locked-phase pops (faceoff prep,
 			# celebrations) measure phase cadence, not link health, and were
 			# skewing the metric the adaptive lead is judged by.
+			# sim_time, not wall: overdue is stamp-vs-consumption, both tick-domain.
+			# On wall time this reads the frame-bunching offset as lateness and
+			# saturates the lead servo (see NetworkManager's sim clock).
 			NetworkTelemetry.record_input_lead(
-					NetworkManager.estimated_host_time() - input.host_timestamp)
+					NetworkManager.sim_time() - input.host_timestamp)
 		if not _game_state.is_movement_locked():
 			_process_input(input, delta)
 		elif not tick_faceoff_approach(delta):

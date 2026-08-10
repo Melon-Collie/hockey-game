@@ -323,6 +323,49 @@ var _input_batch_provider: Callable = Callable()
 var _input_batch_scratch: Array[InputState] = []
 var _input_batch_buf := PackedByteArray()
 var _clock_sync: RefCounted = null  # ClockSync instance, client only
+
+# ── Tick-domain simulation clock ─────────────────────────────────────────────
+# Godot drives physics from an accumulator inside the main loop: at 60 fps with
+# a 120 Hz tick, TWO _physics_process steps run back to back and THEN the frame
+# renders. Both read the same Time.get_ticks_msec() — and at its 1 ms resolution,
+# the same value. So a wall-derived clock hands two different ticks the same
+# instant.
+#
+# That is fatal for anything produced once per tick and compared with strict
+# inequality, which is exactly what input stamps are: RemoteController's dedupe
+# drops any input whose stamp is <= the newest queued, so a colliding pair
+# silently loses one. A client on a display slower than the physics rate then
+# delivers fewer inputs than the host consumes — the queue starves, the drain
+# fires, and the lead servo (whose error term is pop-overdue, measured on the
+# same wall clock) reads the frame-bunching offset as genuine lateness and
+# integrates to its ceiling. Measured in playtest: input_lead_extra pinned at the
+# 50 ms cap for a full session on a 30 ms link, input_starvation triggering every
+# auto-marker, and drains up to 52/s against a queue averaging 11 deep.
+#
+# So the input path gets a clock in the domain it actually lives in: one that
+# advances by exactly TICK_DURATION per physics step. Consecutive stamps are then
+# one tick apart BY CONSTRUCTION at any framerate, and pop-overdue measures
+# genuine lateness with no render-rate term. This is what Source gets from
+# putting a tick number in the usercmd and Overwatch from numbering command
+# frames — neither wall-stamps a per-tick event.
+#
+# It still has to name instants on the HOST's timeline, so it is SLEWED toward
+# estimated_host_time() rather than free-running: a bounded per-tick correction
+# that tracks real clock drift while rejecting the frame jitter that motivated
+# this. The step is two orders of magnitude below TICK_DURATION, so sim_time()
+# stays strictly increasing per tick and stamps can never collide.
+#
+# Deliberately NOT used for RENDER instants. A frame draws an arbitrary wall
+# moment between ticks, so interpolation and prediction targets keep reading
+# estimated_host_time(); quantizing them to the tick grid would stutter at high
+# refresh rates (see "render rate is a clock" in the networking CLAUDE.md). The
+# two clocks stay within the slew bound of each other, so a render-time claim
+# stamp read against the tick-time input timeline remains valid.
+const _SIM_SLEW_S: float = 0.0001   # 0.1 ms/tick = 12 ms/s of drift tracking
+const _SIM_RESYNC_S: float = 0.1    # beyond this, snap: NTP warmup, not drift
+var _sim_ticks: int = 0
+var _sim_offset: float = 0.0
+var _sim_started: bool = false
 # Carrier-event redundancy (see SnapshotEventLog): the host records each carrier
 # event and appends the recent set to every unreliable world-state packet in
 # `_broadcast_state`; clients apply the block in `receive_world_state` and gate
@@ -406,7 +449,7 @@ var _connect_timer: float = -1.0
 var input_delta: float = 1.0 / Constants.INPUT_RATE
 var state_delta: float = 1.0 / Constants.STATE_RATE
 # Number of physics ticks between broadcasts. PHYSICS_TICK / STATE_RATE
-# (120/120 = 1 — every tick). Recomputed by `set_broadcast_rate`, a runtime
+# (120/60 = 2 — every other tick). Recomputed by `set_broadcast_rate`, a runtime
 # knob with no callers today (the per-phase dead-puck downshift was removed:
 # stoppage phases are seconds long so it saved nothing meaningful, starved
 # client interpolation buffers right before the faceoff drop, and polluted
@@ -952,6 +995,7 @@ func _notification(what: int) -> void:
 			_input_timer = 0.0
 
 func _physics_process(_delta: float) -> void:
+	_advance_sim_tick()
 	# Single source of truth for the host-side integer tick counter. Increments
 	# at the engine's physics rate (120 Hz). AI agents salt their per-tick RNG
 	# with this value; consumers must tolerate the counter being zero before
@@ -1873,12 +1917,54 @@ func estimated_host_time() -> float:
 		return 0.0
 	return _clock_sync.estimated_host_time()
 
+# Stamped from sim_time(), NOT estimated_host_time(): one input is produced per
+# physics step, and only the tick clock guarantees consecutive stamps are a tick
+# apart rather than colliding inside one rendered frame (see the sim clock above).
 func estimated_input_stamp_time() -> float:
 	if is_host:
-		return local_time()
+		return sim_time()
 	if _clock_sync == null or not _clock_sync.is_ready:
 		return 0.0
-	return _clock_sync.estimated_input_stamp_time()
+	return sim_time() + _clock_sync.current_input_lead_s()
+
+# One physics step. Called from _physics_process, which as an autoload runs
+# before scene nodes — so a LocalController gathering input this step stamps
+# against a clock that has already advanced.
+func _advance_sim_tick() -> void:
+	if not is_clock_ready():
+		return
+	var wall: float = estimated_host_time()
+	if not _sim_started:
+		_sim_started = true
+		_sim_ticks = 0
+		_sim_offset = wall
+		return
+	_sim_ticks += 1
+	_sim_offset = next_sim_offset(_sim_offset, _sim_ticks, wall)
+
+
+# Pure half of the slew, so the invariant that matters is unit-testable: whatever
+# the wall clock does — including not advancing at all across a burst of steps —
+# sim_time() must rise by at least TICK_DURATION - _SIM_SLEW_S per tick, so two
+# inputs can never land on the same stamp. A large error is warmup or a step
+# change in the NTP offset rather than drift; crawling at the slew rate would
+# leave the input timeline wrong for tens of seconds, so it snaps instead.
+static func next_sim_offset(offset: float, ticks: int, wall: float) -> float:
+	var err: float = (wall - float(ticks) * Constants.TICK_DURATION) - offset
+	if absf(err) > _SIM_RESYNC_S:
+		return offset + err
+	return offset + clampf(err, -_SIM_SLEW_S, _SIM_SLEW_S)
+
+
+# The instant this peer's CURRENT physics step occupies on the host's timeline.
+# Advances exactly one tick per step. Use for anything produced or consumed once
+# per tick (input stamps, the host's consumption gate, pop-overdue); use
+# estimated_host_time() for render instants.
+func sim_time() -> float:
+	if not _sim_started:
+		return estimated_host_time()
+	return float(_sim_ticks) * Constants.TICK_DURATION + _sim_offset
+
 
 func is_clock_ready() -> bool:
 	return is_host or (_clock_sync != null and _clock_sync.is_ready)
