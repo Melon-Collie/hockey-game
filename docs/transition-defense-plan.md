@@ -286,14 +286,20 @@ TRANS_DEFENSE's primary structure.
 Replace `gap_for_pace` with a **ladder on ice remaining**, at three real landmarks:
 
 ```
-sticks(d) = clamp(1 + d / (BLUE_LINE_Z * 2), 1, 3)      # d = carrier's distance to OUR blue line
+sticks(d) = clamp(1 + d / BLUE_LINE_Z, 1, 3)            # d = carrier's distance to OUR blue line
 gap_m     = sticks(d) * BLADE_REACH_M
 ```
 
-- carrier at their blue line → 3 sticks
-- carrier at the red line → 2 sticks
-- carrier at our blue line → **1 stick**
+- carrier at their blue line → 3 sticks   (d = 2·BLUE_LINE_Z)
+- carrier at the red line → 2 sticks      (d = 1·BLUE_LINE_Z)
+- carrier at our blue line → **1 stick**  (d = 0)
 - carrier inside our zone → 1 stick / contact; you are on him
+
+The divisor is ONE zone-to-centre span, because that is the ice between consecutive rungs.
+It was written here as `BLUE_LINE_Z * 2` — which reads `BLUE_LINE_Z` as a zone depth rather
+than as a distance from centre ice, and so contradicts the table directly beneath it: the
+formula as written yields 2 / 1.5 / 1. The code implemented the formula faithfully and
+inherited the error; both are corrected (see `AIRoleRushD._ladder_sticks`).
 
 `BLADE_REACH_M` is the honest physical unit and it is already attribute-scaled per build,
 so a long-stick defender legitimately plays a slightly wider gap.

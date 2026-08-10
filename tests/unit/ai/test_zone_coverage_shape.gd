@@ -77,6 +77,31 @@ const ZONE_SLOTS: Array[int] = [
 
 # Distinct attackers the shape has bodies on, per tick. See the table above.
 const BREADTH_FLOOR: float = 2.2
+# The POINT-SHOT fixture's own floor, and why it is lower than the other two.
+#
+# It is not a weaker guard: it still sits well clear of the per-role argmaxes
+# this file was written to catch (1.44 on this fixture), which is the separation
+# that matters. What moved is the fixture, not the coverage.
+#
+# When the puck-side winger gained AIRoleRushD.should_gap_up — closing to a
+# stick on a carrier who has no pace to beat him with, which at the point is
+# every carrier — this fixture stopped being a settled four-second cycle,
+# because the defence takes the puck away. Measured over the same 480 ticks:
+#
+#                        before            after
+#   puck loose            252 ticks        101
+#   ours                  117              192
+#   D-zone coverage       360              220   (the rest is our BREAKOUT)
+#   puck z at 4 s         -25.5            -16.1 (9 m further off our own net)
+#
+# So the breadth denominator shrank to the 220 ticks we are actually defending,
+# and those now include the churn right after each possession flip, when the
+# partition is re-forming and fewer men are locked. Averaging coverage over a
+# window that keeps starting over is a lower number for a better outcome. The
+# other two fixtures never flip possession and are unchanged to the decimal
+# (2.70 and 2.90), which is also the evidence that the tightening only bites
+# where a winger pressuring the point is the doctrine.
+const BREADTH_FLOOR_POINT_SHOT: float = 1.8
 # The man nobody has should not routinely be a prime scoring threat. A loose
 # guard — it separated the two models weakly — against a collapse.
 const OPEN_DANGER_CEILING: float = 0.25
@@ -161,14 +186,15 @@ func _report(label: String, r: Result) -> void:
 			r.open_danger_sum / n, r.open_danger_worst])
 
 
-func _assert_shape(label: String, r: Result) -> void:
+func _assert_shape(label: String, r: Result,
+		breadth_floor: float = BREADTH_FLOOR) -> void:
 	assert_gt(r.dzone_ticks, MIN_DZONE_TICKS,
 			"%s: fixture never settled into D-zone coverage" % label)
 	var n: float = float(maxi(r.dzone_ticks, 1))
 	assert_lt(r.double_locked_ticks / n, DOUBLE_LOCK_SHARE_CEILING,
 			"%s: two defenders shared a man on %d of %d ticks — past the handoff skew"
 			% [label, r.double_locked_ticks, r.dzone_ticks])
-	assert_gt(r.covered_sum / n, BREADTH_FLOOR,
+	assert_gt(r.covered_sum / n, breadth_floor,
 			"%s: the shape has bodies on almost nobody" % label)
 	assert_lt(r.open_danger_sum / n, OPEN_DANGER_CEILING,
 			"%s: a prime scoring threat is routinely uncovered" % label)
@@ -207,7 +233,7 @@ func test_a_point_shot_setup_is_covered() -> void:
 		 Vector3(-6.0, 0.0, -14.5)],
 		1)
 	_report("point shot", r)
-	_assert_shape("point shot", r)
+	_assert_shape("point shot", r, BREADTH_FLOOR_POINT_SHOT)
 
 
 func test_a_man_who_changes_areas_is_handed_off_not_dropped() -> void:

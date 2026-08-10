@@ -142,11 +142,43 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	# TRANS_DEFENSE -> DZONE re-election stops being a geometry discontinuity.
 	var carrier_velocity: Vector3 = ap.carrier_vel
 	var closing_now: float = ap.closing
-	# Difficulty pace knob: ctx.pursuit_standoff_m widens the ladder so easier bots
-	# sag off the carrier and concede time/space (0.0 = the doctrine gap).
-	var gap: float = AIRoleRushD.ladder_gap_m(
-			carrier_pos, ctx.own_goal_dir, ctx.self_blade_reach, closing_now) \
-			+ ctx.pursuit_standoff_m
+	# ── AND THE LADDER HAS A DOMAIN: HE HAS TO BE COMING AT US ────────────────
+	# The ladder measures ICE REMAINING before the carrier reaches our blue line,
+	# which is a RETREAT quantity — it prices how much room he has to beat you
+	# with speed before there is nothing behind you. Deep in the ATTACKING zone
+	# that quantity is at its maximum and means nothing: this role is also the
+	# forecheck's F1 (the FORECHECK slot dispatches straight here), and a
+	# forechecker is not managing a gap, he is closing on a man who is pinned in
+	# his own end with four teammates between him and our net.
+	#
+	# Unbounded, the ladder saturated at its 3-stick ceiling for the whole
+	# forecheck — a ~5.4 m stand-off, held as a hard FLOOR by the clamp below, so
+	# the forechecker could not close even in principle. His own poke jab reaches
+	# ~1.9 m, so he could never put a stick on the puck either; the only
+	# engagement left was a committed body check, which the easiest tier disables
+	# outright (check_aggression 0). That is a forecheck that never forechecks.
+	#
+	# The read that fixes it already exists and belongs to the OTHER role that
+	# owns a carrier: AIRoleRushD.should_gap_up — "his speed advantage is gone,
+	# so stop retreating and take the ice". Its first trigger is closing < 3 m/s
+	# on OUR net, which a D retrieving behind his own goal line satisfies by
+	# construction. So the forecheck comes out of the shared read rather than a
+	# zone test bolted on here, the two carrier-owning roles agree at the
+	# TRANS_DEFENSE → DZONE handoff the same way they already agree on the
+	# ladder, and DZONE is untouched (the ladder is already 1 stick in our own
+	# zone, which is what gapping up asks for anyway).
+	var gapping_up: bool = AIRoleRushD.should_gap_up(
+			ctx, ctx.rush_read, carrier_pos, closing_now)
+	# Difficulty pace knob: ctx.pursuit_standoff_m widens the gap so easier bots
+	# sag off the carrier and concede time/space (0.0 = the doctrine gap). It
+	# still applies while gapping up — conceding physicality is the pace axis's
+	# job on every stand, not just the retreating ones.
+	var gap: float = ctx.pursuit_standoff_m
+	if gapping_up:
+		gap += AIRoleRushD.GAP_MIN_STICKS * AIRoleRushD.stick_m(ctx)
+	else:
+		gap += AIRoleRushD.ladder_gap_m(
+				carrier_pos, ctx.own_goal_dir, ctx.self_blade_reach, closing_now)
 	# ── AND THE STAND IS ANGLED ───────────────────────────────────────────────
 	# Same shared closing geometry RUSH_D1 uses (AIRoleHelpers.carrier_stand):
 	# the gap up the carrier→our-net line, shaded to the INSIDE so his retreat
@@ -196,9 +228,13 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	#
 	# A loose puck keeps it — there is no man to ride, so the route is a point
 	# seek again and the trip genuinely needs bounding.
+	#
+	# The gap-up is exempt, exactly as RUSH_D1's is: the bound prices being
+	# beaten by pace you cannot match, and the gap-up's own triggers are the
+	# observation that he has no such pace right now.
 	var min_depth: float = -INF
 	var depth_dir: Vector3 = Vector3.ZERO
-	if AIRoleHelpers.stand_ride_velocity(ctx) == Vector3.ZERO \
+	if not gapping_up and AIRoleHelpers.stand_ride_velocity(ctx) == Vector3.ZERO \
 			and not AIRoleHelpers.has_support_behind(ctx):
 		if ap.dir_net != Vector3.ZERO:
 			var net_dir: Vector3 = ap.dir_net
@@ -332,6 +368,16 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 			found = true
 
 	d.target_position = best_pos
+	# NOTE the arrival brake deliberately stays ON even while gapping up, which is
+	# where this differs from RUSH_D1. That role skips it because its stand is a
+	# moving waypoint it must not read as a station; a pressurer's is the opposite
+	# — the carrier gapped up on is by definition one who ISN'T coming at pace,
+	# so his stand is a spot, and braking onto it is how you settle on a man
+	# rather than skate through him. (When he does move, target_velocity flies the
+	# whole route in his frame and the brake is applied there, so the moving case
+	# needs no flag either.) Measured: setting it cost the D-zone shape 0.3
+	# distinct men covered per tick and a third of its settled coverage ticks,
+	# because the pressurer orbited the man instead of standing on him.
 	# The cut-off rides the carrier (its whole geometry is built off his led
 	# position), so the route is flown in his frame — see AISteering's
 	# moving-frame pursuit. This is what makes the last-man bound above

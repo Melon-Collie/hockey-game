@@ -14,6 +14,9 @@ The reference points are, in order of authority:
 2. Standard coaching doctrine for gap control, forechecking, D-zone coverage and breakouts, as
    already cited inside those plans.
 
+**Implementation status (2026-08):** F1, F2 and F3 are **fixed** — see §12 for what each change
+was and what it measured. F4–F7 are open.
+
 **Verdict legend**
 - ✅ **Matches** — behavior aligns with real doctrine
 - ⚠️ **Partial** — right idea, wrong number or missing a piece
@@ -39,9 +42,9 @@ game**: nothing in the model rewards a point shot, so the two roles built to tak
 
 | # | Finding | Verdict | Priority |
 |---|---------|---------|----------|
-| F1 | Gap ladder computes **2 / 1.5 / 1** sticks where its own doctrine (and its own constant) says **3 / 2 / 1** — the divisor is 2× too big | ❌ | P1 |
-| F2 | The **forechecker holds a rush gap**: F1 stands ~5.4 m off the carrier deep in the offensive zone and structurally cannot close | ❌ | P1 |
-| F3 | **Both defencemen pinch to the top of the circles** on every forecheck — the plan says hold the blue line and explicitly lists "no D pinch" as a v1 non-goal | ❌ | P1 |
+| F1 | Gap ladder computes **2 / 1.5 / 1** sticks where its own doctrine (and its own constant) says **3 / 2 / 1** — the divisor is 2× too big — **FIXED** | ❌ | P1 |
+| F2 | The **forechecker holds a rush gap**: F1 stands ~5.4 m off the carrier deep in the offensive zone and structurally cannot close — **FIXED** | ❌ | P1 |
+| F3 | **Both defencemen pinch to the top of the circles** on every forecheck — the plan says hold the blue line and explicitly lists "no D pinch" as a v1 non-goal — **FIXED** | ❌ | P1 |
 | F4 | Bots **never block shots**. `block_held` is hardcoded false; the mechanic, the physics and the stat all exist | ➖ | P1 |
 | F5 | Bots **never lift a stick**. The plan names stick-lift as a backchecker's tool; only the FINISHER raises a blade, and only to tip | ➖ | P2 |
 | F6 | **No point-shot / rebound cycle.** The shot bar bans anything past the top of the circles, and nothing prices a second chance — so the walk-the-line point roles have no shot to walk into | ⚠️ | P1 (feel) |
@@ -445,17 +448,69 @@ faults misrepresents the system.
 
 ---
 
-## 11. Suggested order of work
+## 11. What F1–F3 turned into
 
-1. **F3** (both D pinch) — smallest diff, largest behavioral change, and it is a straight
-   restoration of the design of record. One constant and a strong-side gate.
-2. **F2** (forechecker's gap) — needs a real decision about what PRESSURE's stand-off means in the
-   attacking zone, but the fix is local to one role.
-3. **F1** (ladder divisor) — one character, but it moves every defensive body measurement, so it
-   wants the harness runs (`test_rush_gap_discipline.gd`, `test_defensive_routing.gd`) before and
-   after. Fix the plan doc's table in the same change.
-4. **F4** (shot blocking) — new behavior, but the mechanic and physics already exist; the poke jab
+**F3 — the D pair holds the line.** `DP_PINCH_DEPTH_M` (10.7 m, the circle tops) is replaced by
+`DP_LINE_INSET_M` (1.0 m inside the offensive blue line), applied to both lanes. That is the plan's
+own stand and the election's own race target; the situational strong-side pinch stays where the
+plan put it (§10, post-v1). `test_role_defenseman.gd` gains a second case asserting the weak-side D
+is never deeper in their zone than his partner — the asymmetry that must not come back.
+
+**F2 — the forechecker closes.** `AIRoleRushD.should_gap_up` and `stick_m` become public and
+`AIRolePressure` calls them: when the carrier has no speed advantage to beat you with (closing
+< 3 m/s on our net, which a D retrieving behind his own goal line satisfies by construction) the
+stand-off collapses from the ladder to one stick, and the last-man approach bound is skipped
+exactly as it already is for RUSH_D1. It is a reuse, not a zone test — the two roles that own a
+carrier now share the read that says *when the ladder applies* as well as the ladder itself.
+
+The arrival brake deliberately stays ON for a gapped-up pressurer, which is where it differs from
+RUSH_D1. Skipping it (as RUSH_D1 does, because its stand is a moving waypoint) was measured to cost
+the D-zone shape 0.3 distinct men covered per tick — the pressurer orbits the man instead of
+standing on him.
+
+**F1 — the ladder divisor.** `BLUE_LINE_Z * 2.0` → `BLUE_LINE_Z`, and
+`docs/transition-defense-plan.md` §6's formula is corrected to match the table it was always
+printed above.
+
+### What it measured
+
+The 5v5 D-zone point-shot fixture (`test_zone_coverage_shape.gd`) stops being a settled cycle,
+because the defence takes the puck away. Over the same 480 ticks, before → after:
+
+| | before | after |
+|---|---|---|
+| puck loose | 252 ticks | **101** |
+| puck ours | 117 | **192** |
+| in D-zone coverage | 360 | 220 (rest is our BREAKOUT) |
+| puck z at 4 s | −25.5 | **−16.1** (9 m further off our own net) |
+
+The two fixtures that never flip possession (low cycle, crossing cutter) are unchanged to the
+decimal — 2.70 and 2.90 covered/tick — which is also the evidence that the tightening only bites
+where a winger pressuring the point is the doctrine. The point-shot breadth floor is re-pinned to
+1.8 (still clear of the 1.44 the per-role argmaxes produced, which is the separation that guard
+exists for) with the reasoning recorded on the constant.
+
+On the rush harnesses, `test_rush_gap_discipline.gd` moves within its bars: mean up-ice at the meet
+1.1 → 1.2 m/s, over the lunge bar 3/35 → 2/35, mean excursion 1.2 → 1.8 m (bar 7.0), worst 3.2 →
+10.7 m (bar 14.0). The worst is a single start geometry (D at z −18, carrier wide at +8): a wider
+gap puts that case on the retreating side of RUSH_D1's `stepping_up` split, so it is paced rather
+than braked. Nothing is blown by, and the rushes killed at the line are unchanged at 3.
+`test_defensive_routing.gd`'s share-in-shape reading falls 18% → 12%, which is reported and not
+asserted — that file retired it as a guard for exactly this reason (a correct stand-up scores as a
+failed shadow).
+
+Full suite: 3812 passing, 0 failing, 23 pending — one test added, none removed.
+
+---
+
+## 12. Suggested order of the rest
+
+1. **F4** (shot blocking) — new behavior, but the mechanic and physics already exist; the poke jab
    is the template.
-5. **F7** (finisher depth cap) — small, and it matters most in the default 3v3 mode.
-6. **F5** (stick lift) and **F6** (#577, rebounds) — larger, and F6 in particular wants logged
+2. **F7** (finisher depth cap) — small, and it matters most in the default 3v3 mode.
+3. **F5** (stick lift) and **F6** (#577, rebounds) — larger, and F6 in particular wants logged
    shot data rather than a guess.
+
+Also worth doing while F1–F3 are fresh: the **situational strong-side pinch** the D pair now
+deliberately does not make (5v5 plan §10). `_wall_rim_keepin` is the model for the "can I win this
+puck" gate it needs, and the weak-side D must stay out of it.
