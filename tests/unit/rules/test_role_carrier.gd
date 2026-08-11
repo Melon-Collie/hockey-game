@@ -1962,6 +1962,72 @@ func test_an_easy_entry_is_carried_not_dumped() -> void:
 			"a stand-up wall genuinely collapses the carry's value")
 
 
+func test_an_unopposed_carrier_never_dumps() -> void:
+	# The headline of the residual model. The dump used to be SCORED and entered
+	# in the compete, and it beat an open carrier on an EMPTY RINK: its credit
+	# reached the slot while the carry's is horizon-capped at RECEIVER_DRIVE_MAX_M,
+	# so a soft chip whose landing solve put the puck 17 m up ice out-valued
+	# skating the same ground. Nothing on the ice to lose the puck to, and the bot
+	# threw it away.
+	#
+	# A dump is now what is LEFT when retention is worth nothing, so with the rink
+	# empty there is nothing for it to be left over from — the search does not
+	# even run.
+	for z: float in [-1.0, -3.0, -5.0, -7.0]:
+		for label: String in ["standing", "in stride"]:
+			var self_pos := Vector3(0, 0, z)
+			var vel: Vector3 = Vector3(0, 0, -8) if label == "in stride" \
+					else Vector3.ZERO
+			var ctx: RoleContext = _make_ctx(self_pos, [[1, TEAM_ID, self_pos]])
+			ctx.self_velocity = vel
+			var c := AIRoleCarrier.new()
+			c.decide(ctx)
+			assert_ne(c.intended_action, AIRoleCarrier.INTENT_DUMP,
+					"z=%.0f %s: an unopposed carrier skates it in" % [z, label])
+			assert_eq(c.debug_dump_score, -INF,
+					"z=%.0f %s: the delivery search never ran" % [z, label])
+
+
+func test_a_qualified_release_outranks_the_dump_rather_than_out_scoring_it() -> void:
+	# The ordering, not a comparison. Retention is genuinely hopeless here — a
+	# three-man stand-up line walls the entry off — so without a teammate the bot
+	# concedes, and WITH one up the wall the outlet simply outranks the
+	# concession. It does not have to out-VALUE it: a release that cleared its own
+	# giveaway bar is a live play and a dump is what is left when there is none.
+	var self_pos := Vector3(0, 0, -2)
+	var wall: Array = [
+			[3, 1, Vector3(-4, 0, -5)],
+			[4, 1, Vector3(0, 0, -4.5)],
+			[5, 1, Vector3(4, 0, -5)]]
+	# IN STRIDE, which is the geometry a zone entry is actually decided in. A
+	# carrier standing STILL in front of the same wall backs out and regroups
+	# instead, and that is the right answer rather than an accident: the retreat
+	# ring is cheap from a standstill and expensive at 8 m/s, so the compete
+	# reaches for it exactly when it is available. Regrouping outranks conceding
+	# for the same reason an outlet does.
+	var alone: Array = [[1, TEAM_ID, self_pos]]
+	alone.append_array(wall)
+	var c := AIRoleCarrier.new()
+	var lone_ctx: RoleContext = _make_ctx(self_pos, alone)
+	lone_ctx.self_velocity = Vector3(0, 0, -8)
+	c.decide(lone_ctx)
+	assert_eq(c.intended_action, AIRoleCarrier.INTENT_DUMP,
+			"walled off at speed with nobody to hit: concede")
+
+	var supported: Array = [[1, TEAM_ID, self_pos], [2, TEAM_ID, Vector3(9, 0, -3)]]
+	supported.append_array(wall)
+	var s := AIRoleCarrier.new()
+	var sup_ctx: RoleContext = _make_ctx(self_pos, supported)
+	sup_ctx.self_velocity = Vector3(0, 0, -8)
+	s.decide(sup_ctx)
+	gut.p("  walled + outlet: intent=%d pass=%.4f dump=%.4f"
+			% [s.intended_action, s.debug_pass_score, s.debug_dump_score])
+	assert_eq(s.intended_action, AIRoleCarrier.INTENT_PASS,
+			"the same wall with an outlet available: use the outlet")
+	assert_eq(s.debug_dump_score, -INF,
+			"and the delivery search never ran — the release outranked it")
+
+
 func test_carrier_with_a_clean_outlet_does_not_dump() -> void:
 	# Un-pended by the meeting-strip crossing band (measured, protection-
 	# aware): the head-on forecheck meeting prices as the strip it is even
