@@ -549,6 +549,17 @@ var dump_launch_speed: float = AIActionScoring.PASS_SPEED_M_S
 # absorbed by the body-relative offset and the mouse motion smoothing.
 var protect_offset: Vector3 = Vector3.ZERO
 var protect_gain: float = 0.0
+# Metres of room the PRESENTED-FORWARD puck has from every un-beaten defender's
+# momentum-projected stick over the evasion horizon — negative when somebody can
+# get a blade on it. This is the "necessity" half of the shield weight above,
+# published because it is also the whole of the question the state machine's
+# square-to-net facing asks: is there still a man to beat, i.e. would carrying
+# the puck out in front of me right now give it away? Unlike the shield it is
+# NOT gated on ctx.protects_the_puck — facing is a posture every tier holds, and
+# the read is a physical contest measurement with no protect logic in it.
+# EVADE_SAFE_MARGIN_M (what reach_clearance reports against nobody) until first
+# computed, so a fresh carrier squares up rather than hunching over the puck.
+var forward_puck_clearance: float = AIActionScoring.EVADE_SAFE_MARGIN_M
 # The body-scale evasion seam from the same re-eval (world point) — the
 # OBJECTIVE-DIRECTED seam (AIActionScoring.best_evade_point_toward): the safe
 # spot with the most progress toward the live carry anchor, so the poke-evade
@@ -888,6 +899,7 @@ func reset() -> void:
 	dump_launch_speed = AIActionScoring.PASS_SPEED_M_S
 	protect_offset = Vector3.ZERO
 	protect_gain = 0.0
+	forward_puck_clearance = AIActionScoring.EVADE_SAFE_MARGIN_M
 	evade_seam_world = Vector3.INF
 	brake_check_favored = false
 	deke_go = false
@@ -1054,22 +1066,27 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 	# there buys over the presented-forward spot. The state machine blends the
 	# carry mouse between the two by that gain — pure stick work, steering and the
 	# carry destination are untouched.
+	# Directional screen filter (see PROTECT_SCREEN_BEHIND_M): a carrier driving
+	# at the net already shields the forward-held puck from a defender BEHIND it
+	# with its own body, so a beaten checker trailing the rush must not keep the
+	# shield on and hold the body side-on. Drop those defenders before the
+	# pressure / seam read so it answers only genuine side/front pressure and the
+	# carrier squares to the net the instant its man is beaten. The shot / pass /
+	# carry lanes above still see every defender.
+	#
+	# The forward-puck clearance off that set runs for EVERY tier, because the
+	# facing read consumes it too (see forward_puck_clearance) and facing is not
+	# a protect skill. Only the seam work below is gated.
+	_fill_protect_opponents(ctx)
+	var horizon: float = AIActionScoring.EVADE_HORIZON_S
+	var fwd_spot: Vector3 = _puck_pos_at(
+			self_pos + ctx.self_velocity * horizon, attacking_goal)
+	forward_puck_clearance = AIActionScoring.reach_clearance(fwd_spot, horizon,
+			_scratch_protect_opponents, _scratch_protect_vels,
+			_scratch_protect_caps)
 	if ctx.protects_the_puck:
-		# Directional screen filter (see PROTECT_SCREEN_BEHIND_M): a carrier
-		# driving at the net already shields the forward-held puck from a defender
-		# BEHIND it with its own body, so a beaten checker trailing the rush must
-		# not keep the shield on and hold the body side-on. Drop those defenders
-		# before the pressure / seam read so it answers only genuine side/front
-		# pressure and the carrier squares to the net the instant its man is
-		# beaten. The shot / pass / carry lanes above still see every defender.
-		_fill_protect_opponents(ctx)
-		var horizon: float = AIActionScoring.EVADE_HORIZON_S
-		var fwd_spot: Vector3 = _puck_pos_at(
-				self_pos + ctx.self_velocity * horizon, attacking_goal)
 		var fwd_safety: float = AIActionScoring.clearance_to_safety(
-				AIActionScoring.reach_clearance(fwd_spot, horizon,
-						_scratch_protect_opponents, _scratch_protect_vels,
-						_scratch_protect_caps))
+				forward_puck_clearance)
 		# HOW MUCH to shield and WHERE to put the puck are two questions answered
 		# by two seams (see best_handle_protect_point). The WEIGHT reads the
 		# MAX-clearance seam — the safety the best available shield buys.

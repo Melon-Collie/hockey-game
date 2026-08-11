@@ -831,60 +831,77 @@ func test_live_off_puck_aim_tracks_the_carrier_puck_during_a_jab() -> void:
 			"no opposing carrier → no live jab target")
 
 
-func test_man_to_beat_is_sticky_across_the_contest_boundary() -> void:
-	# The square-to-net facing hinges on _has_man_to_beat. A bare radius let a
-	# defender riding the boundary flip the whole carry-aim forward direction; the
-	# hysteresis band latches it. Team 0 attacks −z, so a goal-side defender is
-	# down −z from the carrier.
-	var self_pos := Vector3.ZERO
-	var s := WorldSnapshot.new()
-	_add_skater(s, SELF_ID, self_pos)
-	# Just OUTSIDE the base contest radius (3.5 m): no man to beat.
-	_add_skater(s, OPP_ID, Vector3(0, 0, -3.6))
-	assert_false(sm._has_man_to_beat(s, self_pos), "outside the base radius: no man")
-	# Inside the base radius: engages.
-	s.skater_states[OPP_ID].position = Vector3(0, 0, -3.4)
-	assert_true(sm._has_man_to_beat(s, self_pos), "inside the base radius: man to beat")
-	# Back outside the base radius but within the widened sustain band (3.5 +
-	# 0.75): the prior answer STICKS instead of flipping.
-	s.skater_states[OPP_ID].position = Vector3(0, 0, -3.6)
-	assert_true(sm._has_man_to_beat(s, self_pos),
+func test_man_to_beat_reads_reach_not_proximity() -> void:
+	# The square-to-net facing hinges on _has_man_to_beat, which reads the
+	# carrier's published forward-puck clearance (metres of room the presented
+	# puck has from the nearest un-beaten stick) rather than a distance band.
+	# EVADE_SAFE_CLEAR_MIN_M — a blade of real air — is the bar.
+	var bar: float = Agent.CARRY_MAN_TO_BEAT_CLEAR_M
+	sm._carry_has_man = false
+	sm._carrier.forward_puck_clearance = bar + 0.01
+	assert_false(sm._has_man_to_beat(), "a blade of air on the forward puck: no man")
+	sm._carrier.forward_puck_clearance = bar - 0.01
+	assert_true(sm._has_man_to_beat(), "a stick inside that: a man to beat")
+	# Sticky: while a man is engaged the bar drops, so a defender riding the
+	# boundary holds the prior answer instead of flipping the whole carry aim.
+	sm._carrier.forward_puck_clearance = bar + 0.01
+	assert_true(sm._has_man_to_beat(),
 			"riding the boundary holds the prior answer (sticky)")
-	# Clear the widened band (> 4.25 m): the man is finally beaten.
-	s.skater_states[OPP_ID].position = Vector3(0, 0, -4.3)
-	assert_false(sm._has_man_to_beat(s, self_pos), "past the widened band: man beaten")
+	# Open more than the sustain band and he is finally beaten.
+	sm._carrier.forward_puck_clearance = \
+			bar + Agent.CARRY_MAN_TO_BEAT_HYSTERESIS_M + 0.01
+	assert_false(sm._has_man_to_beat(), "past the sustain band: man beaten")
 
 
-func test_man_to_beat_reads_the_closing_rate_not_a_freeze_frame() -> void:
-	# "Have I beaten him?" is a question about the CLOSING RATE — the same two
-	# bodies in the same spots answer it differently depending on where they're
-	# going, so both are projected to the evasion horizon. Team 0 attacks −z.
-	# One geometry, a checker level with the carrier on his hip, three futures.
-	var self_pos := Vector3.ZERO
-	var s := WorldSnapshot.new()
-	_add_skater(s, SELF_ID, self_pos)
-	_add_skater(s, OPP_ID, Vector3(1.2, 0, 0.0))
-	s.skater_states[SELF_ID].velocity = Vector3(0, 0, -9.0)   # carrier at full stride
+func test_a_defender_abreast_but_out_of_reach_is_not_a_man_to_beat() -> void:
+	# The defect the reach read exists to remove, driven through the real
+	# carrier: a defender level with the carrier but wide of him projects ~0
+	# along the netward line, so the old goal-side radius counted him and held
+	# the square-to-net facing off — while no stick of his could touch the puck.
+	# Team 0 attacks -z.
+	var carrier := AIRoleCarrier.new()
+	var stride := Vector3(0, 0, -9.0)
+	var ctx := _carry_ctx(Vector3.ZERO, stride, Vector3(3.0, 0, 0.0), stride)
+	carrier.decide(ctx)
+	gut.p("  abreast and 3 m wide: forward-puck clearance %.2f m (bar %.2f)"
+			% [carrier.forward_puck_clearance, Agent.CARRY_MAN_TO_BEAT_CLEAR_M])
+	assert_gt(carrier.forward_puck_clearance, Agent.CARRY_MAN_TO_BEAT_CLEAR_M,
+			"a defender abreast but a stick-and-a-half wide cannot reach the puck")
+	# …and the same defender ON the puck line in front very much can.
+	var tight := _carry_ctx(Vector3.ZERO, stride, Vector3(0.3, 0, -1.2), stride)
+	var pressed := AIRoleCarrier.new()
+	pressed.decide(tight)
+	gut.p("  in front at 1.2 m: forward-puck clearance %.2f m"
+			% pressed.forward_puck_clearance)
+	assert_lt(pressed.forward_puck_clearance, Agent.CARRY_MAN_TO_BEAT_CLEAR_M,
+			"a stick in front of the puck is a man to beat")
 
-	# Static freeze-frame (both velocities zero) — the level checker is a man.
-	s.skater_states[SELF_ID].velocity = Vector3.ZERO
-	assert_true(sm._has_man_to_beat(s, self_pos),
-			"level on the hip and nobody moving: still a man to beat")
 
-	# The carrier pulls away: same spots, but the checker is 2 m behind by the
-	# horizon and falling — beaten, so the O-zone square is free to fire.
-	sm._carry_has_man = false
-	s.skater_states[SELF_ID].velocity = Vector3(0, 0, -9.0)
-	s.skater_states[OPP_ID].velocity = Vector3(0, 0, -4.0)
-	assert_false(sm._has_man_to_beat(s, self_pos),
-			"a chaser losing ground from the same spot is beaten, not a man to beat")
-
-	# The checker is FASTER: same spots, but he pulls even and ahead over the
-	# horizon — a back-checker running the carrier down is still the man.
-	sm._carry_has_man = false
-	s.skater_states[OPP_ID].velocity = Vector3(0, 0, -12.0)
-	assert_true(sm._has_man_to_beat(s, self_pos),
-			"a chaser gaining from the same spot is very much still the man")
+# A carrier at `self_pos` with `self_vel`, one opponent at `opp_pos`, attacking -z.
+func _carry_ctx(self_pos: Vector3, self_vel: Vector3, opp_pos: Vector3,
+		opp_vel: Vector3 = Vector3.ZERO) -> RoleContext:
+	var snap := WorldSnapshot.new()
+	for entry: Array in [[SELF_ID, self_pos, self_vel], [OPP_ID, opp_pos, opp_vel]]:
+		var sk := SkaterNetworkState.new()
+		sk.position = entry[1]
+		sk.velocity = entry[2]
+		sk.facing = Vector2(0.0, -1.0)
+		snap.skater_states[entry[0]] = sk
+	var puck := PuckNetworkState.new()
+	puck.carrier_peer_id = SELF_ID
+	puck.position = self_pos
+	snap.puck_state = puck
+	var ctx := RoleContext.new()
+	ctx.snapshot = snap
+	ctx.self_pos = self_pos
+	ctx.self_velocity = self_vel
+	ctx.team_id = 0
+	ctx.peer_id = SELF_ID
+	ctx.attacking_goal_pos = Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)
+	ctx.defending_goal_pos = Vector3(0.0, 0.0, GameRules.GOAL_LINE_Z)
+	ctx.own_goal_dir = 1.0
+	ctx.team_id_by_peer = {SELF_ID: 0, OPP_ID: 1}
+	return ctx
 
 
 func test_threat_facing_fallback_is_debounced() -> void:
@@ -1540,7 +1557,7 @@ func test_blade_gate_parks_on_the_line_at_the_entry_point() -> void:
 	# and at the comfortable extension from the body.
 	var self_pos := Vector3(10, 0, 1)
 	var gate: Vector3 = sm._blade_gate_on_puck_line(
-			self_pos, Vector3.ZERO, Vector3(20, 0, 0))
+			self_pos, Vector3.ZERO, Vector3.ZERO, Vector3(20, 0, 0))
 	assert_almost_eq(gate.z, 0.0, 0.001, "gate sits on the puck's travel line")
 	assert_lt(gate.x, 10.0, "gate sits ahead of the perpendicular foot (early contact)")
 	assert_almost_eq(self_pos.distance_to(gate), _gate_reach(), 0.001,
@@ -1551,7 +1568,7 @@ func test_blade_gate_head_on_parks_in_front() -> void:
 	# Bot standing exactly on the line: the gate is a full comfortable reach IN
 	# FRONT of the body, toward the incoming puck — blade out to meet it.
 	var gate: Vector3 = sm._blade_gate_on_puck_line(
-			Vector3(10, 0, 0), Vector3.ZERO, Vector3(20, 0, 0))
+			Vector3(10, 0, 0), Vector3.ZERO, Vector3.ZERO, Vector3(20, 0, 0))
 	assert_almost_eq(gate.z, 0.0, 0.001)
 	assert_almost_eq(gate.x, 10.0 - _gate_reach(), 0.001,
 			"head-on gate is one comfortable reach toward the puck")
@@ -1561,7 +1578,7 @@ func test_blade_gate_reaches_toward_the_line_when_still_closing() -> void:
 	# Line runs 3 m to the side — outside reach. Best effort: the perpendicular
 	# foot (nearest point of the line), held while the body closes.
 	var gate: Vector3 = sm._blade_gate_on_puck_line(
-			Vector3(10, 0, 3), Vector3.ZERO, Vector3(20, 0, 0))
+			Vector3(10, 0, 3), Vector3.ZERO, Vector3.ZERO, Vector3(20, 0, 0))
 	assert_almost_eq(gate.x, 10.0, 0.001)
 	assert_almost_eq(gate.z, 0.0, 0.001,
 			"out-of-reach line → aim at its nearest point while closing")
@@ -1579,7 +1596,7 @@ func test_blade_gate_chases_a_puck_that_is_genuinely_leaving() -> void:
 	# is a path that never closes.
 	var puck_pos := Vector3(0, 0, 5)
 	var gate: Vector3 = sm._blade_gate_on_puck_line(
-			Vector3.ZERO, puck_pos, Vector3(0, 0, 20))
+			Vector3.ZERO, Vector3.ZERO, puck_pos, Vector3(0, 0, 20))
 	assert_eq(gate, puck_pos, "a puck genuinely leaving is chased, not gated")
 
 
@@ -1591,7 +1608,7 @@ func test_blade_gate_parks_for_a_puck_ringing_back_off_the_boards() -> void:
 	var self_pos := Vector3(GameRules.INNER_HALF_WIDTH - 2.5, 0, 1)
 	var puck_pos := Vector3(GameRules.INNER_HALF_WIDTH - 1.0, 0, 0)
 	var gate: Vector3 = sm._blade_gate_on_puck_line(
-			self_pos, puck_pos, Vector3(20, 0, 0))
+			self_pos, Vector3.ZERO, puck_pos, Vector3(20, 0, 0))
 	assert_ne(gate, puck_pos, "the carom back into reach is gated, not chased")
 	assert_lt(self_pos.distance_to(gate), _gate_reach() + 0.001,
 			"and the gate sits inside the blade's comfortable extension")
@@ -1606,7 +1623,7 @@ func test_blade_gate_clamps_a_corner_rim_line_into_the_rink() -> void:
 	var puck_pos := Vector3(12.5, 0, 19.0)          # riding high on the +X wall
 	var puck_vel := Vector3(9.9, 0, 9.9)            # angling into the +X/+Z corner
 	var self_pos := Vector3(12.6, 0, 23.5)          # downstream, waiting on the rim
-	var gate: Vector3 = sm._blade_gate_on_puck_line(self_pos, puck_pos, puck_vel)
+	var gate: Vector3 = sm._blade_gate_on_puck_line(self_pos, Vector3.ZERO, puck_pos, puck_vel)
 	var inside: Vector2 = GameRules.clamp_to_rink_inner(Vector2(gate.x, gate.z))
 	assert_almost_eq(inside.distance_to(Vector2(gate.x, gate.z)), 0.0, 0.01,
 			"gate parks on the rink inner surface, not past the glass; got %s"
@@ -1616,7 +1633,7 @@ func test_blade_gate_clamps_a_corner_rim_line_into_the_rink() -> void:
 func test_blade_gate_stationary_puck_is_the_puck() -> void:
 	var puck_pos := Vector3(5, 0, 5)
 	var gate: Vector3 = sm._blade_gate_on_puck_line(
-			Vector3(10, 0, 1), puck_pos, Vector3.ZERO)
+			Vector3(10, 0, 1), Vector3.ZERO, puck_pos, Vector3.ZERO)
 	assert_eq(gate, puck_pos, "no travel line without velocity — aim at the puck")
 
 
@@ -2059,6 +2076,11 @@ func test_carry_aim_keeps_the_route_in_ozone_when_a_man_must_be_beaten() -> void
 	sm._last_carry_anchor = Vector3(8, 0, -15)
 	var s := _carry_snap(oz_pos)
 	_add_skater(s, OPP_ID, Vector3(2, 0, -16))   # goal-side, ~2.2 m away
+	# The facing seam reads the carrier's published forward-puck clearance (see
+	# _has_man_to_beat); that this defender's stick genuinely covers the puck is
+	# the carrier-level claim, pinned in
+	# test_a_defender_abreast_but_out_of_reach_is_not_a_man_to_beat.
+	sm._carrier.forward_puck_clearance = -0.2
 	var target: Vector3 = sm._carry_mouse_aim(s, oz_pos)
 	var facing: Vector3 = (target - oz_pos).normalized()
 	assert_gt(facing.x, 0.9, "a man to beat keeps the carrier facing its route")

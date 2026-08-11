@@ -255,10 +255,41 @@ static func step_puck(pos: Vector3, vel: Vector3, dt: float) -> Transform3D:
 # retrievals specifically: not a missing behaviour, a wrong path.
 #
 # Walks the same friction + rounded-corner-carom integration everything else
-# already trusts and reports the first sample that enters `reach` of `from_pos`
-# — the earliest touchable point, i.e. the gate the blade should wait at. With
-# no sample in reach it reports the closest approach instead, so a receiver
-# still has somewhere honest to aim while the body keeps closing.
+# already trusts and reports the first point on that path the blade can touch —
+# the gate the blade should wait at. With no such point it reports the closest
+# approach instead, so a receiver still has somewhere honest to aim while the
+# body keeps closing.
+#
+# It is a RENDEZVOUS: the reach circle rides `from_vel` down the walk, so the
+# answer is where the puck's path meets the body's, not where it meets the spot
+# the body happens to occupy at the instant of asking. A meeting point is a fact
+# about two futures, and a present-frame solve cannot see one — a body metres
+# off the line never has the puck's path enter a circle drawn where it is
+# STANDING, so the walk finds no entry at all and falls back to reporting the
+# closest-approach foot. Measured on a routine feed crossing in front of a
+# receiver skating through the lane at 7 m/s, that fallback held for 16 of the
+# 21 ticks of the approach, aiming the blade at ice the arm could not reach, and
+# resolved to the real catching offset only in the last few ticks — a ~0.46 m
+# move in one tick against a cursor that slews ~0.33 (blade speed ~10 m/s at
+# 30 Hz). The stick was still swinging when the puck arrived, which is the
+# reported "rotates the stick around as the puck reaches it".
+#
+# Ridden, the same meet is available from the first tick and always sits
+# somewhere the arm can be, so the blade spends the approach in the pose it will
+# catch in. The transition does not get smaller — it gets 15 ticks of warning,
+# which is what the hands needed. Measured end to end on led feeds
+# (tests/unit/ai/test_pass_reception_catch.gd), receptions went 79% -> 83%, and
+# team possession under a live forecheck (test_point_holds_the_line) went from
+# 11% ours / 86% theirs to 29% / 16%.
+#
+# The body is projected at CONSTANT velocity, the same read `_has_man_to_beat`
+# and the protect screen use, and only for `ride_s` — after that it is treated
+# as parked. The bound matters because a receiver is steering while this runs,
+# so its present velocity is a claim with a shelf life, and the walk's horizon
+# (2 s) is well past it. Callers pass the PASSER's own lead bound
+# (AIRoleCarrier.PASS_LEAD_MAX_S), which makes the two halves of a pass agree on
+# how much of the receiver's motion is real: the feed is aimed at most that far
+# ahead of him, so he may set up at most that far ahead of himself.
 #
 # Results land in statics (single-threaded AI tick, same convention as
 # AIActionScoring.resolve_feed_keeper): one solve serves the stance, the timing
@@ -267,6 +298,20 @@ static var gate_point: Vector3 = Vector3.INF   # where the puck meets the reach
 static var gate_velocity: Vector3 = Vector3.ZERO   # its travel there (post-carom)
 static var gate_time_s: float = 0.0            # when it gets there
 static var gate_in_reach: bool = false         # true = a real entry, not just closest
+# The meet in the BODY's frame — the puck's offset from the body AT the meet,
+# i.e. where the blade has to be relative to the chest when the puck shows up.
+# `gate_point` is the same event in world coordinates, and the two consumers
+# want different ones: the STANCE and the timing gate are about a patch of ice
+# (world), while the BLADE AIM is a cursor the IK chases out of a body that is
+# still skating (relative). Aiming the cursor at the world meet parks it on ice
+# the arm cannot reach until the body arrives — measured as a possession drop
+# (53% → 39% of a settled cycle) when the ride was first added, because a
+# reaching-for-nothing blade is not on the puck when the puck comes. Held as an
+# offset the blade rides the body rigidly, which is the most stable pose there
+# is, and lands exactly on the meet as the body gets there. With `from_vel`
+# ZERO the body does not move, so `from_pos + gate_offset == gate_point` and
+# nothing about the frozen solve changes.
+static var gate_offset: Vector3 = Vector3.ZERO
 # Does the path bring the puck CLOSER than it is right now? The board-aware
 # answer to "is this coming to me", which a dot product against the current
 # velocity gets wrong on exactly the play that matters: a rim heading away
@@ -277,29 +322,45 @@ static var gate_closes: bool = false
 
 
 # Returns gate_in_reach. `reach` is the receiver's comfortable blade extension.
+# `from_vel` rides the reach circle down the walk for `ride_s` (see above); ZERO
+# reproduces the frozen-body solve exactly.
 #
 # Each walk step is tested as a SEGMENT, not a sample point: a 20 m/s feed
 # crosses metres per step, so a point-sampled walk fine enough to never skip
 # through a ~1 m reach circle would cost several times the steps. Segment entry
 # is exact at any step size (the ray/circle root gives the sub-step crossing),
-# which keeps the walk coarse enough to run per-tick per-receiver.
+# which keeps the walk coarse enough to run per-tick per-receiver. With the body
+# riding, the segment is taken in the BODY's frame — its endpoints are the
+# puck's offsets from the body at each end of the step, both moving linearly
+# within it — so the same quadratic stays exact and `u` maps straight back onto
+# the puck's world span.
 static func solve_reception_gate(puck_pos: Vector3, puck_vel: Vector3,
 		from_pos: Vector3, reach: float,
-		horizon_s: float, steps: int) -> bool:
+		horizon_s: float, steps: int,
+		from_vel: Vector3 = Vector3.ZERO, ride_s: float = INF) -> bool:
 	gate_point = puck_pos
 	gate_velocity = puck_vel
 	gate_time_s = 0.0
 	gate_in_reach = false
 	gate_closes = false
+	gate_offset = Vector3(puck_pos.x - from_pos.x, 0.0, puck_pos.z - from_pos.z)
 	if steps <= 0 or horizon_s <= 0.0:
 		return false
 	var reach_sq: float = reach * reach
 	var dt: float = horizon_s / float(steps)
 	var p: Vector3 = puck_pos
 	var v: Vector3 = puck_vel
+	# Body offset per step, and the running body position down the walk. The ride
+	# stops after `ride_s` — past that the body's present velocity is no longer
+	# evidence, so it holds where the bound left it.
+	var bx: float = from_pos.x
+	var bz: float = from_pos.z
+	var bstep_x: float = from_vel.x * dt
+	var bstep_z: float = from_vel.z * dt
+	var ride_steps: int = steps if is_inf(ride_s) else int(ride_s / dt)
 	# Already on the blade — the gate is the puck itself.
-	var ax: float = p.x - from_pos.x
-	var az: float = p.z - from_pos.z
+	var ax: float = p.x - bx
+	var az: float = p.z - bz
 	var start_sq: float = ax * ax + az * az
 	if start_sq <= reach_sq:
 		gate_in_reach = true
@@ -310,21 +371,28 @@ static func solve_reception_gate(puck_pos: Vector3, puck_vel: Vector3,
 		var stepped: Transform3D = step_puck(p, v, dt)
 		var q: Vector3 = stepped.origin
 		var qv: Vector3 = stepped.basis.x
-		# Segment a→q against the reach circle around from_pos.
-		var dx: float = q.x - p.x
-		var dz: float = q.z - p.z
+		var step_bx: float = bstep_x if i < ride_steps else 0.0
+		var step_bz: float = bstep_z if i < ride_steps else 0.0
+		# Relative span across this step: puck offset from the body at the step's
+		# start and at its end, with the body having moved one step in between.
+		var fx: float = p.x - bx
+		var fz: float = p.z - bz
+		var dx: float = (q.x - step_bx) - p.x
+		var dz: float = (q.z - step_bz) - p.z
+		# The puck's own world span, which is what `u` is reported against.
+		var wx: float = q.x - p.x
+		var wz: float = q.z - p.z
 		var aa: float = dx * dx + dz * dz
 		var u_near: float = 0.0
 		if aa > 1e-9:
-			var fx: float = p.x - from_pos.x
-			var fz: float = p.z - from_pos.z
 			var b: float = fx * dx + fz * dz
 			var c: float = fx * fx + fz * fz - reach_sq
 			var disc: float = b * b - aa * c
 			if disc >= 0.0:
 				var u: float = (-b - sqrt(disc)) / aa
 				if u >= 0.0 and u <= 1.0:
-					gate_point = Vector3(p.x + dx * u, 0.0, p.z + dz * u)
+					gate_point = Vector3(p.x + wx * u, 0.0, p.z + wz * u)
+					gate_offset = Vector3(fx + dx * u, 0.0, fz + dz * u)
 					gate_velocity = v.lerp(qv, u)
 					gate_time_s = (float(i) + u) * dt
 					gate_in_reach = true
@@ -332,16 +400,19 @@ static func solve_reception_gate(puck_pos: Vector3, puck_vel: Vector3,
 					return true
 			# Closest approach on this segment, for the no-entry fallback.
 			u_near = clampf(-b / aa, 0.0, 1.0)
-		var nx: float = p.x + dx * u_near - from_pos.x
-		var nz: float = p.z + dz * u_near - from_pos.z
+		var nx: float = fx + dx * u_near
+		var nz: float = fz + dz * u_near
 		var n_sq: float = nx * nx + nz * nz
 		if n_sq < best_sq:
 			best_sq = n_sq
-			gate_point = Vector3(p.x + dx * u_near, 0.0, p.z + dz * u_near)
+			gate_point = Vector3(p.x + wx * u_near, 0.0, p.z + wz * u_near)
+			gate_offset = Vector3(nx, 0.0, nz)
 			gate_velocity = v.lerp(qv, u_near)
 			gate_time_s = (float(i) + u_near) * dt
 		p = q
 		v = qv
+		bx += step_bx
+		bz += step_bz
 	gate_closes = best_sq < start_sq
 	return false
 

@@ -370,6 +370,108 @@ func test_a_puck_ringing_off_the_near_wall_does_close() -> void:
 			"a carom back toward us is a puck that closes")
 
 
+# ── The gate is a RENDEZVOUS ────────────────────────────────────────────────
+# The reach circle rides the receiver's own velocity, so the answer is where the
+# puck's path meets the BODY's, not where it meets the spot the body occupied at
+# the instant of asking. Both tests below walk the real clock and compare the
+# two frames on the same feed; `from_vel = ZERO` is the frozen solve, and it is
+# kept reachable precisely so these can still reproduce the defect.
+
+
+# Walks a feed tick by tick and reports [ticks whose blade target was out of
+# the arm's reach, the tick the first real entry appeared on, ticks walked].
+# `ride` selects the frame: the receiver's true velocity, or ZERO for the frozen
+# solve.
+#
+# The tracked quantity is `gate_offset` — the meet in the BODY's frame, which is
+# what the blade aim consumes (SkaterAgentStateMachine._blade_gate_on_puck_line)
+# and therefore what the stick is asked to do. `gate_point`, the same event in
+# world coordinates, feeds the stance instead and legitimately moves.
+func _walk_gate(puck_pos: Vector3, puck_vel: Vector3, body_pos: Vector3,
+		body_vel: Vector3, ride: bool) -> Array:
+	var dt: float = 1.0 / 30.0
+	var p: Vector3 = puck_pos
+	var v: Vector3 = puck_vel
+	var b: Vector3 = body_pos
+	var unreachable: int = 0
+	var first_entry: int = -1
+	var i: int = 0
+	while i < 60 and b.distance_to(p) > _GATE_REACH:
+		var hit: bool = AITrajectory.solve_reception_gate(
+				p, v, b, _GATE_REACH, _GATE_HORIZON_S, _GATE_STEPS,
+				body_vel if ride else Vector3.ZERO, AIRoleCarrier.PASS_LEAD_MAX_S)
+		if hit and first_entry < 0:
+			first_entry = i
+		if AITrajectory.gate_offset.length() > _GATE_REACH + 0.001:
+			unreachable += 1
+		var stepped: Transform3D = AITrajectory.step_puck(p, v, dt)
+		p = stepped.origin
+		v = stepped.basis.x
+		b += body_vel * dt
+		i += 1
+	return [unreachable, first_entry, i]
+
+
+func test_the_catching_pose_is_available_before_the_puck_arrives() -> void:
+	# A feed crossing in front of a receiver skating INTO the lane — the routine
+	# give-and-go, and the shape behind the reported "stick rotates around just
+	# as the puck reaches it".
+	#
+	# What the ride changes is WHEN the blade learns the pose it has to catch in.
+	# Frozen, the puck's path never enters a circle drawn where the body is
+	# STANDING, so for most of the approach there is no entry and the solve falls
+	# back to the closest-approach foot — metres away, a target the arm cannot
+	# reach — resolving to the real catching offset only in the last few ticks.
+	# That last transition is ~0.46 m in a tick and the cursor slews ~0.33
+	# (blade speed ~10 m/s at 30 Hz), so the stick is still swinging when the
+	# puck gets there. Ridden, the same offset is available from the first tick
+	# and the blade carries it in.
+	var puck_pos := Vector3(-12, 0, -14)
+	var puck_vel := Vector3(16, 0, 0)
+	var body_pos := Vector3(0, 0, -18)
+	var body_vel := Vector3(0, 0, 5)
+	var frozen: Array = _walk_gate(puck_pos, puck_vel, body_pos, body_vel, false)
+	var ridden: Array = _walk_gate(puck_pos, puck_vel, body_pos, body_vel, true)
+	gut.p("  frozen: first entry tick %d of %d, %d ticks aimed out of reach"
+			% [frozen[1], frozen[2], frozen[0]])
+	gut.p("  ridden: first entry tick %d of %d, %d ticks aimed out of reach"
+			% [ridden[1], ridden[2], ridden[0]])
+	# The defect, reproduced.
+	assert_gt(frozen[1], frozen[2] / 2,
+			"frozen: no entry exists until the body has nearly arrived")
+	assert_gt(frozen[0], frozen[2] / 2,
+			"frozen: the blade spends most of the approach aimed out of its reach")
+	# Ridden: the meet is known early, and it is somewhere the arm can be.
+	assert_lt(ridden[1], frozen[1] / 2,
+			"ridden: the rendezvous is available long before the puck arrives")
+	# One opening tick before the walk resolves the meet; after that the target
+	# is always somewhere the arm can be.
+	assert_lt(ridden[0], 2,
+			"ridden: the blade is not asked for ice the arm cannot cover")
+
+
+func test_the_ride_leaves_a_standing_receiver_untouched() -> void:
+	# The control that keeps the ride honest: with no velocity to ride, the
+	# rendezvous IS the frozen solve — same meet, same offset, bit for bit — so
+	# nothing about a stationary reception changed.
+	var puck_pos := Vector3(-8, 0, 0)
+	var puck_vel := Vector3(18, 0, 0)
+	var from_pos := Vector3(0, 0, 1)
+	AITrajectory.solve_reception_gate(puck_pos, puck_vel, from_pos,
+			_GATE_REACH, _GATE_HORIZON_S, _GATE_STEPS)
+	var frozen_point: Vector3 = AITrajectory.gate_point
+	var frozen_offset: Vector3 = AITrajectory.gate_offset
+	AITrajectory.solve_reception_gate(puck_pos, puck_vel, from_pos,
+			_GATE_REACH, _GATE_HORIZON_S, _GATE_STEPS,
+			Vector3.ZERO, AIRoleCarrier.PASS_LEAD_MAX_S)
+	assert_eq(AITrajectory.gate_point, frozen_point)
+	assert_eq(AITrajectory.gate_offset, frozen_offset)
+	# And the two halves describe one event: the offset applied to the body IS
+	# the world meet, which is the invariant the blade aim rests on.
+	assert_almost_eq((from_pos + frozen_offset).distance_to(frozen_point), 0.0,
+			0.001, "offset applied to the body is the world meet")
+
+
 func test_a_puck_already_on_the_blade_gates_at_itself() -> void:
 	var puck_pos := Vector3(0, 0, 0)
 	var found: bool = AITrajectory.solve_reception_gate(
