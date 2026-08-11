@@ -103,6 +103,58 @@ func settle(shooter: Vector3, ticks: int) -> void:
 		_ctrl._physics_process(DT)
 
 
+# ── THE CARRIER WHO IS ACTUALLY MOVING ───────────────────────────────────────
+# Every other setup here parks the shooter on a spot. That is a shot nobody
+# takes: a player skates in and releases off the drive, and a MOVING carrier
+# changes what the goalie is solving — the arc target sweeps under him, the
+# carrier lead displaces the threat, and the rush backflow retreats him. None of
+# that is exercised by a shooter standing still.
+#
+# `lane_x` held constant with the drive purely down -Z is the sharpest version:
+# the shooter's own lateral velocity is ZERO the whole way, while the angle he
+# presents swings the width of the mouth. Anything in the goalie's model keyed to
+# the carrier's lateral SPEED is blind to it by construction.
+#
+# Distances are perpendicular metres out from the goal line. The caller owns the
+# starting pose (`settle_ready` at the start spot) so a drive measures tracking
+# and not a keeper still walking out. Returns the release position.
+#
+# `declared_aim` other than Vector3.INF drives him in a published wind-up (the
+# human mechanism: hold the trigger through the drive, release at the spot);
+# INF drives him in plain SKATING_WITH_PUCK and the release is cold.
+func drive_in(lane_x: float, start_dist: float, release_dist: float,
+		speed_m_s: float, declared_aim: Vector3 = Vector3.INF,
+		loft_level: int = 0, shot_speed_m_s: float = 0.0,
+		shot_state: int = SkaterStateMachine.State.WRISTER_AIM) -> Vector3:
+	var dir: float = signf(-_goal_z)      # +1 into the rink from this goal line
+	var z: float = _goal_z + dir * start_dist
+	var end_z: float = _goal_z + dir * release_dist
+	var vel := Vector3(0.0, 0.0, -dir * absf(speed_m_s))
+	var winding: bool = declared_aim != Vector3.INF
+	_shooter.current_shot_state = shot_state if winding \
+			else SkaterStateMachine.State.SKATING_WITH_PUCK
+	_puck.set_carrier(_shooter)
+	var pos := Vector3(lane_x, 0.0, z)
+	# The carrier is genuinely moving, so `velocity` must be set: the goalie reads
+	# it for the carrier lead and for the rush backflow's closing-speed gate. A
+	# drive with velocity left at zero is a teleporting shooter and the goalie
+	# solves a different problem.
+	for _i: int in MAX_STEPS:
+		_shooter.global_position = pos
+		_shooter.velocity = vel
+		if winding:
+			_shooter.predicted_shot_velocity = shot_velocity_at(
+					pos, declared_aim, loft_level, shot_speed_m_s, 0.0)
+		_puck.global_position = pos
+		_puck.linear_velocity = Vector3.ZERO
+		_ctrl._physics_process(DT)
+		if (pos.z - end_z) * dir <= 0.0:
+			break
+		pos.z += vel.z * DT
+	_shooter.global_position = pos
+	return pos
+
+
 # Speed-explicit twin of `publish_windup`, for wind-ups whose power band is not
 # the wrister's — a slapper charge fires 20-40 m/s, so publishing its declared
 # velocity through the wrister band would have the goalie reading a shot nobody
