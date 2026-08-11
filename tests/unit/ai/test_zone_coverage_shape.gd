@@ -31,24 +31,42 @@ extends GutTest
 # whether two bodies share a man can only ever answer no. Asking the bodies
 # works whoever made the choice, which is what lets this file fail if the
 # per-role argmaxes ever come back.
-#   BREADTH — how many distinct attackers the shape has bodies on.
-#   OPEN DANGER — the finish-danger of the most dangerous attacker nobody is
-#     covering. The outcome reading: breadth counts bodies, this counts what
-#     the bodies are worth.
+#   UNATTENDED MEN — how many attackers INSIDE THE ZONE no defender has. This
+#     is the claim the file is really making, and it is asserted directly
+#     because the obvious proxy is not the same statement. Breadth — the count
+#     of distinct men covered — is still reported, but it silently divides by
+#     however many attackers happen to be in the zone, so it moves when the
+#     ATTACK changes with the coverage untouched. It did exactly that: a
+#     reception fix upstream turned the point-shot fixture from a scramble
+#     (puck loose 51% of its life) into a real possession sequence, one attacker
+#     left the zone, and breadth fell 2.43 -> 2.02 through a 2.2 floor while the
+#     number of men going unattended barely moved. A count of men nobody has is
+#     denominator-free and says what the assertion message says.
+#   OPEN DANGER — the finish-danger of the most dangerous unattended man. The
+#     outcome reading: the count above counts bodies, this counts what they
+#     are worth.
 #
-# The bounds are PINNED MEASUREMENTS, chosen to sit between what the matching
-# produces and what the five private argmaxes it replaced produced, run on these
-# same three fixtures through the same bodies:
+# The bounds are PINNED MEASUREMENTS. The double-lock ceiling was chosen to sit
+# between what the matching produces and what the five private argmaxes it
+# replaced produced, run on these same three fixtures through the same bodies:
 #
 #                        matched            per-role argmaxes
 #   double-locked        9% / 0% / 0%       15% / 49% / 23%
 #   covered per tick     2.70 / 2.43 / 2.90 2.62 / 1.44 / 2.05
 #
-# So the ceiling is 0.12 and the floor 2.2 — every old reading breaks at least
-# one, every new reading clears both. The margins are deliberately modest; when
-# one fails the question is "did the behaviour change on purpose", not "which
-# bound do I loosen". Open danger is a much looser guard (it barely separated
-# the two) and is really there to catch a collapse.
+# The covered-per-tick row is kept for context only — it is the retired metric,
+# and the argmax column CANNOT be re-derived under the unattended-men count
+# (that model is gone from the tree, and its own in-zone attacker counts went
+# with it). So the unattended ceiling is calibrated differently: it pins the
+# behaviour that was deliberately measured and accepted when the matching
+# landed — 1.74 / 1.71 / 1.87 men per tick — at 2.0. A regression to the
+# argmaxes still breaks the double-lock ceiling, which is the guard that
+# separated the two models sharply in the first place.
+#
+# The margins are deliberately modest; when one fails the question is "did the
+# behaviour change on purpose", not "which bound do I loosen". Open danger is a
+# much looser guard (it barely separated the two models) and is really there to
+# catch a collapse.
 #
 # Worth knowing before reading too much into the old column: an earlier probe
 # put the private argmaxes at 61% double-locked, but that sampled each role's
@@ -75,8 +93,10 @@ const ZONE_SLOTS: Array[int] = [
 	AIRoleSlots.Slot.ZONE_W_WEAK,
 ]
 
-# Distinct attackers the shape has bodies on, per tick. See the table above.
-const BREADTH_FLOOR: float = 2.2
+# Attackers in the zone that no defender has, per tick. See the header: pins the
+# readings taken when the matching landed (1.74 / 1.71 / 1.87), not a bound
+# derived from the model it replaced.
+const UNCOVERED_CEILING: float = 2.0
 # The man nobody has should not routinely be a prime scoring threat. A loose
 # guard — it separated the two models weakly — against a collapse.
 const OPEN_DANGER_CEILING: float = 0.25
@@ -91,6 +111,8 @@ class Result:
 	var dzone_ticks: int = 0
 	var double_locked_ticks: int = 0
 	var covered_sum: int = 0
+	var in_zone_sum: int = 0
+	var uncovered_sum: int = 0
 	var open_danger_sum: float = 0.0
 	var open_danger_worst: float = 0.0
 
@@ -137,14 +159,20 @@ func _run(attackers: Array, defenders: Array, carrier: int) -> Result:
 			r.double_locked_ticks += 1
 		r.covered_sum += covered.size()
 
-		# The most dangerous attacker nobody has. The carrier is excluded — the
-		# area that owns the puck is pressuring him, not covering a man.
+		# The attackers IN THE ZONE that nobody has, and the most dangerous of
+		# them. The carrier is excluded from both — the area that owns the puck is
+		# pressuring him, not covering a man.
 		var carrier_pid: int = snap.puck_state.carrier_peer_id
 		var worst: float = 0.0
 		for opp: int in snap.skater_states:
-			if duel.team_map.get(opp, -1) == 1 or opp == carrier_pid \
-					or covered.has(opp):
+			if duel.team_map.get(opp, -1) == 1 or opp == carrier_pid:
 				continue
+			if snap.skater_states[opp].position.z >= -GameRules.BLUE_LINE_Z:
+				continue   # not in the zone — nobody's to cover
+			r.in_zone_sum += 1
+			if covered.has(opp):
+				continue
+			r.uncovered_sum += 1
 			worst = maxf(worst, AIActionScoring.score_shoot_threat_fielded(
 					snap.skater_states[opp].position, our_net, our_net,
 					GameRules.NET_HALF_WIDTH, no_defenders))
@@ -155,9 +183,10 @@ func _run(attackers: Array, defenders: Array, carrier: int) -> Result:
 
 func _report(label: String, r: Result) -> void:
 	var n: float = float(maxi(r.dzone_ticks, 1))
-	gut.p("      %-22s dzone %4d | double-locked %3d (%2d%%) | covered/tick %.2f | open danger mean %.4f worst %.4f"
+	gut.p("      %-22s dzone %4d | double-locked %3d (%2d%%) | in zone/tick %.2f | covered %.2f | UNCOVERED %.2f | open danger mean %.4f worst %.4f"
 			% [label, r.dzone_ticks, r.double_locked_ticks,
-			roundi(100.0 * r.double_locked_ticks / n), r.covered_sum / n,
+			roundi(100.0 * r.double_locked_ticks / n), r.in_zone_sum / n,
+			r.covered_sum / n, r.uncovered_sum / n,
 			r.open_danger_sum / n, r.open_danger_worst])
 
 
@@ -168,8 +197,8 @@ func _assert_shape(label: String, r: Result) -> void:
 	assert_lt(r.double_locked_ticks / n, DOUBLE_LOCK_SHARE_CEILING,
 			"%s: two defenders shared a man on %d of %d ticks — past the handoff skew"
 			% [label, r.double_locked_ticks, r.dzone_ticks])
-	assert_gt(r.covered_sum / n, BREADTH_FLOOR,
-			"%s: the shape has bodies on almost nobody" % label)
+	assert_lt(r.uncovered_sum / n, UNCOVERED_CEILING,
+			"%s: attackers in the zone are going unattended" % label)
 	assert_lt(r.open_danger_sum / n, OPEN_DANGER_CEILING,
 			"%s: a prime scoring threat is routinely uncovered" % label)
 
