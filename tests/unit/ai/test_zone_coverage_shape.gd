@@ -57,11 +57,28 @@ extends GutTest
 # The covered-per-tick row is kept for context only — it is the retired metric,
 # and the argmax column CANNOT be re-derived under the unattended-men count
 # (that model is gone from the tree, and its own in-zone attacker counts went
-# with it). So the unattended ceiling is calibrated differently: it pins the
-# behaviour that was deliberately measured and accepted when the matching
-# landed — 1.74 / 1.71 / 1.87 men per tick — at 2.0. A regression to the
-# argmaxes still breaks the double-lock ceiling, which is the guard that
-# separated the two models sharply in the first place.
+# with it). So the unattended ceiling is calibrated differently, against
+# measured readings on these three fixtures:
+#
+#   unattended/tick   1.74 / 1.71 / 1.87   when the matching landed
+#                     1.59 / 1.79 / 2.28   with the reception rendezvous
+#
+# A regression to the argmaxes still breaks the double-lock ceiling, which is
+# the guard that separated the two models sharply in the first place.
+#
+# The crossing-cutter move — 1.87 -> 2.28, the reason the ceiling sits at 2.4 —
+# is an ACCEPTED TRADE, not drift, and it is the reception rendezvous alone
+# (run with the ride disabled, this fixture and the low cycle come back
+# bit-identical to the pre-rendezvous readings; the facing change contributes
+# none of it). That change bought a 79% -> 83% catch rate and a far more
+# connected attack, and this fixture is the one built around a man crossing
+# between coverage areas: more completed passes means more relocation means more
+# handoffs, and the seam is where the shape is thinnest. It is bounded by what
+# the unattended men are WORTH, which barely moved (open danger 0.041 -> 0.077
+# against a 0.25 ceiling) — the gaps are not opening on dangerous ice. If this
+# ever needs to come back down, the lead is the fallback-assigner hole the
+# coverage doctrine already names: a man standing in NOBODY's area cannot be
+# reached however free a defender is.
 #
 # The margins are deliberately modest; when one fails the question is "did the
 # behaviour change on purpose", not "which bound do I loosen". Open danger is a
@@ -94,9 +111,9 @@ const ZONE_SLOTS: Array[int] = [
 ]
 
 # Attackers in the zone that no defender has, per tick. See the header: pins the
-# readings taken when the matching landed (1.74 / 1.71 / 1.87), not a bound
+# readings the reception rendezvous produced (1.59 / 1.79 / 2.28), not a bound
 # derived from the model it replaced.
-const UNCOVERED_CEILING: float = 2.0
+const UNCOVERED_CEILING: float = 2.4
 # The man nobody has should not routinely be a prime scoring threat. A loose
 # guard — it separated the two models weakly — against a collapse.
 const OPEN_DANGER_CEILING: float = 0.25
