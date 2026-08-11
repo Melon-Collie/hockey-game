@@ -155,6 +155,37 @@ func drive_in(lane_x: float, start_dist: float, release_dist: float,
 	return pos
 
 
+# ── THE WALKOUT, continued from wherever `drive_in` left him ─────────────────
+# The move the retreat EXISTS for, in the shape it actually takes: the BODY keeps
+# driving straight at the net while the PUCK is dragged across the crease faster
+# than the goalie can push. A goalie held too far out has a longer arc to travel
+# to stay in front of it, so this is the measurement that prices depth in the
+# other direction — every metre of challenge is a metre of exposure here, and any
+# change that buys angle has to be checked against it or it has only been checked
+# against the half of the trade it helps.
+#
+# Deliberately does NOT give the body a lateral velocity: a forehand-to-backhand
+# beat on a rush is a shooter coming STRAIGHT at the goalie who moves the puck,
+# which is exactly the case a body-velocity read scores as "not a drive".
+#
+# Returns the PUCK's final position — the release point, which is not the body's.
+func sweep_across(to_x: float, seconds: float, drive_speed: float) -> Vector3:
+	var ticks: int = maxi(int(seconds / DT), 1)
+	var from_x: float = _puck.global_position.x
+	var dir: float = signf(-_goal_z)
+	var body: Vector3 = _shooter.global_position
+	var vel := Vector3(0.0, 0.0, -dir * absf(drive_speed))
+	var puck: Vector3 = _puck.global_position
+	for i: int in ticks:
+		body.z += vel.z * DT
+		_shooter.global_position = body
+		_shooter.velocity = vel
+		puck = Vector3(lerpf(from_x, to_x, float(i + 1) / float(ticks)), 0.0, body.z)
+		_puck.global_position = puck
+		_ctrl._physics_process(DT)
+	return puck
+
+
 # Speed-explicit twin of `publish_windup`, for wind-ups whose power band is not
 # the wrister's — a slapper charge fires 20-40 m/s, so publishing its declared
 # velocity through the wrister band would have the goalie reading a shot nobody

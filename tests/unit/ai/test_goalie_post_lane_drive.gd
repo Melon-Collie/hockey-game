@@ -14,9 +14,13 @@ extends GutTest
 # most of the way from the middle of the mouth to the post while the thing he
 # measures the play by (`carrier.velocity.x`) never leaves zero.
 #
-# Two questions, one per test below:
-#   TRACE  — how far behind his own square position does he actually run?
-#   MAP    — and does that leave a repeatable place to shoot?
+# Four questions, one per test below:
+#   TRACE    — how far behind his own square position does he run, and which
+#              depth constraint is actually bringing him in?
+#   MAP      — does that leave a repeatable place to shoot?
+#   ANCHOR   — what does moving where the retreat lands buy, and cost?
+#   WALKOUT  — and does a shallower retreat get him skated around, which is what
+#              retreating is FOR?
 #
 # The control lane (x = 0, straight in down the middle) is run alongside so the
 # post-lane numbers can be read as "worse than a drive" rather than "worse than a
@@ -115,6 +119,34 @@ extends GutTest
 # is gone with no beatability lost on the control. Past 0.55 the keeper walls up
 # on both lanes, which is the other failure mode and the one that matters more —
 # that is the whole reason the anchor did not simply go to C (0.70).
+#
+# ── THE OTHER HALF OF THE TRADE: does a shallower retreat get him WALKED ─────
+# Retreating is not for the shot. It is what stops a goalie being skated around
+# for free — deeper is a shorter arc to travel to stay in front of a puck dragged
+# across him — so an anchor that buys angle has to be paid for here or only half
+# the trade has been measured. Body driving straight in to 3.5 m, puck then
+# dragged to the backhand side, fired from where the PUCK ended up:
+#
+#   drag pace     anchor 0.10 (was)              anchor 0.40 (ship)
+#   3.6 m/s        4/144   x -0.076  r 0.240      1/144   x -0.187  r 0.505
+#   6.0 m/s       25/144   x -0.070  r 0.500     10/144   x -0.151  r 0.700
+#
+# IT GOES THE OTHER WAY, at both paces, and the goalie-x column is the reason.
+# With the puck dragged out to -0.90 the deeper keeper sits at -0.07 — he barely
+# follows it across at all. This is the degenerate arc again: the challenge line
+# converges on x = 0 at the goal line, so the deeper he is, the LESS his lateral
+# target responds to the puck moving. Retreating does shorten the arc he has to
+# travel, but in this model it shrinks the arc he is ASKED to travel faster still,
+# so in tight the retreat is not buying lateral protection — it is removing his
+# lateral response. That is the same defect the post-lane hole comes from, seen
+# from the other side, and it means the depth/lateral trade the backflow is meant
+# to make is not actually being made at these ranges.
+#
+# SCOPE, because this measures less than it sounds like: the body drives straight
+# and only the puck moves, so it is the drag, not a deke-and-tuck where the body
+# goes around. The tuck is the beaten-wide seal's job and lives in
+# test_goalie_lateral_beat_slide.gd. One cut distance, one direction, rebounds
+# terminal.
 #
 # ── WHAT THE SOURCES SAY (2026-08) ───────────────────────────────────────────
 # Two findings, and they point at the trigger and the anchor separately.
@@ -355,6 +387,79 @@ func test_report_the_retreat_landing_anchor_sweep() -> void:
 		gut.p("  == anchor %.2f: POST %d (L%d/R%d)  CENTRE %d (L%d/R%d)"
 				% [anchor, post["goals"], post["left"], post["right"],
 				mid["goals"], mid["left"], mid["right"]])
+	assert_true(true, "report")
+
+
+# ── THE OTHER HALF OF THE TRADE: does the shallower retreat get him WALKED ───
+# Every measurement above prices depth against the shot. Retreating is not for
+# the shot — it is what keeps a goalie from being skated around for free, because
+# a goalie standing further out has a longer arc to travel to stay in front of a
+# puck dragged across him. So an anchor that buys angle has to be paid for here
+# or it has only been checked against the half of the trade it helps.
+#
+# The move: drive the body straight in down the middle to `CUT_DIST`, then drag
+# the puck across to the backhand side in 0.25 s (~3.6 m/s of real lateral puck
+# travel, the pace a human plays it) with the body still coming straight on, and
+# release from where the PUCK ended up — not where the body is.
+const CUT_DIST: float = 3.5
+const CUT_TO_X: float = -0.9
+const CUT_S: float = 0.25
+const CUT_S_FAST: float = 0.15
+
+
+func _walkout_map(anchor: float, seconds: float) -> Dictionary:
+	_ctrl._rush_cfg.depth_arrive = anchor
+	var lofts: Array[int] = [
+		ShotMechanics.ELEVATION_FLAT,
+		ShotMechanics.ELEVATION_LOW,
+		ShotMechanics.ELEVATION_HIGH,
+	]
+	var names: Array[String] = ["FLAT", "LOW ", "HIGH"]
+	var start := Vector3(0.0, 0.0, GOAL_Z + START_DIST)
+	var goals: int = 0
+	var shots: int = 0
+	var pose_x: float = 0.0
+	var pose_depth: float = 0.0
+	for li: int in lofts.size():
+		var row: String = ""
+		var a: float = -MAX_AIM
+		while a <= MAX_AIM + 0.001:
+			var best: String = "."
+			for mph: float in SHOT_MPH:
+				var speed: float = mph * MPH_TO_MS
+				_h.settle_ready(start)
+				_h.drive_in(0.0, START_DIST, CUT_DIST, DRIVE_SPEED)
+				var rel: Vector3 = _h.sweep_across(CUT_TO_X, seconds, DRIVE_SPEED)
+				pose_x += _ctrl._current_x
+				pose_depth += _ctrl._current_depth
+				var o: int = _h.fire_at(rel, Vector3(a, 0.0, GOAL_Z), lofts[li],
+						speed, 0.0)
+				shots += 1
+				if o == Harness.GOAL:
+					goals += 1
+					best = "G"
+				elif o == Harness.SAVE:
+					best = "s" if best == "." else best
+				elif best == ".":
+					best = "x"
+			row += best
+			a += 0.07
+		gut.p("     %s |%s|" % [names[li], row])
+	var n: float = float(maxi(shots, 1))
+	gut.p("     -> %d/%d (%.1f%%)  goalie x %+.3f radius %.3f at the release"
+			% [goals, shots, 100.0 * float(goals) / n, pose_x / n, pose_depth / n])
+	return {"goals": goals, "shots": shots}
+
+
+func test_report_whether_the_shallower_retreat_gets_him_walked() -> void:
+	gut.p("Straight drive to %.1f m, puck dragged to %+.2f in %.2f s, then fired."
+			% [CUT_DIST, CUT_TO_X, CUT_S])
+	for seconds: float in [CUT_S, CUT_S_FAST]:
+		gut.p("  drag in %.2f s (%.1f m/s of lateral puck travel):"
+				% [seconds, absf(CUT_TO_X) / seconds])
+		for anchor: float in [0.10, 0.40]:
+			gut.p("   retreat anchor %.2f:" % anchor)
+			_walkout_map(anchor, seconds)
 	assert_true(true, "report")
 
 
