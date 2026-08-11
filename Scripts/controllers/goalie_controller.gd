@@ -455,6 +455,23 @@ extends Node
 @export var rush_mid_distance: float = 4.5
 @export var rush_arrive_distance: float = 1.5
 @export var rush_min_closing_speed: float = 1.5
+# WHERE THE RETREAT LANDS, and deliberately NOT `depth_defensive`. The A/B/C/D
+# ladder this curve interpolates is defined SITUATIONALLY: D is "on the post, or
+# tracking the puck behind the net" and C is the middle of the paint, held when a
+# lateral play is live. A shooter coming straight in from `rush_arrive_distance`
+# is neither, and the taught breakaway retreat ends around the crease and turns
+# into lateral movement rather than continuing to the goal line — "back in too
+# soon and they will have net open up to shoot at" is this defect stated as a
+# coaching error. Landing on D put him at 0.565 of radius with a carrier 2.5 m
+# out on the post lane, which is 7 cm of net off centre and the short side open
+# at every height (tests/unit/ai/test_goalie_post_lane_drive.gd).
+#
+# The VALUE is calibrated, not derived — it sits between D and C because that is
+# where the anchor sweep in that file stops moving the control. Below 0.40 the
+# post-lane drive concedes 4x what a centre-lane drive does; at 0.40 they concede
+# alike; past 0.55 he stops being beatable on either, which is the other failure
+# mode and the one that matters more.
+@export var rush_arrive_depth: float = 0.40
 
 # ── Backdoor-aware depth (anticipatory) ──────────────────────────────────────
 # The lateral-pressure retreat above is REACTIVE — it reads puck velocity, i.e.
@@ -1589,7 +1606,7 @@ func _build_rule_configs() -> void:
 	_rush_cfg.arrive_distance = rush_arrive_distance
 	_rush_cfg.depth_engage = depth_aggressive
 	_rush_cfg.depth_mid = depth_base
-	_rush_cfg.depth_arrive = depth_defensive
+	_rush_cfg.depth_arrive = rush_arrive_depth
 	_clear.lane_cfg = _sweep_lane_cfg
 	_depth_constraints.floor_radius = depth_defensive
 	_depth_constraints.settle_speed = depth_speed

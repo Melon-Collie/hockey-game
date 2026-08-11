@@ -694,9 +694,11 @@ static var goalie_arm_deploy_s: float = GOALIE_ARM_DEPLOY_S
 # net everywhere inside the dots, no drive or cut could ever out-score standing
 # still, and the compete fell through to whatever was safest — the back pass.
 # With the real backflow that same 3 m release meets a keeper who has retreated
-# to ~0.7 m, sits 2.3 m away, and leaves honest corners open: driving in gains
+# to ~0.85 m, sits ~2.15 m away, and leaves honest corners open: driving in gains
 # value again, exactly as it does on the ice, and the bail-out stops being the
-# only positive-EV action.
+# only positive-EV action. (That was 0.7 m while the retreat landed on the post;
+# `rush_arrive_depth` explains why it no longer does, and the margin over a
+# keeper frozen at 1.75 is what this paragraph is actually about.)
 #
 # Values mirror GoalieController's export defaults (cited per field); the two
 # tier-varied depths ride set_goalie_profile like every other synced read.
@@ -744,7 +746,7 @@ static func _build_planning_rush_cfg() -> GoalieBehaviorRules.RushRetreatConfig:
 	cfg.arrive_distance = 1.5    # rush_arrive_distance
 	cfg.depth_engage = 1.75      # = depth_aggressive
 	cfg.depth_mid = 1.30         # = depth_base
-	cfg.depth_arrive = 0.10      # = depth_defensive
+	cfg.depth_arrive = 0.40      # rush_arrive_depth export default
 	return cfg
 
 
@@ -821,9 +823,20 @@ static func planned_goalie_depth(
 				dist, _rush_cfg_planning)
 		if rush_target < target:
 			target = rush_target
-			# Speed-matched backflow: a fast rush backs him in fast.
-			rate = maxf(rate, GoalieBehaviorRules.rush_retreat_rate(
-					dist, closing_speed_m_s, _rush_cfg_planning))
+			# Speed-matched backflow: a fast rush backs him in fast — and a slow
+			# one backs him in SLOWLY, which is the half this used to miss. While
+			# the backflow is retreating him it OWNS the motion and bypasses the
+			# ordinary rate cap entirely (GoalieDepthSolver.solve), so the rate is
+			# the backflow's own and not the faster of the two. Taking the max
+			# only agreed with the live keeper while the curve happened to be
+			# steeper than `depth_max_speed`; flatten the curve and the planner
+			# retreats him a fifth of a metre further than he actually goes.
+			# Zero means the curve is flat here (outside its sloped segments), and
+			# there the live solve does fall back to the settle — so does this.
+			var rush_rate: float = GoalieBehaviorRules.rush_retreat_rate(
+					dist, closing_speed_m_s, _rush_cfg_planning)
+			if rush_rate > 0.0:
+				rate = rush_rate
 	if target >= now_depth:
 		return now_depth
 	return maxf(now_depth - rate * time_s, target)

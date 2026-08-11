@@ -29,28 +29,30 @@ extends GutTest
 #
 #              WIND-UP HELD THROUGH THE DRIVE        COLD RELEASE
 #   release    POST LANE      CENTRE       radius    POST         CENTRE
-#    2.5 m     12  L8/R4      3  L2/R1     0.565      8  L4/R4     6  L2/R4
-#    4.0 m     10  L6/R4      4  L2/R2     1.127      8  L6/R2     4  L2/R2
-#    6.5 m      7  L2/R5      6  L0/R6     1.560     10  L6/R4     7  L4/R3
-#
-#   release 2.5 m, wind-up, POST LANE     FLAT |Gpppppppssssssssssssssss|  2
-#                                         LOW  |Gppppppssssssssssssssssss| 2
-#                                         HIGH |GGpppssssssssGGppssssssp | 8
-#
-# IT IS A CLOSE-RANGE EFFECT, and it tracks the radius rather than the range as
-# such. At 2.5 m the post lane concedes 4x the control and the excess is all in
-# the short half, with the short-side column open at EVERY loft — flat and low
-# included, which is the part that reads as broken. At 4.0 m it is still 2.5x.
-# By 6.5 m it is gone: both lanes are then dominated by the same RIGHT-half hole,
-# which is the low glove-side seam a held wind-up opens against a parked shooter
-# too (test_goalie_exhaustive_beatability's held-windup sweep) and is not a lane
-# effect at all. The radius column is why — at 6.5 m the backflow has barely
-# bitten (1.56 against a 1.75 ceiling) and the geometry below has not yet gone
-# degenerate.
+#    2.5 m      2  L2/R0      3  L2/R1     0.749      6  L4/R2     5  L2/R3
+#    4.0 m      8  L6/R2      4  L2/R2     1.170      8  L6/R2     4  L2/R2
+#    6.5 m      7  L2/R5      6  L0/R6     1.560      -            -
 #
 # The control is NOT clean, and reading it as clean was a bug in this instrument
 # for one run: it concedes 2 left-half goals at 2.5 and 4.0 m. What the post lane
-# adds is the excess and its side, not the existence of a hole.
+# has ever added is the EXCESS and its side, not the existence of a hole.
+#
+# THE 2.5 m ROW USED TO BE 12 (L8/R4), four times the control, with the short-side
+# column open at EVERY loft including flat and low. That is what `rush_arrive_depth`
+# addressed and it is what the sweep below prices; the row now sits at the control's
+# level and the flat and low rows are clean.
+#
+# THE 4.0 m ROW IS THE RESIDUAL. Its left half did not move (L6 against the
+# control's L2), because the backflow's curve near its `rush_mid_distance` end is
+# barely touched by where it lands — 1.127 to 1.170 of radius. If the post lane
+# still feels wrong to play at that range, the shape of the curve between mid and
+# arrive is the next thing to look at, not the anchor.
+#
+# BY 6.5 m THERE IS NO LANE EFFECT LEFT. Both lanes are dominated by the same
+# RIGHT-half hole, which is the low glove-side seam a held wind-up opens against a
+# parked shooter too (test_goalie_exhaustive_beatability's held-windup sweep). The
+# radius column is why — the backflow has barely bitten there (1.56 against a 1.75
+# ceiling), so the geometry below never goes degenerate.
 #
 # ── WHY: the retreat, not the tracking ───────────────────────────────────────
 # The trace test rules out lag outright — he is never more than 7 cm off his own
@@ -76,7 +78,7 @@ extends GutTest
 # closing at 1.5 m/s inside 8 m. Switching it off (the counterfactual test
 # below) at the 2.5 m post-lane release:
 #
-#     backflow ON    x -0.225  radius 0.565   ->  8/144 goals, 4 short side
+#     backflow ON    x -0.284  radius 0.749   ->  6/144 goals, 4 short side
 #     backflow OFF   x -0.660  radius 1.749   ->  0/144 goals, all 144 STICK
 #
 # So the backflow owns the position the goals come from. Note the OFF column is
@@ -96,23 +98,23 @@ extends GutTest
 # So the depth is the lever, and the retreat is where the defect lives.
 #
 # ── WHAT THE RETREAT'S ANCHOR IS WORTH (the sweep test below) ────────────────
-# The backflow lands on `depth_defensive` when the attacker reaches
-# `rush_arrive_distance`. Sweeping that landing anchor, wind-up drive, released
-# 2.5 m out:
+# Sweeping `rush_arrive_depth` — where the backflow lands when the attacker
+# reaches `rush_arrive_distance` — wind-up drive, released 2.5 m out. 0.10 is
+# `depth_defensive`, which it used to be; 0.40 is what it is now:
 #
 #     anchor      POST radius / goals        CENTRE radius / goals
-#     0.10 (ship)   0.565   12  L8/R4          0.500   3  L2/R1
+#     0.10 (was)    0.565   12  L8/R4          0.500   3  L2/R1
 #     0.25          0.657    6  L4/R2          0.600   3  L2/R1
-#     0.40          0.749    2  L2/R0          0.700   3  L2/R1
+#     0.40 (ship)   0.749    2  L2/R0          0.700   3  L2/R1
 #     0.55          0.841    0                 0.800   1  L0/R1
 #     0.70          0.933    0                 0.900   0
 #
 # READ THE CONTROL COLUMN. It is FLAT at 3 goals from 0.10 through 0.40 and only
-# starts falling past that. So the post lane's excess is the only thing the
-# anchor moves in that range — at 0.40 the two lanes concede alike (2 vs 3) and
-# the lane asymmetry is gone without the control losing any beatability at all.
-# Past 0.55 the keeper starts walling up on both lanes, which is the other
-# failure mode.
+# starts falling past that, so in that range the anchor moves the post lane's
+# excess and nothing else: at 0.40 the two lanes concede alike and the asymmetry
+# is gone with no beatability lost on the control. Past 0.55 the keeper walls up
+# on both lanes, which is the other failure mode and the one that matters more —
+# that is the whole reason the anchor did not simply go to C (0.70).
 #
 # ── WHAT THE SOURCES SAY (2026-08) ───────────────────────────────────────────
 # Two findings, and they point at the trigger and the anchor separately.
@@ -337,12 +339,11 @@ func test_report_how_much_of_the_hole_is_the_rush_backflow() -> void:
 # the two apart. The full 5-point sweep is in the header; three points are kept
 # live here because these maps are the most expensive thing in the suite.
 #
-# NOTE if this is ever adopted: `AIActionScoring._build_planning_rush_cfg` copies
-# all three anchors by hand, so the bots score against a keeper who retreats to
-# 0.10 unless it moves too — and the drive-the-net gradient documented in that
-# file's `planned_goalie_depth` header is exactly what a shallower retreat puts
-# back at risk. Re-run the action-scoring ordering table before believing it.
-func test_report_the_retreat_landing_on_c_instead_of_d() -> void:
+# `AIActionScoring._build_planning_rush_cfg` copies all three anchors by hand, so
+# it must move with `rush_arrive_depth` or the bots score against a keeper who
+# retreats further than the one they meet. The tie is pinned by
+# test_goalie_depth_model_tie.gd — keep the two in step.
+func test_report_the_retreat_landing_anchor_sweep() -> void:
 	gut.p("Wind-up drive, release 2.5 m. Retreat anchor D (%.2f) .. C (%.2f)."
 			% [_ctrl.depth_defensive, _ctrl.depth_conservative])
 	for anchor: float in [0.10, 0.40, 0.70]:

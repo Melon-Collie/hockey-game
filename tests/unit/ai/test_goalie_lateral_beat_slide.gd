@@ -89,7 +89,15 @@ func test_forehand_backhand_on_a_rush_pushes_into_the_seal() -> void:
 			"%.2f s" % (sweep if not is_inf(sweep) else 0.25 + tuck) if committed else "never"])
 	assert_true(committed,
 			"beaten to the backhand side → push off into the post seal, not a square drop")
-	assert_lt(_ctrl._slide.dir, 0.0,
+	# THE SEAL'S SIDE, read off where the slide ENDS. Not `_slide.dir`, which is
+	# only the residual TRAVEL — `commit_slide` takes it as
+	# `sign(target_x - current_x)`, so it agrees with the seal's side only while
+	# he commits from inside the seal spot. Standing wider than the seal (which a
+	# shallower retreat does: measured, he sits at -0.183 rather than -0.117 and
+	# reaches the SAME -0.154 seal) makes the last few centimetres travel back the
+	# other way, and reading that as "sealed the wrong post" is a proxy failing,
+	# not a behaviour change.
+	assert_lt(_ctrl._slide.end_x, 0.0,
 			"the seal goes the way the PUCK went")
 
 
