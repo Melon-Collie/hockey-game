@@ -23,22 +23,34 @@ extends GutTest
 # parked shooter", which would confound the drive with the lane.
 #
 # ── WHAT IT MEASURED (2026-08) ───────────────────────────────────────────────
-# Drive at 6.5 m/s from 9 m, wind-up held through it, honest release, best over
-# 70/80 mph. Columns run post to post; on the -x lane the LEFT edge is the short
-# side.
+# Drive at 6.5 m/s from 9 m, best over 70/80 mph. L/R are goals in the left and
+# right halves of the mouth; on the -x lane LEFT is the short side. `radius` is
+# the challenge radius he is actually holding at the release.
 #
-#   release 2.5 m   POST LANE   FLAT |Gpppppppssssssssssssssss|  2 goals
-#                               LOW  |Gppppppssssssssssssssssss|  2
-#                               HIGH |GGpppssssssssGGppssssssp |  8
-#                               -> 12/144 (8.3%), 8 of them short side
-#                   CENTRE      ->  3/144 (2.1%), 0 short side
-#   release 4.0 m   POST LANE   -> 10/144 (6.9%), 6 short side
-#                   CENTRE      ->  4/144 (2.8%), 0 short side
+#              WIND-UP HELD THROUGH THE DRIVE        COLD RELEASE
+#   release    POST LANE      CENTRE       radius    POST         CENTRE
+#    2.5 m     12  L8/R4      3  L2/R1     0.565      8  L4/R4     6  L2/R4
+#    4.0 m     10  L6/R4      4  L2/R2     1.127      8  L6/R2     4  L2/R2
+#    6.5 m      7  L2/R5      6  L0/R6     1.560     10  L6/R4     7  L4/R3
 #
-# FOUR TIMES the goals, and the whole short-side column is open at EVERY loft —
-# the flat and low ones too, which is the part that reads as broken. The centre
-# lane concedes nothing there at any loft; what it concedes is the middle, high,
-# which is the goalie getting beaten the way he is supposed to be.
+#   release 2.5 m, wind-up, POST LANE     FLAT |Gpppppppssssssssssssssss|  2
+#                                         LOW  |Gppppppssssssssssssssssss| 2
+#                                         HIGH |GGpppssssssssGGppssssssp | 8
+#
+# IT IS A CLOSE-RANGE EFFECT, and it tracks the radius rather than the range as
+# such. At 2.5 m the post lane concedes 4x the control and the excess is all in
+# the short half, with the short-side column open at EVERY loft — flat and low
+# included, which is the part that reads as broken. At 4.0 m it is still 2.5x.
+# By 6.5 m it is gone: both lanes are then dominated by the same RIGHT-half hole,
+# which is the low glove-side seam a held wind-up opens against a parked shooter
+# too (test_goalie_exhaustive_beatability's held-windup sweep) and is not a lane
+# effect at all. The radius column is why — at 6.5 m the backflow has barely
+# bitten (1.56 against a 1.75 ceiling) and the geometry below has not yet gone
+# degenerate.
+#
+# The control is NOT clean, and reading it as clean was a bug in this instrument
+# for one run: it concedes 2 left-half goals at 2.5 and 4.0 m. What the post lane
+# adds is the excess and its side, not the existence of a hole.
 #
 # ── WHY: the retreat, not the tracking ───────────────────────────────────────
 # The trace test rules out lag outright — he is never more than 7 cm off his own
@@ -183,7 +195,12 @@ func _map(lane_x: float, release_dist: float, windup: bool) -> Dictionary:
 	var goals: int = 0
 	var shots: int = 0
 	var parts: Dictionary = {}
-	var near_goals: int = 0    # goals on the SHORT side — the lane's own side
+	# Split by half of the mouth ALWAYS, never by "the lane's own side": a
+	# short-side count that is only defined for an off-centre lane silently
+	# reports zero for the control, which reads as "the control concedes nothing
+	# there" when it means "not measured". On the -x lane, `left` is short side.
+	var left_goals: int = 0
+	var right_goals: int = 0
 	var pose_x: float = 0.0
 	var pose_depth: float = 0.0
 	for li: int in lofts.size():
@@ -208,8 +225,10 @@ func _map(lane_x: float, release_dist: float, windup: bool) -> Dictionary:
 					goals += 1
 					row_goals += 1
 					best = "G"
-					if lane_x != 0.0 and a * signf(lane_x) > 0.0:
-						near_goals += 1
+					if a < 0.0:
+						left_goals += 1
+					elif a > 0.0:
+						right_goals += 1
 				elif o == Harness.SAVE:
 					var k: String = PART[_h.last_part] if _h.last_part >= 0 else "?"
 					parts[k] = int(parts.get(k, 0)) + 1
@@ -221,10 +240,10 @@ func _map(lane_x: float, release_dist: float, windup: bool) -> Dictionary:
 			a += 0.07
 		gut.p("     %s |%s| %d" % [names[li], row, row_goals])
 	var n: float = float(maxi(shots, 1))
-	gut.p("     -> %d/%d (%.1f%%)  short-side %d  release pose x %+.3f radius %.3f  %s"
-			% [goals, shots, 100.0 * float(goals) / n, near_goals,
+	gut.p("     -> %d/%d (%.1f%%)  L%d/R%d  release pose x %+.3f radius %.3f  %s"
+			% [goals, shots, 100.0 * float(goals) / n, left_goals, right_goals,
 			pose_x / n, pose_depth / n, str(parts)])
-	return {"goals": goals, "shots": shots, "near": near_goals}
+	return {"goals": goals, "shots": shots, "left": left_goals, "right": right_goals}
 
 
 # ── COUNTERFACTUAL: how much of the short-side hole is the rush backflow ─────
@@ -239,8 +258,8 @@ func test_report_how_much_of_the_hole_is_the_rush_backflow() -> void:
 	_ctrl.rush_engage_distance = 0.0
 	gut.p("  backflow OFF:")
 	var off: Dictionary = _map(POST_LANE, 2.5, false)
-	gut.p("  %d -> %d goals, short-side %d -> %d"
-			% [base["goals"], off["goals"], base["near"], off["near"]])
+	gut.p("  %d -> %d goals, short side %d -> %d"
+			% [base["goals"], off["goals"], base["left"], off["left"]])
 	assert_true(true, "report")
 
 
@@ -248,7 +267,7 @@ func test_report_how_much_of_the_hole_is_the_rush_backflow() -> void:
 # lane the LEFT of each row is the short side.
 func test_report_the_goal_map_off_a_post_lane_drive() -> void:
 	gut.p("Cold release off the drive (no wind-up published).")
-	for dist: float in [4.0, 2.5]:
+	for dist: float in [6.5, 4.0, 2.5]:
 		gut.p("  release %.1f m out, POST LANE:" % dist)
 		_map(POST_LANE, dist, false)
 		gut.p("  release %.1f m out, CENTRE LANE (control):" % dist)
@@ -262,7 +281,7 @@ func test_report_the_goal_map_off_a_post_lane_drive() -> void:
 # the question.
 func test_report_the_goal_map_off_a_post_lane_drive_with_windup() -> void:
 	gut.p("Wind-up held through the drive, honest release.")
-	for dist: float in [4.0, 2.5]:
+	for dist: float in [6.5, 4.0, 2.5]:
 		gut.p("  release %.1f m out, POST LANE:" % dist)
 		_map(POST_LANE, dist, true)
 		gut.p("  release %.1f m out, CENTRE LANE (control):" % dist)
