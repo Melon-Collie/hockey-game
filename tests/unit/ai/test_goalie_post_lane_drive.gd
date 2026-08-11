@@ -83,29 +83,63 @@ extends GutTest
 # a wall, which is the other failure mode — the counterfactual identifies the
 # mechanism, it is not a proposal.
 #
-# ── WHAT THIS INSTRUMENT CANNOT DECIDE ───────────────────────────────────────
+# ── WHAT THE LATERAL SOLVE CANNOT FIX ────────────────────────────────────────
 # Deep in his crease the goalie is physically too small to cover the mouth from
 # 2.5 m (a 1.12 m pad column against a 1.83 m net), so SOME band is open however
-# he stands, and standing on the centre line splits the leftover evenly. Closing
-# the short side means choosing to concede the far side instead — real doctrine
-# ("never get beat short side"), but a doctrine call, not something the geometry
-# decides: measured from the post lane at 2.5 m the short-side gap is already
-# the ANGULARLY smaller of the two (5.2° against 7.4°), so an even-handed model
-# is already shading away from it and no amount of grounding will flip that on
-# its own. Post integration cannot rescue it either — `rvh_early_angle` is 80°,
-# which on this lane is not reached until 0.16 m off the goal line.
+# he stands, and standing on the centre line splits the leftover evenly. Shading
+# to the short side means choosing to concede the far side, and the geometry does
+# not decide that: from the post lane at 2.5 m the short-side gap is already the
+# ANGULARLY smaller of the two (5.2° against 7.4°), so an even-handed model is
+# shading away from it correctly. Post integration cannot rescue it either —
+# `rvh_early_angle` is 80°, not reached on this lane until 0.16 m off the line.
 #
-# The two ways out, both changes to how the retreat is priced rather than to the
-# lateral solve:
-#   * floor the backflow at the depth where the set stance still fills the
-#     shooter's angle — tried and REJECTED here: full coverage is exactly the
-#     wall the OFF column measured, and the floor's own geometry (r >= 0.39·D)
-#     cancels the backflow out to ~4.5 m, which re-freezes the keeper's depth in
-#     AIActionScoring.planned_goalie_depth and with it the bots' drive-the-net
-#     gradient;
-#   * make the retreat DIRECTIONAL: it buys lateral coverage, and a carrier on
-#     the post lane has no short-side room left to punish it with, so the ground
-#     given up on that side is bought with nothing.
+# So the depth is the lever, and the retreat is where the defect lives.
+#
+# ── WHAT THE RETREAT'S ANCHOR IS WORTH (the sweep test below) ────────────────
+# The backflow lands on `depth_defensive` when the attacker reaches
+# `rush_arrive_distance`. Sweeping that landing anchor, wind-up drive, released
+# 2.5 m out:
+#
+#     anchor      POST radius / goals        CENTRE radius / goals
+#     0.10 (ship)   0.565   12  L8/R4          0.500   3  L2/R1
+#     0.25          0.657    6  L4/R2          0.600   3  L2/R1
+#     0.40          0.749    2  L2/R0          0.700   3  L2/R1
+#     0.55          0.841    0                 0.800   1  L0/R1
+#     0.70          0.933    0                 0.900   0
+#
+# READ THE CONTROL COLUMN. It is FLAT at 3 goals from 0.10 through 0.40 and only
+# starts falling past that. So the post lane's excess is the only thing the
+# anchor moves in that range — at 0.40 the two lanes concede alike (2 vs 3) and
+# the lane asymmetry is gone without the control losing any beatability at all.
+# Past 0.55 the keeper starts walling up on both lanes, which is the other
+# failure mode.
+#
+# ── WHAT THE SOURCES SAY (2026-08) ───────────────────────────────────────────
+# Two findings, and they point at the trigger and the anchor separately.
+#
+# THE ANCHOR IS A SITUATIONAL ZONE, NOT A DEPTH. In the Buckley system this
+# curve is taken from, D — where the retreat lands — is defined as "on the post,
+# or tracking the puck behind the net", and C as the middle of the blue paint,
+# held "when a lateral play can be made". A shooter coming straight in from
+# 1.5 m is neither, and the taught breakaway retreat ends at the top of the
+# crease and converts into lateral movement rather than continuing to the goal
+# line — "if you back in too soon they will have net open up to shoot at", which
+# is this defect stated as a coaching error.
+#
+# THE TRIGGER IS DISTANCE, AND DOCTRINE SAYS IT SHOULD BE THE LATERAL OPTION.
+# "Challenge the shot, respect the pass": depth is surrendered when another
+# option appears — a trailer, a backdoor man, a deke — not because the shooter
+# got closer. Our solve already prices both of those honestly (`lateral_cap` for
+# the deke, `backdoor_cap` for the pass), and the trace test shows BOTH sitting
+# at "not binding" for the entire post-lane drive while the goalie surrenders
+# 1.75 m of radius anyway. He pays for respecting a pass nobody can throw.
+#
+# That also explains why switching the backflow off makes him a wall HERE and
+# should not be read as "the backflow is wrong": against a 1v0 with no lateral
+# option, near-unbeatable is what the doctrine actually prescribes. What is
+# missing is the model that separates that case from the deke the backflow
+# exists for — a carrier's remaining lateral ROOM, which on the post lane is
+# almost nil to the short side and the width of the ice to the far.
 
 const Harness := preload("res://tests/unit/ai/real_goalie_shot_harness.gd")
 const GOAL_Z: float = -GameRules.GOAL_LINE_Z
@@ -157,10 +191,23 @@ func _square_x(lane_x: float, dist: float) -> float:
 			_ctrl._current_depth, cfg).x
 
 
+const CAP_INF: float = 99.0
+
+
+func _cap(v: float) -> String:
+	return "  -  " if v >= CAP_INF else "%5.2f" % v
+
+
+# WHICH CONSTRAINT IS ACTUALLY BRINGING HIM IN. Read live off the controller's
+# own `_depth_constraints` (rebuilt in place every tick) rather than re-derived
+# here, so this cannot describe a solve the goalie isn't running. Every entry is
+# a MAXIMUM RADIUS; the tightest one is the answer, and a dash means that
+# constraint is not binding at all.
 func _trace(lane_x: float, label: String) -> void:
 	_h.settle_ready(Vector3(lane_x, 0.0, GOAL_Z + START_DIST))
 	gut.p("  %s" % label)
-	gut.p("    out(m)  angle  goalie_x  square_x   lag  depth")
+	gut.p("    out(m)  angle  goalie_x  square_x    lag  radius | ceil  standoff"
+			+ "  lateral  backdoor   rush  <- binding")
 	var d: float = START_DIST
 	while d > 1.0:
 		var next_d: float = d - 0.5
@@ -168,9 +215,19 @@ func _trace(lane_x: float, label: String) -> void:
 		d = next_d
 		var angle: float = rad_to_deg(atan2(absf(lane_x), maxf(d, 0.01)))
 		var sq: float = _square_x(lane_x, d)
-		gut.p("    %5.1f   %4.1f°   %+6.3f   %+6.3f  %+5.3f  %5.3f"
+		var c: GoalieDepthSolver.Constraints = _ctrl._depth_constraints
+		var binding: String = "ceiling"
+		var tightest: float = c.ceiling_radius
+		for pair: Array in [[c.standoff_cap, "standoff"], [c.lateral_cap, "lateral"],
+				[c.backdoor_cap, "backdoor"], [c.rush_radius, "rush"]]:
+			if float(pair[0]) < tightest:
+				tightest = float(pair[0])
+				binding = String(pair[1])
+		gut.p("    %5.1f   %4.1f°   %+6.3f   %+6.3f  %+5.3f   %5.3f | %s  %s  %s  %s  %s   %s"
 				% [d, angle, _ctrl._current_x, sq, _ctrl._current_x - sq,
-				_ctrl._current_depth])
+				_ctrl._current_depth, _cap(c.ceiling_radius), _cap(c.standoff_cap),
+				_cap(c.lateral_cap), _cap(c.backdoor_cap), _cap(c.rush_radius),
+				binding])
 
 
 # What he does with the whole approach, sampled every half metre. Read the `lag`
@@ -263,11 +320,50 @@ func test_report_how_much_of_the_hole_is_the_rush_backflow() -> void:
 	assert_true(true, "report")
 
 
+# ── COUNTERFACTUAL: the retreat's TERMINAL ANCHOR ────────────────────────────
+# The backflow lands on `depth_defensive` — BPS "D" — when the attacker reaches
+# `rush_arrive_distance`. But D is defined situationally, not by distance: in the
+# system this curve is taken from, D is "on the post, or tracking the puck behind
+# the net". A shooter coming straight at the goalie from 1.5 m is not that
+# situation, and the taught retreat against him ends at the top of the crease and
+# converts into lateral movement rather than continuing to the goal line ("if you
+# back in too soon they will have net open up to shoot at"). The zone that IS
+# defined for it is C — the middle of the blue paint, held when a lateral play is
+# live, which is exactly what the retreat is buying.
+#
+# So this sweeps the landing anchor from D to C and measures. BOTH lanes, and the
+# control column is the half that matters: an anchor that only helps the post
+# lane by walling him up everywhere is not the fix, and the control is what tells
+# the two apart. The full 5-point sweep is in the header; three points are kept
+# live here because these maps are the most expensive thing in the suite.
+#
+# NOTE if this is ever adopted: `AIActionScoring._build_planning_rush_cfg` copies
+# all three anchors by hand, so the bots score against a keeper who retreats to
+# 0.10 unless it moves too — and the drive-the-net gradient documented in that
+# file's `planned_goalie_depth` header is exactly what a shallower retreat puts
+# back at risk. Re-run the action-scoring ordering table before believing it.
+func test_report_the_retreat_landing_on_c_instead_of_d() -> void:
+	gut.p("Wind-up drive, release 2.5 m. Retreat anchor D (%.2f) .. C (%.2f)."
+			% [_ctrl.depth_defensive, _ctrl.depth_conservative])
+	for anchor: float in [0.10, 0.40, 0.70]:
+		_ctrl._rush_cfg.depth_arrive = anchor
+		gut.p("  anchor %.2f, POST LANE:" % anchor)
+		var post: Dictionary = _map(POST_LANE, 2.5, true)
+		gut.p("  anchor %.2f, CENTRE LANE:" % anchor)
+		var mid: Dictionary = _map(0.0, 2.5, true)
+		gut.p("  == anchor %.2f: POST %d (L%d/R%d)  CENTRE %d (L%d/R%d)"
+				% [anchor, post["goals"], post["left"], post["right"],
+				mid["goals"], mid["left"], mid["right"]])
+	assert_true(true, "report")
+
+
 # The map, off the drive. Columns run post to post left→right; on the -x post
 # lane the LEFT of each row is the short side.
 func test_report_the_goal_map_off_a_post_lane_drive() -> void:
 	gut.p("Cold release off the drive (no wind-up published).")
-	for dist: float in [6.5, 4.0, 2.5]:
+	# 6.5 m is swept on the wind-up arm only — that is the human mechanism, and
+	# these maps are the most expensive thing in the suite.
+	for dist: float in [4.0, 2.5]:
 		gut.p("  release %.1f m out, POST LANE:" % dist)
 		_map(POST_LANE, dist, false)
 		gut.p("  release %.1f m out, CENTRE LANE (control):" % dist)
