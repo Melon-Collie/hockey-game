@@ -29,31 +29,35 @@ class_name AILoosePuckChase
 # teammate takes too long to take over.
 const HYSTERESIS_S: float = 0.2
 
-# Single bounded round of puck lead so the election targets where the
-# puck WILL be, not where it sits now — the difference that decides who
-# wins a race for a puck squirting between two bots. Constant-velocity
-# lead (the puck's friction decel is ignored at this horizon); capped at
-# MAX_LEAD_S so a hard rim around the boards can't run the lead point
-# away. The CHASE_PUCK state itself does the precise friction-aware
-# lead-intercept once a bot is committed; this is only the coarse
-# election lead.
-const MAX_LEAD_S: float = 0.5
-
-# ── Path race (fast pucks) ───────────────────────────────────────────────────
-# Above FAST_PUCK_SPEED the puck's path diverges from its position inside
-# the race horizon, and every current-position read lies: the man chasing a
-# rim's tail from a metre back "wins" a race he can never finish (the puck
-# outruns him too), while the far-side skater whose true intercept is where
-# the wrap comes to him reads as hopeless — so he declines the chase and the
-# rim rides the whole zone untouched. Fast pucks therefore race on the
-# friction + board-aware predicted path: at each step T of the walk, a
-# skater makes the intercept iff his calibrated ETA to that point fits
-# inside T. Slow pucks keep the cheap bounded-lead read (path ≈ position).
-const FAST_PUCK_SPEED_M_S: float = 4.0
+# ── Path race ────────────────────────────────────────────────────────────────
+# EVERY loose puck races on its friction + board-aware predicted path: at each
+# step T of the walk, a skater makes the intercept iff his calibrated ETA to
+# that point fits inside T. A current-position read lies about both ends of the
+# race — the man chasing a puck's tail from a metre back "wins" a race the puck
+# outruns him in, while the skater the puck is travelling TOWARD, whose true
+# intercept is where it comes to him, reads as hopeless and declines.
+#
+# This used to be gated to pucks above 4 m/s, on the theory that a slow puck's
+# path is approximately its position. On this ice it is not: ICE_FRICTION 0.05
+# decelerates a puck at 0.49 m/s², so a 3.9 m/s roller — a hair under that old
+# gate — travels 9.5 m inside the race horizon and takes 8 s to settle. The
+# bounded-lead read it fell back to led the puck by at most 0.5 s (≤1.95 m),
+# along a straight line that runs THROUGH the boards. Both halves of that are
+# exactly the reported failure: bots late to slow pucks rolling at them, and
+# worse on the wall, where the phantom straight line leaves the rink entirely.
 const RACE_LOOKAHEAD_S: float = 3.0
-# 0.25 s steps — fine enough that the race-read margins can
-# still resolve between quantized path times.
+# 0.25 s steps. The race read interpolates within the step it crosses in
+# (path_intercept_time), so this is the resolution of the PATH, not of the
+# answer — a coarser walk costs geometric fidelity, never race margin.
 const RACE_STEPS: int = 12
+
+# Above this the puck must be met EARLY — blade swung to the gate and the body
+# set — so its intercept is judged with KILL_SETUP_MARGIN_S of arrival slack.
+# Below it a skater can meet the puck exactly and the intercept converges on
+# its own. This is a statement about the RECEPTION, not about whether the
+# puck's path is worth predicting; see the block above for why those are
+# separate questions.
+const FAST_PUCK_SPEED_M_S: float = 4.0
 
 # ── Race commitment (is that body actually going for the puck?) ─────────────
 # First-stride floor: a skater actually running a race for a loose puck
@@ -102,6 +106,14 @@ static func is_fast_puck(puck_vel: Vector3) -> bool:
 			> FAST_PUCK_SPEED_M_S * FAST_PUCK_SPEED_M_S
 
 
+# Arrival slack a race read must leave itself against this puck. One definition,
+# shared by the election, the race-lost decline and the chase state's own
+# lead-intercept, so they can never disagree about how early a given puck has to
+# be met.
+static func setup_margin(puck_vel: Vector3) -> float:
+	return KILL_SETUP_MARGIN_S if is_fast_puck(puck_vel) else 0.0
+
+
 # Sprint-aware race cap for one candidate (BotSprintRules.race_speed): cruise
 # and sprint ceiling from caps (league defaults when unset — a league body
 # sprints), pool and lockout from the replicated skater state, race length
@@ -140,16 +152,20 @@ static func race_trajectory(puck_pos: Vector3, puck_vel: Vector3) -> Array[Vecto
 
 
 # Earliest time (s) this skater can meet the puck ON its predicted path,
-# arriving with the KILL_SETUP_MARGIN_S of slack that makes the contact a
-# set-and-corral instead of a dead heat. Quantized to the walk's step
-# times. When no step is makeable the race resolves at the settled end of
-# the walk: the skater collects the puck where it stops (or exits the
-# horizon), arriving no earlier than the horizon itself.
+# arriving with `margin` of slack (see setup_margin) so a fast contact is a
+# set-and-corral instead of a dead heat. `puck_pos` is the walk's origin — the
+# path point at t=0, which the sub-step solve below needs as its left endpoint.
+# When no step is makeable the race resolves at the settled end of the walk: the
+# skater collects the puck where it stops (or exits the horizon), arriving no
+# earlier than the horizon itself.
 static func path_intercept_time(traj: Array[Vector3], step_dt: float,
-		skater_pos: Vector3, skater_vel: Vector3, max_speed: float) -> float:
+		puck_pos: Vector3, skater_pos: Vector3, skater_vel: Vector3,
+		max_speed: float, margin: float = KILL_SETUP_MARGIN_S) -> float:
+	if traj.is_empty():
+		return INF
 	for i: int in traj.size():
 		var t_step: float = (i + 1) * step_dt
-		var t_set: float = t_step - KILL_SETUP_MARGIN_S
+		var t_set: float = t_step - margin
 		if t_set <= 0.0:
 			continue
 		# Exact prune: even at a flying top-speed start, ETA ≥ dist / v_max —
@@ -159,19 +175,37 @@ static func path_intercept_time(traj: Array[Vector3], step_dt: float,
 		var reach: float = max_speed * t_set
 		if dx * dx + dz * dz > reach * reach:
 			continue
-		if AIActionScoring.time_to_arrive(
-				skater_pos, traj[i], skater_vel, max_speed) <= t_set:
-			return t_step
+		var eta: float = AIActionScoring.time_to_arrive(
+				skater_pos, traj[i], skater_vel, max_speed)
+		if eta > t_set:
+			continue
+		# Crossing found — now solve WHERE in the step it happens. Returning
+		# t_step quantizes every race read to the walk's grid, and at 0.25 s
+		# that is ~2 m of skating: bots separated by less than a step read as
+		# exactly tied, so the election resolved them by peer id instead of by
+		# who actually gets there, and the race-lost decline could not see a
+		# margin narrower than the grid. Linear-interpolate the arrival slack
+		# s(t) = (t − margin) − ETA(t) across the step it changes sign in — the
+		# same sub-step solve the chase's own _lead_intercept runs on its
+		# reachability surplus. Exact for a settled puck: s is then linear in t,
+		# so the crossing IS the skater's ETA.
+		var prev_t: float = i * step_dt
+		var prev_point: Vector3 = traj[i - 1] if i > 0 else puck_pos
+		var prev_slack: float = (prev_t - margin) - AIActionScoring.time_to_arrive(
+				skater_pos, prev_point, skater_vel, max_speed)
+		if prev_slack >= 0.0:
+			return prev_t   # already makeable at the left endpoint
+		return prev_t + (t_step - prev_t) * (-prev_slack / (t_set - eta - prev_slack))
 	var horizon: float = traj.size() * step_dt
 	return maxf(horizon, AIActionScoring.time_to_arrive(
 			skater_pos, traj[-1], skater_vel, max_speed))
 
 
 # The path point a path_intercept_time result names — the spot on the walk the
-# skater actually meets the puck at. Callers that need to ask something ABOUT
-# the intercept (is that body committed to going there?) map the quantized time
-# back through this so they can never disagree with the race read that produced
-# it. Times past the horizon resolve at the settled end of the walk.
+# skater actually meets the puck at, to the walk's resolution. Callers that need
+# to ask something ABOUT the intercept (is that body committed to going there?)
+# map the time back through this so they can never disagree with the race read
+# that produced it. Times past the horizon resolve at the settled end of the walk.
 static func path_intercept_point(traj: Array[Vector3], step_dt: float,
 		t: float) -> Vector3:
 	if traj.is_empty():
@@ -344,11 +378,12 @@ static func elect(
 		camped_ids: Array = []) -> int:
 	if not puck_playable:
 		return -1
-	# Fast puck → the shared path walk (see the path-race block above).
-	var traj: Array[Vector3] = []
-	if is_fast_puck(puck_vel):
-		traj = race_trajectory(puck_pos, puck_vel)
+	# Every loose puck races on the shared path walk (see the path-race block
+	# above) — memoized on the puck state, so both teams' elections, every
+	# chaser's decline and every reach-band read share ONE walk per tick.
+	var traj: Array[Vector3] = race_trajectory(puck_pos, puck_vel)
 	var step_dt: float = RACE_LOOKAHEAD_S / float(RACE_STEPS)
+	var margin: float = setup_margin(puck_vel)
 	var best_pid: int = -1
 	var best_t: float = INF
 	for pid: int in teammate_ids:
@@ -364,9 +399,8 @@ static func elect(
 		# the stamina-gated sprint gear) — a fast skater genuinely reaches
 		# a loose puck first. Missing caps → league default.
 		var max_speed: float = race_vmax(s, caps_by_peer.get(pid), puck_pos)
-		var t: float = path_intercept_time(traj, step_dt, s.position, s.velocity, max_speed) \
-				if not traj.is_empty() \
-				else _intercept_time(s.position, s.velocity, puck_pos, puck_vel, max_speed)
+		var t: float = path_intercept_time(traj, step_dt, puck_pos,
+				s.position, s.velocity, max_speed, margin)
 		# Incumbent hysteresis: challengers pay HYSTERESIS_S, so the
 		# current chaser keeps the role unless beaten by the margin.
 		if pid != prev_elected:
@@ -394,36 +428,17 @@ static func best_intercept_time(
 		puck_pos: Vector3,
 		puck_vel: Vector3,
 		caps_by_peer: Dictionary = {}) -> float:
-	var traj: Array[Vector3] = []
-	if is_fast_puck(puck_vel):
-		traj = race_trajectory(puck_pos, puck_vel)
+	var traj: Array[Vector3] = race_trajectory(puck_pos, puck_vel)
 	var step_dt: float = RACE_LOOKAHEAD_S / float(RACE_STEPS)
+	var margin: float = setup_margin(puck_vel)
 	var best_t: float = INF
 	for pid: int in ids:
 		var s: SkaterNetworkState = skater_states.get(pid)
 		if s == null:
 			continue
 		var max_speed: float = race_vmax(s, caps_by_peer.get(pid), puck_pos)
-		var t: float = path_intercept_time(traj, step_dt, s.position, s.velocity, max_speed) \
-				if not traj.is_empty() \
-				else _intercept_time(s.position, s.velocity, puck_pos, puck_vel, max_speed)
+		var t: float = path_intercept_time(traj, step_dt, puck_pos,
+				s.position, s.velocity, max_speed, margin)
 		if t < best_t:
 			best_t = t
 	return best_t
-
-
-# Momentum-aware intercept time: lead the puck a coarse, bounded amount
-# (its straight-line distance at ref skating speed, capped), then return
-# the bot's momentum-aware time to that predicted point.
-static func _intercept_time(bot_pos: Vector3, bot_vel: Vector3,
-		puck_pos: Vector3, puck_vel: Vector3,
-		max_speed: float = AIActionScoring.SKATER_REF_SPEED_M_S) -> float:
-	var dx: float = puck_pos.x - bot_pos.x
-	var dz: float = puck_pos.z - bot_pos.z
-	var rough_dist: float = sqrt(dx * dx + dz * dz)
-	var lead: float = minf(rough_dist / max_speed, MAX_LEAD_S)
-	var predicted := Vector3(
-			puck_pos.x + puck_vel.x * lead,
-			0.0,
-			puck_pos.z + puck_vel.z * lead)
-	return AIActionScoring.time_to_arrive(bot_pos, predicted, bot_vel, max_speed)

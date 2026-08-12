@@ -207,11 +207,11 @@ var _receive_body_offset: float = (
 # flight time to spare — otherwise the default lead-intercept (which
 # gets the bot to the puck faster, even if at a worse angle) wins.
 const RECEIVE_TIMING_MARGIN: float = 0.9
-# Body-center inset from the boards for the receive stance anchor (a
-# skater's collision radius, so the shoulder — not the anchor point —
-# stops at the glass). Applies when the side-stand offset from a
-# boards-hugging rim line would push the stance into the wall.
-const RECEIVE_BODY_WALL_MARGIN_M: float = 0.5
+# Body-centre inset from the boards for any stance built off a boards-hugging
+# puck line — a skater's collision radius, so the shoulder rather than the
+# anchor point stops at the glass. Both the receive stance's side-step and the
+# chase's puck-derived target can otherwise name ice inside the wall.
+const BODY_WALL_MARGIN_M: float = 0.5
 
 # ── Board-aware reception path (rims) ────────────────────────────────────────
 # The reception stance and the blade gate are solved on the puck's REAL path
@@ -2726,6 +2726,26 @@ func _state_chase_puck(input: InputState, snapshot: WorldSnapshot, self_pos: Vec
 			var approach_len: float = approach.length()
 			if approach_len > CARRY_BLADE_AIM_FORWARD_M:
 				target -= approach * (CARRY_BLADE_AIM_FORWARD_M / approach_len)
+		# Stand the BODY on ice it can actually occupy. Every target above is
+		# built off the PUCK — a point on its predicted path, or a drive-through a
+		# stride PAST it — and the puck's own path rides a puck radius off the
+		# kickplate, ice a skater's centre can never reach. The contested
+		# overshoot is worse: it aims ENGAGEMENT_PROXIMITY_M beyond a puck already
+		# on the wall, so for the board battles that are most 50/50s the body is
+		# sent metres INSIDE the glass. Steered at ice that isn't there the
+		# potential field simply presses the body into the boards, and whatever
+		# along-wall component survives is the only thing still moving it — the
+		# pinned, grinding retrieval. Clamped to the standable surface the target
+		# is somewhere the skater converges, and the blade still plays the wall:
+		# it is aimed at the puck itself once inside reach, and reach is measured
+		# from a body that now has room to stand. The net-crossing guard above is
+		# the cage edition of exactly this, and the reception stance takes the
+		# same inset for the same reason.
+		var chase_on_ice: Vector2 = GameRules.clamp_to_rink_inner(
+				Vector2(target.x, target.z), BODY_WALL_MARGIN_M)
+		target = Vector3(chase_on_ice.x, 0.0, chase_on_ice.y)
+		if contested:
+			_chase_sprint_ref = target   # the gap the sprint gate reads
 		_apply_steering(input, snapshot, self_pos, target)
 		if give_brake:
 			input.brake = true   # give with the puck — shed our own closing
@@ -2883,7 +2903,7 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	# body radius inside so the stance is standable and the blade (not the
 	# chest) plays the rim line.
 	var anchor_xz: Vector2 = GameRules.clamp_to_rink_inner(
-			Vector2(body_anchor.x, body_anchor.z), RECEIVE_BODY_WALL_MARGIN_M)
+			Vector2(body_anchor.x, body_anchor.z), BODY_WALL_MARGIN_M)
 	body_anchor = Vector3(anchor_xz.x, 0.0, anchor_xz.y)
 	# Timing gate: do we have time to reach body_anchor before the puck
 	# arrives at perp_foot? (puck_eta came off the path walk above — timed
@@ -6127,12 +6147,14 @@ func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3,
 	# aims produced the sliding-intercept treadmill on rims: miss by a
 	# hair, re-solve to a new dead-heat point further along, miss again.
 	# Slow pucks keep the exact test — the intercept converges on its own.
-	var setup_margin: float = AILoosePuckChase.KILL_SETUP_MARGIN_S \
-			if AILoosePuckChase.is_fast_puck(puck_vel) else 0.0
+	# Same seam the race reads price with (AILoosePuckChase.setup_margin), so
+	# the committed chase and the election that assigned it cannot disagree
+	# about how early this puck has to be met.
+	var arrival_slack: float = AILoosePuckChase.setup_margin(puck_vel)
 	var prev_surplus: float = -INF
 	var prev_pos: Vector3 = self_pos
 	for i: int in traj.size():
-		var t_step: float = (i + 1) * dt - setup_margin
+		var t_step: float = (i + 1) * dt - arrival_slack
 		if t_step <= 0.0:
 			prev_surplus = -INF
 			prev_pos = traj[i]
