@@ -93,6 +93,9 @@ func _ready() -> void:
 	_init_connectors()
 	_init_arm_bones()
 	_setup_uniform_coordinator()
+	var vfx := GoalieVFX.new()
+	vfx.name = "VFX"
+	add_child(vfx)
 
 
 func _process(_delta: float) -> void:
@@ -152,6 +155,11 @@ func get_goalie_rotation_y() -> float:
 # live in) so the caller can `distance_to(config.glove_pos)` directly.
 func get_glove_position() -> Vector3:
 	return _glove.position
+
+# Live body-local chest position. GoalieVFX reads its height to tell a
+# committed butterfly drop (fast fall into the low band) from a stance lerp.
+func get_body_position() -> Vector3:
+	return _body.position
 
 # Clear-sweep follow-through moves the BlockArm (and its child Stick, off which
 # the puck rebounds during saves) through the puck's exit path. Without this, that
