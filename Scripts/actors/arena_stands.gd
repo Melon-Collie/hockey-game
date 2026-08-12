@@ -274,6 +274,9 @@ var _head_palette: Array[Color] = [
 static var _crowd_material: ShaderMaterial = null
 var _excitement: float = 0.0
 var _excite_tween: Tween = null
+# Rebuilt with the spectators (a rebuild frees all children), so guard reads
+# with is_instance_valid during the free→re-add window.
+var _flashbulbs: CrowdFlashbulbs = null
 # Set while set_crowd_rows writes both row counts, so the two setters don't
 # each trigger a rebuild of their own.
 var _suspend_rebuild: bool = false
@@ -904,6 +907,11 @@ func _add_spectators(layout: Dictionary) -> void:
 		head_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(head_mmi)
 
+	_flashbulbs = CrowdFlashbulbs.new()
+	_flashbulbs.name = "CrowdFlashbulbs"
+	_flashbulbs.set_sources(head_mms)
+	add_child(_flashbulbs)
+
 
 # Roll body/head colors for every spectator. Own rng stream (same _SEED),
 # consumed across the sections in their fixed build order, so the fan-mix
@@ -1047,6 +1055,8 @@ func excite(level: float) -> void:
 func _set_excitement(v: float) -> void:
 	_excitement = v
 	_spectator_material().set_shader_parameter("excitement", v)
+	if _flashbulbs != null and is_instance_valid(_flashbulbs):
+		_flashbulbs.set_excitement(v)
 
 
 func _on_goal_scored(_team: Variant, _scorer: String, _a1: String, _a2: String) -> void:
