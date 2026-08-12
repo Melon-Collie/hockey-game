@@ -16,10 +16,13 @@ extends Node2D
 
 const FONT: Font = preload("res://Assets/Fonts/BarlowSemiCondensed-ExtraBold.ttf")
 
-# Under-ice, not on it. The field is barely there; the wordmark carries the read.
-const FIELD_ALPHA: float = 0.13
-const BORDER_ALPHA: float = 0.34
-const TEXT_ALPHA: float = 0.72
+# Under-ice, not on it — but the shader composites these BEFORE the Beer-Lambert
+# fade, which then washes them toward the ice fog colour, so what reaches the eye
+# is a good deal fainter than the numbers suggest. They are set by how the panels
+# read in a capture, not by how they read on the palette.
+const FIELD_ALPHA: float = 0.24
+const BORDER_ALPHA: float = 0.50
+const TEXT_ALPHA: float = 0.92
 const BORDER_M: float = 0.07
 # Fractions of the panel's short axis (its cap height) and long axis.
 const NAME_HEIGHT_FRACTION: float = 0.42
