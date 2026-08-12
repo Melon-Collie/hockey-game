@@ -19,8 +19,8 @@ extends GutTest
 #              depth constraint is actually bringing him in?
 #   MAP      — does that leave a repeatable place to shoot?
 #   ANCHOR   — what does moving where the retreat lands buy, and cost?
-#   WALKOUT  — and does a shallower retreat get him skated around, which is what
-#              retreating is FOR?
+#   WALKOUT  — the puck dragged across him, which prices depth the other way
+#   DEKE     — and a BODY going around him, which is what retreating is FOR
 #
 # The control lane (x = 0, straight in down the middle) is run alongside so the
 # post-lane numbers can be read as "worse than a drive" rather than "worse than a
@@ -147,6 +147,34 @@ extends GutTest
 # goes around. The tuck is the beaten-wide seal's job and lives in
 # test_goalie_lateral_beat_slide.gd. One cut distance, one direction, rebounds
 # terminal.
+#
+# ── DOES HE GET SKATED AROUND? (the deke test) ───────────────────────────────
+# The two measurements above both move only the PUCK, so `carrier.velocity.x`
+# stays zero and the lateral tracking cap, the carrier lead and the beaten-wide
+# read never engage. That leaves the question retreating actually exists to
+# answer untouched: does a body crossing the crease face get past him. Drive the
+# +post lane to 3.5 m, cut the body across to -0.55 with the puck leading to the
+# far post, fire from where the PUCK ended up:
+#
+#   cut pace            anchor 0.10 (was)          anchor 0.40 (ship)
+#   3.7 m/s lateral      5/144  x -0.207 r 0.439    0/144  x -0.308 r 0.654
+#   5.9 m/s lateral      4/144  x -0.141 r 0.616    1/144  x -0.196 r 0.787
+#
+# HE IS NOT BEING SKATED AROUND — 0-3.5% of a perfect-aim sweep, he stays on his
+# feet through it (down 0%, the beaten-wide seal never fires because he wins the
+# race to the tuck), and the shallower retreat is BETTER at it, not worse. Taken
+# with the walkout above, the retreat has now been priced against every lateral
+# shape this harness can produce and it has not once paid for the depth it costs.
+#
+# THE SHAPE THAT DOES BEAT HIM IS A DIFFERENT MECHANISM. Cutting from the centre
+# lane out to x -1.00 instead puts the puck at -1.35 — outside the post — and that
+# scores 25/144 (17.4%) at anchor 0.10 and 24/144 at 0.40, i.e. the retreat does
+# not touch it. He is beaten WIDE there (correctly), seals (down 100%, at 0.19 s),
+# and the seal parks him at a fixed x -0.154 so the rotated pad edge lands on the
+# post — which it does. The goals are shots that pass OUTSIDE that pad edge at his
+# own plane and cut back inside the post at the goal line. That is a walkout past
+# him answered by a seal, not a failure of the arc, and it is the one worth
+# looking at next.
 #
 # ── WHAT THE SOURCES SAY (2026-08) ───────────────────────────────────────────
 # Two findings, and they point at the trigger and the anchor separately.
@@ -488,4 +516,106 @@ func test_report_the_goal_map_off_a_post_lane_drive_with_windup() -> void:
 		_map(POST_LANE, dist, true)
 		gut.p("  release %.1f m out, CENTRE LANE (control):" % dist)
 		_map(0.0, dist, true)
+	assert_true(true, "report")
+
+
+# ── THE DEKE: the case the retreat exists for ────────────────────────────────
+# The walkout above moves only the puck. That is the right shape for a
+# forehand-backhand beat, and it is BLIND to the failure retreating is supposed
+# to prevent — a carrier who skates across the crease face and past the goalie.
+# With the body moving, `carrier.velocity.x` is finally non-zero, so the lateral
+# tracking cap engages, the carrier lead swings the tracked threat, and the
+# beaten-wide seal has a real drive to read. None of that fires in `_walkout_map`.
+#
+# Two paces, because a deke is bought out of the legs: the lateral component
+# comes at the cost of the drive, so a wide fast cut is a slow approach. Forward
+# pace drops to DEKE_FORWARD accordingly.
+#
+# `commit` is when he first dropped into a committed slide, and it is half the
+# measurement — sealing late and never sealing are different failures and the
+# goal count cannot tell them apart.
+# THE SHAPE MATTERS, and the first one tried was the wrong one. Cutting from the
+# centre lane out to x -1.00 puts the PUCK at -1.35 with its lead — outside the
+# post — which is a walkout PAST him, not around him: the shot then has to cut
+# back in past his pad edge, and it measured 17% of the aim space at both anchors
+# (unmoved by the retreat, because the seal spot is a fixed geometric point).
+# Real and worth knowing, but it is not the question.
+#
+# Skating AROUND him is a cross-crease cut: come down one post lane, take the body
+# across the crease face, tuck on the other side. Driving from +NET_HALF_WIDTH to
+# DEKE_TO_X is 1.47 m of body travel with the puck arriving at the far post — the
+# move the retreat is supposed to keep him in front of.
+const DEKE_FROM: float = 3.5
+const DEKE_LANE: float = GameRules.NET_HALF_WIDTH
+const DEKE_TO_X: float = -0.55
+const DEKE_FORWARD: float = 3.0
+
+
+func _deke_map(anchor: float, seconds: float) -> Dictionary:
+	_ctrl._rush_cfg.depth_arrive = anchor
+	var lofts: Array[int] = [
+		ShotMechanics.ELEVATION_FLAT,
+		ShotMechanics.ELEVATION_LOW,
+		ShotMechanics.ELEVATION_HIGH,
+	]
+	var names: Array[String] = ["FLAT", "LOW ", "HIGH"]
+	var start := Vector3(DEKE_LANE, 0.0, GOAL_Z + START_DIST)
+	var goals: int = 0
+	var shots: int = 0
+	var pose_x: float = 0.0
+	var pose_depth: float = 0.0
+	var commits: int = 0
+	var commit_s: float = 0.0
+	var seal_x: float = 0.0
+	var down: int = 0
+	for li: int in lofts.size():
+		var row: String = ""
+		var a: float = -MAX_AIM
+		while a <= MAX_AIM + 0.001:
+			var best: String = "."
+			for mph: float in SHOT_MPH:
+				var speed: float = mph * MPH_TO_MS
+				_h.settle_ready(start)
+				_h.drive_in(DEKE_LANE, START_DIST, DEKE_FROM, DRIVE_SPEED)
+				var rel: Vector3 = _h.deke_across(DEKE_TO_X, seconds, DEKE_FORWARD)
+				pose_x += _ctrl._current_x
+				pose_depth += _ctrl._current_depth
+				if not is_inf(_h.last_deke_commit_s):
+					commits += 1
+					commit_s += _h.last_deke_commit_s
+					seal_x += _ctrl._slide.end_x
+				if _h.last_deke_went_down:
+					down += 1
+				var o: int = _h.fire_at(rel, Vector3(a, 0.0, GOAL_Z), lofts[li],
+						speed, 0.0)
+				shots += 1
+				if o == Harness.GOAL:
+					goals += 1
+					best = "G"
+				elif o == Harness.SAVE:
+					best = "s" if best == "." else best
+				elif best == ".":
+					best = "x"
+			row += best
+			a += 0.07
+		gut.p("     %s |%s|" % [names[li], row])
+	var n: float = float(maxi(shots, 1))
+	var mean_commit: String = "never" if commits == 0 \
+			else "%.2f s on %d%%, aimed x %+.3f" % [commit_s / float(commits),
+			int(round(100.0 * float(commits) / n)), seal_x / float(commits)]
+	gut.p("     -> %d/%d (%.1f%%)  goalie x %+.3f radius %.3f  down %d%%  seal %s"
+			% [goals, shots, 100.0 * float(goals) / n, pose_x / n, pose_depth / n,
+			int(round(100.0 * float(down) / n)), mean_commit])
+	return {"goals": goals, "shots": shots, "commits": commits}
+
+
+func test_report_whether_the_deke_skates_around_him() -> void:
+	gut.p("Drive the %+.2f lane to %.1f m, then CUT the body across to %+.2f."
+			% [DEKE_LANE, DEKE_FROM, DEKE_TO_X])
+	for seconds: float in [0.40, 0.25]:
+		gut.p("  cut in %.2f s (%.1f m/s of body lateral):"
+				% [seconds, absf(DEKE_TO_X - DEKE_LANE) / seconds])
+		for anchor: float in [0.10, 0.40]:
+			gut.p("   retreat anchor %.2f:" % anchor)
+			_deke_map(anchor, seconds)
 	assert_true(true, "report")

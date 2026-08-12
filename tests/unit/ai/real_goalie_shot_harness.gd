@@ -186,6 +186,63 @@ func sweep_across(to_x: float, seconds: float, drive_speed: float) -> Vector3:
 	return puck
 
 
+# ── THE DEKE: the BODY goes around him too ──────────────────────────────────
+# `sweep_across` moves only the puck, which is the right shape for a
+# forehand-backhand beat but cannot see the failure the retreat actually exists
+# to prevent — a carrier who skates ACROSS the crease face and past the goalie.
+# The difference is not cosmetic: with the body moving, `carrier.velocity.x` is
+# finally non-zero, so the lateral tracking cap engages, the carrier lead swings
+# the tracked threat, and the beaten-wide seal has a genuine drive to read. A
+# depth change can only be judged against this, because "he is deep so he has a
+# short arc to travel" is a claim about a body going around him.
+#
+# The puck LEADS the body laterally, which is what separates a deke from a turn:
+# the blade takes the puck across first and the body follows into the space.
+# Forward pace is the caller's, and should be lower than the straight-line drive
+# — the lateral component is bought out of the same legs.
+#
+# `last_deke_commit_s` is the seconds into the move at which the goalie first
+# dropped into a committed slide (COILING/SLIDING), or INF if he never did. Read
+# it beside the goal count: sealing late and sealing never are different
+# failures, and the shot map alone cannot tell them apart.
+var last_deke_commit_s: float = INF
+var last_deke_went_down: bool = false
+
+func deke_across(to_x: float, seconds: float, forward_speed: float,
+		puck_lead_x: float = 0.35) -> Vector3:
+	last_deke_commit_s = INF
+	last_deke_went_down = false
+	var ticks: int = maxi(int(seconds / DT), 1)
+	var dir: float = signf(-_goal_z)
+	var body: Vector3 = _shooter.global_position
+	var from_x: float = body.x
+	var side: float = signf(to_x - from_x)
+	var lateral_rate: float = (to_x - from_x) / maxf(seconds, 0.0001)
+	var vel := Vector3(lateral_rate, 0.0, -dir * absf(forward_speed))
+	var puck: Vector3 = _puck.global_position
+	for i: int in ticks:
+		var t: float = float(i + 1) / float(ticks)
+		body.x = lerpf(from_x, to_x, t)
+		body.z += vel.z * DT
+		_shooter.global_position = body
+		_shooter.velocity = vel
+		# Blade out ahead of the body across the direction of travel. Held to the
+		# destination so the puck arrives at the tuck point rather than overrunning
+		# it — past the post there is no shot left to take.
+		var px: float = body.x + side * puck_lead_x
+		puck = Vector3(px, 0.0, body.z)
+		_puck.global_position = puck
+		_ctrl._physics_process(DT)
+		if not _ctrl._sm.is_upright():
+			last_deke_went_down = true
+		var st: int = _ctrl._sm.current
+		if is_inf(last_deke_commit_s) \
+				and (st == GoalieStateMachine.State.COILING
+						or st == GoalieStateMachine.State.SLIDING):
+			last_deke_commit_s = float(i + 1) * DT
+	return puck
+
+
 # Speed-explicit twin of `publish_windup`, for wind-ups whose power band is not
 # the wrister's — a slapper charge fires 20-40 m/s, so publishing its declared
 # velocity through the wrister band would have the goalie reading a shot nobody
