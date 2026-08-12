@@ -551,7 +551,8 @@ const DEKE_TO_X: float = -0.55
 const DEKE_FORWARD: float = 3.0
 
 
-func _deke_map(anchor: float, seconds: float) -> Dictionary:
+func _deke_map(anchor: float, seconds: float, lane: float = DEKE_LANE,
+		to_x: float = DEKE_TO_X) -> Dictionary:
 	_ctrl._rush_cfg.depth_arrive = anchor
 	var lofts: Array[int] = [
 		ShotMechanics.ELEVATION_FLAT,
@@ -559,7 +560,7 @@ func _deke_map(anchor: float, seconds: float) -> Dictionary:
 		ShotMechanics.ELEVATION_HIGH,
 	]
 	var names: Array[String] = ["FLAT", "LOW ", "HIGH"]
-	var start := Vector3(DEKE_LANE, 0.0, GOAL_Z + START_DIST)
+	var start := Vector3(lane, 0.0, GOAL_Z + START_DIST)
 	var goals: int = 0
 	var shots: int = 0
 	var pose_x: float = 0.0
@@ -576,8 +577,8 @@ func _deke_map(anchor: float, seconds: float) -> Dictionary:
 			for mph: float in SHOT_MPH:
 				var speed: float = mph * MPH_TO_MS
 				_h.settle_ready(start)
-				_h.drive_in(DEKE_LANE, START_DIST, DEKE_FROM, DRIVE_SPEED)
-				var rel: Vector3 = _h.deke_across(DEKE_TO_X, seconds, DEKE_FORWARD)
+				_h.drive_in(lane, START_DIST, DEKE_FROM, DRIVE_SPEED)
+				var rel: Vector3 = _h.deke_across(to_x, seconds, DEKE_FORWARD)
 				pose_x += _ctrl._current_x
 				pose_depth += _ctrl._current_depth
 				if not is_inf(_h.last_deke_commit_s):
@@ -618,4 +619,64 @@ func test_report_whether_the_deke_skates_around_him() -> void:
 		for anchor: float in [0.10, 0.40]:
 			gut.p("   retreat anchor %.2f:" % anchor)
 			_deke_map(anchor, seconds)
+	assert_true(true, "report")
+
+
+# ── COUNTERFACTUAL: the seal's in-tight gate against the taught one ──────────
+# The walkout PAST the post is the biggest hole this file has found (17.4%), and
+# the retreat does not touch it. What owns it is the beaten-wide seal: he commits
+# on 100% of trials and parks at the fixed seal spot while the shooter is still
+# 2.3 m OFF the goal line with a real shooting angle.
+#
+# Post-sealing is taught with a range bound this does not have. RVH and its
+# family are for a puck below the goal line or at a very sharp angle within
+# ONE TO TWO STICK LENGTHS of the net, and using them further out is named as the
+# way you concede easy goals. `beaten_wide_max_threat_distance` is 4.0 m — about
+# three of our 1.30 m sticks — and it gates persistence as well as onset, so a
+# puck that walks out AWAY from the post keeps him sealed. The taught release is
+# the opposite: if the puck moves off the post, push off and get square again.
+#
+# So this measures the gate at the taught bound. Measured, centre-lane walkout:
+#
+#   gate 4.00 m (3.1 sticks)   24/144 (16.7%)  x -0.205  down 100%  seal 0.22 s
+#   gate 2.60 m (2.0 sticks)    4/144 ( 2.8%)  x -0.403  down   0%  seal never
+#
+# At the taught range he stays on his feet and tracks out to nearly twice the
+# lateral position, and the hole all but closes.
+#
+# ── AND YET THE GATE IS NOT THE FIX, which is the finding ───────────────────
+# The seal's own canonical case — the forehand-backhand tuck in
+# test_goalie_lateral_beat_slide.gd — ARMS AT 2.800 m, i.e. 2.2 stick lengths,
+# with the puck still inside the post at x -0.508. The walkout above arms at
+# ~2.9 m. They are the same distance, so no range gate separates the tuck the
+# seal exists for from the walkout it is wrong for: 2.60 closes the hole AND
+# breaks `test_a_release_inside_the_confirmation_window_still_seals`, which is
+# doctrine.
+#
+# What separates them is not how far the puck is but whether it is still coming
+# to the post. The tuck converges on the tuck point; the walkout takes the puck
+# and the body away from the net front. That is exactly the term
+# `beaten_wide_holds` drops on purpose — persistence deliberately has no velocity
+# in it, so that a puck settling wide cannot un-beat him — and dropping it also
+# removed any way to tell a puck arriving at the tuck from one leaving the
+# picture. The sources say the same thing in coaching language: seal the post
+# while the puck is AT it, and "if the puck moves away from the post, push off
+# with your outside leg and return to a standard stance or butterfly".
+#
+# So the seal needs a convergence test, not a range test. Left unbuilt here
+# deliberately — this is the one sanctioned commit in the goalie doctrine and
+# rebuilding its release condition is its own change with its own measurements.
+const WIDE_WALKOUT_TO_X: float = -1.00
+const TAUGHT_SEAL_RANGE_M: float = 2.0 * GameRules.DEFAULT_STICK_LENGTH_M
+
+
+func test_report_the_seal_gate_against_the_taught_range() -> void:
+	gut.p("Centre-lane walkout to %+.2f (puck to %+.2f, OUTSIDE the post)."
+			% [WIDE_WALKOUT_TO_X, WIDE_WALKOUT_TO_X - 0.35])
+	for gate: float in [4.0, TAUGHT_SEAL_RANGE_M]:
+		_ctrl.beaten_wide_max_threat_distance = gate
+		_ctrl._build_rule_configs()
+		gut.p("  seal in-tight gate %.2f m (%.1f stick lengths):"
+				% [gate, gate / GameRules.DEFAULT_STICK_LENGTH_M])
+		_deke_map(_ctrl.rush_arrive_depth, 0.40, 0.0, WIDE_WALKOUT_TO_X)
 	assert_true(true, "report")
