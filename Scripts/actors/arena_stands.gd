@@ -227,8 +227,10 @@ const _EXCITE_DECAY_TIME: float = 3.0
 # Player benches: two team benches on the +X side straddling center ice,
 # carved out of the first rows of crowd. 3v3 fields no reserves, so they're
 # empty furniture — the break in the crowd wall is what sells the rink.
-const _BENCH_CENTER_Z: float = 4.4    # bench centers at ±this along the boards
-const _BENCH_HALF_LEN: float = 3.0    # half-length of each bench along Z
+# The span is public because HockeyRink has to know it too: the stretch of board
+# a bench sits behind is a gate and a doorway, not somewhere an ad can go.
+const BENCH_CENTER_Z: float = 4.4    # bench centers at ±this along the boards
+const BENCH_HALF_LEN: float = 3.0    # half-length of each bench along Z
 const _BENCH_CLEAR_ROWS: int = 2      # spectator rows cleared behind the glass
 const _BENCH_CLEAR_MARGIN: float = 0.3
 const _BENCH_SEAT_X_OFFSET: float = 0.33  # seat center outward of the first tread's inner edge
@@ -985,7 +987,7 @@ func _in_bench_zone(row: int, p: Vector2) -> bool:
 		return false
 	if p.x < 0.0:
 		return false
-	return absf(p.y) < _BENCH_CENTER_Z + _BENCH_HALF_LEN + _BENCH_CLEAR_MARGIN
+	return absf(p.y) < BENCH_CENTER_Z + BENCH_HALF_LEN + _BENCH_CLEAR_MARGIN
 
 
 # ── Player benches ───────────────────────────────────────────────────────────
@@ -997,14 +999,14 @@ func _build_benches() -> void:
 	var x_inner: float = rink_width / 2.0 + base_outward_offset
 	var tread_y: float = stands_base_y
 	for side: float in [-1.0, 1.0]:
-		var center_z: float = side * _BENCH_CENTER_Z
+		var center_z: float = side * BENCH_CENTER_Z
 		# Home (team 0) defends +Z, so its bench sits on the +Z half.
 		var team_color: Color = home_color if side > 0.0 else away_color
 
 		var seat := MeshInstance3D.new()
 		seat.name = "BenchSeatHome" if side > 0.0 else "BenchSeatAway"
 		var seat_mesh := BoxMesh.new()
-		seat_mesh.size = Vector3(0.42, _BENCH_SEAT_HEIGHT, _BENCH_HALF_LEN * 2.0)
+		seat_mesh.size = Vector3(0.42, _BENCH_SEAT_HEIGHT, BENCH_HALF_LEN * 2.0)
 		var seat_mat := StandardMaterial3D.new()
 		seat_mat.albedo_color = team_color.darkened(0.25)
 		seat_mat.roughness = 0.8
@@ -1017,7 +1019,7 @@ func _build_benches() -> void:
 		var backrest := MeshInstance3D.new()
 		backrest.name = "BenchBackHome" if side > 0.0 else "BenchBackAway"
 		var back_mesh := BoxMesh.new()
-		back_mesh.size = Vector3(0.06, 0.5, _BENCH_HALF_LEN * 2.0)
+		back_mesh.size = Vector3(0.06, 0.5, BENCH_HALF_LEN * 2.0)
 		var back_mat := StandardMaterial3D.new()
 		back_mat.albedo_color = Color(0.20, 0.20, 0.22)
 		back_mat.roughness = 0.9
@@ -1033,7 +1035,7 @@ func _build_benches() -> void:
 func bench_seat_center(team_id: int) -> Vector3:
 	var side: float = 1.0 if team_id == 0 else -1.0
 	return Vector3(rink_width / 2.0 + base_outward_offset + _BENCH_SEAT_X_OFFSET,
-			stands_base_y + _BENCH_SEAT_HEIGHT, side * _BENCH_CENTER_Z)
+			stands_base_y + _BENCH_SEAT_HEIGHT, side * BENCH_CENTER_Z)
 
 
 # ── Crowd excitement ─────────────────────────────────────────────────────────

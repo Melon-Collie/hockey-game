@@ -120,6 +120,15 @@ extends Node3D
 	set(v):
 		ice_roughness_grazing = v
 		_rebuild()
+@export_group("Sponsors")
+@export var board_ads_enabled: bool = true:
+	set(v):
+		board_ads_enabled = v
+		_rebuild()
+@export var ice_ads_enabled: bool = true:
+	set(v):
+		ice_ads_enabled = v
+		_rebuild()
 @export_group("")
 # Editor escape hatch: also drops the static build cache, so geometry *code*
 # edits mid-session can't be masked by stale cached products.
@@ -156,6 +165,30 @@ const KICKPLATE_ICE_OFFSET: float = 0.005
 #   Kickplate height:                       0.15-0.30 m (6-12 in)
 #   Cap rail height:                        0.05-0.08 m (2-3 in)
 
+# ── Sponsor panels ───────────────────────────────────────────────────────────
+# The ad ribbon stands 1.5 mm inside the boards' face — half a millimetre in
+# front of the painted stripes at 1 mm. They never share board (the layout
+# reserves the paint), but the offset means a mis-sized reservation would show as
+# an ad over a stripe rather than as a z-fight.
+const AD_BAND_INSET: float = 0.0015
+# White board left showing above and below each panel, so the ads read as mounted
+# in the recessed channel between the kickplate and cap-rail lips rather than as
+# a repaint of the whole wall.
+const AD_BAND_MARGIN: float = 0.04
+const AD_PANEL_GAP: float = 0.30
+const AD_RUN_MARGIN: float = 0.35
+# Bare board kept around each painted stripe. The side stripes are 0.3 m wide and
+# the corner goal-line stripes 0.15 m, so these are half-widths plus clearance.
+const AD_STRIPE_CLEARANCE: float = 0.25
+const AD_SIDE_STRIPE_HALF: float = 0.15
+const AD_GOAL_STRIPE_HALF: float = 0.075
+# How finely the perimeter is walked when working out which stretches of board
+# are already spoken for. 10 cm is far below the narrowest thing being avoided.
+const AD_RESERVE_STEP: float = 0.1
+# Resolution of the in-ice ad overlay. The panels are metres across with no fine
+# detail, so this sits an order of magnitude below the ice albedo's 80 px/m.
+const ICE_AD_PX_PER_METER: float = 40.0
+
 # Texture resolution: pixels per meter
 var _px_per_meter: float = 80.0
 
@@ -177,6 +210,12 @@ var _scratch_map: IceScratchMap = null
 # before the RenderingServer is finalized — see _teardown_render_targets().
 var _decal_vp: SubViewport = null
 var _ice_material: ShaderMaterial = null
+# Sponsor art render targets — the dasher-board atlas and the in-ice overlay.
+# Held for the same reason as the decal viewport: their textures are bound into
+# live materials and have to be released before the RenderingServer finalizes.
+var _board_ad_vp: SubViewport = null
+var _ice_ad_vp: SubViewport = null
+var _board_ad_material: StandardMaterial3D = null
 var _render_targets_freed: bool = false
 
 func _ready() -> void:
@@ -221,13 +260,23 @@ func _teardown_render_targets() -> void:
 	if _ice_material != null:
 		_ice_material.set_shader_parameter("scratch_tex", null)
 		_ice_material.set_shader_parameter("decal_tex", null)
+		_ice_material.set_shader_parameter("ads_tex", null)
 	_ice_material = null
+	if _board_ad_material != null:
+		_board_ad_material.albedo_texture = null
+	_board_ad_material = null
 	if is_instance_valid(_scratch_map):
 		_scratch_map.free()
 	_scratch_map = null
 	if is_instance_valid(_decal_vp):
 		_decal_vp.free()
 	_decal_vp = null
+	if is_instance_valid(_board_ad_vp):
+		_board_ad_vp.free()
+	_board_ad_vp = null
+	if is_instance_valid(_ice_ad_vp):
+		_ice_ad_vp.free()
+	_ice_ad_vp = null
 
 
 # Drop the process-lifetime build cache. The cached products include the ice
@@ -298,6 +347,9 @@ func _rebuild() -> void:
 
 	_add_side_board_stripes(products.stripe_tex)
 
+	if board_ads_enabled:
+		_add_board_ads(products.band_ads)
+
 
 # ── Build cache ──────────────────────────────────────────────────────────────
 
@@ -360,6 +412,11 @@ func _get_or_build_products() -> Dictionary:
 		# its bottom cap doesn't z-fight the cap rail's top.
 		"band_glass": _perimeter_band_mesh(stations, glass_half_thick, glass_half_thick,
 				glass_y_bot, glass_y_top),
+		# Sponsor panels: one merged ribbon hugging the white board's inner face.
+		# Built regardless of board_ads_enabled — it is a handful of quads, and
+		# keeping it out of the cache key means toggling the ads in the editor
+		# doesn't throw away the ten-million-pixel ice albedo alongside them.
+		"band_ads": _build_ad_band(stations, board_half_thick),
 	}
 	_build_cache[key] = products
 	return products
@@ -455,6 +512,8 @@ func _add_ice(tex: ImageTexture) -> void:
 	mesh_instance.material_override = mat
 	_ice_material = mat
 	add_child(mesh_instance)
+
+	_add_ice_ads(mat)
 
 	# Persistent skate scratches — runtime only. The SubViewport renders into
 	# a texture that the ice shader samples as a surface overlay.
@@ -686,6 +745,156 @@ func _add_side_board_stripes(tex: ImageTexture) -> void:
 		mat.render_priority = 1
 		mi.material_override = mat
 		add_child(mi)
+
+# ── Sponsor panels ───────────────────────────────────────────────────────────
+
+# Height of the white board's visible channel — the strip between the kickplate
+# lip and the cap rail — less the margin that keeps the board framing the ads.
+func _ad_band_height() -> float:
+	return maxf((wall_height - CAP_RAIL_HEIGHT) - kickplate_height
+			- 2.0 * AD_BAND_MARGIN, 0.0)
+
+
+# Panel width is DERIVED, never tuned: the atlas cell has a fixed aspect, so the
+# only width that shows the art unstretched is the band height times that aspect.
+func _ad_panel_width() -> float:
+	return _ad_band_height() * float(BoardAdPainter.CELL_PX.x) / float(BoardAdPainter.CELL_PX.y)
+
+
+# The stretches of board an ad may not take: the painted stripes, and the boards
+# the player benches sit behind.
+#
+# Sampled by walking the perimeter at a fixed arc step rather than by testing the
+# stations, because station spacing is geometric — the whole middle of a 43 m
+# straight run, where the centre and blue stripes live, has no station near it.
+func _ad_reserved_arcs(stations: Array, cumulative: PackedFloat32Array,
+		perimeter: float) -> Array[Vector2]:
+	var reserved: Array[Vector2] = []
+	var s: float = 0.0
+	while s < perimeter:
+		if _ad_arc_is_reserved(BoardAdBandBuilder.sample_pos(stations, cumulative, s)):
+			# Overlapping stubs; BoardAdLayout merges them into runs.
+			reserved.append(Vector2(s - AD_RESERVE_STEP, AD_RESERVE_STEP * 2.0))
+		s += AD_RESERVE_STEP
+	return reserved
+
+
+# `point` is a spot on the perimeter centerline, as (x, z) in metres.
+func _ad_arc_is_reserved(point: Vector2) -> bool:
+	var abs_z: float = absf(point.y)
+	if abs_z < AD_SIDE_STRIPE_HALF + AD_STRIPE_CLEARANCE:
+		return true   # centre red stripe
+	if absf(abs_z - GameRules.BLUE_LINE_Z) < AD_SIDE_STRIPE_HALF + AD_STRIPE_CLEARANCE:
+		return true   # blue stripes
+	if absf(abs_z - GameRules.GOAL_LINE_Z) < AD_GOAL_STRIPE_HALF + AD_STRIPE_CLEARANCE:
+		return true   # goal-line stripes, out on the corner arcs
+	# Both benches sit on the +X boards, and between them is a gate rather than a
+	# stretch of wall, so the whole span from one bench's far end to the other's
+	# is spoken for.
+	var bench_span: float = ArenaStands.BENCH_CENTER_Z + ArenaStands.BENCH_HALF_LEN
+	if point.x > 0.0 and abs_z < bench_span + AD_STRIPE_CLEARANCE:
+		return true
+	return false
+
+
+func _build_ad_band(stations: Array, board_half_thick: float) -> ArrayMesh:
+	var cumulative: PackedFloat32Array = BoardAdBandBuilder.cumulative_arcs(stations)
+	var perimeter: float = BoardAdBandBuilder.perimeter_of(cumulative)
+	var panel_width: float = _ad_panel_width()
+	if panel_width <= 0.0:
+		return null
+	var placements: Array[Vector2] = BoardAdLayout.place_panels(
+			perimeter, _ad_reserved_arcs(stations, cumulative, perimeter),
+			panel_width, AD_PANEL_GAP, AD_RUN_MARGIN)
+	if placements.is_empty():
+		return null
+
+	# Panels are dealt round-robin, so a lap of the rink shows every sponsor
+	# before it repeats one.
+	var brand_count: int = AdBrands.BRANDS.size()
+	var uv_rects: Array[Rect2] = []
+	for index: int in placements.size():
+		uv_rects.append(BoardAdPainter.cell_uv(index % brand_count, brand_count))
+
+	return BoardAdBandBuilder.build_band(stations, cumulative, placements, uv_rects,
+			board_half_thick + AD_BAND_INSET,
+			kickplate_height + AD_BAND_MARGIN,
+			wall_height - CAP_RAIL_HEIGHT - AD_BAND_MARGIN)
+
+
+func _add_board_ads(band: ArrayMesh) -> void:
+	if band == null:
+		return
+
+	var atlas_vp := SubViewport.new()
+	atlas_vp.name = "BoardAdAtlasViewport"
+	atlas_vp.size = BoardAdPainter.atlas_size(AdBrands.BRANDS.size())
+	atlas_vp.transparent_bg = true
+	atlas_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	atlas_vp.disable_3d = true
+	atlas_vp.handle_input_locally = false
+	atlas_vp.gui_disable_input = true
+	add_child(atlas_vp)
+	_board_ad_vp = atlas_vp
+
+	var painter := BoardAdPainter.new()
+	painter.brands = AdBrands.BRANDS
+	atlas_vp.add_child(painter)
+
+	var mi := MeshInstance3D.new()
+	mi.name = "BoardAds"
+	mi.mesh = band
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = atlas_vp.get_texture()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	# Unshaded for the same reason the board bands self-emit: the ceiling rig
+	# grazes these near-vertical faces, so a lit ad reads black from the top-down
+	# gameplay camera (see docs/arena-atmosphere-spec.md). Matches the painted
+	# stripes, which sit on the same wall.
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.render_priority = 1
+	mi.material_override = mat
+	_board_ad_material = mat
+	add_child(mi)
+
+
+func _add_ice_ads(mat: ShaderMaterial) -> void:
+	if not ice_ads_enabled or AdBrands.ICE_SLOTS.is_empty():
+		return
+
+	var vp_size := Vector2i(
+			maxi(int(rink_width * ICE_AD_PX_PER_METER), 1),
+			maxi(int(rink_length * ICE_AD_PX_PER_METER), 1))
+	var ads_vp := SubViewport.new()
+	ads_vp.name = "IceAdsViewport"
+	ads_vp.size = vp_size
+	ads_vp.transparent_bg = true
+	ads_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	ads_vp.disable_3d = true
+	ads_vp.handle_input_locally = false
+	ads_vp.gui_disable_input = true
+	add_child(ads_vp)
+	_ice_ad_vp = ads_vp
+
+	var painter := IceAdPainter.new()
+	painter.img_size = Vector2(vp_size)
+	painter.px_per_meter = ICE_AD_PX_PER_METER
+	painter.rink_size = Vector2(rink_width, rink_length)
+	var slots: Array[Dictionary] = []
+	for slot: Dictionary in AdBrands.ICE_SLOTS:
+		slots.append({
+			"center": slot.center,
+			"size": slot.size,
+			"brand": AdBrands.brand_at(slot.brand as int),
+		})
+	painter.slots = slots
+	ads_vp.add_child(painter)
+
+	# Full-rink coverage, so the shader indexes it with the rink UV directly.
+	mat.set_shader_parameter("ads_tex", ads_vp.get_texture())
+	mat.set_shader_parameter("ads_enabled", true)
+
 
 func _make_glass_material() -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
