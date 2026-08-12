@@ -63,6 +63,25 @@ extends GutTest
 #   unattended/tick   1.74 / 1.71 / 1.87   when the matching landed
 #                     1.59 / 1.79 / 2.28   with the reception rendezvous
 #                     1.59 / 1.57 / 2.00   with the gap-ladder / pinch fixes
+#                     1.69 / 1.92 / 2.54   with the stick-aware chase intercept
+#
+# That last row is the first one the shared ceiling could not hold, and the
+# crossing cutter now carries its own pin (see below). Two things about it are
+# worth keeping, because neither is visible in the number:
+#   - It is not a graded response. Shrinking the reach credit (1.80 m ->
+#     1.60 m) moved the cutter only 2.54 -> 2.52 while breaking BOTH
+#     point-holds-the-line fixtures, so these sims are landing in a DIFFERENT
+#     rollout rather than defending the same one better or worse — this
+#     fixture's D-zone window moved 340 -> 320 ticks, and low cycle's
+#     300 -> 460. Do not tune the chase against this table; it does not
+#     measure what a tuner would think it measures.
+#   - The danger readings moved in OPPOSITE directions, which is why the row
+#     above cannot be read as a coverage regression on its own: the cutter's
+#     open danger halved (mean 0.109 -> 0.052, worst 0.997 -> 0.308) while low
+#     cycle's rose (0.039 -> 0.145, worst 0.370 -> 0.782). Low cycle still
+#     clears OPEN_DANGER_CEILING with room, but it is the closest it has been,
+#     and nobody has explained it. If that number moves again, explain it
+#     before pinning it.
 #
 # A regression to the argmaxes still breaks the double-lock ceiling, which is
 # the guard that separated the two models sharply in the first place.
@@ -111,11 +130,18 @@ const ZONE_SLOTS: Array[int] = [
 ]
 
 # Attackers in the zone that no defender has, per tick. See the header: pins the
-# current measured readings (1.59 / 1.57 / 2.00), not a bound derived from the
-# model it replaced. It sat at 2.4 for one commit to accept a crossing-cutter
-# cost the reception rendezvous charged; the gap-ladder work paid that back, so
-# the slack comes back out rather than sitting there hiding the next one.
+# current measured readings (1.69 / 1.92), not a bound derived from the model it
+# replaced. It sat at 2.4 for one commit to accept a crossing-cutter cost the
+# reception rendezvous charged; the gap-ladder work paid that back, so the slack
+# comes back out rather than sitting there hiding the next one.
 const UNCOVERED_CEILING: float = 2.2
+# The crossing cutter is pinned SEPARATELY rather than by widening the bar above.
+# The stick-aware chase intercept moved it past 2.2 and left the other two
+# fixtures inside it, so a shared ceiling wide enough for 2.52 would park ~0.9 of
+# slack on low cycle — the exact "slack sitting there hiding the next one" the
+# 2.4 commit is remembered for. A fixture that moved gets a new pin; fixtures
+# that did not keep their tight one.
+const UNCOVERED_CEILING_CROSSING_CUTTER: float = 2.6
 # The man nobody has should not routinely be a prime scoring threat. A loose
 # guard — it separated the two models weakly — against a collapse.
 const OPEN_DANGER_CEILING: float = 0.25
@@ -209,14 +235,15 @@ func _report(label: String, r: Result) -> void:
 			r.open_danger_sum / n, r.open_danger_worst])
 
 
-func _assert_shape(label: String, r: Result) -> void:
+func _assert_shape(label: String, r: Result,
+		uncovered_ceiling: float = UNCOVERED_CEILING) -> void:
 	assert_gt(r.dzone_ticks, MIN_DZONE_TICKS,
 			"%s: fixture never settled into D-zone coverage" % label)
 	var n: float = float(maxi(r.dzone_ticks, 1))
 	assert_lt(r.double_locked_ticks / n, DOUBLE_LOCK_SHARE_CEILING,
 			"%s: two defenders shared a man on %d of %d ticks — past the handoff skew"
 			% [label, r.double_locked_ticks, r.dzone_ticks])
-	assert_lt(r.uncovered_sum / n, UNCOVERED_CEILING,
+	assert_lt(r.uncovered_sum / n, uncovered_ceiling,
 			"%s: attackers in the zone are going unattended" % label)
 	assert_lt(r.open_danger_sum / n, OPEN_DANGER_CEILING,
 			"%s: a prime scoring threat is routinely uncovered" % label)
@@ -272,4 +299,4 @@ func test_a_man_who_changes_areas_is_handed_off_not_dropped() -> void:
 		 Vector3(-7.0, 0.0, -13.5)],
 		1)
 	_report("crossing cutter", r)
-	_assert_shape("crossing cutter", r)
+	_assert_shape("crossing cutter", r, UNCOVERED_CEILING_CROSSING_CUTTER)

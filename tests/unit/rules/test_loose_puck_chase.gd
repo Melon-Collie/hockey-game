@@ -181,7 +181,7 @@ func test_path_intercept_time_reads_arrival_of_the_puck() -> void:
 			Vector3(12, 0, 0), Vector3(0, 0, 15))
 	var dt: float = AILoosePuckChase.RACE_LOOKAHEAD_S / float(AILoosePuckChase.RACE_STEPS)
 	var t: float = AILoosePuckChase.path_intercept_time(
-			traj, dt, Vector3(12, 0, 20), Vector3.ZERO, REF)
+			traj, dt, Vector3(12, 0, 0), Vector3(12, 0, 20), Vector3.ZERO, REF)
 	assert_between(t, 1.0, 2.0, "intercept ≈ the puck's own arrival at the parked skater")
 
 
@@ -628,3 +628,74 @@ func test_missing_blade_field_does_not_yield() -> void:
 	assert_false(AILoosePuckChase.teammate_first_to_puck(
 			states, [100, 101], 100, states[100].blade_contact_world, puck),
 			"an absent blade field is not a blade on the puck")
+
+
+# ── Slow pucks race on the path too ──────────────────────────────────────────
+# The path race used to be gated to pucks above 4 m/s, on the theory that a
+# slower puck's path is approximately its position. On this ice (ICE_FRICTION
+# 0.05 → 0.49 m/s² of decel) it is not: a 3.5 m/s roller travels ~8 m inside the
+# 3 s race horizon and takes seconds to settle. Below the gate the election fell
+# back to a constant-velocity lead capped at 0.5 s — under 2 m, along a straight
+# line that ignores the boards.
+
+func test_slow_roller_elects_the_man_it_rolls_toward() -> void:
+	# 3.5 m/s puck rolling up-ice. Teammate 100 trails it by 4 m — the bounded
+	# lead's winner, because it only ever looked 1.75 m ahead of the puck — but
+	# he is chasing it from behind for the whole horizon. Teammate 200 stands
+	# 12 m downstream and the puck is coming to him: on the real path he meets
+	# it at 1.36 s against the tail-chaser's 1.48 s. The peer-id tie-break
+	# favours 100, so only the margin can elect 200.
+	var states := {
+		100: _skater(Vector3(0, 0, -14)),
+		200: _skater(Vector3(0, 0, 2)),
+	}
+	var pid: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3(0, 0, -10), Vector3(0, 0, 3.5), -1)
+	assert_eq(pid, 200, "a slow puck's path elects the man it rolls toward")
+
+
+func test_slow_puck_rimmed_into_the_wall_elects_the_rebound() -> void:
+	# 3.5 m/s puck 0.84 m off the side wall, rolling straight into it. The
+	# retired bounded lead put its phantom 0.5 s point at x=13.75 — 0.9 m
+	# INSIDE the boards — so the teammate pinned on the glass read as first to
+	# it. The real puck contacts at 12.775 and rebounds back toward the middle,
+	# where teammate 200 is standing.
+	var states := {
+		100: _skater(Vector3(12.7, 0, 3.5)),   # on the glass, past the contact
+		200: _skater(Vector3(9.0, 0, 0)),      # inside, where the rebound comes
+	}
+	var pid: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3(12.0, 0, 0), Vector3(3.5, 0, 0), -1)
+	assert_eq(pid, 200, "a slow puck caroms for the election instead of leaving the rink")
+
+
+# ── Race times are continuous, not quantized to the walk ─────────────────────
+# path_intercept_time interpolates the arrival slack across the step it crosses
+# in. Quantized to the 0.25 s grid — ~2 m of skating — geometrically separated
+# bots read as tied and the election fell through to its peer-id tie-break.
+
+func test_settled_puck_intercept_equals_the_skaters_eta() -> void:
+	var traj: Array[Vector3] = AILoosePuckChase.race_trajectory(
+			Vector3.ZERO, Vector3.ZERO)
+	var dt: float = AILoosePuckChase.RACE_LOOKAHEAD_S / float(AILoosePuckChase.RACE_STEPS)
+	var from := Vector3(0, 0, 7)
+	var eta: float = AIActionScoring.time_to_arrive(from, Vector3.ZERO, Vector3.ZERO, REF)
+	var t: float = AILoosePuckChase.path_intercept_time(
+			traj, dt, Vector3.ZERO, from, Vector3.ZERO, REF, 0.0)
+	# A settled puck makes the slack exactly linear in t, so the crossing IS
+	# the ETA — the sub-step solve is exact here, not merely closer.
+	assert_almost_eq(t, eta, 0.01, "settled-puck intercept recovers the exact ETA")
+
+
+func test_sub_step_margin_decides_the_election() -> void:
+	# Two bots 0.5 m apart on a settled puck — well inside one 0.25 s step, so
+	# a quantized race read hands them identical times and the LOWER peer id
+	# wins. The nearer bot is the higher id here, so only a continuous read
+	# elects him.
+	var states := {
+		100: _skater(Vector3(0, 0, 5.0)),
+		200: _skater(Vector3(0, 0, 4.5)),
+	}
+	var pid: int = AILoosePuckChase.elect(
+			states, [100, 200], Vector3.ZERO, Vector3.ZERO, -1)
+	assert_eq(pid, 200, "half a metre of real separation beats the peer-id tie-break")

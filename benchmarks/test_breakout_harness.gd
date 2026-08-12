@@ -204,17 +204,18 @@ func _run_trial(scenario: String, mirror: float, jitter: int,
 						es.pos.x, es.pos.z, Vector2(es.vel.x, es.vel.z).length()]
 			# Per-teammate path intercept times — who COULD kill this puck.
 			var kill_bits: Array[String] = []
-			if AILoosePuckChase.is_fast_puck(duel.puck_vel):
-				var ktraj: Array[Vector3] = AILoosePuckChase.race_trajectory(
-						duel.puck_pos, duel.puck_vel)
-				var sdt: float = AILoosePuckChase.RACE_LOOKAHEAD_S \
-						/ float(AILoosePuckChase.RACE_STEPS)
-				for s2: RefCounted in duel.skaters:
-					if s2.team_id != 0:
-						continue
-					kill_bits.append("%d:%.1f" % [s2.peer_id % 100,
-							AILoosePuckChase.path_intercept_time(
-									ktraj, sdt, s2.pos, s2.vel, 9.0)])
+			var ktraj: Array[Vector3] = AILoosePuckChase.race_trajectory(
+					duel.puck_pos, duel.puck_vel)
+			var sdt: float = AILoosePuckChase.RACE_LOOKAHEAD_S \
+					/ float(AILoosePuckChase.RACE_STEPS)
+			var kmargin: float = AILoosePuckChase.setup_margin(duel.puck_vel)
+			for s2: RefCounted in duel.skaters:
+				if s2.team_id != 0:
+					continue
+				kill_bits.append("%d:%.1f" % [s2.peer_id % 100,
+						AILoosePuckChase.path_intercept_time(
+								ktraj, sdt, duel.puck_pos, s2.pos, s2.vel, 9.0,
+								kmargin)])
 			chaser_trace.append("%4.1fs %s | puck(%.1f,%.1f) | %s" % [
 					t, bit, duel.puck_pos.x, duel.puck_pos.z, " ".join(kill_bits)])
 		# Probe: pair each team-0 release with its fate — the next pickup
