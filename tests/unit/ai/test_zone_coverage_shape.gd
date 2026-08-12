@@ -31,24 +31,59 @@ extends GutTest
 # whether two bodies share a man can only ever answer no. Asking the bodies
 # works whoever made the choice, which is what lets this file fail if the
 # per-role argmaxes ever come back.
-#   BREADTH — how many distinct attackers the shape has bodies on.
-#   OPEN DANGER — the finish-danger of the most dangerous attacker nobody is
-#     covering. The outcome reading: breadth counts bodies, this counts what
-#     the bodies are worth.
+#   UNATTENDED MEN — how many attackers INSIDE THE ZONE no defender has. This
+#     is the claim the file is really making, and it is asserted directly
+#     because the obvious proxy is not the same statement. Breadth — the count
+#     of distinct men covered — is still reported, but it silently divides by
+#     however many attackers happen to be in the zone, so it moves when the
+#     ATTACK changes with the coverage untouched. It did exactly that: a
+#     reception fix upstream turned the point-shot fixture from a scramble
+#     (puck loose 51% of its life) into a real possession sequence, one attacker
+#     left the zone, and breadth fell 2.43 -> 2.02 through a 2.2 floor while the
+#     number of men going unattended barely moved. A count of men nobody has is
+#     denominator-free and says what the assertion message says.
+#   OPEN DANGER — the finish-danger of the most dangerous unattended man. The
+#     outcome reading: the count above counts bodies, this counts what they
+#     are worth.
 #
-# The bounds are PINNED MEASUREMENTS, chosen to sit between what the matching
-# produces and what the five private argmaxes it replaced produced, run on these
-# same three fixtures through the same bodies:
+# The bounds are PINNED MEASUREMENTS. The double-lock ceiling was chosen to sit
+# between what the matching produces and what the five private argmaxes it
+# replaced produced, run on these same three fixtures through the same bodies:
 #
 #                        matched            per-role argmaxes
 #   double-locked        9% / 0% / 0%       15% / 49% / 23%
 #   covered per tick     2.70 / 2.43 / 2.90 2.62 / 1.44 / 2.05
 #
-# So the ceiling is 0.12 and the floor 2.2 — every old reading breaks at least
-# one, every new reading clears both. The margins are deliberately modest; when
-# one fails the question is "did the behaviour change on purpose", not "which
-# bound do I loosen". Open danger is a much looser guard (it barely separated
-# the two) and is really there to catch a collapse.
+# The covered-per-tick row is kept for context only — it is the retired metric,
+# and the argmax column CANNOT be re-derived under the unattended-men count
+# (that model is gone from the tree, and its own in-zone attacker counts went
+# with it). So the unattended ceiling is calibrated differently, against
+# measured readings on these three fixtures:
+#
+#   unattended/tick   1.74 / 1.71 / 1.87   when the matching landed
+#                     1.59 / 1.79 / 2.28   with the reception rendezvous
+#                     1.59 / 1.57 / 2.00   with the gap-ladder / pinch fixes
+#
+# A regression to the argmaxes still breaks the double-lock ceiling, which is
+# the guard that separated the two models sharply in the first place.
+#
+# Those three rows are also the argument for counting unattended men rather than
+# covered ones, because the two middle changes moved the fixtures in opposite
+# directions and only one metric read both honestly. The reception rendezvous
+# cost the crossing cutter real coverage (1.87 -> 2.28) while breadth there
+# stayed clear of its floor; the gap-ladder work then took the puck away from
+# the attack in the point-shot fixture, which shrank its D-zone window from 360
+# ticks to 260 and dragged BREADTH down through the same floor for a strictly
+# better outcome — a hole the covered-per-tick metric could only be talked out
+# of with a per-fixture exemption. Counting the men nobody has needs no
+# exemption: it read the first as the regression it was and the second as the
+# improvement it was (1.79 -> 1.57), because it never divides by how many
+# attackers happen to be standing in the zone.
+#
+# The margins are deliberately modest; when one fails the question is "did the
+# behaviour change on purpose", not "which bound do I loosen". Open danger is a
+# much looser guard (it barely separated the two models) and is really there to
+# catch a collapse.
 #
 # Worth knowing before reading too much into the old column: an earlier probe
 # put the private argmaxes at 61% double-locked, but that sampled each role's
@@ -75,33 +110,12 @@ const ZONE_SLOTS: Array[int] = [
 	AIRoleSlots.Slot.ZONE_W_WEAK,
 ]
 
-# Distinct attackers the shape has bodies on, per tick. See the table above.
-const BREADTH_FLOOR: float = 2.2
-# The POINT-SHOT fixture's own floor, and why it is lower than the other two.
-#
-# It is not a weaker guard: it still sits well clear of the per-role argmaxes
-# this file was written to catch (1.44 on this fixture), which is the separation
-# that matters. What moved is the fixture, not the coverage.
-#
-# When the puck-side winger gained AIRoleRushD.should_gap_up — closing to a
-# stick on a carrier who has no pace to beat him with, which at the point is
-# every carrier — this fixture stopped being a settled four-second cycle,
-# because the defence takes the puck away. Measured over the same 480 ticks:
-#
-#                        before            after
-#   puck loose            252 ticks        101
-#   ours                  117              192
-#   D-zone coverage       360              220   (the rest is our BREAKOUT)
-#   puck z at 4 s         -25.5            -16.1 (9 m further off our own net)
-#
-# So the breadth denominator shrank to the 220 ticks we are actually defending,
-# and those now include the churn right after each possession flip, when the
-# partition is re-forming and fewer men are locked. Averaging coverage over a
-# window that keeps starting over is a lower number for a better outcome. The
-# other two fixtures never flip possession and are unchanged to the decimal
-# (2.70 and 2.90), which is also the evidence that the tightening only bites
-# where a winger pressuring the point is the doctrine.
-const BREADTH_FLOOR_POINT_SHOT: float = 1.8
+# Attackers in the zone that no defender has, per tick. See the header: pins the
+# current measured readings (1.59 / 1.57 / 2.00), not a bound derived from the
+# model it replaced. It sat at 2.4 for one commit to accept a crossing-cutter
+# cost the reception rendezvous charged; the gap-ladder work paid that back, so
+# the slack comes back out rather than sitting there hiding the next one.
+const UNCOVERED_CEILING: float = 2.2
 # The man nobody has should not routinely be a prime scoring threat. A loose
 # guard — it separated the two models weakly — against a collapse.
 const OPEN_DANGER_CEILING: float = 0.25
@@ -116,6 +130,8 @@ class Result:
 	var dzone_ticks: int = 0
 	var double_locked_ticks: int = 0
 	var covered_sum: int = 0
+	var in_zone_sum: int = 0
+	var uncovered_sum: int = 0
 	var open_danger_sum: float = 0.0
 	var open_danger_worst: float = 0.0
 
@@ -162,14 +178,20 @@ func _run(attackers: Array, defenders: Array, carrier: int) -> Result:
 			r.double_locked_ticks += 1
 		r.covered_sum += covered.size()
 
-		# The most dangerous attacker nobody has. The carrier is excluded — the
-		# area that owns the puck is pressuring him, not covering a man.
+		# The attackers IN THE ZONE that nobody has, and the most dangerous of
+		# them. The carrier is excluded from both — the area that owns the puck is
+		# pressuring him, not covering a man.
 		var carrier_pid: int = snap.puck_state.carrier_peer_id
 		var worst: float = 0.0
 		for opp: int in snap.skater_states:
-			if duel.team_map.get(opp, -1) == 1 or opp == carrier_pid \
-					or covered.has(opp):
+			if duel.team_map.get(opp, -1) == 1 or opp == carrier_pid:
 				continue
+			if snap.skater_states[opp].position.z >= -GameRules.BLUE_LINE_Z:
+				continue   # not in the zone — nobody's to cover
+			r.in_zone_sum += 1
+			if covered.has(opp):
+				continue
+			r.uncovered_sum += 1
 			worst = maxf(worst, AIActionScoring.score_shoot_threat_fielded(
 					snap.skater_states[opp].position, our_net, our_net,
 					GameRules.NET_HALF_WIDTH, no_defenders))
@@ -180,22 +202,22 @@ func _run(attackers: Array, defenders: Array, carrier: int) -> Result:
 
 func _report(label: String, r: Result) -> void:
 	var n: float = float(maxi(r.dzone_ticks, 1))
-	gut.p("      %-22s dzone %4d | double-locked %3d (%2d%%) | covered/tick %.2f | open danger mean %.4f worst %.4f"
+	gut.p("      %-22s dzone %4d | double-locked %3d (%2d%%) | in zone/tick %.2f | covered %.2f | UNCOVERED %.2f | open danger mean %.4f worst %.4f"
 			% [label, r.dzone_ticks, r.double_locked_ticks,
-			roundi(100.0 * r.double_locked_ticks / n), r.covered_sum / n,
+			roundi(100.0 * r.double_locked_ticks / n), r.in_zone_sum / n,
+			r.covered_sum / n, r.uncovered_sum / n,
 			r.open_danger_sum / n, r.open_danger_worst])
 
 
-func _assert_shape(label: String, r: Result,
-		breadth_floor: float = BREADTH_FLOOR) -> void:
+func _assert_shape(label: String, r: Result) -> void:
 	assert_gt(r.dzone_ticks, MIN_DZONE_TICKS,
 			"%s: fixture never settled into D-zone coverage" % label)
 	var n: float = float(maxi(r.dzone_ticks, 1))
 	assert_lt(r.double_locked_ticks / n, DOUBLE_LOCK_SHARE_CEILING,
 			"%s: two defenders shared a man on %d of %d ticks — past the handoff skew"
 			% [label, r.double_locked_ticks, r.dzone_ticks])
-	assert_gt(r.covered_sum / n, breadth_floor,
-			"%s: the shape has bodies on almost nobody" % label)
+	assert_lt(r.uncovered_sum / n, UNCOVERED_CEILING,
+			"%s: attackers in the zone are going unattended" % label)
 	assert_lt(r.open_danger_sum / n, OPEN_DANGER_CEILING,
 			"%s: a prime scoring threat is routinely uncovered" % label)
 
@@ -233,7 +255,7 @@ func test_a_point_shot_setup_is_covered() -> void:
 		 Vector3(-6.0, 0.0, -14.5)],
 		1)
 	_report("point shot", r)
-	_assert_shape("point shot", r, BREADTH_FLOOR_POINT_SHOT)
+	_assert_shape("point shot", r)
 
 
 func test_a_man_who_changes_areas_is_handed_off_not_dropped() -> void:

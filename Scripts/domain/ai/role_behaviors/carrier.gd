@@ -63,24 +63,14 @@ const SHOT_MIN_VALUE: float = 0.05
 # play). This bar only rejects a release into nothing: a numerical residual on
 # a dead lane, never a real outlet.
 const PASS_MIN_VALUE: float = 0.02
-# The DUMP's giveaway bar — the third way of surrendering the puck, and the one
-# that spent years without one. A shot must clear SHOT_MIN_VALUE and a pass
-# PASS_MIN_VALUE for the same stated reason: a release forfeits the puck while
-# carrying retains it AND its optionality, so a release that merely ties must
-# not win. A dump forfeits more than either — no receiver, no shot on goal, just
-# a race — yet it only had to out-score the carry by any epsilon, and a compete
-# decided at the fourth decimal place is what "dumps a puck it could have
-# skated in" looks like from the stands.
-#
-# It reads as a FRACTION rather than an absolute because, unlike a shot or a
-# pass, what a dump competes against is the carry itself, whose scale swings by
-# an order of magnitude between the defensive zone and the attacking blue line;
-# a fixed bar would be unreachable at one end and free at the other. The margin
-# is the optionality the carrier is spending — the passes and shots he can still
-# choose one beat from now and a dumped puck cannot — which the one-ply carry
-# score does not represent. A tactical bar, like the blue-line valve: it says
-# how sure the bot has to be before it concedes, not what it perceives.
-const DUMP_GIVEAWAY_MARGIN_FRAC: float = 0.15
+# There is deliberately no third bar for the DUMP. A shot clears SHOT_MIN_VALUE
+# and a pass PASS_MIN_VALUE because each is a RELEASE chosen on its merits, and a
+# release that merely ties the carry must not win. The dump is not chosen on
+# merits at all — it is what is left when the carry is worth nothing and no
+# release qualifies (see the residual block in _pick_commit_phase), so there is
+# nothing for a bar to gate. The margin that used to sit here existed to stop a
+# dump winning the value compete by an epsilon; retiring the compete retires the
+# margin with it.
 
 # ── Settle doubt: how sure a FRESH carrier has to be to give the puck up ──────
 # The three bars above say what an ACTIVE option (shoot / pass / dump) is worth
@@ -549,6 +539,17 @@ var dump_launch_speed: float = AIActionScoring.PASS_SPEED_M_S
 # absorbed by the body-relative offset and the mouse motion smoothing.
 var protect_offset: Vector3 = Vector3.ZERO
 var protect_gain: float = 0.0
+# Metres of room the PRESENTED-FORWARD puck has from every un-beaten defender's
+# momentum-projected stick over the evasion horizon — negative when somebody can
+# get a blade on it. This is the "necessity" half of the shield weight above,
+# published because it is also the whole of the question the state machine's
+# square-to-net facing asks: is there still a man to beat, i.e. would carrying
+# the puck out in front of me right now give it away? Unlike the shield it is
+# NOT gated on ctx.protects_the_puck — facing is a posture every tier holds, and
+# the read is a physical contest measurement with no protect logic in it.
+# EVADE_SAFE_MARGIN_M (what reach_clearance reports against nobody) until first
+# computed, so a fresh carrier squares up rather than hunching over the puck.
+var forward_puck_clearance: float = AIActionScoring.EVADE_SAFE_MARGIN_M
 # The body-scale evasion seam from the same re-eval (world point) — the
 # OBJECTIVE-DIRECTED seam (AIActionScoring.best_evade_point_toward): the safe
 # spot with the most progress toward the live carry anchor, so the poke-evade
@@ -888,6 +889,7 @@ func reset() -> void:
 	dump_launch_speed = AIActionScoring.PASS_SPEED_M_S
 	protect_offset = Vector3.ZERO
 	protect_gain = 0.0
+	forward_puck_clearance = AIActionScoring.EVADE_SAFE_MARGIN_M
 	evade_seam_world = Vector3.INF
 	brake_check_favored = false
 	deke_go = false
@@ -1054,22 +1056,27 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 	# there buys over the presented-forward spot. The state machine blends the
 	# carry mouse between the two by that gain — pure stick work, steering and the
 	# carry destination are untouched.
+	# Directional screen filter (see PROTECT_SCREEN_BEHIND_M): a carrier driving
+	# at the net already shields the forward-held puck from a defender BEHIND it
+	# with its own body, so a beaten checker trailing the rush must not keep the
+	# shield on and hold the body side-on. Drop those defenders before the
+	# pressure / seam read so it answers only genuine side/front pressure and the
+	# carrier squares to the net the instant its man is beaten. The shot / pass /
+	# carry lanes above still see every defender.
+	#
+	# The forward-puck clearance off that set runs for EVERY tier, because the
+	# facing read consumes it too (see forward_puck_clearance) and facing is not
+	# a protect skill. Only the seam work below is gated.
+	_fill_protect_opponents(ctx)
+	var horizon: float = AIActionScoring.EVADE_HORIZON_S
+	var fwd_spot: Vector3 = _puck_pos_at(
+			self_pos + ctx.self_velocity * horizon, attacking_goal)
+	forward_puck_clearance = AIActionScoring.reach_clearance(fwd_spot, horizon,
+			_scratch_protect_opponents, _scratch_protect_vels,
+			_scratch_protect_caps)
 	if ctx.protects_the_puck:
-		# Directional screen filter (see PROTECT_SCREEN_BEHIND_M): a carrier
-		# driving at the net already shields the forward-held puck from a defender
-		# BEHIND it with its own body, so a beaten checker trailing the rush must
-		# not keep the shield on and hold the body side-on. Drop those defenders
-		# before the pressure / seam read so it answers only genuine side/front
-		# pressure and the carrier squares to the net the instant its man is
-		# beaten. The shot / pass / carry lanes above still see every defender.
-		_fill_protect_opponents(ctx)
-		var horizon: float = AIActionScoring.EVADE_HORIZON_S
-		var fwd_spot: Vector3 = _puck_pos_at(
-				self_pos + ctx.self_velocity * horizon, attacking_goal)
 		var fwd_safety: float = AIActionScoring.clearance_to_safety(
-				AIActionScoring.reach_clearance(fwd_spot, horizon,
-						_scratch_protect_opponents, _scratch_protect_vels,
-						_scratch_protect_caps))
+				forward_puck_clearance)
 		# HOW MUCH to shield and WHERE to put the puck are two questions answered
 		# by two seams (see best_handle_protect_point). The WEIGHT reads the
 		# MAX-clearance seam — the safety the best available shield buys.
@@ -1556,59 +1563,70 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	var hold_value: float = (_best_developing_feed(ctx)
 			* keep_prob * AIActionScoring.delay_discount(_hold_elapsed_s))
 
-	# Last-resort DUMP (zone-gated; -INF where none applies). It competes against the
-	# RAW (honest, strip-point-priced) carry — see _best_dump. The dump's bar IS
-	# that retention comparison (there is no absolute floor to charge the settle
-	# doubt against), so here the handicap deepens the concession itself: a fresh
-	# carrier will not throw the puck away on a marginal clear, while a free one
-	# (concession 0 — a certain recovery) is unaffected, which is right. Applied
-	# before the debug field so the label shows the value the compete used.
-	var dump_result: Array = _best_dump(ctx, our_goalie)
-	var dump_score: float = _settle_handicap(dump_result[0], settle_penalty)
-	debug_dump_score = dump_score
-
 	var new_intent: int
-	# Retention is HOPELESS when even the honest raw carry is worth less than
-	# conceding at the dump spot. In that regime the floored carry (the self
-	# drive-in mirror / the keep-the-puck floor) must not veto a fire — it just
-	# lost to the dump on the honest pricing, so the real choice is between the
-	# two ways of GIVING THE PUCK UP, and a qualified fire (a live teammate)
-	# beats flinging it to space whenever it out-values the dump. Without this
-	# the compete was intransitive: carry beat pass, dump beat (raw) carry,
-	# pass beat dump — and a pinned carrier dumped past a clean outlet.
-	# What the dump is judged against. The honest raw carry always; PLUS the
-	# DRIVE-IN — the shot the carrier skates into by beating his man — but only
-	# against the dump-IN.
+	# Only filled when the delivery search actually runs (the dump branch below);
+	# -INF on the label means "nothing was conceded", not "a dump scored -INF".
+	debug_dump_score = -INF
+	# ── The dump is a RESIDUAL, not an option ────────────────────────────────
+	# It used to be scored and entered in the compete: search 36 deliveries,
+	# price each as gain-minus-concession, and let the winner run against the
+	# carry. Every calibration problem this area has ever had came from that one
+	# decision, because it requires a dumped puck's whole future to be
+	# commensurable with a carry's next beat, in one currency, at every point on
+	# the rink. It is not, and the symptoms were the ones you would predict from
+	# an incommensurable compete: the dump reached a spot the carry was forbidden
+	# to name (its credit is horizon-capped), so it out-scored an OPEN carrier on
+	# an EMPTY RINK; it won by being the SAFE play whenever the carry was
+	# contested, though the real cost of a failed entry and a dump-in are within
+	# a hair of each other; and the softest release on the ladder kept winning
+	# because its landing solve put the puck in the slot.
 	#
-	# The drive-in belongs here for the same reason it floors the fire compete:
-	# it is a real, contested-priced value of keeping the puck (carry_safety over
-	# the drive, so a carrier who will be stripped scores 0), and a compete blind
-	# to it under-rates carrying. Blind, the dump saw only the ONE-BEAT-AHEAD
-	# candidate, so a wide-open carrier compared "where I'll be in a second"
-	# against a dumped puck's whole play — and dumped a free entry.
+	# Real hockey does not make this choice on value either. Every coaching
+	# source states it as an ordering, not a comparison: carry when you have
+	# speed and space; if the gap is soft and you have a passing option, use it;
+	# dumping when you have time and space is a mistake; the dump-in is a LAST
+	# RESORT, not a default. The evidence agrees on the ordering's direction — a
+	# controlled entry generates 2-5x the shots of a dump-in, a dump-in is
+	# recovered only 22-29% of the time, and the conclusion drawn from it is that
+	# players give the puck up at the blue line too easily.
 	#
-	# It may NOT judge the CLEAR, because the two are not the same currency: the
-	# drive-in is benefit-only (it subtracts no turnover cost) while the clear is
-	# priced as a pure concession, so a clear — always <= 0 — could never once
-	# beat a drive-in that is always >= 0, and the DZ clear would simply cease to
-	# exist. Against the dump-IN the mismatch is immaterial: its concession is
-	# taken deep in the ATTACKING end, where turnover cost is ~0 anyway.
-	var retention: float = raw_carry_score
-	if dump_result[2]:
-		retention = maxf(retention, drive_in_value)
-	# …and it must clear that retention by the dump's giveaway margin (see
-	# DUMP_GIVEAWAY_MARGIN_FRAC). Proportional and positive-only, so it scales
-	# with the compete's own magnitude and never turns a doomed carry (negative
-	# retention) into a reason to hold — a pinned carrier still concedes.
-	var retention_hopeless: bool = dump_score > retention \
-			+ maxf(retention, 0.0) * DUMP_GIVEAWAY_MARGIN_FRAC
+	# So the question is no longer "is a dump worth more than a carry" but "is
+	# there anything else left". Retention is HOPELESS only when keeping the puck
+	# is honestly worth nothing — the strip-point-priced carry has non-positive
+	# EV AND there is no drive-in to skate into — which is an ABSOLUTE read with
+	# no reference to the dump and no bar to tune. A qualified fire then beats
+	# the concession outright (that is the "you have a passing option" clause),
+	# and only with no carry and no fire does the search run at all, purely to
+	# pick the best DELIVERY. Which also means it stops running 36 landing solves
+	# and two race solves on every tick the bot was always going to carry.
+	#
+	# Both readings of "keeping the puck is worth something" have to fail,
+	# because each is blind where the other sees. The raw carry is honest but
+	# ONE BEAT AHEAD, so it cannot see the entry a carrier skates into by beating
+	# his man; the drive-in sees exactly that but is benefit-only, so it cannot
+	# go negative and cannot by itself say a carry is doomed.
+	#
+	# …except in OUR OWN ZONE, where the alternative is a CLEAR and the drive-in
+	# gets no vote. The two are not the same errand and never were: the drive-in
+	# prices skating the length of the ice from our own corner, benefit-only, so
+	# it is positive for any carrier with a sliver of a lane and would veto every
+	# clear a pinned bot ever wanted to make. A carrier buried on his own wall
+	# with two forecheckers on him is not going to skate out of it, and "when in
+	# doubt, get it out" is the whole of the doctrine there. Past centre the
+	# drive-in earns its vote back, because there the alternative is an offensive
+	# dump-in and a free entry must never be flung away.
+	var in_own_zone: bool = AIActionScoring.in_offensive_zone(
+			self_pos, ctx.defending_goal_pos)
+	var retention_hopeless: bool = raw_carry_score <= 0.0 \
+			and (in_own_zone or drive_in_value <= 0.0)
 	# Fire if it beats retention (carrying + holding for the developing play) —
-	# or, when retention is hopeless anyway, if it beats the dump about to
-	# happen (the hold gate drops there too: holding IS retention). The giveaway
-	# bar was already applied when fire_intent was picked, so an unqualified
-	# fire arrives here as -INF and loses both branches.
+	# or, when retention is hopeless, at all. A release that cleared its own
+	# giveaway bar is a live play and a dump is what is left when there is none,
+	# so the ordering is fire-then-dump with nothing to compare: an unqualified
+	# fire arrives here as -INF and loses both branches, which is the only test
+	# that matters.
 	if ((fire_score >= carry_score and fire_score >= hold_value)
-			or (retention_hopeless and fire_score >= dump_score)) \
+			or (retention_hopeless and fire_score > -INF)) \
 			and not staggered:
 		_hold_elapsed_s = 0.0
 		new_intent = fire_intent
@@ -1706,15 +1724,25 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 							/ maxf(ctx.self_wrister_shot_speed - min_v, 0.001),
 						0.0, 1.0)
 	elif retention_hopeless and not staggered:
-		# Last resort: even the best carry is doomed in a bad spot (raw carry, honestly
-		# priced, below the safe giveaway), and no qualified fire out-valued the
-		# concession (checked above). Clear our zone, or dump-and-chase.
-		_hold_elapsed_s = 0.0
-		new_intent = INTENT_DUMP
-		dump_target = dump_result[1]
-		dump_is_soft = dump_result[2]
-		dump_is_rim = dump_result[3]
-		dump_launch_speed = dump_result[5]
+		# Last resort, and the ONLY place the delivery search runs: keeping the puck
+		# is worth nothing and no qualified fire exists, so clear our zone or
+		# dump-and-chase. The search's whole job here is to pick WHICH delivery —
+		# its score is read only as availability (-INF where no dump applies: the
+		# own-side neutral zone, or a DZ from which every launch either ices or dies
+		# in our own end). With none available there is nothing to concede TO, so
+		# keep skating and let the next re-eval look again.
+		var dump_result: Array = _best_dump(ctx, our_goalie)
+		debug_dump_score = dump_result[0]
+		if dump_result[0] > -INF:
+			_hold_elapsed_s = 0.0
+			new_intent = INTENT_DUMP
+			dump_target = dump_result[1]
+			dump_is_soft = dump_result[2]
+			dump_is_rim = dump_result[3]
+			dump_launch_speed = dump_result[5]
+		else:
+			_hold_elapsed_s = 0.0
+			new_intent = INTENT_CARRY
 	else:
 		# Not firing. Advance the hold clock only while the developing play is the
 		# reason (it out-scores plain carrying); a normal carry resets it so the

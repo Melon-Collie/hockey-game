@@ -388,31 +388,37 @@ const STICKHANDLE_OFFSET_MAX_M: float = 0.33
 const CARRY_FACE_ROUTE_MIN_DIST_M: float = 1.0
 const CARRY_FACE_RETREAT_ADVANCE: float = -0.3
 
-# "Man to beat" contest band (see _has_man_to_beat / the O-ZONE SQUARE block in
-# _carry_mouse_aim). A GOAL-SIDE opponent within this distance of the carrier is
-# close enough to poke/steal — a defender the carrier still has to beat. With NO
-# such man while the carrier is in the offensive zone, there is nobody to beat,
-# so the body points at the goalie (square to the net, all shot/pass options
-# open) rather than skating on along a lateral route into an awkward angle — the
-# reported "weird sideways shot" after a deke/protect move. A hair beyond the
-# stickhandle threat radius so it anticipates a closing checker. Physical
-# contest measurement, tier-agnostic (it needs no protect read, so the
-# naive-carry tiers get it too).
-const CARRY_MAN_TO_BEAT_RADIUS_M: float = 3.5
-# A defender the carrier has skated PAST — this far behind it toward our own
-# end along the netward line, with both bodies projected to the evasion horizon
-# (see _has_man_to_beat) — is beaten and no longer a man to beat, so the carrier
-# squares up the instant it clears him even with him trailing close behind
-# (rather than waiting for the full contest radius to open). ~a body length.
-# Physical measurement: the tolerance on the read, not a stand-in for the closing
-# rate — the projection is what supplies that.
-const CARRY_MAN_TO_BEAT_BEHIND_M: float = 0.75
-# Hysteresis band on the man-to-beat contest (see _has_man_to_beat). Once a man
-# is being beaten the radius AND the behind-slack both widen by this, so a
-# defender riding the contest boundary doesn't flip the "square to the net"
-# decision — and with it the whole carry-aim forward direction — every re-eval.
-# Feel/debounce tunable, not an evaluation curve.
-const CARRY_MAN_TO_BEAT_HYSTERESIS_M: float = 0.75
+# "Man to beat" bar (see _has_man_to_beat / the O-ZONE SQUARE block in
+# _carry_mouse_aim). The carrier still has a man to beat while the puck it would
+# hold OUT IN FRONT has less than this much room from the nearest un-beaten
+# stick. With no such man while the carrier is in the offensive zone there is
+# nobody to beat, so the body points at the goalie (square to the net, all
+# shot/pass options open) rather than skating on along a lateral route into an
+# awkward angle — the reported "weird sideways shot" after a deke/protect move.
+#
+# A blade of real air, which is what EVERY other "is this puck safe" read in the
+# model calls clear (AIActionScoring.EVADE_SAFE_CLEAR_MIN_M, the seam search's
+# own bar). The measurement behind it is the reachable-set clearance the carrier
+# already publishes (AIRoleCarrier.forward_puck_clearance) — a defender's
+# momentum-projected stick against the presented-forward puck over the evasion
+# horizon — so the facing asks the same physical question the shield does and
+# the two cannot disagree about whether a man is beaten.
+#
+# The proximity band this replaced (a 3.5 m radius with a 0.75 m goal-side
+# slack) was the last raw-distance threat read in the carrier, and it failed the
+# way raw distance always does here: a defender ABREAST of the carrier and three
+# metres to the side projects ~0 along the netward line, so he counted as a man
+# to beat, held the square-up off and kept the carrier driving the zone at a
+# lateral angle with its options shut down — even though he could not physically
+# reach the puck inside the horizon. Reach answers that; a radius cannot.
+# Tier-agnostic, as before: it needs no protect read, so the naive-carry tiers
+# get it too.
+const CARRY_MAN_TO_BEAT_CLEAR_M: float = AIActionScoring.EVADE_SAFE_CLEAR_MIN_M
+# Hysteresis on that bar (see _has_man_to_beat). Once a man is engaged the bar
+# rises by this, so a defender riding the boundary doesn't flip the "square
+# to the net" decision — and with it the whole carry-aim forward direction —
+# every re-eval. Half a blade: debounce, not an evaluation curve.
+const CARRY_MAN_TO_BEAT_HYSTERESIS_M: float = 0.5 * GameRules.DEFAULT_BLADE_LENGTH_M
 
 # How far off the play line the protect aim is allowed to swing the body. The
 # domain seam (best_handle_protect_point) is the MAX-CLEARANCE point in the
@@ -2574,7 +2580,10 @@ func _chase_reception_aim_target(snapshot: WorldSnapshot, self_pos: Vector3) -> 
 	if snapshot.puck_state.carrier_peer_id == -1:
 		var pv: Vector3 = snapshot.puck_state.velocity
 		if pv.x * pv.x + pv.z * pv.z > LOOSE_PUCK_TRACK_SPEED_M_S * LOOSE_PUCK_TRACK_SPEED_M_S:
-			return _blade_gate_on_puck_line(self_pos, puck_pos, pv)
+			var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+			return _blade_gate_on_puck_line(self_pos,
+					self_state.velocity if self_state != null else Vector3.ZERO,
+					puck_pos, pv)
 	return Vector3.INF
 
 
@@ -2806,13 +2815,21 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	if puck_speed_sq < RECEIVE_TRIGGER_PUCK_SPEED_M_S * RECEIVE_TRIGGER_PUCK_SPEED_M_S:
 		return false
 	var puck_pos: Vector3 = snapshot.puck_state.position
+	var self_vel: Vector3 = Vector3.ZERO
+	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
+	if self_state != null:
+		self_vel = self_state.velocity
 	# Meet the puck on its REAL path, not on the straight ray off its current
 	# velocity (see RECEIVE_PATH_* / AITrajectory.solve_reception_gate): the
 	# crossing point, WHEN it gets there, and the direction it is travelling
 	# THEN all come off the same board-aware walk, so a rim is set up for
-	# around the carom instead of along a chord that leaves the rink.
+	# around the carom instead of along a chord that leaves the rink. Solved as a
+	# RENDEZVOUS — the reach circle rides our own velocity — so the meet is a
+	# fixed point both bodies are travelling toward rather than one that walks
+	# down the puck's line at our skating speed.
 	AITrajectory.solve_reception_gate(puck_pos, puck_vel, self_pos,
-			_receive_gate_reach(), RECEIVE_PATH_HORIZON_S, RECEIVE_PATH_STEPS)
+			_receive_gate_reach(), RECEIVE_PATH_HORIZON_S, RECEIVE_PATH_STEPS,
+			self_vel, AIRoleCarrier.PASS_LEAD_MAX_S)
 	# Nothing to set up for when the path never brings it closer than it
 	# already is. Path-based, not a dot product against the current velocity:
 	# a rim running away down the far wall IS coming to us, it just has a
@@ -2850,13 +2867,16 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	# side" of a rim line can mean standing in the glass, and the clamp that
 	# used to rescue that put the body on the puck's line with the blade
 	# swinging out over it. Inward is where a player takes a rim from.
-	var wall_gate: Vector3 = perp_foot
+	# The blade's half of the meet is the same event in the BODY's frame (see
+	# AITrajectory.gate_offset) — where the stick has to be relative to the chest
+	# when the puck shows up — so the wall push applies to both halves alike.
+	var blade_offset: Vector3 = AITrajectory.gate_offset
 	var board: Vector3 = _board_normal_and_gap(Vector2(perp_foot.x, perp_foot.z))
 	if board.y <= WALL_KILL_BAND_M:
-		wall_gate = Vector3(perp_foot.x - board.x * board.y, 0.0,
-				perp_foot.z - board.z * board.y)
+		var push := Vector3(-board.x * board.y, 0.0, -board.z * board.y)
 		lateral = Vector3(board.x, 0.0, board.z)
-		perp_foot = wall_gate
+		perp_foot += push
+		blade_offset += push
 	var body_anchor: Vector3 = perp_foot + lateral * _receive_body_offset
 	# Wall reception: the side-stand offset from a boards-hugging line can
 	# push the body target into/through the wall — keep the body's center a
@@ -2869,10 +2889,6 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	# arrives at perp_foot? (puck_eta came off the path walk above — timed
 	# around the carom, not along a chord.) If not, default lead-intercept
 	# gets us closer even at a worse angle — bail and let it run.
-	var self_vel: Vector3 = Vector3.ZERO
-	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
-	if self_state != null:
-		self_vel = self_state.velocity
 	var bot_eta: float = AIActionScoring.time_to_arrive(
 			self_pos, body_anchor, self_vel, _self_max_speed)
 	if bot_eta > puck_eta * RECEIVE_TIMING_MARGIN:
@@ -2884,15 +2900,23 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	# sprint adds ~2 m/s over the puck's own pace) and it kills the rush: a
 	# stopped receiver pays full re-acceleration after the catch. The one case
 	# that NEEDS the brake is arriving so early that continued motion carries the
-	# blade past the puck's line before the puck shows up. The blade's own reach
-	# buys a window around the line-crossing (~2 × gate reach / speed of covered
-	# time); only when the puck is later than that window is waiting forced — and
-	# then stopping square at the gate is the correct wait. A near-stationary bot
-	# has an effectively unbounded window (nothing carries it past the line).
-	var self_speed: float = sqrt(self_vel.x * self_vel.x + self_vel.z * self_vel.z)
-	var blade_window: float = 2.0 * _receive_gate_reach() / maxf(self_speed, 0.001)
-	_apply_steering(input, snapshot, self_pos, body_anchor,
-			puck_eta > bot_eta + blade_window)
+	# blade past the meet before the puck shows up — so ask that directly: keep
+	# skating as we are, and see whether the meet is still inside the blade when
+	# the puck actually gets there. Overrun → waiting is forced, and stopping
+	# square at the gate is the correct wait; otherwise run through it.
+	#
+	# This asks the question the meet solve deliberately cannot. That solve rides
+	# our velocity to find where the puck becomes catchable, and its ride is
+	# BOUNDED (AIRoleCarrier.PASS_LEAD_MAX_S) because a steering body's present
+	# velocity has a shelf life — so it will happily report a meet just inside
+	# the bound that the body then skates straight past. The brake is a decision
+	# to CHANGE that motion, which means it has to be judged on the motion's full
+	# unbounded consequence at the arrival time, not on the read that assumed it.
+	# A near-stationary bot overruns nothing and so never brakes, as before.
+	var drift: Vector3 = self_pos + self_vel * puck_eta
+	var overruns: bool = Vector2(drift.x - perp_foot.x, drift.z - perp_foot.z) \
+			.length() > _receive_gate_reach()
+	_apply_steering(input, snapshot, self_pos, body_anchor, overruns)
 	# GIVE WITH THE PUCK: the catch gate judges the puck in OUR frame, and a
 	# receiver with real closing speed INTO the feed stacks it on top of the
 	# puck's pace — over the receivable ceiling, force the brake and shed our
@@ -2901,16 +2925,16 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 	if Vector2(puck_vel.x - self_vel.x, puck_vel.z - self_vel.z) \
 			.length_squared() > RECEIVE_GIVE_CEILING_M_S * RECEIVE_GIVE_CEILING_M_S:
 		input.brake = true
-	# Aim: PARK the blade at the gate — the point where the puck's path meets our
-	# reach — and let the puck arrive into it. Reuses `wall_gate` from the stance
-	# solve above rather than re-walking the path for the same answer. Tracking
-	# the puck's position (the
+	# Aim: PARK the blade at the gate — held in the body's frame, so the stick
+	# carries the meeting pose in with it and settles onto the meet as the body
+	# arrives. Reuses the offset from the stance solve above rather than
+	# re-walking the path for the same answer. Tracking the puck's position (the
 	# old aim) failed two ways: the cursor (capped at Hands blade speed ~10 m/s)
 	# can't keep up with a ~20 m/s puck near the crossing, and pointing at a far
 	# puck lays the stick SHAFT along the line, so the face is square to the
 	# approach only in the last few ticks of a rate-limited swing. Parked at the
 	# gate the shaft spans perpendicular and the face is square the whole way in.
-	input.mouse_world_pos = _step_mouse_toward(wall_gate)
+	input.mouse_world_pos = _step_mouse_toward(self_pos + blade_offset)
 	return true
 
 
@@ -2919,22 +2943,25 @@ func _pass_receive_aim_and_steer(input: InputState, snapshot: WorldSnapshot, sel
 # comfortable-extension circle around the body). Parking there beats tracking the
 # puck's position: the cursor slews at Hands blade speed (~10 m/s baseline) while
 # a pass sweeps past at ~20 m/s, so a blade CHASING the puck lags behind it
-# through the reach envelope and the pass transits untouched. The gate itself
-# moves at body speed (recomputed from self_pos each tick), which the cursor
-# holds trivially — the puck arrives INTO the waiting blade. Falls back to the
-# puck's own position when the puck has already passed our level (chase from
-# behind) or is (near-)stationary.
-func _blade_gate_on_puck_line(
-		self_pos: Vector3, puck_pos: Vector3, puck_vel: Vector3) -> Vector3:
+# through the reach envelope and the pass transits untouched. Solved as a
+# rendezvous against our own moving reach, the gate is a fixed world point both
+# bodies are travelling toward, so the cursor holds it at rest and the puck
+# arrives INTO the waiting blade. Falls back to the puck's own position when the
+# puck has already passed our level (chase from behind) or is (near-)stationary.
+func _blade_gate_on_puck_line(self_pos: Vector3, self_vel: Vector3,
+		puck_pos: Vector3, puck_vel: Vector3) -> Vector3:
 	var speed_sq: float = puck_vel.x * puck_vel.x + puck_vel.z * puck_vel.z
 	if speed_sq < 0.0001:
 		return puck_pos
-	# Solve the gate on the puck's REAL path (caroms and friction included) —
-	# see RECEIVE_PATH_* / AITrajectory.solve_reception_gate. Where the path is
-	# straight this lands on the same point the old ray solve did; on a rim it
-	# lands where the puck actually comes through instead of on a phantom line.
+	# Solve the gate on the puck's REAL path (caroms and friction included) and
+	# against our own MOVING reach — see RECEIVE_PATH_* /
+	# AITrajectory.solve_reception_gate. Where the path is straight and we are
+	# standing still this lands on the same point the old ray solve did; on a rim
+	# it lands where the puck actually comes through instead of on a phantom
+	# line, and in stride it lands where we will be rather than where we are.
 	if not AITrajectory.solve_reception_gate(puck_pos, puck_vel, self_pos,
-			_receive_gate_reach(), RECEIVE_PATH_HORIZON_S, RECEIVE_PATH_STEPS):
+			_receive_gate_reach(), RECEIVE_PATH_HORIZON_S, RECEIVE_PATH_STEPS,
+			self_vel, AIRoleCarrier.PASS_LEAD_MAX_S):
 		# No touchable point on the path. If the puck is moving AWAY right now
 		# there is nothing to park for — chase it from behind, the same fallback
 		# the straight-ray solve made on a negative along-distance. Otherwise
@@ -2944,9 +2971,14 @@ func _blade_gate_on_puck_line(
 		var to_self_z: float = self_pos.z - puck_pos.z
 		if puck_vel.x * to_self_x + puck_vel.z * to_self_z <= 0.0:
 			return puck_pos
-	# Wall kill: a gate against the boards is played with the blade ON the
-	# glass, not out on the path line — see the WALL_KILL_BAND_M doc.
-	return _wall_kill_aim(AITrajectory.gate_point)
+	# Held in the body's frame (AITrajectory.gate_offset), so the cursor is a spot
+	# the arm can actually be at while the body is still closing on the meet.
+	# Wall kill: a gate against the boards is played with the blade ON the glass,
+	# not out on the path line — judged at the meet itself and carried across as
+	# the same displacement. See the WALL_KILL_BAND_M doc.
+	var meet: Vector3 = AITrajectory.gate_point
+	var push: Vector3 = _wall_kill_aim(meet) - meet
+	return self_pos + AITrajectory.gate_offset + push
 
 
 # Comfortable blade extension for a parked reception: the blade span minus the
@@ -3148,7 +3180,7 @@ func _try_shot_reception(input: InputState, snapshot: WorldSnapshot, self_pos: V
 	# scorer takes the quick pass.
 	_apply_steering(input, snapshot, self_pos, anchor)
 	input.mouse_world_pos = _step_mouse_toward(
-			_blade_gate_on_puck_line(self_pos, puck_pos, puck_vel))
+			_blade_gate_on_puck_line(self_pos, self_vel, puck_pos, puck_vel))
 	return _RECV_CATCH_STRIDE
 
 
@@ -5025,7 +5057,7 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	# stride down a lateral escape / wall-exit route.
 	var squared_to_net: bool = false
 	if AIActionScoring.in_offensive_zone(self_pos, _attacking_goal_pos) \
-			and not _has_man_to_beat(snapshot, self_pos):
+			and not _has_man_to_beat():
 		var goalie_square: Vector3 = _goalie_now(snapshot)
 		var to_goalie: Vector3 = goalie_square - self_pos
 		to_goalie.y = 0.0
@@ -5122,65 +5154,42 @@ func _carry_mouse_aim(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
 	return AIActionScoring.net_safe_blade_target(self_pos, target)
 
 
-# True when any GOAL-SIDE opponent is inside the contest band
-# (CARRY_MAN_TO_BEAT_RADIUS_M) of the carrier — a defender ahead toward the net,
-# close enough to poke/steal, i.e. a man the carrier still has to beat. A
-# defender the carrier has already skated past (behind it toward our own end by
-# more than CARRY_MAN_TO_BEAT_BEHIND_M along the netward line) is beaten and does
-# NOT count, so the carrier squares up the instant it clears him. With no such
-# man the carrier is unobstructed. Measured from the body so a checker on any
-# side ahead counts.
+# True while the puck the carrier would hold OUT IN FRONT is inside somebody's
+# reach — i.e. there is still a man to beat. With no such man the carrier is
+# unobstructed and the O-ZONE SQUARE block above points the body at the goalie.
 #
-# BOTH BODIES ARE PROJECTED to the evasion horizon, matching the read the protect
-# screen filter already runs (AIRoleCarrier._fill_protect_opponents). "Have I
-# beaten him?" is a question about the CLOSING RATE, and a frozen snapshot cannot
-# answer it: a chaser half a stride behind and losing ground is gone, while one
-# in the same spot and pulling even is the man you still have to beat. Reading
-# raw positions, the carrier kept both — so a beaten checker riding the hip held
-# the square-to-net facing off for as long as he trailed inside the slack, and
-# the carrier drove the zone at a lateral angle with its options shut down (the
-# "holds the stickhandling angle after cleanly beating his man" report), while a
-# back-checker about to pull even was written off a beat early. The slack and the
-# hysteresis stay what they are — a body length of tolerance and a debounce — but
-# they now sit on a read that can see who is actually going where. Runs on the
-# carrier only (~1 bot/team) and loops the small opponent set, so it's hot-path
-# cheap.
-func _has_man_to_beat(snapshot: WorldSnapshot, self_pos: Vector3) -> bool:
-	# Sticky contest (see CARRY_MAN_TO_BEAT_HYSTERESIS_M): while a man is already
-	# being beaten, widen the radius AND the behind-slack so a defender riding the
-	# boundary keeps the same answer rather than flipping the square-to-net facing.
-	var radius: float = CARRY_MAN_TO_BEAT_RADIUS_M
-	var behind: float = CARRY_MAN_TO_BEAT_BEHIND_M
+# The measurement is AIRoleCarrier.forward_puck_clearance: the reachable-set
+# clearance of the presented-forward puck against every un-beaten defender's
+# momentum-projected stick over the evasion horizon. Three properties come with
+# using that read rather than a private one:
+#
+#   - It is the SAME read the shield's necessity half runs, so the body and the
+#     stick can never disagree about whether the man is beaten — which is what
+#     "get the stick back in front once you have beaten them" needs. A carrier
+#     that squares up while the blade stays out on the protect seam has not
+#     opened any options.
+#   - "Have I beaten him?" is a question about the CLOSING RATE, and reach
+#     answers it directly: a chaser half a stride behind and losing ground
+#     cannot get there, one pulling even can. The screen filter
+#     (AIRoleCarrier._fill_protect_opponents) has already dropped the men the
+#     carrier's own body shields.
+#   - A defender ABREAST and three metres wide stops counting. He was the defect:
+#     a raw goal-side radius scored him ~0 along the netward line, so he read as a
+#     man to beat and held the square-up off while the carrier drove the zone at
+#     a lateral angle, though no stick of his could reach the puck.
+#
+# Costs nothing here — the carrier mirror computes it once per re-eval (~30 Hz)
+# for the shield, and this is a field read.
+func _has_man_to_beat() -> bool:
+	# Sticky (see CARRY_MAN_TO_BEAT_HYSTERESIS_M): while a man is already engaged,
+	# RAISE the bar — he has to open more than a blade of air to be declared
+	# beaten — so a defender riding the boundary keeps the same answer rather than
+	# flipping the square-to-net facing every re-eval.
+	var bar: float = CARRY_MAN_TO_BEAT_CLEAR_M
 	if _carry_has_man:
-		radius += CARRY_MAN_TO_BEAT_HYSTERESIS_M
-		behind += CARRY_MAN_TO_BEAT_HYSTERESIS_M
-	var r2: float = radius * radius
-	var to_net: Vector3 = _attacking_goal_pos - self_pos
-	to_net.y = 0.0
-	var net_len: float = to_net.length()
-	var have_net: bool = net_len > 0.001
-	var nx: float = to_net.x / net_len if have_net else 0.0
-	var nz: float = to_net.z / net_len if have_net else 0.0
-	var horizon: float = AIActionScoring.EVADE_HORIZON_S
-	var self_state: SkaterNetworkState = snapshot.skater_states.get(_peer_id)
-	var self_x: float = self_pos.x
-	var self_z: float = self_pos.z
-	if self_state != null:
-		self_x += self_state.velocity.x * horizon
-		self_z += self_state.velocity.z * horizon
-	var found: bool = false
-	for peer_id: int in _opponent_ids(snapshot):
-		var opp_state: SkaterNetworkState = snapshot.skater_states[peer_id]
-		var dx: float = opp_state.position.x + opp_state.velocity.x * horizon - self_x
-		var dz: float = opp_state.position.z + opp_state.velocity.z * horizon - self_z
-		if dx * dx + dz * dz >= r2:
-			continue
-		# Goal-side (ahead toward the net) beyond the beaten-behind slack.
-		if not have_net or dx * nx + dz * nz > -behind:
-			found = true
-			break
-	_carry_has_man = found
-	return found
+		bar += CARRY_MAN_TO_BEAT_HYSTERESIS_M
+	_carry_has_man = _carrier.forward_puck_clearance < bar
+	return _carry_has_man
 
 
 # Computes the perpendicular puck-evade offset for stickhandling.

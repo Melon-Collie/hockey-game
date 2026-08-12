@@ -40,9 +40,11 @@ class_name AIActionScoring
 # evaluating chains of passes (which can run away into mutual
 # back-and-forth pass loops) and bounds the recursion cleanly.
 #
-# No dump scoring — 3v3 doesn't reward dumps. No open-man / advance /
-# receiver_pressure heuristics — the recursive score_at captures
-# "what could the receiver do" with their actual options.
+# Dumps do NOT compete on this scale — they are priced in their own currency
+# (a concession, plus a race the dump-in earns a gain from) and meet the carry
+# in AIRoleCarrier's commit compete. No open-man / advance / receiver_pressure
+# heuristics — the recursive score_at captures "what could the receiver do"
+# with their actual options.
 
 # Pressure on a shooter/carrier is a physical contest, not a density curve —
 # see release_contest_clean: each opponent's blade races to the release point
@@ -58,8 +60,10 @@ class_name AIActionScoring
 # positional proxy there), and it needs no establishment floor: entry is driven by
 # position_potential, which already climbs from the blue line toward the slot, so an
 # in-zone target out-scores staying outside on that one shared scale. The only
-# in-vs-out decision is the choice to CARRY into the zone (there is no dump-and-
-# chase), and it is made entirely in position_potential currency.
+# in-vs-out decision made ON THIS SCALE is the choice to CARRY into the zone, and
+# it is made entirely in position_potential currency. The dump-and-chase is real
+# but is not one of these candidates: it lives in AIRoleCarrier._best_dump and
+# competes against the raw carry in its own currency.
 
 # Position-potential closeness ramp. position_potential is only used
 # by `_score_at` while the CARRIER is OUTSIDE the offensive zone —
