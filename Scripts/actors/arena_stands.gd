@@ -6,8 +6,9 @@ extends Node3D
 # crowd. Pattern mirrors HockeyRink — single rebuild on @export change, no
 # runtime updates. Geometry is one ArrayMesh for all concrete (lower bowl +
 # concourse walkway + upper-deck fascia and terraces), one for the arena
-# shell wall, and the crowd as per-section MultiMesh pairs (bodies, heads):
-# the bowl is split into _CROWD_SECTIONS angular slices, each with its own
+# shell wall, and the crowd as per-section MultiMesh pairs (bodies, heads)
+# with a third MultiMesh per section for the seats they sit in: the bowl is
+# split into _CROWD_SECTIONS angular slices, each with its own
 # tight AABB, so the renderer frustum-culls off-screen crowd wholesale
 # instead of vertex-processing every spectator every frame. The walkway /
 # upper deck / shell exist so every camera sightline that clears the crowd
@@ -204,6 +205,29 @@ extends Node3D
 		away_color_secondary = v
 		_request_rebuild()
 
+@export_group("Seats")
+# Seats are furniture: one per seating position, occupied or not, which is the
+# whole point — a bowl at 0.93 attendance shows bare concrete in the empty spots
+# and in the 0.27 m of daylight between neighbours at the shipping spacing.
+@export var seats_enabled: bool = true:
+	set(v):
+		seats_enabled = v
+		_request_rebuild()
+# Multiplied by the per-seat shade jitter baked into the layout, so this applies
+# live without invalidating the cached geometry — the same split the crowd uses
+# between its layout and its paint pass.
+@export var seat_color: Color = Color(0.13, 0.16, 0.26):
+	set(v):
+		seat_color = v
+		_request_rebuild()
+# How far a seat's shade may fall below `seat_color`. A bowl of one flat colour
+# reads as a painted surface rather than as thousands of separate objects; a
+# little unevenness is what makes the rows legible as rows.
+@export_range(0.0, 0.5) var seat_shade_variation: float = 0.16:
+	set(v):
+		seat_shade_variation = v
+		_request_rebuild()
+
 @export_group("")
 # Editor escape hatch: also drops the static layout cache, so geometry *code*
 # edits mid-session can't be masked by a stale cached bowl.
@@ -244,6 +268,30 @@ const _HEAD_SIZE: Vector3 = Vector3(0.22, 0.22, 0.22)
 # their row (upper-bowl rows reach ~6 m, well above typical camera height).
 const _BODY_Y_LIFT: float = 0.002
 
+# Seat furniture: a pan on the tread and a backrest behind it, in the seated
+# spectator's own local frame (local −Z faces the rink, so +Z is outward).
+#
+# Every number here is bounded by something already fixed. The seat is wider
+# than the 0.28 m body so it shows either side of an occupant, and narrower than
+# the 0.55 m spacing so neighbours don't merge into a bench. The pan reaches
+# 0.17 m forward — the spectator sits 0.18 m outward of the tread's inner edge,
+# so a deeper pan would hang over the drop. The backrest starts at 0.175 m,
+# clearing the body's 0.14 m back face, and ends at 0.225 m, well short of the
+# next riser 0.42 m out. It stands 0.38 m against the body's 0.45 m, so an
+# occupant's shoulders and head clear the top of their own seat.
+const _SEAT_WIDTH: float = 0.46
+const _SEAT_PAN_DEPTH: float = 0.34
+const _SEAT_PAN_THICKNESS: float = 0.05
+const _SEAT_BACK_HEIGHT: float = 0.38
+const _SEAT_BACK_THICKNESS: float = 0.05
+const _SEAT_BACK_OFFSET: float = 0.20
+# Same trick as _BODY_Y_LIFT, for the same reason: the pan's underside would
+# otherwise be coplanar with the tread it rests on.
+const _SEAT_Y_LIFT: float = 0.002
+# Seats roll their shade from their own stream. Sharing the crowd's would tie
+# the two together — a change to seat jitter would repaint every spectator.
+const _SEAT_SEED: int = 90210
+
 # Civilian shirts/coats for the neutral fan slice.
 var _neutral_body_palette: Array[Color] = [
 	Color(0.25, 0.25, 0.28),  # charcoal
@@ -283,7 +331,8 @@ var _flashbulbs: CrowdFlashbulbs = null
 # each trigger a rebuild of their own.
 var _suspend_rebuild: bool = false
 
-# geometry key → layout dict {terrace_mesh, body_mm, head_mm, paint_key}.
+# geometry key → layout dict {terrace_mesh, shell_mesh, body/head/seat mms,
+# away_flags, paint_key}.
 # Everything in a layout is color-independent and deterministic (fixed
 # _SEED), so it's built once per geometry-param set and reused for the
 # process lifetime — a scene change's rebuild (free play → lobby → game)
@@ -372,21 +421,30 @@ func _rebuild() -> void:
 	var layout: Dictionary = _get_or_build_layout()
 	_add_terraces(layout.terrace_mesh)
 	_add_shell(layout.shell_mesh)
+	# Seats before spectators so the furniture is already there to sit in — and
+	# so the opaque occupants draw over their own seat backs rather than the
+	# other way round.
+	if seats_enabled:
+		_add_seats(layout)
 	_add_spectators(layout)
 	_build_benches()
 
 
 # ── Layout cache ─────────────────────────────────────────────────────────────
 
-# Every param that moves geometry, transforms, or the AABB. Colors and fan
-# ratios are deliberately absent — they only repaint.
+# Every param that moves geometry, transforms, or the AABB. The team colors and
+# fan ratios are deliberately absent — they only repaint, and so is `seat_color`,
+# which lives on the seat material. `seat_shade_variation` IS here, because it is
+# rolled into per-instance colors baked into the cached MultiMeshes rather than
+# applied at instancing time.
 func _geometry_key() -> String:
 	return str([rink_length, rink_width, corner_radius, stands_base_y,
 			num_terraces, tread_depth, riser_height, base_outward_offset,
 			corner_segments, spectator_spacing, spectator_inset_from_riser,
 			spectator_yaw_jitter_deg, spectator_y_jitter,
 			walkway_depth, upper_terraces, upper_riser_height, upper_deck_rise,
-			shell_height, num_aisles, aisle_width, attendance])
+			shell_height, num_aisles, aisle_width, attendance,
+			seat_shade_variation])
 
 
 # Everything the paint pass reads: the four team colors + the mix ratios.
@@ -408,6 +466,7 @@ func _get_or_build_layout() -> Dictionary:
 		"paint_key": "",
 	}
 	_fill_spectator_layout(layout)
+	_fill_seat_layout(layout)
 	_layout_cache[key] = layout
 	return layout
 
@@ -913,6 +972,149 @@ func _add_spectators(layout: Dictionary) -> void:
 	_flashbulbs.name = "CrowdFlashbulbs"
 	_flashbulbs.set_sources(head_mms)
 	add_child(_flashbulbs)
+
+
+# ── Seats ────────────────────────────────────────────────────────────────────
+#
+# Same shape as the crowd — per-section MultiMeshes over the same angular
+# slices, so seats frustum-cull with the spectators sitting in them — but built
+# in a separate pass over the same rows rather than alongside the spectators.
+# Two reasons, and both are load-bearing:
+#
+#   A seat exists whether or not anyone is in it, so this pass has no vacancy
+#   roll. Weaving that difference into _append_spectator_row would mean two
+#   traversals of one rng stream, and the crowd's whole appearance is downstream
+#   of that stream's order.
+#
+#   Seats are bolted to the concrete: no yaw jitter, no height jitter, no
+#   animation. The crowd's sway/hop comes from its shader reading per-instance
+#   custom data; seats want none of it, so they carry no custom data and use a
+#   plain material instead.
+func _fill_seat_layout(layout: Dictionary) -> void:
+	var transforms: Array[Transform3D] = []
+	var shades: PackedFloat32Array = PackedFloat32Array()
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	rng.seed = _SEAT_SEED
+	for i: int in num_terraces:
+		_append_seat_row(transforms, shades, rng,
+				base_outward_offset + i * tread_depth + spectator_inset_from_riser,
+				stands_base_y + i * riser_height, i)
+	for j: int in upper_terraces:
+		_append_seat_row(transforms, shades, rng,
+				_upper_deck_inner_offset() + j * tread_depth + spectator_inset_from_riser,
+				_upper_deck_base_y() + j * upper_riser_height, -1)
+
+	var seat_mesh: ArrayMesh = _build_seat_mesh()
+	var section_indices: Array[PackedInt32Array] = []
+	section_indices.resize(_CROWD_SECTIONS)
+	for k: int in _CROWD_SECTIONS:
+		section_indices[k] = PackedInt32Array()
+	for i: int in transforms.size():
+		var o: Vector3 = transforms[i].origin
+		var sector: int = int(floor((atan2(o.z, o.x) + PI) / TAU * _CROWD_SECTIONS))
+		section_indices[clampi(sector, 0, _CROWD_SECTIONS - 1)].append(i)
+
+	var seat_mms: Array[MultiMesh] = []
+	for k: int in _CROWD_SECTIONS:
+		var idxs: PackedInt32Array = section_indices[k]
+		if idxs.is_empty():
+			continue
+		var mm: MultiMesh = MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = seat_mesh
+		mm.instance_count = idxs.size()
+		var seed_aabb: AABB = AABB(transforms[idxs[0]].origin, Vector3.ZERO)
+		for n_i: int in idxs.size():
+			var src: int = idxs[n_i]
+			mm.set_instance_transform(n_i, transforms[src])
+			# White scaled by the shade roll. The material's albedo carries the
+			# actual colour and multiplies through, so seat_color stays a live
+			# export instead of something baked into this cached layout.
+			var shade: float = shades[src]
+			mm.set_instance_color(n_i, Color(shade, shade, shade))
+			seed_aabb = seed_aabb.expand(transforms[src].origin)
+		mm.custom_aabb = _grow_seat_aabb(seed_aabb)
+		seat_mms.append(mm)
+	layout["seat_mms"] = seat_mms
+
+
+# One ring of seats. Mirrors _append_spectator_row's placement rules — the bench
+# cutout and the aisles take precedence over furniture the same way they take
+# precedence over people — minus the vacancy roll and every jitter.
+func _append_seat_row(transforms: Array[Transform3D], shades: PackedFloat32Array,
+		rng: RandomNumberGenerator, seat_off: float, y: float, bench_row: int) -> void:
+	var samples: PackedVector2Array = _sample_offset_path(seat_off)
+	var resampled: PackedVector2Array = _resample_uniform(samples, spectator_spacing)
+	for p: Vector2 in resampled:
+		if bench_row >= 0 and _in_bench_zone(bench_row, p):
+			continue
+		if _in_aisle(_base_path_s(p)):
+			continue
+		transforms.append(Transform3D(Basis(Vector3.UP, atan2(p.x, p.y)),
+				Vector3(p.x, y, p.y)))
+		shades.append(1.0 - rng.randf() * seat_shade_variation)
+
+
+# Unlike the crowd's, a seat's AABB needs no animation headroom — nothing here
+# sways or hops. It still needs the mesh's own extent, since the seed box only
+# covers instance ORIGINS, and the horizontal margin still has to allow for a
+# seat rotated to any heading around the bowl.
+func _grow_seat_aabb(seed_aabb: AABB) -> AABB:
+	var reach: float = Vector2(_SEAT_WIDTH, _SEAT_BACK_OFFSET
+			+ _SEAT_BACK_THICKNESS).length() * 0.5 + 0.1
+	var pos: Vector3 = seed_aabb.position - Vector3(reach, 0.05, reach)
+	var end: Vector3 = seed_aabb.end + Vector3(reach, _SEAT_BACK_HEIGHT + 0.1, reach)
+	return AABB(pos, end - pos)
+
+
+# Pan and backrest as one mesh. They are rigidly related and share a colour, so
+# splitting them would double the instance count to buy nothing — unlike the
+# crowd's body and head, which are separate only because they take different
+# per-instance colours (shirt and skin) from the same transform.
+func _build_seat_mesh() -> ArrayMesh:
+	var st: SurfaceTool = SurfaceTool.new()
+	st.begin(Mesh.PrimitiveType.PRIMITIVE_TRIANGLES)
+	_emit_box(st, Vector3(0.0, _SEAT_Y_LIFT + _SEAT_PAN_THICKNESS * 0.5, 0.0),
+			Vector3(_SEAT_WIDTH, _SEAT_PAN_THICKNESS, _SEAT_PAN_DEPTH))
+	_emit_box(st, Vector3(0.0, _SEAT_Y_LIFT + _SEAT_BACK_HEIGHT * 0.5, _SEAT_BACK_OFFSET),
+			Vector3(_SEAT_WIDTH, _SEAT_BACK_HEIGHT, _SEAT_BACK_THICKNESS))
+	st.generate_normals()
+	return st.commit()
+
+
+func _add_seats(layout: Dictionary) -> void:
+	var seat_mms: Array[MultiMesh] = layout.seat_mms
+	if seat_mms.is_empty():
+		return
+	var mat: StandardMaterial3D = _seat_material()
+	for k: int in seat_mms.size():
+		var mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
+		mmi.multimesh = seat_mms[k]
+		mmi.name = "Seats%d" % k
+		mmi.material_override = mat
+		# Shadows off for the same reason the crowd's are (see _add_spectators):
+		# thousands of instances across the eight shadow-casting ceiling lights
+		# is the arena's biggest shadow-map cost, and seat shadows up in the
+		# stands are invisible from a rink-focused camera.
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		# And out of the GI probe: SDFGI voxelizes static geometry, which is
+		# exactly what these are and exactly the volume it charges for. Seats
+		# are small, dark, and mostly under an occupant — they have nothing to
+		# contribute to bounce that the terrace beneath them doesn't already.
+		mmi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		add_child(mmi)
+
+
+# Flat and unshiny — moulded plastic, not furniture polish. Vertex colour is on
+# so the per-instance shade roll multiplies into the albedo.
+func _seat_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = seat_color
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.85
+	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	return mat
 
 
 # Roll body/head colors for every spectator. Own rng stream (same _SEED),

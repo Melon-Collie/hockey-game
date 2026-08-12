@@ -78,6 +78,13 @@ const SHOTS: Array[Dictionary] = [
 		"fov": 55.0, "note": "into the north-east corner, where the ribbon follows the arc",
 	},
 	{
+		"name": "stands",
+		# Stood on the ice looking at the west bowl. Anywhere past the boards is
+		# inside the first rows, which photographs one spectator's coat.
+		"pos": Vector3(-7.0, 2.6, 1.0), "look_at": Vector3(-19.0, 4.2, 0.0),
+		"fov": 55.0, "note": "up into the bowl — seats, occupied and empty",
+	},
+	{
 		"name": "ice_ads",
 		"pos": Vector3(2.0, 9.0, -20.0), "look_at": Vector3(4.0, 0.0, 2.0),
 		"fov": 50.0, "note": "over the neutral zone — the in-ice panels",
