@@ -131,6 +131,28 @@ static func race_vmax(s: SkaterNetworkState, caps: AISkaterCaps,
 			Vector2(puck_pos.x - s.position.x, puck_pos.z - s.position.z).length())
 
 
+# ── Why the `reach` argument below is for the SELF read only ────────────────
+# A skater meets a loose puck when his BLADE touches it, not when his navel
+# lands on it, so the intercept a body STEERS to must not charge the last
+# stick-length as travel: without reach the solve pushed the meeting point
+# downstream, and the man who would have swept the puck up on the way past
+# instead read himself as late and aimed further along.
+#
+# The COMPARATIVE reads — the election, best_intercept_time, the race-lost
+# decline — deliberately leave it at 0. Two reasons, and the second is the
+# load-bearing one:
+#   - Reach is nearly common to all racers, so it barely moves a RANKING; it
+#     is the absolute arrival that it corrects.
+#   - It destroys the resolution the election depends on. Every body within a
+#     stick of the puck solves to t = 0, so bots the sub-step interpolation
+#     exists to separate all tie and fall through to the peer-id tie-break —
+#     the exact defect that interpolation was added to fix. Measured, putting
+#     reach in the election left a crossing cutter unattended (D-zone coverage
+#     fixture: 2.49 uncovered attackers/tick against a 2.2 bar).
+# "Is this puck inside my stick" is already its own read (puck_comes_to_reach),
+# which overrides the election rather than competing inside it.
+
+
 # The shared predicted path for one race — memoized on the exact puck state,
 # because every consumer in one AI tick (both teams' elections, the brain's
 # each chaser's race-lost decline) races the SAME puck: one
@@ -166,7 +188,8 @@ static func race_trajectory(puck_pos: Vector3, puck_vel: Vector3) -> Array[Vecto
 static func path_intercept_time(traj: Array[Vector3], step_dt: float,
 		puck_pos: Vector3, skater_pos: Vector3, skater_vel: Vector3,
 		max_speed: float, margin: float = KILL_SETUP_MARGIN_S,
-		accel: float = AIActionScoring.SHED_ACCEL_DEFAULT_M_S2) -> float:
+		accel: float = AIActionScoring.SHED_ACCEL_DEFAULT_M_S2,
+		reach: float = 0.0) -> float:
 	if traj.is_empty():
 		return INF
 	for i: int in traj.size():
@@ -174,15 +197,17 @@ static func path_intercept_time(traj: Array[Vector3], step_dt: float,
 		var t_set: float = t_step - margin
 		if t_set <= 0.0:
 			continue
-		# Exact prune: even at a flying top-speed start, ETA ≥ dist / v_max —
-		# skip the full phase-model call when that bound alone misses T.
+		# Exact prune: even at a flying top-speed start, ETA ≥ (dist − reach) /
+		# v_max — skip the full phase-model call when that bound alone misses T.
+		# The blade span widens the bound; leaving it off the prune would drop
+		# steps the reach-aware ETA below would have made.
 		var dx: float = traj[i].x - skater_pos.x
 		var dz: float = traj[i].z - skater_pos.z
-		var reach: float = max_speed * t_set
-		if dx * dx + dz * dz > reach * reach:
+		var span: float = max_speed * t_set + reach
+		if dx * dx + dz * dz > span * span:
 			continue
-		var eta: float = AIActionScoring.time_to_arrive(
-				skater_pos, traj[i], skater_vel, max_speed, accel)
+		var eta: float = _reach_eta(
+				skater_pos, traj[i], skater_vel, max_speed, accel, reach)
 		if eta > t_set:
 			continue
 		# Crossing found — now solve WHERE in the step it happens. Returning
@@ -196,14 +221,34 @@ static func path_intercept_time(traj: Array[Vector3], step_dt: float,
 		# the skater's ETA.
 		var prev_t: float = i * step_dt
 		var prev_point: Vector3 = traj[i - 1] if i > 0 else puck_pos
-		var prev_slack: float = (prev_t - margin) - AIActionScoring.time_to_arrive(
-				skater_pos, prev_point, skater_vel, max_speed, accel)
+		var prev_slack: float = (prev_t - margin) - _reach_eta(
+				skater_pos, prev_point, skater_vel, max_speed, accel, reach)
 		if prev_slack >= 0.0:
 			return prev_t   # already makeable at the left endpoint
 		return prev_t + (t_step - prev_t) * (-prev_slack / (t_set - eta - prev_slack))
 	var horizon: float = traj.size() * step_dt
-	return maxf(horizon, AIActionScoring.time_to_arrive(
-			skater_pos, traj[-1], skater_vel, max_speed, accel))
+	return maxf(horizon, _reach_eta(
+			skater_pos, traj[-1], skater_vel, max_speed, accel, reach))
+
+
+# ETA for the BLADE to touch `point`, rather than for the body to land on it.
+# The destination is the nearest spot on the reach circle around `point` — the
+# path point pulled `reach` back along the approach line — so the last stick-
+# length is never charged as travel. Already inside reach is 0: the stick is on
+# it now.
+static func _reach_eta(from_pos: Vector3, point: Vector3, vel: Vector3,
+		max_speed: float, accel: float, reach: float) -> float:
+	if reach <= 0.0:
+		return AIActionScoring.time_to_arrive(from_pos, point, vel, max_speed, accel)
+	var dx: float = point.x - from_pos.x
+	var dz: float = point.z - from_pos.z
+	var d: float = sqrt(dx * dx + dz * dz)
+	if d <= reach:
+		return 0.0
+	var f: float = (d - reach) / d
+	return AIActionScoring.time_to_arrive(from_pos,
+			Vector3(from_pos.x + dx * f, point.y, from_pos.z + dz * f),
+			vel, max_speed, accel)
 
 
 # The path point a path_intercept_time result names — the spot on the walk the

@@ -6103,12 +6103,20 @@ func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3,
 	var traj: Array[Vector3] = AILoosePuckChase.race_trajectory(puck_pos, puck_vel)
 	var step_dt: float = AILoosePuckChase.RACE_LOOKAHEAD_S \
 			/ float(AILoosePuckChase.RACE_STEPS)
-	# Own attribute-scaled thrust, not the league default: this is the one caller
-	# reasoning about ITSELF, so a high-Acceleration build genuinely redirects
-	# onto an off-axis intercept sooner.
+	# Own attribute-scaled thrust and own stick, not the league defaults: this is
+	# the one caller reasoning about ITSELF, so a high-Acceleration build
+	# genuinely redirects onto an off-axis intercept sooner and a longer stick
+	# genuinely reaches the puck earlier. The reach here is the PHYSICAL stick,
+	# not `_blade_reach` — that carries BLADE_REACH_BUFFER_M, which is the
+	# pickup gate's radius tolerance rather than a length the bot can extend.
 	var t: float = AILoosePuckChase.path_intercept_time(
 			traj, step_dt, puck_pos, self_pos, self_vel, cap,
-			AILoosePuckChase.setup_margin(puck_vel), _chase_max_accel)
+			AILoosePuckChase.setup_margin(puck_vel), _chase_max_accel,
+			_blade_reach - BLADE_REACH_BUFFER_M)
+	# The TIME is reach-aware; the steering target is not pulled back onto the
+	# reach circle. Where the blade can first touch the puck is the right answer
+	# to "am I in this race"; the body should still drive at the meeting point
+	# and close the last stick-length, rather than parking at full extension.
 	return AILoosePuckChase.path_intercept_point(traj, step_dt, puck_pos, t)
 
 

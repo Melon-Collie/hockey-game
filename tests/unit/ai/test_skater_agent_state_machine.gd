@@ -295,6 +295,41 @@ func test_lead_intercept_meets_a_puck_arriving_at_him() -> void:
 	assert_gt(out.x, 0.0, "intercept stays in front of him, not behind")
 
 
+func test_lead_intercept_counts_the_stick() -> void:
+	# A puck already inside his reach is met where it is — the last stick-length
+	# is not travel. Without this the solve demanded his body centre land ON the
+	# puck and pushed the aim downstream (4.17 m at 8 m/s for a puck 0.5 m off
+	# his blade), which is the bot skating past a puck it could have swept up.
+	sm._chase_max_accel = GameRules.DEFAULT_SKATER_THRUST_M_S2
+	sm._self_max_speed = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
+	var puck_pos := Vector3(0.5, 0, 0)
+	for speed: float in [0.0, 4.0, 8.0]:
+		var out: Vector3 = sm._lead_intercept(
+				Vector3.ZERO, Vector3(speed, 0, 0), puck_pos, Vector3(0, 0, 3))
+		assert_almost_eq(out.distance_to(puck_pos), 0.0, 0.001,
+				"puck inside reach at %.0f m/s is met where it is" % speed)
+
+
+func test_election_does_not_count_the_stick() -> void:
+	# Reach belongs to the SELF read only. In the election it collapses every
+	# body within a stick to t = 0, so bots the sub-step solve exists to
+	# separate tie and fall through to the peer-id tie-break. Two bots a stride
+	# apart must still rank by geometry.
+	var puck_pos := Vector3(0.5, 0, 0)
+	var puck_vel := Vector3(0, 0, 3)
+	var traj: Array[Vector3] = AILoosePuckChase.race_trajectory(puck_pos, puck_vel)
+	var step_dt: float = AILoosePuckChase.RACE_LOOKAHEAD_S \
+			/ float(AILoosePuckChase.RACE_STEPS)
+	var near: float = AILoosePuckChase.path_intercept_time(
+			traj, step_dt, puck_pos, Vector3.ZERO, Vector3.ZERO,
+			GameRules.DEFAULT_SKATER_MAX_SPEED_M_S)
+	var far: float = AILoosePuckChase.path_intercept_time(
+			traj, step_dt, puck_pos, Vector3(-1.0, 0, 0), Vector3.ZERO,
+			GameRules.DEFAULT_SKATER_MAX_SPEED_M_S)
+	assert_gt(near, 0.0, "election must not collapse a near body to zero")
+	assert_lt(near, far, "the nearer body still ranks ahead on geometry")
+
+
 func test_lead_intercept_has_no_cliff_in_closing_speed() -> void:
 	# The defect was intermittent because the old model's feasible set was not an
 	# interval: an early point could be makeable at 6 m/s of closing and not at
@@ -326,11 +361,14 @@ func test_lead_intercept_agrees_with_the_election() -> void:
 	var traj: Array[Vector3] = AILoosePuckChase.race_trajectory(puck_pos, puck_vel)
 	var step_dt: float = AILoosePuckChase.RACE_LOOKAHEAD_S \
 			/ float(AILoosePuckChase.RACE_STEPS)
+	# Same solver, same walk, same margin, and the body's own stick — the self
+	# read passes reach where the election deliberately does not (see the reach
+	# block in AILoosePuckChase), so the agreement is of MODEL, not of arguments.
 	var elected: Vector3 = AILoosePuckChase.path_intercept_point(
 			traj, step_dt, puck_pos, AILoosePuckChase.path_intercept_time(
 					traj, step_dt, puck_pos, self_pos, self_vel,
 					sm._self_max_speed, AILoosePuckChase.setup_margin(puck_vel),
-					sm._chase_max_accel))
+					sm._chase_max_accel, sm._blade_reach))
 	var steered: Vector3 = sm._lead_intercept(
 			self_pos, self_vel, puck_pos, puck_vel)
 	assert_almost_eq(steered.distance_to(elected), 0.0, 0.001,
