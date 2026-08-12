@@ -278,15 +278,63 @@ func test_lead_intercept_moving_with_puck_picks_early_point() -> void:
 	assert_lt(out.z, 6.0, "closing chase resolves to a near intercept")
 
 
-func test_cruise_distance_matches_closed_form() -> void:
-	# From rest at A=12, V=9: t_acc = 0.75 s. At t=0.5 (accel phase):
-	# ½·12·0.25 = 1.5 m. At t=2.0: ½·12·0.5625 + 9·1.25 = 14.625 m.
-	sm._chase_max_accel = 12.0
-	sm._self_max_speed = 9.0
-	assert_almost_eq(sm._cruise_distance(0.0, 0.5), 1.5, 0.001)
-	assert_almost_eq(sm._cruise_distance(0.0, 2.0), 14.625, 0.001)
-	# Moving AWAY (v0 negative) covers strictly less ground.
-	assert_lt(sm._cruise_distance(-4.0, 2.0), sm._cruise_distance(0.0, 2.0))
+func test_lead_intercept_meets_a_puck_arriving_at_him() -> void:
+	# A puck rolling straight AT a body already closing on it — the retrieval the
+	# old private model got worst. It solved for a constant acceleration landing
+	# the body exactly on the path point at exactly T, which has no distance term
+	# (T ≥ 2·|v_puck − v_self| / A), so at 8 m/s of closing it declared every near
+	# point unmakeable and aimed 10.6 m down the line — 6.6 m BEHIND the bot, who
+	# was skating the other way at a puck due to reach him in half a second.
+	sm._chase_max_accel = GameRules.DEFAULT_SKATER_THRUST_M_S2
+	sm._self_max_speed = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
+	var puck_pos := Vector3(4, 0, 0)
+	var out: Vector3 = sm._lead_intercept(
+			Vector3.ZERO, Vector3(8, 0, 0), puck_pos, Vector3(-5, 0, 0))
+	assert_lt(out.distance_to(puck_pos), 4.0,
+			"meets the puck on its way in, not far down the ice behind him")
+	assert_gt(out.x, 0.0, "intercept stays in front of him, not behind")
+
+
+func test_lead_intercept_has_no_cliff_in_closing_speed() -> void:
+	# The defect was intermittent because the old model's feasible set was not an
+	# interval: an early point could be makeable at 6 m/s of closing and not at
+	# 8 m/s, dropping the search through to a far one. Two m/s of the bot's OWN
+	# speed moved the aim point 8 m. Sweep the axis and pin continuity.
+	sm._chase_max_accel = GameRules.DEFAULT_SKATER_THRUST_M_S2
+	sm._self_max_speed = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
+	var puck_pos := Vector3(4, 0, 0)
+	var prev := Vector3.INF
+	for closing: float in [0.0, 2.0, 4.0, 6.0, 8.0]:
+		var out: Vector3 = sm._lead_intercept(
+				Vector3.ZERO, Vector3(closing, 0, 0), puck_pos, Vector3(-5, 0, 0))
+		if prev.is_finite():
+			assert_lt(out.distance_to(prev), 1.5,
+					"aim point jumped between adjacent closing speeds (%.0f m/s)"
+					% closing)
+		prev = out
+
+
+func test_lead_intercept_agrees_with_the_election() -> void:
+	# The election assigns the chase; the body must go where it was elected on.
+	# These disagreed by 8 m before the solvers were unified.
+	sm._chase_max_accel = GameRules.DEFAULT_SKATER_THRUST_M_S2
+	sm._self_max_speed = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
+	var puck_pos := Vector3(4, 0, 0)
+	var puck_vel := Vector3(-5, 0, 0)
+	var self_pos := Vector3.ZERO
+	var self_vel := Vector3(8, 0, 0)
+	var traj: Array[Vector3] = AILoosePuckChase.race_trajectory(puck_pos, puck_vel)
+	var step_dt: float = AILoosePuckChase.RACE_LOOKAHEAD_S \
+			/ float(AILoosePuckChase.RACE_STEPS)
+	var elected: Vector3 = AILoosePuckChase.path_intercept_point(
+			traj, step_dt, puck_pos, AILoosePuckChase.path_intercept_time(
+					traj, step_dt, puck_pos, self_pos, self_vel,
+					sm._self_max_speed, AILoosePuckChase.setup_margin(puck_vel),
+					sm._chase_max_accel))
+	var steered: Vector3 = sm._lead_intercept(
+			self_pos, self_vel, puck_pos, puck_vel)
+	assert_almost_eq(steered.distance_to(elected), 0.0, 0.001,
+			"steering target is the election's own intercept point")
 
 
 # ── Slice 2: mouse / aim motion geometry ─────────────────────────────────────

@@ -1505,7 +1505,8 @@ static func loose_puck_race_lost(
 				s, caps_by_peer.get(pid), puck_pos)
 		var t: float = AILoosePuckChase.path_intercept_time(
 				traj, step_dt, puck_pos, s.position, s.velocity, speed, margin)
-		var meet: Vector3 = AILoosePuckChase.path_intercept_point(traj, step_dt, t)
+		var meet: Vector3 = AILoosePuckChase.path_intercept_point(
+				traj, step_dt, puck_pos, t)
 		var committed: bool = AILoosePuckChase.path_enters_band(traj, puck_pos,
 				s.position, AIActionScoring.CHASE_CONTEST_MARGIN_M) \
 				or AILoosePuckChase.committed_to_point(s, meet)

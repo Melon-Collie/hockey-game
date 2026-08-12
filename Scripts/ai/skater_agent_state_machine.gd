@@ -110,17 +110,6 @@ const ENGAGEMENT_PROXIMITY_M: float = 2.0        # blade-on-puck range
 # truth across role behaviors + chase logic. Reference it directly
 # below where needed.
 
-# Cap on lead lookahead so a barely-moving puck doesn't project an
-# intercept point a million seconds away. 3 s covers a full cross-ice
-# race: with the speed-capped reachability model below, a long chase now
-# resolves to a true far intercept instead of tail-aiming at the window's
-# edge and re-aiming every dispatch (a pursuit curve that trails the play).
-const CHASE_MAX_LOOKAHEAD_S: float = 3.0
-# Steps per chase trajectory walk. Granular enough that the rink clamp
-# catches a sliding puck hitting the boards mid-flight (so we don't aim
-# at a point inside the wall), cheap enough at the dispatch cadence
-# (same 0.125 s step as the original 1.5 s / 12-step walk).
-const CHASE_TRAJECTORY_STEPS: int = 24
 # Angling: when chasing an opposing CARRIER (not a loose puck), the
 # intercept point is shaded one stick-reach toward OUR net
 # (_shade_intercept_goal_side) so the approach comes in on the inside
@@ -132,18 +121,9 @@ const CHASE_TRAJECTORY_STEPS: int = 24
 # 1.5 m center-ice X-shift that was invisible from range and ignored
 # where the net actually was.)
 
-# Kinematic chase intercept. At each step T of the puck trajectory walk,
-# the bot is reachable iff the constant acceleration required to land at
-# `puck_traj(T)` at time T (starting from current pos & velocity) has
-# magnitude ≤ _chase_max_accel AND the resulting arrival speed stays within
-# _self_max_speed (see _lead_intercept). Set to this bot's own thrust
-# via apply_capabilities so the model reflects what the bot can
-# actually pull off; the default below mirrors SkaterController.thrust's
-# 12.0 default. The previous heuristic (effective_speed × T ≥ distance)
-# ignored starting velocity direction except as a small ±50% bias, so a bot
-# moving sideways relative to the puck would still be modelled as reaching
-# the intercept by skating-from-rest at REF_SPEED — produced bad angles
-# that the kinematic check rejects.
+# This bot's all-direction thrust — the redirect authority its own ETA reads
+# price the cross-momentum shed at (see _lead_intercept). Set to the real value
+# via apply_capabilities; the default mirrors SkaterController.thrust's 12.0.
 var _chase_max_accel: float = 12.0
 
 # Per-peer velocity-history smoothing for acceleration estimation.
@@ -6096,107 +6076,40 @@ static func _shade_intercept_goal_side(target: Vector3, our_net: Vector3) -> Vec
 	return Vector3(target.x + to_net.x * inv, target.y, target.z + to_net.z * inv)
 
 
-# `vmax` overrides the speed cap for the reachability walk (< 0 → the cruise
-# _self_max_speed). The chase passes its sprint-aware race cap — see
-# _chase_race_vmax.
+# Where to steer for a loose puck: the earliest point on its own predicted path
+# this body can meet it at, solved by THE SAME race read the election used to
+# assign this chase (AILoosePuckChase.path_intercept_time, over the shared
+# per-tick trajectory walk). One solver, so the body cannot skate to a different
+# spot than the one it was elected on.
+#
+# It used to run a private model, and the two disagreed by up to 8 m. That model
+# asked whether a single constant acceleration would put the body EXACTLY on the
+# path point at EXACTLY time T — a rendezvous constraint, not an arrival one, and
+# it has no distance term at all: |Δp − v·T| ≤ ½·A·T² reduces, for a body near
+# the puck, to T ≥ 2·|v_puck − v_self| / A. So a skater was charged for his own
+# momentum however close the puck was, and a puck 0.5 m off his stick read as
+# unreachable for 1.4 s at 8 m/s — he skated to a point 3.6 m further down the
+# line while the puck sat by his skates. It also fought its own arrival slack
+# (which exists to make him arrive EARLY) and its feasible set was not an
+# interval, so 2 m/s of the bot's own speed could move the aim point 8 m.
+# time_to_arrive prices the cross-momentum shed as the delay it physically is,
+# and is net-aware besides — the private walk would aim a route through the cage.
+#
+# `vmax` overrides the speed cap for the race walk (< 0 → the cruise
+# _self_max_speed). The chase passes its sprint-aware race cap.
 func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3,
 		puck_vel: Vector3, vmax: float = -1.0) -> Vector3:
 	var cap: float = vmax if vmax > 0.0 else _self_max_speed
-	var dt: float = CHASE_MAX_LOOKAHEAD_S / float(CHASE_TRAJECTORY_STEPS)
-	# Use puck-physics-aware prediction (ice friction + board bounces) — the same
-	# step the host drives the loose puck with, so the intercept solves against
-	# where the puck actually ends up. Constant-velocity over 1.5 s overshoots.
-	var traj: Array[Vector3] = AITrajectory.predict_puck(
-			puck_pos, puck_vel, CHASE_TRAJECTORY_STEPS, dt)
-	# Kinematic reachability: for each step T on the puck trajectory,
-	# solve for the constant control acceleration `a` that would land
-	# the bot at `traj[i]` at time T starting from (self_pos, self_vel):
-	#
-	#     traj[i] = self_pos + self_vel·T + ½·a·T²
-	#  ⇒  a = 2·(traj[i] − self_pos − self_vel·T) / T²
-	#
-	# The bot is reachable iff BOTH necessary conditions hold:
-	#   1. |a| ≤ _chase_max_accel — the thrust to bend the current velocity
-	#      onto the target exists (this is what charges a bot moving the
-	#      WRONG way for its turn). Compared in squared form to skip the
-	#      sqrt and per-step T² divisions:
-	#          |a|² ≤ A_max²  ⇔  A_max²·T⁴ − 4·|residual|² ≥ 0
-	#   2. The top-speed cap: the distance to traj[i] must fit inside what
-	#      an accelerate-then-cruise sprint covers in T — accelerate along
-	#      the target line from the CURRENT velocity component v₀ at A_max
-	#      until _self_max_speed, then cruise (see _cruise_distance).
-	#      Constraint 1 alone claimed ½·A·T² of travel from rest (13.5 m in
-	#      1.5 s at A=12 — ~40% beyond what a speed-capped skater covers),
-	#      so the bot picked intercept points EARLIER on the puck's path
-	#      than its body could make, arrived after the puck had passed, and
-	#      trailed the whole race — the "bad chase angle".
-	#   Both are necessary, neither sufficient alone; their conjunction can
-	#   still be a touch optimistic vs. true optimal control (the cruise
-	#   bound doesn't charge for shedding perpendicular velocity), and the
-	#   per-dispatch re-evaluation absorbs that residual error.
-	#
-	# First step where both hold is the intercept. When the accel bracket
-	# spans two steps (prev < 0 ≤ curr), linear-interp T inside the step
-	# instead of always returning traj[i] (over-runs by up to dt); a
-	# speed-cap flip takes traj[i] directly (no comparable surplus units).
-	var a_max_sq: float = _chase_max_accel * _chase_max_accel
-	# Fast pucks demand arrival SLACK, not a dead heat: reachability is
-	# tested against t − KILL_SETUP_MARGIN_S so the aim point sits far
-	# enough along the path that the body genuinely arrives early and sets
-	# (blade to the gate) instead of meeting the puck at pace. Zero-slack
-	# aims produced the sliding-intercept treadmill on rims: miss by a
-	# hair, re-solve to a new dead-heat point further along, miss again.
-	# Slow pucks keep the exact test — the intercept converges on its own.
-	# Same seam the race reads price with (AILoosePuckChase.setup_margin), so
-	# the committed chase and the election that assigned it cannot disagree
-	# about how early this puck has to be met.
-	var arrival_slack: float = AILoosePuckChase.setup_margin(puck_vel)
-	var prev_surplus: float = -INF
-	var prev_pos: Vector3 = self_pos
-	for i: int in traj.size():
-		var t_step: float = (i + 1) * dt - arrival_slack
-		if t_step <= 0.0:
-			prev_surplus = -INF
-			prev_pos = traj[i]
-			continue
-		var t_sq: float = t_step * t_step
-		var t_4: float = t_sq * t_sq
-		var residual_x: float = traj[i].x - self_pos.x - self_vel.x * t_step
-		var residual_z: float = traj[i].z - self_pos.z - self_vel.z * t_step
-		var residual_sq: float = residual_x * residual_x + residual_z * residual_z
-		var surplus: float = a_max_sq * t_4 - 4.0 * residual_sq
-		var dist_x: float = traj[i].x - self_pos.x
-		var dist_z: float = traj[i].z - self_pos.z
-		var dist: float = sqrt(dist_x * dist_x + dist_z * dist_z)
-		var speed_ok: bool = true
-		if dist > 0.001:
-			var v0_along: float = (self_vel.x * dist_x + self_vel.z * dist_z) / dist
-			speed_ok = _cruise_distance(v0_along, t_step, cap) >= dist
-		if surplus >= 0.0 and speed_ok:
-			if prev_surplus > -INF and prev_surplus < 0.0:
-				var frac: float = -prev_surplus / (surplus - prev_surplus)
-				return prev_pos.lerp(traj[i], frac)
-			return traj[i]
-		prev_surplus = surplus if speed_ok else -INF
-		prev_pos = traj[i]
-	# Puck unreachable inside the lookahead window — aim at the last
-	# projected position so we at least head in the right direction.
-	return traj[traj.size() - 1] if traj.size() > 0 else puck_pos
-
-
-# Distance a sprint covers along one axis in `t` seconds: accelerate from
-# `v0` (the current velocity component along the target line — negative when
-# moving away, so the turn-around is charged) at _chase_max_accel until the
-# speed cap, then cruise at it. The 1D leg of _lead_intercept's reachability
-# check (constraint 2 above). `vmax` < 0 → the cruise _self_max_speed.
-func _cruise_distance(v0: float, t: float, vmax: float = -1.0) -> float:
-	var cap: float = vmax if vmax > 0.0 else _self_max_speed
-	var v_start: float = minf(v0, cap)
-	var t_acc: float = (cap - v_start) / maxf(_chase_max_accel, 0.001)
-	if t <= t_acc:
-		return v_start * t + 0.5 * _chase_max_accel * t * t
-	return v_start * t_acc + 0.5 * _chase_max_accel * t_acc * t_acc \
-			+ cap * (t - t_acc)
+	var traj: Array[Vector3] = AILoosePuckChase.race_trajectory(puck_pos, puck_vel)
+	var step_dt: float = AILoosePuckChase.RACE_LOOKAHEAD_S \
+			/ float(AILoosePuckChase.RACE_STEPS)
+	# Own attribute-scaled thrust, not the league default: this is the one caller
+	# reasoning about ITSELF, so a high-Acceleration build genuinely redirects
+	# onto an off-axis intercept sooner.
+	var t: float = AILoosePuckChase.path_intercept_time(
+			traj, step_dt, puck_pos, self_pos, self_vel, cap,
+			AILoosePuckChase.setup_margin(puck_vel), _chase_max_accel)
+	return AILoosePuckChase.path_intercept_point(traj, step_dt, puck_pos, t)
 
 
 # True iff a TEAMMATE (not me, not opp) currently has the puck. Used to

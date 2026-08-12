@@ -158,9 +158,15 @@ static func race_trajectory(puck_pos: Vector3, puck_vel: Vector3) -> Array[Vecto
 # When no step is makeable the race resolves at the settled end of the walk: the
 # skater collects the puck where it stops (or exits the horizon), arriving no
 # earlier than the horizon itself.
+#
+# `accel` is the redirect authority the ETA prices the cross-momentum shed at.
+# Cross-player callers (the election, which must rank every bot on one shared
+# baseline) leave it at the league default; a bot solving its OWN chase passes
+# its attribute-scaled max_accel, exactly as time_to_arrive documents.
 static func path_intercept_time(traj: Array[Vector3], step_dt: float,
 		puck_pos: Vector3, skater_pos: Vector3, skater_vel: Vector3,
-		max_speed: float, margin: float = KILL_SETUP_MARGIN_S) -> float:
+		max_speed: float, margin: float = KILL_SETUP_MARGIN_S,
+		accel: float = AIActionScoring.SHED_ACCEL_DEFAULT_M_S2) -> float:
 	if traj.is_empty():
 		return INF
 	for i: int in traj.size():
@@ -176,7 +182,7 @@ static func path_intercept_time(traj: Array[Vector3], step_dt: float,
 		if dx * dx + dz * dz > reach * reach:
 			continue
 		var eta: float = AIActionScoring.time_to_arrive(
-				skater_pos, traj[i], skater_vel, max_speed)
+				skater_pos, traj[i], skater_vel, max_speed, accel)
 		if eta > t_set:
 			continue
 		# Crossing found — now solve WHERE in the step it happens. Returning
@@ -185,32 +191,45 @@ static func path_intercept_time(traj: Array[Vector3], step_dt: float,
 		# exactly tied, so the election resolved them by peer id instead of by
 		# who actually gets there, and the race-lost decline could not see a
 		# margin narrower than the grid. Linear-interpolate the arrival slack
-		# s(t) = (t − margin) − ETA(t) across the step it changes sign in — the
-		# same sub-step solve the chase's own _lead_intercept runs on its
-		# reachability surplus. Exact for a settled puck: s is then linear in t,
-		# so the crossing IS the skater's ETA.
+		# s(t) = (t − margin) − ETA(t) across the step it changes sign in.
+		# Exact for a settled puck: s is then linear in t, so the crossing IS
+		# the skater's ETA.
 		var prev_t: float = i * step_dt
 		var prev_point: Vector3 = traj[i - 1] if i > 0 else puck_pos
 		var prev_slack: float = (prev_t - margin) - AIActionScoring.time_to_arrive(
-				skater_pos, prev_point, skater_vel, max_speed)
+				skater_pos, prev_point, skater_vel, max_speed, accel)
 		if prev_slack >= 0.0:
 			return prev_t   # already makeable at the left endpoint
 		return prev_t + (t_step - prev_t) * (-prev_slack / (t_set - eta - prev_slack))
 	var horizon: float = traj.size() * step_dt
 	return maxf(horizon, AIActionScoring.time_to_arrive(
-			skater_pos, traj[-1], skater_vel, max_speed))
+			skater_pos, traj[-1], skater_vel, max_speed, accel))
 
 
 # The path point a path_intercept_time result names — the spot on the walk the
-# skater actually meets the puck at, to the walk's resolution. Callers that need
-# to ask something ABOUT the intercept (is that body committed to going there?)
-# map the time back through this so they can never disagree with the race read
-# that produced it. Times past the horizon resolve at the settled end of the walk.
+# skater actually meets the puck at. Callers that need to ask something ABOUT
+# the intercept (is that body committed to going there? where do I steer?) map
+# the time back through this so they can never disagree with the race read that
+# produced it. Times past the horizon resolve at the settled end of the walk.
+#
+# INTERPOLATED, because the time it maps is a sub-step solve: snapping to the
+# nearest sample threw away exactly the precision path_intercept_time exists to
+# recover, and at 0.25 s steps that is up to ~1 m of aim error at rim speeds.
+# `puck_pos` is the walk's origin (the path point at t=0), so an intercept
+# inside the first step — a puck arriving at a skater who is already there,
+# which is the whole near-puck regime — resolves between the puck's spot NOW
+# and traj[0] rather than being clamped forward onto traj[0].
 static func path_intercept_point(traj: Array[Vector3], step_dt: float,
-		t: float) -> Vector3:
+		puck_pos: Vector3, t: float) -> Vector3:
 	if traj.is_empty():
 		return Vector3.INF
-	return traj[clampi(int(round(t / step_dt)) - 1, 0, traj.size() - 1)]
+	# traj[i] is the path at (i+1)*step_dt, so time t sits at index t/step_dt − 1;
+	# index −1 is the origin.
+	var idx: float = t / step_dt - 1.0
+	var hi: int = clampi(int(ceil(idx)), 0, traj.size() - 1)
+	var lo: int = hi - 1
+	var from: Vector3 = traj[lo] if lo >= 0 else puck_pos
+	return from.lerp(traj[hi], clampf(idx - float(lo), 0.0, 1.0))
 
 
 # ── Incidental reach (a free puck at your feet is yours) ─────────────────────
