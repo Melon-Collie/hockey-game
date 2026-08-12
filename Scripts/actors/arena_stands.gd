@@ -228,6 +228,28 @@ extends Node3D
 		seat_shade_variation = v
 		_request_rebuild()
 
+@export_group("Rafter Banners")
+@export var banners_enabled: bool = true:
+	set(v):
+		banners_enabled = v
+		_request_rebuild()
+# Hang height of the banner cloth. Width follows from the atlas cell's aspect,
+# so this is the only dimension to touch.
+@export_range(1.0, 10.0) var banner_height: float = 4.2:
+	set(v):
+		banner_height = v
+		_request_rebuild()
+
+@export_group("Ribbon Board")
+@export var ribbon_enabled: bool = true:
+	set(v):
+		ribbon_enabled = v
+		_request_rebuild()
+# Metres of board travelling past a fixed point per second. Real ribbon boards
+# run a walking pace — fast enough to be alive in peripheral vision, slow enough
+# to read a sponsor before it leaves.
+@export_range(0.0, 12.0) var ribbon_scroll_speed: float = 2.4
+
 @export_group("")
 # Editor escape hatch: also drops the static layout cache, so geometry *code*
 # edits mid-session can't be masked by a stale cached bowl.
@@ -259,6 +281,15 @@ const _BENCH_CLEAR_ROWS: int = 2      # spectator rows cleared behind the glass
 const _BENCH_CLEAR_MARGIN: float = 0.3
 const _BENCH_SEAT_X_OFFSET: float = 0.33  # seat center outward of the first tread's inner edge
 const _BENCH_SEAT_HEIGHT: float = 0.46
+# Penalty boxes and the off-ice officials between them, on the −X boards
+# opposite the player benches — which is where a real rink puts them, and which
+# is also the only stretch of this bowl that was an unbroken run of crowd. Two
+# boxes flank centre ice with the timekeeper's table in the gap, so the whole
+# assembly spans |z| < PENALTY_BOX_CENTER_Z + PENALTY_BOX_HALF_LEN.
+const PENALTY_BOX_CENTER_Z: float = 2.9
+const PENALTY_BOX_HALF_LEN: float = 1.7
+const _OFFICIALS_HALF_LEN: float = 1.0
+const _OFFICIALS_HEIGHT: float = 0.78
 # Spectator body dimensions — stacked boxes matching the skater art style.
 const _BODY_SIZE: Vector3 = Vector3(0.28, 0.45, 0.28)
 const _HEAD_SIZE: Vector3 = Vector3(0.22, 0.22, 0.22)
@@ -291,6 +322,30 @@ const _SEAT_Y_LIFT: float = 0.002
 # Seats roll their shade from their own stream. Sharing the crowd's would tie
 # the two together — a change to seat jitter would repaint every spectator.
 const _SEAT_SEED: int = 90210
+
+# ── Ribbon board ─────────────────────────────────────────────────────────────
+# The LED strip on the upper deck's fascia — the wall the lower bowl's back rows
+# sit against, which is where a real arena puts one and which is otherwise a
+# blank band of concrete right in the eyeline of every high camera.
+const _RIBBON_HEIGHT: float = 0.55
+# Stood this far proud of the fascia so the two faces are never coplanar.
+const _RIBBON_INSET: float = 0.02
+# Whole number of repeats around the bowl, and it must stay whole: the strip
+# wraps in U, so a fractional count would put a hard seam where the band closes.
+const _RIBBON_REPEATS: int = 3
+
+# ── Rafter banners ───────────────────────────────────────────────────────────
+# Hung inboard of the shell wall so they read as suspended over the bowl rather
+# than as signs bolted to it, and high enough that the top deck's back row is
+# well below them.
+const _BANNER_INBOARD: float = 2.0
+# Where the banners' top edge sits in the shell's height, as a fraction. Leaves
+# the roof space above them dark, which is the whole reason they read as hanging
+# from something rather than floating.
+const _BANNER_TOP_FRACTION: float = 0.86
+# Gap between a banner's two printed faces. Cloth is thinner than this; the
+# number is set by depth precision at 30 m, not by upholstery.
+const _BANNER_THICKNESS: float = 0.02
 
 # Civilian shirts/coats for the neutral fan slice.
 var _neutral_body_palette: Array[Color] = [
@@ -330,6 +385,16 @@ var _flashbulbs: CrowdFlashbulbs = null
 # Set while set_crowd_rows writes both row counts, so the two setters don't
 # each trigger a rebuild of their own.
 var _suspend_rebuild: bool = false
+# Ribbon board: the strip SubViewport and the material holding its texture, kept
+# so exit teardown can drop the binding before the RenderingServer finalizes,
+# plus the world span of one repeat, which converts the scroll from m/s to UV/s.
+var _ribbon_vp: SubViewport = null
+var _ribbon_material: StandardMaterial3D = null
+var _ribbon_span_m: float = 0.0
+# Rafter banners: same story, one atlas viewport for the whole roof.
+var _banner_vp: SubViewport = null
+var _banner_material: StandardMaterial3D = null
+var _render_targets_freed: bool = false
 
 # geometry key → layout dict {terrace_mesh, shell_mesh, body/head/seat mms,
 # away_flags, paint_key}.
@@ -352,6 +417,39 @@ static var _layout_cache: Dictionary = {}
 static func release_shared_cache() -> void:
 	_crowd_material = null
 	_layout_cache.clear()
+
+
+# Release the ribbon strip's render target and its material binding before Godot
+# finalizes the RenderingServer on quit — same contract, and same reasoning, as
+# HockeyRink._teardown_render_targets and Jumbotron._teardown_viewport: a
+# ViewportTexture still bound at exit takes its viewport and that viewport's
+# canvas and text-shaping RIDs down after the server, which reports them leaked.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_teardown_render_targets()
+
+
+func _exit_tree() -> void:
+	_teardown_render_targets()
+
+
+func _teardown_render_targets() -> void:
+	if _render_targets_freed:
+		return
+	_render_targets_freed = true
+	set_process(false)
+	if _ribbon_material != null:
+		_ribbon_material.albedo_texture = null
+	_ribbon_material = null
+	if is_instance_valid(_ribbon_vp):
+		_ribbon_vp.free()
+	_ribbon_vp = null
+	if _banner_material != null:
+		_banner_material.albedo_texture = null
+	_banner_material = null
+	if is_instance_valid(_banner_vp):
+		_banner_vp.free()
+	_banner_vp = null
 
 
 func _ready() -> void:
@@ -416,6 +514,11 @@ func set_crowd_rows(lower: int, upper: int) -> void:
 func _rebuild() -> void:
 	if rink_length <= 0.0 or rink_width <= 0.0 or num_terraces <= 0:
 		return
+	# A prior _exit_tree (a reparent, say) may have latched the teardown guard;
+	# clear it so a genuine later teardown still frees what this build creates.
+	_render_targets_freed = false
+	_ribbon_material = null
+	_banner_material = null
 	for child: Node in get_children():
 		child.queue_free()
 	var layout: Dictionary = _get_or_build_layout()
@@ -428,6 +531,11 @@ func _rebuild() -> void:
 		_add_seats(layout)
 	_add_spectators(layout)
 	_build_benches()
+	_build_penalty_boxes()
+	if ribbon_enabled:
+		_add_ribbon_board()
+	if banners_enabled:
+		_add_rafter_banners()
 
 
 # ── Layout cache ─────────────────────────────────────────────────────────────
@@ -974,6 +1082,184 @@ func _add_spectators(layout: Dictionary) -> void:
 	add_child(_flashbulbs)
 
 
+# ── Ribbon board ─────────────────────────────────────────────────────────────
+
+# Turn one of this bowl's sampled paths into the {pos, inward} stations
+# BoardAdBandBuilder wants.
+#
+# The traversal is REVERSED on the way in, because this file and HockeyRink wind
+# their perimeters oppositely: _sample_offset_path runs bottom edge → left → top
+# → right, while HockeyRink's stations run right → top → left → bottom. Arc
+# length is the band's U axis, so feeding this bowl's own order would run U the
+# other way round the building and hang every wordmark mirrored.
+#
+# Reversing flips the tangent, so inward — which must still point at the rink —
+# is the +90° rotation here where the un-reversed path wanted −90°. Tangents
+# come from a central difference so a station on a corner blends its two
+# neighbours instead of inheriting one segment's normal wholesale.
+func _path_stations(offset: float) -> Array:
+	var pts: PackedVector2Array = _sample_offset_path(offset)
+	pts.reverse()
+	var stations: Array = []
+	var count: int = pts.size()
+	for i: int in count:
+		var prev: Vector2 = pts[(i - 1 + count) % count]
+		var next: Vector2 = pts[(i + 1) % count]
+		var tangent: Vector2 = (next - prev).normalized()
+		stations.append({
+			"pos": pts[i],
+			"inward": Vector2(-tangent.y, tangent.x),
+		})
+	return stations
+
+
+# One continuous band around the fascia, sampled with U repeating _RIBBON_REPEATS
+# times, so the whole board is a single mesh and a single material — and the
+# scroll is one UV write per frame rather than anything rebuilt.
+func _add_ribbon_board() -> void:
+	if upper_terraces <= 0:
+		return   # no upper deck means no fascia to mount it on
+	var stations: Array = _path_stations(_upper_deck_inner_offset())
+	var cumulative: PackedFloat32Array = BoardAdBandBuilder.cumulative_arcs(stations)
+	var perimeter: float = BoardAdBandBuilder.perimeter_of(cumulative)
+	var centre_y: float = (_lower_top_tread_y() + _upper_deck_base_y()) * 0.5
+	var band: ArrayMesh = BoardAdBandBuilder.build_band(stations, cumulative,
+			[Vector2(0.0, perimeter)] as Array[Vector2],
+			[Rect2(0.0, 0.0, float(_RIBBON_REPEATS), 1.0)] as Array[Rect2],
+			_RIBBON_INSET,
+			centre_y - _RIBBON_HEIGHT * 0.5, centre_y + _RIBBON_HEIGHT * 0.5)
+	if band == null:
+		return
+
+	var strip_vp := SubViewport.new()
+	strip_vp.name = "RibbonStripViewport"
+	strip_vp.size = RibbonPainter.strip_size(AdBrands.BRANDS.size())
+	strip_vp.transparent_bg = false
+	strip_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	strip_vp.disable_3d = true
+	strip_vp.handle_input_locally = false
+	strip_vp.gui_disable_input = true
+	add_child(strip_vp)
+	_ribbon_vp = strip_vp
+
+	var painter := RibbonPainter.new()
+	painter.brands = AdBrands.BRANDS
+	strip_vp.add_child(painter)
+
+	var mi := MeshInstance3D.new()
+	mi.name = "RibbonBoard"
+	mi.mesh = band
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = strip_vp.get_texture()
+	# Unshaded so the board is its own light source rather than something the
+	# ceiling rig has to reach, which at this height and angle it does not.
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	# Double-sided like every other band in the project: BoardAdBandBuilder's
+	# winding does not survive Godot's culling the way the world-space geometry
+	# suggests it should (see HockeyRink._rebuild), so nothing built by it relies
+	# on which face the renderer thinks is front.
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
+
+	_ribbon_material = mat
+	# One repeat spans this much wall, which converts the scroll speed from
+	# metres per second into UV per second.
+	_ribbon_span_m = perimeter / float(_RIBBON_REPEATS)
+	# Editor previews hold still: a @tool node redrawing every frame for a
+	# scrolling sign is churn the editor does not need.
+	set_process(not Engine.is_editor_hint())
+
+
+func _process(delta: float) -> void:
+	if _ribbon_material == null or _ribbon_span_m <= 0.0:
+		return
+	var offset: Vector3 = _ribbon_material.uv1_offset
+	offset.x = fposmod(offset.x + delta * ribbon_scroll_speed / _ribbon_span_m, 1.0)
+	_ribbon_material.uv1_offset = offset
+
+
+# ── Rafter banners ───────────────────────────────────────────────────────────
+
+# Banners are spaced evenly around a ring inboard of the shell and built as one
+# band, exactly like the boards' ad panels — a 2.6 m banner on a ring this wide
+# is very nearly flat, so following the arc costs nothing and saves writing a
+# second quad builder.
+func _add_rafter_banners() -> void:
+	if shell_height <= 0.0 or BannerRegistry.BANNERS.is_empty():
+		return
+	var stations: Array = _path_stations(_shell_offset() - _BANNER_INBOARD)
+	var cumulative: PackedFloat32Array = BoardAdBandBuilder.cumulative_arcs(stations)
+	var perimeter: float = BoardAdBandBuilder.perimeter_of(cumulative)
+	var count: int = BannerRegistry.BANNERS.size()
+	var width: float = banner_height \
+			* float(BannerPainter.CELL_PX.x) / float(BannerPainter.CELL_PX.y)
+	if width <= 0.0 or width * count >= perimeter:
+		return
+
+	var placements: Array[Vector2] = []
+	var uv_rects: Array[Rect2] = []
+	for i: int in count:
+		# Evenly spaced around the ring, each centred on its share of it.
+		var centre: float = perimeter * (float(i) + 0.5) / float(count)
+		placements.append(Vector2(centre - width * 0.5, width))
+		uv_rects.append(BannerPainter.cell_uv(i, count))
+
+	var top_y: float = _top_tread_y() + shell_height * _BANNER_TOP_FRACTION
+	var band: ArrayMesh = BoardAdBandBuilder.build_band(stations, cumulative,
+			placements, uv_rects, 0.0, top_y - banner_height, top_y)
+	if band == null:
+		return
+	# Cloth has two sides and a real banner is printed on both. A single
+	# double-sided quad would show the reverse mirrored, so the back is its own
+	# surface hung _BANNER_THICKNESS behind the front with its U reversed —
+	# which reads right from outside the ring and keeps the two off each other's
+	# depth.
+	var back_rects: Array[Rect2] = []
+	for cell: Rect2 in uv_rects:
+		back_rects.append(Rect2(cell.position.x + cell.size.x, cell.position.y,
+				-cell.size.x, cell.size.y))
+	var back_band: ArrayMesh = BoardAdBandBuilder.build_band(stations, cumulative,
+			placements, back_rects, -_BANNER_THICKNESS,
+			top_y - banner_height, top_y)
+
+	var atlas_vp := SubViewport.new()
+	atlas_vp.name = "BannerAtlasViewport"
+	atlas_vp.size = BannerPainter.atlas_size(count)
+	atlas_vp.transparent_bg = true
+	atlas_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	atlas_vp.disable_3d = true
+	atlas_vp.handle_input_locally = false
+	atlas_vp.gui_disable_input = true
+	add_child(atlas_vp)
+	_banner_vp = atlas_vp
+
+	var painter := BannerPainter.new()
+	painter.banners = BannerRegistry.BANNERS
+	atlas_vp.add_child(painter)
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = atlas_vp.get_texture()
+	# Unshaded: nothing lights the roof space, so a lit banner is a black
+	# rectangle. Double-sided per surface, since BoardAdBandBuilder's winding
+	# does not survive culling the way the geometry suggests (see
+	# HockeyRink._rebuild) — the two surfaces, not the culling, make the sides.
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_banner_material = mat
+
+	for face: Array in [["RafterBanners", band], ["RafterBannersBack", back_band]]:
+		if face[1] == null:
+			continue
+		var mi := MeshInstance3D.new()
+		mi.name = face[0]
+		mi.mesh = face[1]
+		mi.material_override = mat
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mi)
+
+
 # ── Seats ────────────────────────────────────────────────────────────────────
 #
 # Same shape as the crowd — per-section MultiMeshes over the same angular
@@ -1178,18 +1464,20 @@ func _spectator_material() -> ShaderMaterial:
 	return _crowd_material
 
 
-# True when a spectator slot falls inside the player-bench cutout: the first
-# _BENCH_CLEAR_ROWS rows on the bench (+X) side, along the full stretch from
-# one bench's far end to the other's — including the gap BETWEEN the bench
-# spans, which is the gate/staff area; fans seated at ice level in that
-# sliver read as people sitting between the two benches.
+# True when a spectator slot falls inside a rinkside furniture cutout: the first
+# _BENCH_CLEAR_ROWS rows on either side of the bowl, along the full stretch the
+# furniture occupies — the player benches on +X, the penalty boxes and officials'
+# table on −X. Both spans include the GAP between their two halves, which is
+# gate and staff area rather than seating; fans at ice level in that sliver read
+# as people sitting between the benches.
 # Sample points are (x, z) packed as Vector2(x, y).
 func _in_bench_zone(row: int, p: Vector2) -> bool:
 	if row >= _BENCH_CLEAR_ROWS:
 		return false
-	if p.x < 0.0:
-		return false
-	return absf(p.y) < BENCH_CENTER_Z + BENCH_HALF_LEN + _BENCH_CLEAR_MARGIN
+	if p.x >= 0.0:
+		return absf(p.y) < BENCH_CENTER_Z + BENCH_HALF_LEN + _BENCH_CLEAR_MARGIN
+	# −X: the penalty boxes and the officials' table between them.
+	return absf(p.y) < PENALTY_BOX_CENTER_Z + PENALTY_BOX_HALF_LEN + _BENCH_CLEAR_MARGIN
 
 
 # ── Player benches ───────────────────────────────────────────────────────────
@@ -1229,6 +1517,76 @@ func _build_benches() -> void:
 		backrest.mesh = back_mesh
 		backrest.position = Vector3(x_inner + 0.57, tread_y + 0.55, center_z)
 		add_child(backrest)
+
+
+# The −X answer to the benches: a box per team either side of centre ice with
+# the off-ice officials' table in the gap. Same construction as _build_benches
+# and, like it, empty furniture — 3v3 fields no reserves and the game calls no
+# penalties, so nobody ever sits here. It earns its place by breaking up the
+# only stretch of this bowl that ran crowd from corner to corner, and by putting
+# something behind the −X glass for the boards' gates to open onto.
+func _build_penalty_boxes() -> void:
+	var x_inner: float = -(rink_width / 2.0 + base_outward_offset)
+	var tread_y: float = stands_base_y
+
+	for side: float in [-1.0, 1.0]:
+		var center_z: float = side * PENALTY_BOX_CENTER_Z
+		# Matches the benches' convention: the +Z-half team is home.
+		var team_color: Color = home_color if side > 0.0 else away_color
+
+		var seat := MeshInstance3D.new()
+		seat.name = "PenaltySeatHome" if side > 0.0 else "PenaltySeatAway"
+		var seat_mesh := BoxMesh.new()
+		seat_mesh.size = Vector3(0.42, _BENCH_SEAT_HEIGHT, PENALTY_BOX_HALF_LEN * 2.0)
+		var seat_mat := StandardMaterial3D.new()
+		seat_mat.albedo_color = team_color.darkened(0.35)
+		seat_mat.roughness = 0.8
+		seat_mesh.material = seat_mat
+		seat.mesh = seat_mesh
+		seat.position = Vector3(x_inner - _BENCH_SEAT_X_OFFSET,
+				tread_y + _BENCH_SEAT_HEIGHT * 0.5, center_z)
+		add_child(seat)
+
+		var backrest := MeshInstance3D.new()
+		backrest.name = "PenaltyBackHome" if side > 0.0 else "PenaltyBackAway"
+		var back_mesh := BoxMesh.new()
+		back_mesh.size = Vector3(0.06, 0.5, PENALTY_BOX_HALF_LEN * 2.0)
+		var back_mat := StandardMaterial3D.new()
+		back_mat.albedo_color = Color(0.20, 0.20, 0.22)
+		back_mat.roughness = 0.9
+		back_mesh.material = back_mat
+		backrest.mesh = back_mesh
+		backrest.position = Vector3(x_inner - 0.57, tread_y + 0.55, center_z)
+		add_child(backrest)
+
+		# Divider between this box and the officials, so the three read as three
+		# compartments rather than one long shelf.
+		var divider := MeshInstance3D.new()
+		divider.name = "PenaltyDividerHome" if side > 0.0 else "PenaltyDividerAway"
+		var divider_mesh := BoxMesh.new()
+		divider_mesh.size = Vector3(0.72, 1.05, 0.07)
+		var divider_mat := StandardMaterial3D.new()
+		divider_mat.albedo_color = Color(0.24, 0.25, 0.28)
+		divider_mat.roughness = 0.9
+		divider_mesh.material = divider_mat
+		divider.mesh = divider_mesh
+		divider.position = Vector3(x_inner - 0.36, tread_y + 0.525,
+				side * _OFFICIALS_HALF_LEN)
+		add_child(divider)
+
+	# Timekeeper's table: a taller counter than the players' bench, since the
+	# crew works standing at it rather than sitting on it.
+	var table := MeshInstance3D.new()
+	table.name = "OfficialsTable"
+	var table_mesh := BoxMesh.new()
+	table_mesh.size = Vector3(0.60, _OFFICIALS_HEIGHT, _OFFICIALS_HALF_LEN * 2.0)
+	var table_mat := StandardMaterial3D.new()
+	table_mat.albedo_color = Color(0.17, 0.18, 0.21)
+	table_mat.roughness = 0.85
+	table_mesh.material = table_mat
+	table.mesh = table_mesh
+	table.position = Vector3(x_inner - 0.42, tread_y + _OFFICIALS_HEIGHT * 0.5, 0.0)
+	add_child(table)
 
 
 # Seat-surface center of a team's bench (top face of the seat block), in

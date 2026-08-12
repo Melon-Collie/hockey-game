@@ -9,11 +9,13 @@ extends SceneTree
 # boards, the same painted ice, the same ad layout derived from the same
 # constants. Nothing here can look right while the game looks wrong.
 #
-# The shots cover what no single view can: SHOT_WIDE and SHOT_BROADCAST for the
-# bowl, SHOT_BOARDS and SHOT_CORNER for the dasher panels at a reading angle
-# (and through the corner curve, where the ribbon has to follow the arc), and
-# SHOT_TOPDOWN for what the gameplay camera actually sees — which is the view
-# that decides whether board ads were worth it, since it grazes them.
+# The shots cover what no single view can: `wide` and `broadcast` for the bowl,
+# `boards` and `corner` for the dasher panels at a reading angle (and through the
+# corner curve, where the ribbon has to follow the arc), `stands` for the seating,
+# `rafters` for the banners and the ribbon board, `ice_ads` for the sheet, and
+# `topdown` for what the gameplay camera actually sees — which is the view that
+# decides whether anything mounted on a vertical surface was worth it, since it
+# grazes every one of them.
 #
 # One caveat, from the renderer rather than the scene: the compatibility renderer
 # drops SDFGI, SSR, and volumetric fog, so these frames are flatter and less
@@ -54,8 +56,18 @@ const FRAMES_PER_SHOT: int = 3
 const SHOTS: Array[Dictionary] = [
 	{
 		"name": "wide",
-		"pos": Vector3(34.0, 24.0, 46.0), "look_at": Vector3(0.0, 1.0, 0.0),
-		"fov": 50.0, "note": "the bowl from a corner — rink, stands, scoreboard",
+		# Above the banner ring rather than beyond it: the banners hang at the
+		# shell wall, so a corner camera at their own height puts one in the lens
+		# and the building behind it. Looking down over them keeps both.
+		"pos": Vector3(38.0, 34.0, 52.0), "look_at": Vector3(0.0, 2.0, 0.0),
+		"fov": 46.0, "note": "the bowl from a corner — rink, stands, scoreboard",
+	},
+	{
+		"name": "rafters",
+		# Aimed across at the far corner's banners rather than up through the
+		# middle, which is where the scoreboard hangs.
+		"pos": Vector3(8.0, 8.0, 20.0), "look_at": Vector3(-20.0, 18.0, 42.0),
+		"fov": 58.0, "note": "up into the roof — banners, and the ribbon below them",
 	},
 	{
 		"name": "broadcast",

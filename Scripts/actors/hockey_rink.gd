@@ -189,6 +189,36 @@ const AD_RESERVE_STEP: float = 0.1
 # detail, so this sits an order of magnitude below the ice albedo's 80 px/m.
 const ICE_AD_PX_PER_METER: float = 40.0
 
+# ── Gates ────────────────────────────────────────────────────────────────────
+# Doors cut into the boards: one at the inner end of each player bench, one at
+# the outer end of each penalty box, and one per end board for the resurfacer
+# crew — which until now drove in through a solid wall.
+#
+# Drawn as an outline with a transparent interior, so the door is the board's
+# own white with a frame around it rather than a differently-coloured patch that
+# has to match the wall. Sits 1.2 mm proud: between the painted stripes at 1 mm
+# and the ad panels at 1.5 mm, so no two of the three can ever land coplanar.
+const GATE_INSET: float = 0.0012
+const GATE_WIDTH: float = 1.2
+const GATE_CLEARANCE: float = 0.2   # bare board an ad keeps off a gate
+# Where the resurfacers appear from. IceResurfacer runs its two machines on
+# point-mirrored lanes at x ≈ ±1.6–3.8, so a door at ±3.4 on each end board sits
+# where each one enters instead of somewhere arbitrary along the wall.
+const GATE_RESURFACER_X: float = 3.4
+
+# ── End-zone netting ─────────────────────────────────────────────────────────
+# The mesh that hangs above the end glass to catch pucks leaving the rink.
+# Continues the glass plane upward and wraps both corners, reaching this far
+# down the side boards — past the corner's start at half_length − corner_radius,
+# which is what makes it read as a curtain around the end rather than a flat
+# panel across it.
+const NET_EDGE_Z: float = 14.0
+const NET_HEIGHT: float = 4.5
+# World size of one diamond in Assets/textures/net_diamond.png. The band's UVs
+# are scaled by this so the mesh keeps a constant physical gauge whether it is
+# crossing a straight or a corner, instead of stretching with the arc.
+const NET_TILE_M: float = 0.14
+
 # Texture resolution: pixels per meter
 var _px_per_meter: float = 80.0
 
@@ -347,6 +377,9 @@ func _rebuild() -> void:
 
 	_add_side_board_stripes(products.stripe_tex)
 
+	_add_gates(products.band_gates)
+	_add_netting(products.band_netting)
+
 	if board_ads_enabled:
 		_add_board_ads(products.band_ads)
 
@@ -417,6 +450,8 @@ func _get_or_build_products() -> Dictionary:
 		# keeping it out of the cache key means toggling the ads in the editor
 		# doesn't throw away the ten-million-pixel ice albedo alongside them.
 		"band_ads": _build_ad_band(stations, board_half_thick),
+		"band_gates": _build_gate_band(stations, board_half_thick),
+		"band_netting": _build_net_band(stations, glass_half_thick),
 	}
 	_build_cache[key] = products
 	return products
@@ -788,13 +823,37 @@ func _ad_arc_is_reserved(point: Vector2) -> bool:
 		return true   # blue stripes
 	if absf(abs_z - GameRules.GOAL_LINE_Z) < AD_GOAL_STRIPE_HALF + AD_STRIPE_CLEARANCE:
 		return true   # goal-line stripes, out on the corner arcs
-	# Both benches sit on the +X boards, and between them is a gate rather than a
-	# stretch of wall, so the whole span from one bench's far end to the other's
-	# is spoken for.
-	var bench_span: float = ArenaStands.BENCH_CENTER_Z + ArenaStands.BENCH_HALF_LEN
-	if point.x > 0.0 and abs_z < bench_span + AD_STRIPE_CLEARANCE:
+	# Rinkside furniture: the benches run along the +X boards and the penalty
+	# boxes along −X, and in each case the gap between the two halves is gate and
+	# staff area rather than a stretch of wall, so the whole span is spoken for.
+	var furniture_span: float = ArenaStands.BENCH_CENTER_Z + ArenaStands.BENCH_HALF_LEN \
+			if point.x > 0.0 \
+			else ArenaStands.PENALTY_BOX_CENTER_Z + ArenaStands.PENALTY_BOX_HALF_LEN
+	if abs_z < furniture_span + AD_STRIPE_CLEARANCE:
 		return true
+	# Every gate is reserved explicitly rather than left to the furniture spans
+	# to happen to cover — the resurfacer doors on the end boards are nowhere
+	# near either span. All gates sit on straight wall, so a plain world-space
+	# distance is a faithful stand-in for distance along the boards.
+	for target: Vector2 in _gate_targets():
+		if point.distance_to(target) < GATE_WIDTH * 0.5 + GATE_CLEARANCE:
+			return true
 	return false
+
+
+# Gate centres on the perimeter centerline, as (x, z) in metres. Bench doors at
+# the inner end of each bench, penalty doors at the outer end of each box, and
+# one resurfacer door per end board on the side its machine drives in from.
+func _gate_targets() -> Array[Vector2]:
+	var half_w: float = rink_width / 2.0
+	var half_l: float = rink_length / 2.0
+	var penalty_end: float = ArenaStands.PENALTY_BOX_CENTER_Z \
+			+ ArenaStands.PENALTY_BOX_HALF_LEN - GATE_WIDTH * 0.5
+	return [
+		Vector2( half_w,  1.55), Vector2( half_w, -1.55),
+		Vector2(-half_w,  penalty_end), Vector2(-half_w, -penalty_end),
+		Vector2(-GATE_RESURFACER_X,  half_l), Vector2(GATE_RESURFACER_X, -half_l),
+	] as Array[Vector2]
 
 
 func _build_ad_band(stations: Array, board_half_thick: float) -> ArrayMesh:
@@ -856,6 +915,186 @@ func _add_board_ads(band: ArrayMesh) -> void:
 	mat.render_priority = 1
 	mi.material_override = mat
 	_board_ad_material = mat
+	add_child(mi)
+
+
+# ── Gates ────────────────────────────────────────────────────────────────────
+
+# Arc of the perimeter point nearest `target`, found by walking the loop rather
+# than by solving per wall section. The walk costs nothing at build time and
+# cannot be wrong about which section a point belongs to, which the closed-form
+# version would have to get right for straights and arcs separately.
+func _arc_nearest_to(stations: Array, cumulative: PackedFloat32Array,
+		perimeter: float, target: Vector2) -> float:
+	var best_arc: float = 0.0
+	var best_dist: float = INF
+	var s: float = 0.0
+	while s < perimeter:
+		var dist: float = BoardAdBandBuilder.sample_pos(stations, cumulative, s) \
+				.distance_squared_to(target)
+		if dist < best_dist:
+			best_dist = dist
+			best_arc = s
+		s += AD_RESERVE_STEP
+	return best_arc
+
+
+func _build_gate_band(stations: Array, board_half_thick: float) -> ArrayMesh:
+	var cumulative: PackedFloat32Array = BoardAdBandBuilder.cumulative_arcs(stations)
+	var perimeter: float = BoardAdBandBuilder.perimeter_of(cumulative)
+	var placements: Array[Vector2] = []
+	var uv_rects: Array[Rect2] = []
+	for target: Vector2 in _gate_targets():
+		var arc: float = _arc_nearest_to(stations, cumulative, perimeter, target)
+		placements.append(Vector2(arc - GATE_WIDTH * 0.5, GATE_WIDTH))
+		# One texture for every gate — a door is a door.
+		uv_rects.append(Rect2(0.0, 0.0, 1.0, 1.0))
+	# Gates run the full height of the white board: a door reaches the rail.
+	return BoardAdBandBuilder.build_band(stations, cumulative, placements, uv_rects,
+			board_half_thick + GATE_INSET,
+			kickplate_height, wall_height - CAP_RAIL_HEIGHT)
+
+
+# A frame, a hinge stile, and a handle — drawn transparent inside so the door
+# shows the boards' own white rather than a patch that has to match it.
+func _build_gate_texture() -> ImageTexture:
+	var px_per_m: float = 200.0
+	var band_h: float = (wall_height - CAP_RAIL_HEIGHT) - kickplate_height
+	var img_w: int = maxi(int(GATE_WIDTH * px_per_m), 1)
+	var img_h: int = maxi(int(band_h * px_per_m), 1)
+	var img := Image.create(img_w, img_h, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0.0, 0.0, 0.0, 0.0))
+
+	var frame := Color(0.32, 0.34, 0.38)
+	var hardware := Color(0.20, 0.21, 0.24)
+	var edge: int = maxi(int(0.035 * px_per_m), 2)
+	# Frame: four bars around the opening.
+	img.fill_rect(Rect2i(0, 0, img_w, edge), frame)
+	img.fill_rect(Rect2i(0, img_h - edge, img_w, edge), frame)
+	img.fill_rect(Rect2i(0, 0, edge, img_h), frame)
+	img.fill_rect(Rect2i(img_w - edge, 0, edge, img_h), frame)
+	# Hinge stile down the latch-side edge, and two hinge blocks on it.
+	var stile: int = maxi(int(0.06 * px_per_m), 2)
+	img.fill_rect(Rect2i(edge, 0, stile, img_h), frame.darkened(0.15))
+	for hinge_frac: float in [0.22, 0.74]:
+		img.fill_rect(Rect2i(edge, int(img_h * hinge_frac),
+				stile * 3, maxi(int(0.05 * px_per_m), 2)), hardware)
+	# Handle: a horizontal bar set in from the swinging edge.
+	var handle_w: int = int(0.26 * px_per_m)
+	img.fill_rect(Rect2i(img_w - edge - handle_w - int(0.05 * px_per_m),
+			int(img_h * 0.46), handle_w, maxi(int(0.045 * px_per_m), 2)), hardware)
+	return ImageTexture.create_from_image(img)
+
+
+func _add_gates(band: ArrayMesh) -> void:
+	if band == null:
+		return
+	var mi := MeshInstance3D.new()
+	mi.name = "BoardGates"
+	mi.mesh = band
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = _build_gate_texture()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	# Unshaded for the reason the stripes and ads are — the ceiling rig grazes
+	# these faces (see docs/arena-atmosphere-spec.md).
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.render_priority = 1
+	mi.material_override = mat
+	add_child(mi)
+
+
+# ── End-zone netting ─────────────────────────────────────────────────────────
+
+func _build_net_band(stations: Array, glass_half_thick: float) -> ArrayMesh:
+	var cumulative: PackedFloat32Array = BoardAdBandBuilder.cumulative_arcs(stations)
+	var perimeter: float = BoardAdBandBuilder.perimeter_of(cumulative)
+	var half_w: float = rink_width / 2.0
+	if NET_EDGE_Z >= rink_length / 2.0:
+		return null
+
+	# Each run starts on one side board, crosses a corner, the end, and the other
+	# corner, and finishes on the opposite side board. Station order runs +Z up
+	# the east wall and around, so the +Z run climbs in arc while the −Z run
+	# wraps the seam — build_band samples modulo the perimeter, so the wrap needs
+	# nothing but the right width.
+	var runs: Array[Vector2] = [
+		Vector2(half_w, NET_EDGE_Z), Vector2(-half_w, NET_EDGE_Z),
+		Vector2(-half_w, -NET_EDGE_Z), Vector2(half_w, -NET_EDGE_Z),
+	] as Array[Vector2]
+	var placements: Array[Vector2] = []
+	var uv_rects: Array[Rect2] = []
+	for i: int in [0, 2]:
+		var arc_start: float = _arc_nearest_to(stations, cumulative, perimeter, runs[i])
+		var arc_end: float = _arc_nearest_to(stations, cumulative, perimeter, runs[i + 1])
+		var width: float = arc_end - arc_start
+		if width <= 0.0:
+			width += perimeter
+		placements.append(Vector2(arc_start, width))
+		uv_rects.append(Rect2(0.0, 0.0, width / NET_TILE_M, NET_HEIGHT / NET_TILE_M))
+
+	var glass_top: float = wall_height + GLASS_LIFT + glass_height
+	return BoardAdBandBuilder.build_band(stations, cumulative, placements, uv_rects,
+			glass_half_thick, glass_top, glass_top + NET_HEIGHT)
+
+
+# One cell of diamond lattice: opaque strands, transparent holes.
+#
+# Drawn here rather than taken from Assets/textures/net_diamond.png, which looks
+# like the right texture and is not: it is fully opaque, a diamond PATTERN that
+# the goal-net shader tints and makes see-through through its own `tint` alpha
+# uniform. Sampled straight into a StandardMaterial3D it is a solid wall.
+func _build_net_texture() -> ImageTexture:
+	var size: int = 64
+	var half_strand: float = 0.055   # fraction of a cell, so gauge scales with it
+	var aa: float = 1.5 / float(size)
+	var img := Image.create(size, size, true, Image.FORMAT_RGBA8)
+	for y: int in size:
+		for x: int in size:
+			var u: float = float(x) / float(size)
+			var v: float = float(y) / float(size)
+			# Two families of diagonals; a pixel is strand if it is near either.
+			var alpha: float = maxf(
+					_net_strand_alpha(fposmod(u + v, 1.0), half_strand, aa),
+					_net_strand_alpha(fposmod(u - v, 1.0), half_strand, aa))
+			img.set_pixel(x, y, Color(1.0, 1.0, 1.0, alpha))
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
+
+# Coverage of one strand, wrapped: `m` is the pixel's position within the cell
+# along one diagonal family, so the line sits at both 0 and 1.
+func _net_strand_alpha(m: float, half_strand: float, aa: float) -> float:
+	var edge: float = minf(m, 1.0 - m)
+	return clampf((half_strand - edge) / aa + 0.5, 0.0, 1.0)
+
+
+func _add_netting(band: ArrayMesh) -> void:
+	if band == null:
+		return
+	var mi := MeshInstance3D.new()
+	mi.name = "EndZoneNetting"
+	mi.mesh = band
+	# On the jumbotron's layer, which is the project's established home for set
+	# dressing the gameplay camera must not see (GameCamera and PovCamera both
+	# clear this bit). The netting stands 4.5 m above the glass at both ends, so
+	# left on the default layer it would hang between a top-down camera and the
+	# play whenever the puck worked the end boards. Cinematic, replay, lobby and
+	# free cameras keep the default everything-on mask and do see it.
+	mi.layers = Jumbotron.RENDER_LAYER_MASK
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = _build_net_texture()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_color = Color(0.86, 0.88, 0.92, 0.85)
+	mat.roughness = 0.9
+	# It hangs in the dark above the lit boards; without a little self-emission
+	# the mesh reads as a black smear rather than as a fine pale net.
+	mat.emission_enabled = true
+	mat.emission = Color(0.55, 0.60, 0.70)
+	mat.emission_energy_multiplier = 0.25
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
 
 
