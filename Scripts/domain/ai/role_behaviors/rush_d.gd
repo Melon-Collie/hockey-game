@@ -130,14 +130,14 @@ static func _decide_d1(ctx: RoleContext) -> RoleDecision:
 	# under him yet, or has been steered into the wall with no outside left to
 	# take is one you attack — the reversal the bound protects is not the thing
 	# that beats you there.
-	var gapping_up: bool = _should_gap_up(ctx, read, carrier_pos, closing)
+	var gapping_up: bool = should_gap_up(ctx, read, carrier_pos, closing)
 	# THE STAND RIDES HIM (AISteering, "moving-frame pursuit"): the steering flies
 	# the route in the stand's own frame, so the trip ends with this body already
 	# travelling at the rush's pace at the ladder's gap. That is what gap control
 	# IS, and it is also what retires the approach bound below — see _settable_gap.
 	var ride: Vector3 = AIRoleHelpers.stand_ride_velocity(ctx)
 	if gapping_up:
-		gap = minf(_stick(ctx) * GAP_MIN_STICKS, dist)
+		gap = minf(stick_m(ctx) * GAP_MIN_STICKS, dist)
 	elif ride == Vector3.ZERO:
 		gap = minf(_settable_gap(ctx, carrier_pos, dir_net, gap, closing), dist)
 	# Stepping UP into the stand, or retreating with it? Measured off the carrier
@@ -187,10 +187,20 @@ static func _depth_along(ctx: RoleContext, threat_pos: Vector3,
 # The BASE ladder, in stick lengths: ice remaining to OUR blue line gives 3
 # sticks at their blue line, 2 at the red line, 1 at ours. Zero ice left (he is
 # in the zone) means you are on him.
+#
+# The divisor is BLUE_LINE_Z — one zone-to-centre span — because that is the ice
+# between consecutive rungs: their blue line is 2·BLUE_LINE_Z of remaining ice,
+# the red line is 1·, ours is 0·, so `1 + ice / BLUE_LINE_Z` lands the table
+# above exactly. It read `BLUE_LINE_Z * 2.0` for a long time (inherited verbatim
+# from docs/transition-defense-plan.md §6, whose own worked table the formula
+# therefore contradicted), which halves the ramp: 2 / 1.5 / 1 instead of
+# 3 / 2 / 1, and left GAP_MAX_STICKS unreachable from the base term at all. Both
+# ends were pinned right, which is why it survived — the tests assert the ladder
+# TIGHTENS with depth, and it did.
 static func _ladder_sticks(threat_pos: Vector3, own_goal_dir: float) -> float:
 	var ice_to_line: float = maxf(
 			GameRules.BLUE_LINE_Z - own_goal_dir * threat_pos.z, 0.0)
-	return clampf(GAP_MIN_STICKS + ice_to_line / (GameRules.BLUE_LINE_Z * 2.0),
+	return clampf(GAP_MIN_STICKS + ice_to_line / GameRules.BLUE_LINE_Z,
 			GAP_MIN_STICKS, GAP_MAX_STICKS)
 
 
@@ -232,11 +242,17 @@ static func _gap_for(ctx: RoleContext, read: AIRushRead, carrier_pos: Vector3,
 		sticks -= GAP_RUNG_STICKS
 
 	sticks = clampf(sticks, GAP_MIN_STICKS, GAP_MAX_STICKS)
-	return (sticks + _pace_sticks(closing)) * _stick(ctx)
+	return (sticks + _pace_sticks(closing)) * stick_m(ctx)
 
 
 # Is his speed advantage gone? Any of the three observable triggers.
-static func _should_gap_up(ctx: RoleContext, read: AIRushRead,
+#
+# Public because AIRolePressure asks the identical question. The two roles that
+# own a carrier already share the gap LADDER; they have to share the read that
+# says when the ladder stops applying, or the answer changes at the handoff —
+# and for the forechecking F1 (which dispatches into PRESSURE) the ladder never
+# applied in the first place. See AIRolePressure.decide.
+static func should_gap_up(ctx: RoleContext, read: AIRushRead,
 		carrier_pos: Vector3, closing: float) -> bool:
 	# Never step up into a rush we're outnumbered against — that is the one case
 	# where being beaten is a goal rather than a scoring chance.
@@ -360,8 +376,10 @@ static func _mid_lane_man_index(read: AIRushRead) -> int:
 
 # ── Shared ───────────────────────────────────────────────────────────────────
 
-# This bot's stick length — the ladder's unit.
-static func _stick(ctx: RoleContext) -> float:
+# This bot's stick length — the ladder's unit. Public for the same reason
+# should_gap_up is: PRESSURE sizes a gapped-up stand in the same unit, and two
+# roles holding "one stick" must not compute two different metres.
+static func stick_m(ctx: RoleContext) -> float:
 	return maxf(ctx.self_blade_reach, 0.5)
 
 

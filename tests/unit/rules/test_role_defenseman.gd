@@ -155,19 +155,42 @@ func test_point_sags_when_the_race_home_is_lost() -> void:
 
 # ── FORECHECK line pair ──────────────────────────────────────────────────────
 
-func test_dp_pinches_on_a_bottled_forecheck() -> void:
-	# Opp carrier pinned deep in THEIR zone, nobody moving: every counter
-	# channel is slow, the whole lane is race-home feasible, and the D pair
-	# pinches to the top of the end-zone circles — real forecheck pressure
-	# instead of blue-line statuary (the "no pinching, glued to exactly the
-	# blue line" report).
+func test_dp_holds_the_line_on_a_bottled_forecheck() -> void:
+	# Opp carrier pinned deep in THEIR zone, nobody moving: the read allows the
+	# forward stand, and the stand is the OFFENSIVE BLUE LINE on the lane — the
+	# 1-2-2's back wall (docs/5v5-ai-plan.md §2). Just inside the line, because
+	# the job there is keeping pucks in.
+	#
+	# This replaced a pinch to the top of the end-zone circles, which put BOTH
+	# defencemen 8.8 m inside the line, unconditionally — the weak-side D
+	# included, and 9 m deeper than the slot election that assigns them races
+	# to. The plan lists a deliberate D pinch as a v1 non-goal precisely because
+	# it is a per-puck read (my winger owns the wall, a forward is covering
+	# behind me) rather than a standing shape.
 	var ctx: RoleContext = _make_ctx(Vector3(6.0, 0.0, -4.0),
 			[[10, 1, Vector3(4.0, 0.0, -24.0)]], 10)
 	var d: RoleDecision = AIRoleDefenseman.decide(ctx, AIRoleSlots.Slot.DP_STRONG)
 	assert_almost_eq(d.target_position.z,
-			-(GameRules.GOAL_LINE_Z - AIRoleDefenseman.DP_PINCH_DEPTH_M), 0.6,
-			"pinches to the circle tops when the play is bottled")
+			-(GameRules.BLUE_LINE_Z + AIRoleDefenseman.DP_LINE_INSET_M), 0.6,
+			"holds the offensive blue line when the play is bottled")
 	assert_almost_eq(d.target_position.x, 6.7, 0.1, "strong lane inside the dots")
+
+
+func test_the_weak_side_d_holds_the_line_too_never_deeper() -> void:
+	# The asymmetry that must NOT exist: whatever the strong-side D is doing,
+	# the weak-side D is the safety, so he is never deeper into their zone than
+	# his partner. Same bottled forecheck as above.
+	var ctx: RoleContext = _make_ctx(Vector3(6.0, 0.0, -4.0),
+			[[10, 1, Vector3(4.0, 0.0, -24.0)]], 10)
+	var strong: RoleDecision = AIRoleDefenseman.decide(
+			ctx, AIRoleSlots.Slot.DP_STRONG)
+	var weak: RoleDecision = AIRoleDefenseman.decide(
+			ctx, AIRoleSlots.Slot.DP_WEAK)
+	assert_gte(weak.target_position.z, strong.target_position.z - 0.01,
+			"the weak-side D is never deeper in their zone than the strong side")
+	assert_almost_eq(weak.target_position.z,
+			-(GameRules.BLUE_LINE_Z + AIRoleDefenseman.DP_LINE_INSET_M), 0.6,
+			"the weak-side D holds the line as well")
 
 
 func test_dp_releases_the_pinch_as_the_breakout_forms() -> void:

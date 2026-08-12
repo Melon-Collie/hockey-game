@@ -12,10 +12,10 @@ class_name AIRoleDefenseman
 #     the cycle goes low (the researched staggered pair); the chosen stand is
 #     then bounded by the shared pinch read (never held with a man behind you
 #     and nobody covering — the keep-in insurance).
-#   FORECHECK line pair (DP_STRONG / DP_WEAK) — pinch to the top of the
-#     end-zone circles, per lane, and abandon it for the defensive home post
-#     the moment their breakout is genuinely under way — exactly like the 3v3
-#     forecheck's F3, which runs the same read.
+#   FORECHECK line pair (DP_STRONG / DP_WEAK) — hold the offensive blue line,
+#     per lane, and abandon it for the defensive home post the moment their
+#     breakout is genuinely under way — exactly like the 3v3 forecheck's F3,
+#     which runs the same read.
 #   TRANS_OFFENSE safety valve (DVALVE) — trail the rush centrally about a zone
 #     behind the play, bounded by the shared pinch read: always the reset
 #     option, never beaten home.
@@ -43,11 +43,18 @@ const POINT_WEAK_LANES_U: Array[float] = [6.0, 4.5, 3.0, 1.5, 0.0]
 # Forecheck line pair lanes (world-x magnitude, inside the dots).
 const DP_STRONG_LANE_X_M: float = 6.7
 const DP_WEAK_LANE_X_M: float = 5.0
-# Pinch stand of the forecheck line pair: the top of the end-zone circles
-# (dots 6.1 m off the goal line + the 4.57 m circle radius) — the standard
-# forecheck-D pinch depth, and the stand the pair holds whenever the pinch read
-# lets it (see _decide_line_hold).
-const DP_PINCH_DEPTH_M: float = 10.7
+# Forecheck line-hold stand: this far INSIDE the offensive blue line, on the
+# lane. The D pair is the 1-2-2's back wall — the layer the three forwards
+# press in FRONT of — so its depth is the line, not the zone
+# (docs/5v5-ai-plan.md §2: "the two D hold the offensive blue line inside the
+# dots"). A pinch past it is a per-puck read this file does not yet make.
+#
+# Inside the line rather than on it because the job at the line is KEEPING
+# PUCKS IN, and a stand on the neutral-zone side can only watch a rim leave.
+# Kept under a stick, so stepping back out with a breakout is one stride —
+# which is the difference between this and the O-zone POINT_INSET_M, where the
+# D holds possession and pays a full handling radius for the reception cushion.
+const DP_LINE_INSET_M: float = 1.0
 # DVALVE: how far behind the play the valve trails, and its goal-line cap.
 const DVALVE_TRAIL_M: float = 10.0
 const DVALVE_GOAL_LINE_PAD_M: float = 2.0
@@ -202,23 +209,34 @@ static func _wall_rim_keepin(ctx: RoleContext, side: float) -> Vector3:
 	return stand
 
 
-# ── FORECHECK: pinch on the lane, or go home ────────────────────────────────
-# The shared offensive-station pinch read (offensive_station_target), applied
-# per lane for the D pair — the stand is not glued to the blue line. While the
-# read allows the pinch the D stands at DP_PINCH_DEPTH_M on his lane (the circle
-# top — real pressure instead of blue-line statuary); the moment their breakout
-# is genuinely under way (Mode.RUSH with the puck theirs) he abandons it for his
-# defensive home post. There is no intermediate stand on the lane: the pinch
-# read is categorical, so the pair either presses or backs out.
+# ── FORECHECK: hold the line on the lane, or go home ────────────────────────
+# The shared offensive-station read (offensive_station_target), applied per lane
+# for the D pair. While the read allows it the D holds the blue line on his lane
+# (DP_LINE_INSET_M); the moment their breakout is genuinely under way (Mode.RUSH
+# with the puck theirs) he abandons it for his defensive home post. There is no
+# intermediate stand on the lane: the read is categorical, so the pair either
+# holds the line or backs out.
+#
+# THE PAIR DOES NOT PINCH, and that is the doctrine rather than a limitation.
+# In a 1-2-2 the D are the back layer: three forwards press, and if the puck
+# beats them the pair is what stands between it and a rush the other way. A
+# pinch is a per-puck read — my winger owns the wall, the puck is coming to me,
+# a forward is covering behind me — and the weak-side D categorically does not
+# make it. Pinching BOTH, unconditionally, turns every failed forecheck into an
+# odd-man rush; this file previously stood them 8.8 m inside the line, which is
+# also 9 m deeper than the slot election that assigns them races to. The
+# situational strong-side pinch is tracked as its own work (5v5 plan §10);
+# _wall_rim_keepin below is the model for the "can I win this puck" gate it
+# needs.
 static func _decide_line_hold(ctx: RoleContext, lane_x: float) -> RoleDecision:
 	var d := RoleDecision.new()
 	var own_dir: float = ctx.own_goal_dir
-	var pinch_z: float = -own_dir * (GameRules.GOAL_LINE_Z - DP_PINCH_DEPTH_M)
+	var line_z: float = -own_dir * (GameRules.BLUE_LINE_Z + DP_LINE_INSET_M)
 
-	var pinch_stand := Vector3(lane_x, 0.0, pinch_z)
+	var line_stand := Vector3(lane_x, 0.0, line_z)
 	d.target_position = AIRoleHelpers.offensive_station_target(
-			ctx, pinch_stand, ctx.prev_held_forward_stand)
-	d.held_forward_stand = d.target_position.distance_to(pinch_stand) < 0.5
+			ctx, line_stand, ctx.prev_held_forward_stand)
+	d.held_forward_stand = d.target_position.distance_to(line_stand) < 0.5
 	return d
 
 
