@@ -1,0 +1,11 @@
+#!/bin/bash
+# Warns after a branch switch when the built GDExtension belongs to other
+# sources. This is the gap the post-merge hook could never cover: checkout does
+# not set ORIG_HEAD, so a range-based check sees nothing here (#645).
+#
+# Args: $1 prev HEAD, $2 new HEAD, $3 branch flag (1 = branch checkout,
+# 0 = file checkout). File checkouts are skipped — HEAD has not moved.
+
+[ "${3:-0}" = "1" ] || exit 0
+
+exec "$(dirname "$0")/native-stale-check.sh"
