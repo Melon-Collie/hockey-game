@@ -65,6 +65,11 @@ var _phase_slide_tween: Tween = null
 var _faceoff_countdown_tween: Tween = null
 var _skip_prompt_label: Label = null
 var _skip_prompt_tween: Tween = null
+# "SAVE GIF" affordance, shown above the skip prompt whenever a goal clip is
+# capturing (the cinematic, or a clip of the post-game reel).
+var _clip_prompt_label: Label = null
+var _clip_available: bool = false
+var _clip_state: GoalClipExporter.State = GoalClipExporter.State.IDLE
 var _menu_hint_label: Label = null
 var _menu_hint_tween: Tween = null
 var _skip_vote_current: int = 0
@@ -117,6 +122,7 @@ func _ready() -> void:
 	_build_ghost_banner()
 	_build_bug_icon()
 	_build_skip_replay_prompt()
+	_build_clip_prompt()
 	_bug_dialog = BugReportDialog.new()
 	add_child(_bug_dialog)
 	_game_over_popup = GameOverPopup.new()
@@ -214,6 +220,9 @@ func _ready() -> void:
 	GameManager.replay_started.connect(_on_replay_started)
 	GameManager.replay_stopped.connect(_on_replay_stopped)
 	GameManager.skip_replay_vote_updated.connect(_on_skip_replay_vote_updated)
+	GameManager.goal_clip_available_changed.connect(_on_goal_clip_available_changed)
+	GameManager.goal_clip_state_changed.connect(_on_goal_clip_state_changed)
+	GameManager.goal_clip_export_finished.connect(_on_goal_clip_export_finished)
 	# Prompts follow the active device: rebuild the persistent on-screen hints when
 	# the mouse↔pad handoff flips (auto-disconnected when this HUD frees).
 	InputDeviceTracker.device_changed.connect(_refresh_device_prompts)
@@ -259,6 +268,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		# a menu owns the screen.
 		if not menu_open:
 			GameManager.try_send_smart_ping()
+		get_viewport().set_input_as_handled()
+		return
+	# Save the goal clip as a GIF: F (keyboard) or pad X. Consumes the press only
+	# when it actually acts, so X keeps its gameplay/menu meanings everywhere
+	# else — unlike the skip binds below, this isn't the only thing X could mean
+	# in the window.
+	var pad_save_clip: bool = InputDeviceTracker.is_gamepad_active() \
+			and event is InputEventJoypadButton and event.pressed \
+			and (event as InputEventJoypadButton).button_index == JOY_BUTTON_X
+	if (event.is_action_pressed(&"save_goal_clip") or pad_save_clip) \
+			and not menu_open and GameManager.can_export_goal_clip():
+		GameManager.request_goal_clip_export()
 		get_viewport().set_input_as_handled()
 		return
 	# Skip vote: Space (keyboard) or pad A. A is the pad's block during play, but a
@@ -704,6 +725,61 @@ func _build_skip_replay_prompt() -> void:
 	_skip_prompt_label.visible = false
 	_scale_root.add_child(_skip_prompt_label)
 
+# "SAVE GIF" prompt, stacked directly above the skip prompt and sharing its
+# right edge. Deliberately quieter than the skip prompt (smaller, dimmed, no
+# pulse): skipping is the thing every player does every goal, saving is an
+# occasional extra, and two pulsing prompts in one corner fight each other.
+func _build_clip_prompt() -> void:
+	_clip_prompt_label = _lbl(_clip_prompt_text(), 15, _DIM)
+	_clip_prompt_label.add_theme_font_override("font", MenuStyle.UI_FONT)
+	_clip_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_clip_prompt_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	_clip_prompt_label.anchor_left = 1.0
+	_clip_prompt_label.anchor_right = 1.0
+	_clip_prompt_label.anchor_top = 1.0
+	_clip_prompt_label.anchor_bottom = 1.0
+	_clip_prompt_label.offset_left = -324.0
+	_clip_prompt_label.offset_right = -52.0
+	# One line above the skip prompt's -52/-24 band.
+	_clip_prompt_label.offset_top = -76.0
+	_clip_prompt_label.offset_bottom = -52.0
+	_clip_prompt_label.visible = false
+	_scale_root.add_child(_clip_prompt_label)
+
+func _on_goal_clip_available_changed(available: bool) -> void:
+	_clip_available = available
+	_refresh_clip_prompt()
+
+func _on_goal_clip_state_changed(state: GoalClipExporter.State) -> void:
+	_clip_state = state
+	_refresh_clip_prompt()
+
+func _on_goal_clip_export_finished(path: String, ok: bool) -> void:
+	if _toast_stack == null:
+		return
+	if ok:
+		# The filename carries the scorer and timestamp, which is what makes one
+		# clip findable among sixty; the folder is the same every time.
+		_toast_stack.push("%s  %s" % [tr("CLIP_SAVED"), path.get_file()], _WHITE)
+	else:
+		_toast_stack.push(tr("CLIP_SAVE_FAILED"), _WARN_AMBER)
+
+# Visible while a clip is capturing (press to save) or an export is in flight
+# (so the player sees their press landed). Hidden otherwise.
+func _refresh_clip_prompt() -> void:
+	if _clip_prompt_label == null:
+		return
+	var busy: bool = _clip_state != GoalClipExporter.State.IDLE
+	_clip_prompt_label.visible = _clip_available or busy
+	_clip_prompt_label.text = _clip_prompt_text()
+
+func _clip_prompt_text() -> String:
+	if _clip_state != GoalClipExporter.State.IDLE:
+		return tr("CLIP_SAVING")
+	var key: String = ControllerGlyphs.prompt(
+			"[F]", "[%s]" % ControllerGlyphs.joy_label(JOY_BUTTON_X))
+	return tr("CLIP_SAVE_PROMPT") % key
+
 # Re-resolve the persistent on-screen prompts to the current device. Fired by
 # InputDeviceTracker.device_changed so the menu-open hint and the skip-vote prompt
 # follow a mid-session mouse↔pad swap. (The spectator toast is one-shot — it keeps
@@ -712,6 +788,7 @@ func _refresh_device_prompts(_is_gamepad: bool) -> void:
 	if _menu_hint_label != null:
 		_menu_hint_label.text = _menu_hint_text()
 	_refresh_skip_prompt_text()
+	_refresh_clip_prompt()
 
 # Menu-open hint text, resolved to the active device: pad Start (≡ / + on Switch),
 # else keyboard Escape. Rebuilt on device swap via _refresh_device_prompts.

@@ -18,6 +18,24 @@ for what belongs here: settled, evaluation-grade math with a coarse call
 boundary — primitives and vectors in, results out, no callbacks into GDScript
 mid-solve. Feel-tunable orchestration stays in GDScript.
 
+## The one non-kernel: `NativeGifEncoder`
+
+`NativeGifEncoder` (goal-clip GIF export, `Scripts/game/gif_exporter.gd`) is
+registered here but is **not** a port and touches no tick. It qualifies on the
+other half of the rule — a coarse boundary around work GDScript is simply too
+slow for (palette quantization plus LZW over ~150 frames: seconds interpreted,
+well under one in C++). Three consequences worth knowing:
+
+- **It has no parity gate**, because it has no GDScript reference to agree
+  with. `tests/unit/game/test_gif_encoder.gd` pins it by decoding its output
+  with an independently written GIF reader instead.
+- **It is deliberately absent from `NativeKernels.KERNEL_CLASSES`.** That
+  census answers "is gameplay running the C++ or the GDScript path?", and a
+  non-gameplay class in it would make the boot log and debug digest report
+  `PARTIAL` for a reason that has nothing to do with the tick.
+- **It is the reason `build_profile.json` enables `Image`** — the only bound
+  engine class any of this needs beyond `RefCounted` / `OS`.
+
 ## Layout
 
 - `src/` — extension sources. One `.h`/`.cpp` pair per ported kernel plus

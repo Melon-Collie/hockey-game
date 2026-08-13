@@ -1,6 +1,7 @@
 {
 	"enabled_classes": [
 		"RefCounted",
-		"OS"
+		"OS",
+		"Image"
 	]
 }
