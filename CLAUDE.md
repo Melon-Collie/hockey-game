@@ -167,6 +167,7 @@ that file can't tell you:
 | Submit bug report from UI | Instantiate `BugReportDialog`, `add_child` it, call `.open()` on button press |
 | New RPC | `NetworkManager` (define) → emit a signal → `GameManager._wire_network_signals()` (connect) |
 | New phase-entry side effect | `PhaseCoordinator` |
+| New arena sponsor (boards and in-ice) | Append to `AdBrands.BRANDS` — a row, not an art file; the painters compose the panel. A new in-ice placement is a row in `AdBrands.ICE_SLOTS`, which `test_board_ad_layout.gd` holds against every painted marking |
 | New practice drill | Append to `DrillRegistry` (id + `display_name_key` + manager path; add the matching `DRILL_*` row to `locale/translations.csv`) → manager node in `Scripts/game/` owning the drill loop (`DrillSession` for the score tally) → `DrillHUD` subclass for its strings |
 | New controller behavior | Method on `SkaterController`; `GameManager` calls it, never pokes internals directly |
 | New reconcile logic | `domain/rules/reconciliation_rules.gd` + GUT test |

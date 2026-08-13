@@ -92,6 +92,13 @@ their *own* color:
   reverted. The mild center pooling is accepted; if it bugs you, the fix is a
   small **ambient** bump (`0.25→0.30`), which evens without the overhead spill.
 
+- **Sponsor panels are unshaded** (`hockey_rink.gd._add_board_ads`) — same
+  problem, blunter answer. The ad ribbon carries its own art rather than a band
+  color, so instead of self-emitting it opts out of lighting entirely, like the
+  painted stripes it shares the wall with. Consequence worth knowing before you
+  reach for a dial: the board emission energies do **not** move the ads, so
+  raising them widens the gap between lit board and unlit panel.
+
 Dials: board emission energies (up = boards pop more / risk bloom, down =
 subtler); a `0.03` ambient nudge for center pooling. All one-liners.
 

@@ -6,8 +6,9 @@ extends Node3D
 # crowd. Pattern mirrors HockeyRink — single rebuild on @export change, no
 # runtime updates. Geometry is one ArrayMesh for all concrete (lower bowl +
 # concourse walkway + upper-deck fascia and terraces), one for the arena
-# shell wall, and the crowd as per-section MultiMesh pairs (bodies, heads):
-# the bowl is split into _CROWD_SECTIONS angular slices, each with its own
+# shell wall, and the crowd as per-section MultiMesh pairs (bodies, heads)
+# with a third MultiMesh per section for the seats they sit in: the bowl is
+# split into _CROWD_SECTIONS angular slices, each with its own
 # tight AABB, so the renderer frustum-culls off-screen crowd wholesale
 # instead of vertex-processing every spectator every frame. The walkway /
 # upper deck / shell exist so every camera sightline that clears the crowd
@@ -98,7 +99,14 @@ extends Node3D
 		_request_rebuild()
 # Balcony rise from the walkway up to the deck's first tread; the concrete
 # fascia wall the lower bowl's back rows sit against spans exactly this height.
-@export var upper_deck_rise: float = 1.1:
+#
+# This is the number that makes the building read as two decks rather than one
+# long bank of seats. At the 1.1 m it shipped with, the upper deck began a step
+# above the walkway: geometrically a concourse, visually a continuation. A real
+# second tier is cantilevered a storey up, so the level under it is a room you
+# could stand in — and that headroom is also what the lower bowl's portals need
+# somewhere to be.
+@export var upper_deck_rise: float = 4.0:
 	set(v):
 		upper_deck_rise = v
 		_request_rebuild()
@@ -204,6 +212,73 @@ extends Node3D
 		away_color_secondary = v
 		_request_rebuild()
 
+@export_group("Seats")
+# Seats are furniture: one per seating position, occupied or not, which is the
+# whole point — a bowl at 0.93 attendance shows bare concrete in the empty spots
+# and in the 0.27 m of daylight between neighbours at the shipping spacing.
+@export var seats_enabled: bool = true:
+	set(v):
+		seats_enabled = v
+		_request_rebuild()
+# Multiplied by the per-seat shade jitter baked into the layout, so this applies
+# live without invalidating the cached geometry — the same split the crowd uses
+# between its layout and its paint pass.
+@export var seat_color: Color = Color(0.13, 0.16, 0.26):
+	set(v):
+		seat_color = v
+		_request_rebuild()
+# How far a seat's shade may fall below `seat_color`. A bowl of one flat colour
+# reads as a painted surface rather than as thousands of separate objects; a
+# little unevenness is what makes the rows legible as rows.
+@export_range(0.0, 0.5) var seat_shade_variation: float = 0.16:
+	set(v):
+		seat_shade_variation = v
+		_request_rebuild()
+
+@export_group("Vomitories")
+# Portals where each aisle meets the shell. Without them the stairways climb the
+# rake and stop dead against a blank wall — the bowl has no way out.
+@export var vomitories_enabled: bool = true:
+	set(v):
+		vomitories_enabled = v
+		_request_rebuild()
+@export_range(0.0, 6.0) var vomitory_width: float = 2.2:
+	set(v):
+		vomitory_width = v
+		_request_rebuild()
+@export_range(0.0, 6.0) var vomitory_height: float = 2.9:
+	set(v):
+		vomitory_height = v
+		_request_rebuild()
+# How far the tunnel bores outward before its back wall. Deep enough to read as
+# a passage at a glance, shallow enough that it never pokes out of the building.
+@export_range(0.5, 8.0) var vomitory_depth: float = 2.6:
+	set(v):
+		vomitory_depth = v
+		_request_rebuild()
+
+@export_group("Rafter Banners")
+@export var banners_enabled: bool = true:
+	set(v):
+		banners_enabled = v
+		_request_rebuild()
+# Hang height of the banner cloth. Width follows from the atlas cell's aspect,
+# so this is the only dimension to touch.
+@export_range(1.0, 10.0) var banner_height: float = 4.2:
+	set(v):
+		banner_height = v
+		_request_rebuild()
+
+@export_group("Ribbon Board")
+@export var ribbon_enabled: bool = true:
+	set(v):
+		ribbon_enabled = v
+		_request_rebuild()
+# Metres of board travelling past a fixed point per second. Real ribbon boards
+# run a walking pace — fast enough to be alive in peripheral vision, slow enough
+# to read a sponsor before it leaves.
+@export_range(0.0, 12.0) var ribbon_scroll_speed: float = 2.4
+
 @export_group("")
 # Editor escape hatch: also drops the static layout cache, so geometry *code*
 # edits mid-session can't be masked by a stale cached bowl.
@@ -227,12 +302,41 @@ const _EXCITE_DECAY_TIME: float = 3.0
 # Player benches: two team benches on the +X side straddling center ice,
 # carved out of the first rows of crowd. 3v3 fields no reserves, so they're
 # empty furniture — the break in the crowd wall is what sells the rink.
-const _BENCH_CENTER_Z: float = 4.4    # bench centers at ±this along the boards
-const _BENCH_HALF_LEN: float = 3.0    # half-length of each bench along Z
+# The span is public because HockeyRink has to know it too: the stretch of board
+# a bench sits behind is a gate and a doorway, not somewhere an ad can go.
+const BENCH_CENTER_Z: float = 4.4    # bench centers at ±this along the boards
+const BENCH_HALF_LEN: float = 3.0    # half-length of each bench along Z
 const _BENCH_CLEAR_ROWS: int = 2      # spectator rows cleared behind the glass
 const _BENCH_CLEAR_MARGIN: float = 0.3
 const _BENCH_SEAT_X_OFFSET: float = 0.33  # seat center outward of the first tread's inner edge
 const _BENCH_SEAT_HEIGHT: float = 0.46
+# Penalty boxes and the off-ice officials between them, on the −X boards
+# opposite the player benches — which is where a real rink puts them, and which
+# is also the only stretch of this bowl that was an unbroken run of crowd. Two
+# boxes flank centre ice with the timekeeper's table in the gap, so the whole
+# assembly spans |z| < PENALTY_BOX_CENTER_Z + PENALTY_BOX_HALF_LEN.
+const PENALTY_BOX_CENTER_Z: float = 2.9
+const PENALTY_BOX_HALF_LEN: float = 1.7
+const _OFFICIALS_HALF_LEN: float = 1.0
+const _OFFICIALS_HEIGHT: float = 0.78
+# Staff: the people the rinkside furniture was built for. Coaches stand behind
+# each bench, the timekeeping crew works the table, and an attendant minds each
+# penalty box door. Bodies are the crowd's boxes at a slightly taller scale —
+# these are standing adults seen against seated ones — but they take a plain
+# material rather than the crowd shader, because a coach does not do the wave.
+#
+# Standing stature over the unscaled figure — the same arithmetic the seated
+# crowd uses, which is the point: staff and spectators are now sized from one
+# set of anthropometry rather than against each other. This read as enormous
+# while the crowd was undersized, and the fix was the crowd, not this number.
+const _STAFF_SEED: int = 5150
+const _STAFF_SCALE: float = _STANDING_STATURE / _FIGURE_HEIGHT
+# Outward of the furniture they work behind, so they read as standing at it.
+const _STAFF_BEHIND_BENCH: float = 0.92
+const _STAFF_BEHIND_TABLE: float = 0.88
+# Spacing the shell wall is resampled at before its openings are cut. Well under
+# the narrowest portal, so an opening always spans several segments.
+const _VOMITORY_SAMPLE_M: float = 0.25
 # Spectator body dimensions — stacked boxes matching the skater art style.
 const _BODY_SIZE: Vector3 = Vector3(0.28, 0.45, 0.28)
 const _HEAD_SIZE: Vector3 = Vector3(0.22, 0.22, 0.22)
@@ -241,6 +345,88 @@ const _HEAD_SIZE: Vector3 = Vector3(0.22, 0.22, 0.22)
 # face at all, back-row spectators look hollow when the camera ends up below
 # their row (upper-bowl rows reach ~6 m, well above typical camera height).
 const _BODY_Y_LIFT: float = 0.002
+
+# ── Stature ──────────────────────────────────────────────────────────────────
+# One unscaled figure stands 0.692 m from the tread to the crown of its head.
+# That is not a person: these spectators sit with their base ON the tread rather
+# than on a raised pan, so their whole height IS sitting height, and a real adult
+# sitting height runs about 0.79 m to 0.97 m. The bowl was drawn at roughly 78%
+# of that, which is subtle enough to pass unnoticed on its own and is exactly why
+# the rinkside staff looked enormous: they were scaled to real metres against a
+# crowd that was not.
+#
+# Every stature below is divided by this to get a scale factor, so the figures
+# are sized by anthropometry in one place instead of by eye in several.
+const _FIGURE_HEIGHT: float = _BODY_Y_LIFT + _BODY_SIZE.y + 0.02 + _HEAD_SIZE.y
+# Roughly 5th-percentile female to 95th-percentile male. Rolled per spectator, so
+# a row is a mix of statures rather than a line of identical boxes — which reads
+# as a crowd of people at a glance, where a uniform one reads as a texture.
+const _SEATED_STATURE_MIN: float = 0.80
+const _SEATED_STATURE_MAX: float = 0.96
+const _CROWD_SCALE_MAX: float = _SEATED_STATURE_MAX / _FIGURE_HEIGHT
+# Standing, for the staff on their feet at the boards.
+const _STANDING_STATURE: float = 1.75
+
+# Seat furniture: a pan on the tread and a backrest behind it, in the seated
+# spectator's own local frame (local −Z faces the rink, so +Z is outward).
+#
+# Every number here is bounded by something already fixed, and the body it has
+# to clear is the LARGEST stature roll — 0.39 m across and deep, not the mesh's
+# nominal 0.28 m. The seat is wider than that so it shows either side of an
+# occupant, and narrower than the 0.55 m spacing so neighbours don't merge into a
+# bench. The pan reaches 0.17 m forward — the spectator sits 0.18 m outward of
+# the tread's inner edge, so a deeper pan would hang over the drop. The backrest
+# starts at 0.205 m, clearing that body's 0.195 m back face, and ends at 0.255 m,
+# short of the next riser 0.42 m out. It stands 0.38 m against a seated occupant
+# of 0.80–0.96 m, so shoulders and head clear the top of the seat.
+const _SEAT_WIDTH: float = 0.46
+const _SEAT_PAN_DEPTH: float = 0.34
+const _SEAT_PAN_THICKNESS: float = 0.05
+const _SEAT_BACK_HEIGHT: float = 0.38
+const _SEAT_BACK_THICKNESS: float = 0.05
+# Nudged back from 0.20 once spectators grew: the tallest stature roll is also
+# the deepest body, and at 0.20 the backrest passed through it.
+const _SEAT_BACK_OFFSET: float = 0.23
+# Same trick as _BODY_Y_LIFT, for the same reason: the pan's underside would
+# otherwise be coplanar with the tread it rests on.
+const _SEAT_Y_LIFT: float = 0.002
+# Seats roll their shade from their own stream. Sharing the crowd's would tie
+# the two together — a change to seat jitter would repaint every spectator.
+const _SEAT_SEED: int = 90210
+
+# ── Ribbon board ─────────────────────────────────────────────────────────────
+# The LED strip on the upper deck's fascia — the wall the lower bowl's back rows
+# sit against, which is where a real arena puts one and which is otherwise a
+# blank band of concrete right in the eyeline of every high camera.
+const _RIBBON_HEIGHT: float = 0.55
+# Stood this far proud of the fascia so the two faces are never coplanar.
+const _RIBBON_INSET: float = 0.02
+# Whole number of repeats around the bowl, and it must stay whole: the strip
+# wraps in U, so a fractional count would put a hard seam where the band closes.
+const _RIBBON_REPEATS: int = 3
+# Gap between the strip and the upper deck's lip above it. The board hangs from
+# the TOP of the fascia rather than the middle of it — that is where a real one
+# goes, and on a fascia tall enough to be a storey it also leaves the lower half
+# of the wall free for the concourse portals.
+const _RIBBON_FASCIA_MARGIN: float = 0.25
+
+# ── Rafter banners ───────────────────────────────────────────────────────────
+# Hung inboard of the shell wall so they read as suspended over the bowl rather
+# than as signs bolted to it, and high enough that the top deck's back row is
+# well below them.
+const _BANNER_INBOARD: float = 2.0
+# Where the banners' top edge sits in the shell's height, as a fraction. Leaves
+# the roof space above them dark, which is the whole reason they read as hanging
+# from something rather than floating.
+const _BANNER_TOP_FRACTION: float = 0.86
+# Gap between a banner's two printed faces. Cloth is thinner than this; the
+# number is set by depth precision at 30 m, not by upholstery.
+const _BANNER_THICKNESS: float = 0.02
+# How many times the registry goes round the ring. There are only a handful of
+# banners and the ring is ~250 m, so hanging one of each would leave 60 m of
+# empty roof between them and most cameras seeing none. Repeating puts a banner
+# in view from anywhere without the roof becoming a wall of duplicates.
+const _BANNER_RING_REPEATS: int = 2
 
 # Civilian shirts/coats for the neutral fan slice.
 var _neutral_body_palette: Array[Color] = [
@@ -280,8 +466,22 @@ var _flashbulbs: CrowdFlashbulbs = null
 # Set while set_crowd_rows writes both row counts, so the two setters don't
 # each trigger a rebuild of their own.
 var _suspend_rebuild: bool = false
+# Ribbon board: the strip SubViewport and the material holding its texture, kept
+# so exit teardown can drop the binding before the RenderingServer finalizes,
+# plus the world span of one repeat, which converts the scroll from m/s to UV/s.
+var _ribbon_vp: SubViewport = null
+var _ribbon_material: StandardMaterial3D = null
+var _ribbon_span_m: float = 0.0
+# Rafter banners: same story, one atlas viewport for the whole roof.
+var _banner_vp: SubViewport = null
+var _banner_material: StandardMaterial3D = null
+# The ceiling rig's housings and its intro cue. Outlives rebuilds (see _ready).
+const _HOUSE_LIGHTS_NAME: StringName = &"ArenaHouseLights"
+var _house_lights: ArenaHouseLights = null
+var _render_targets_freed: bool = false
 
-# geometry key → layout dict {terrace_mesh, body_mm, head_mm, paint_key}.
+# geometry key → layout dict {terrace_mesh, shell_mesh, body/head/seat mms,
+# away_flags, paint_key}.
 # Everything in a layout is color-independent and deterministic (fixed
 # _SEED), so it's built once per geometry-param set and reused for the
 # process lifetime — a scene change's rebuild (free play → lobby → game)
@@ -303,8 +503,50 @@ static func release_shared_cache() -> void:
 	_layout_cache.clear()
 
 
+# Release the ribbon strip's render target and its material binding before Godot
+# finalizes the RenderingServer on quit — same contract, and same reasoning, as
+# HockeyRink._teardown_render_targets and Jumbotron._teardown_viewport: a
+# ViewportTexture still bound at exit takes its viewport and that viewport's
+# canvas and text-shaping RIDs down after the server, which reports them leaked.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_teardown_render_targets()
+
+
+func _exit_tree() -> void:
+	_teardown_render_targets()
+
+
+func _teardown_render_targets() -> void:
+	if _render_targets_freed:
+		return
+	_render_targets_freed = true
+	set_process(false)
+	if _ribbon_material != null:
+		_ribbon_material.albedo_texture = null
+	_ribbon_material = null
+	if is_instance_valid(_ribbon_vp):
+		_ribbon_vp.free()
+	_ribbon_vp = null
+	if _banner_material != null:
+		_banner_material.albedo_texture = null
+	_banner_material = null
+	if is_instance_valid(_banner_vp):
+		_banner_vp.free()
+	_banner_vp = null
+
+
 func _ready() -> void:
 	_rebuild()
+	# The house lights are runtime-only and live OUTSIDE the rebuild: they hold a
+	# tween and the scene's captured light energies, and a rebuild mid-cue (team
+	# colours arriving, say) would drop both and leave the bowl dark. _rebuild
+	# skips this child by name for that reason.
+	if not Engine.is_editor_hint() and get_parent() != null:
+		_house_lights = ArenaHouseLights.new()
+		_house_lights.name = _HOUSE_LIGHTS_NAME
+		add_child(_house_lights)
+		_house_lights.setup(get_parent())
 	# The crowd material is static (see its doc): a bowl mid-celebration when
 	# the scene changed would otherwise carry its excitement into the fresh
 	# arena. New bowls start at the idle murmur.
@@ -320,6 +562,12 @@ func _ready() -> void:
 		gm.phase_changed.connect(_on_phase_changed)
 	if gm.has_signal("body_check_broadcast"):
 		gm.body_check_broadcast.connect(_on_body_check_broadcast)
+	if gm.has_signal("faceoff_prep_announced"):
+		# The cue is timed against an announced window, but a skipped intro or a
+		# late joiner never reaches the end of it. Faceoff prep is the intro's
+		# real exit — the same dismissal the resurfacer crew uses — so the house
+		# comes back there whether the tween finished or not.
+		gm.faceoff_prep_announced.connect(_on_faceoff_prep_announced)
 	if gm.has_signal("pregame_intro_started"):
 		gm.pregame_intro_started.connect(_on_pregame_intro_started)
 	if gm.has_signal("period_intro_started"):
@@ -365,26 +613,51 @@ func set_crowd_rows(lower: int, upper: int) -> void:
 func _rebuild() -> void:
 	if rink_length <= 0.0 or rink_width <= 0.0 or num_terraces <= 0:
 		return
+	# A prior _exit_tree (a reparent, say) may have latched the teardown guard;
+	# clear it so a genuine later teardown still frees what this build creates.
+	_render_targets_freed = false
+	_ribbon_material = null
+	_banner_material = null
 	for child: Node in get_children():
+		if child.name == _HOUSE_LIGHTS_NAME:
+			continue   # survives rebuilds — see _ready
 		child.queue_free()
 	var layout: Dictionary = _get_or_build_layout()
 	_add_terraces(layout.terrace_mesh)
 	_add_shell(layout.shell_mesh)
+	# Seats before spectators so the furniture is already there to sit in — and
+	# so the opaque occupants draw over their own seat backs rather than the
+	# other way round.
+	if seats_enabled:
+		_add_seats(layout)
 	_add_spectators(layout)
+	_add_vomitory_tunnels()
 	_build_benches()
+	_build_penalty_boxes()
+	_build_staff()
+	if ribbon_enabled:
+		_add_ribbon_board()
+	if banners_enabled:
+		_add_rafter_banners()
 
 
 # ── Layout cache ─────────────────────────────────────────────────────────────
 
-# Every param that moves geometry, transforms, or the AABB. Colors and fan
-# ratios are deliberately absent — they only repaint.
+# Every param that moves geometry, transforms, or the AABB. The team colors and
+# fan ratios are deliberately absent — they only repaint, and so is `seat_color`,
+# which lives on the seat material. `seat_shade_variation` IS here, because it is
+# rolled into per-instance colors baked into the cached MultiMeshes rather than
+# applied at instancing time.
 func _geometry_key() -> String:
 	return str([rink_length, rink_width, corner_radius, stands_base_y,
 			num_terraces, tread_depth, riser_height, base_outward_offset,
 			corner_segments, spectator_spacing, spectator_inset_from_riser,
 			spectator_yaw_jitter_deg, spectator_y_jitter,
 			walkway_depth, upper_terraces, upper_riser_height, upper_deck_rise,
-			shell_height, num_aisles, aisle_width, attendance])
+			shell_height, num_aisles, aisle_width, attendance,
+			seat_shade_variation,
+			# The shell mesh is cached, and these cut holes in it.
+			vomitories_enabled, vomitory_width, vomitory_height])
 
 
 # Everything the paint pass reads: the four team colors + the mix ratios.
@@ -406,6 +679,7 @@ func _get_or_build_layout() -> Dictionary:
 		"paint_key": "",
 	}
 	_fill_spectator_layout(layout)
+	_fill_seat_layout(layout)
 	_layout_cache[key] = layout
 	return layout
 
@@ -441,9 +715,20 @@ func _build_terrace_mesh() -> ArrayMesh:
 	# poured structure. Row 0 below emits no riser of its own, since a
 	# duplicate co-planar wall here would z-fight this one.
 	if upper_terraces > 0:
-		_emit_riser(st,
-				_sample_offset_path(_upper_deck_inner_offset(), counts.x, counts.y),
-				_lower_top_tread_y(), _upper_deck_base_y())
+		var fascia_head: float = _fascia_portal_head()
+		if fascia_head > _lower_top_tread_y():
+			# Portals through to the concourse, at the head of every lower-bowl
+			# stairway. Same treatment as the shell wall: resampled fine enough
+			# that an opening always spans several segments, cut below, solid
+			# above.
+			var fine: PackedVector2Array = _resample_uniform(
+					_sample_offset_path(_upper_deck_inner_offset()), _VOMITORY_SAMPLE_M)
+			_emit_riser_gapped(st, fine, _lower_top_tread_y(), fascia_head)
+			_emit_riser(st, fine, fascia_head, _upper_deck_base_y())
+		else:
+			_emit_riser(st,
+					_sample_offset_path(_upper_deck_inner_offset(), counts.x, counts.y),
+					_lower_top_tread_y(), _upper_deck_base_y())
 	for j: int in upper_terraces:
 		var inner_off: float = _upper_deck_inner_offset() + j * tread_depth
 		var outer_off: float = inner_off + tread_depth
@@ -495,11 +780,73 @@ func _build_shell_mesh() -> ArrayMesh:
 	var st: SurfaceTool = SurfaceTool.new()
 	st.begin(Mesh.PrimitiveType.PRIMITIVE_TRIANGLES)
 	if shell_height > 0.0:
+		var base_y: float = _top_tread_y()
+		var top_y: float = base_y + shell_height
 		var wall_pts: PackedVector2Array = _sample_offset_path(
 				_shell_offset(), counts.x, counts.y)
-		_emit_riser(st, wall_pts, _top_tread_y(), _top_tread_y() + shell_height)
+		if _vomitories_wanted():
+			# The wall is resampled at a fixed spacing before the openings are
+			# cut. Its own sampling is geometric — the corners get
+			# `corner_segments` steps regardless of how far out the shell sits,
+			# which at this radius stretches them to ~3 m — and an opening barely
+			# wider than that would fall between two samples and never appear.
+			var fine: PackedVector2Array = _resample_uniform(wall_pts, _VOMITORY_SAMPLE_M)
+			var head_y: float = minf(base_y + vomitory_height, top_y)
+			_emit_riser_gapped(st, fine, base_y, head_y)
+			_emit_riser(st, fine, head_y, top_y)
+		else:
+			_emit_riser(st, wall_pts, base_y, top_y)
 	st.generate_normals()
 	return st.commit()
+
+
+# Top of the lower bowl's portals. They share the fascia with the ribbon board,
+# which hangs under the upper deck's lip, so the lintel stops clear of it. A
+# fascia too short for both (a shallow `upper_deck_rise`) yields the wall to the
+# ribbon and gets no portals — the caller checks for that by comparing this
+# against the walkway height.
+func _fascia_portal_head() -> float:
+	if not _vomitories_wanted():
+		return -INF
+	return minf(_lower_top_tread_y() + vomitory_height,
+			_upper_deck_base_y() - _RIBBON_HEIGHT - _RIBBON_FASCIA_MARGIN * 2.0)
+
+
+func _vomitories_wanted() -> bool:
+	return vomitories_enabled and num_aisles > 0 and vomitory_width > 0.0 \
+			and vomitory_height > 0.0
+
+
+# True where the shell wall is a doorway rather than a wall. Shares the aisles'
+# spacing so a portal lands at the head of every stairway, but takes its own
+# width — a vomitory is wider than the steps that feed it.
+func _in_vomitory(s: float) -> bool:
+	if not _vomitories_wanted():
+		return false
+	var seg: float = _base_path_length() / float(num_aisles)
+	var into: float = fposmod(s, seg)
+	return minf(into, seg - into) < vomitory_width * 0.5
+
+
+# _emit_riser, minus the segments that fall in a doorway.
+func _emit_riser_gapped(st: SurfaceTool, inner: PackedVector2Array,
+		y_bot: float, y_top: float) -> void:
+	var n: int = inner.size()
+	var cut: PackedByteArray = _shell_cut_flags(inner)
+	for i: int in n:
+		var j: int = (i + 1) % n
+		if cut[i] == 1:
+			continue
+		var ba := Vector3(inner[i].x, y_bot, inner[i].y)
+		var ta := Vector3(inner[i].x, y_top, inner[i].y)
+		var bb := Vector3(inner[j].x, y_bot, inner[j].y)
+		var tb := Vector3(inner[j].x, y_top, inner[j].y)
+		st.add_vertex(ba)
+		st.add_vertex(bb)
+		st.add_vertex(tb)
+		st.add_vertex(ba)
+		st.add_vertex(tb)
+		st.add_vertex(ta)
 
 
 # Shell color lives on a per-instance material_override (same pattern as the
@@ -829,11 +1176,14 @@ func _make_crowd_multimesh(mesh: ArrayMesh, count: int) -> MultiMesh:
 # celebration hop on top, ~0.1 m of sway sideways; rotated bodies can extend
 # by the box diagonal in any horizontal direction.
 func _grow_section_aabb(seed_aabb: AABB) -> AABB:
-	var horizontal_margin: float = max(_BODY_SIZE.x, _BODY_SIZE.z) * 0.71 + 0.15
+	# Sized for the TALLEST spectator a stature roll can produce, not the mesh's
+	# own dimensions — an under-sized AABB gets the whole section frustum-culled.
+	var horizontal_margin: float = max(_BODY_SIZE.x, _BODY_SIZE.z) \
+			* _CROWD_SCALE_MAX * 0.71 + 0.15
 	var pos: Vector3 = seed_aabb.position - Vector3(horizontal_margin, 0.1, horizontal_margin)
 	var end: Vector3 = seed_aabb.end + Vector3(
 			horizontal_margin,
-			_BODY_SIZE.y + _HEAD_SIZE.y + 0.35,
+			(_BODY_SIZE.y + _HEAD_SIZE.y) * _CROWD_SCALE_MAX + 0.35,
 			horizontal_margin)
 	return AABB(pos, end - pos)
 
@@ -865,7 +1215,12 @@ func _append_spectator_row(transforms: Array[Transform3D], anim_data: Array[Colo
 		# solving for that to equal -p.normalized() yields yaw = atan2(p.x, p.z).
 		var yaw: float = atan2(p.x, p.y) \
 				+ deg_to_rad(rng.randf_range(-spectator_yaw_jitter_deg, spectator_yaw_jitter_deg))
-		var spectator_basis: Basis = Basis(Vector3.UP, yaw)
+		# Uniform, so the head rides the body without the two needing separate
+		# transforms. Heads therefore vary a little with stature, which is not
+		# how people are built but is invisible at this level of stylization.
+		var stature: float = rng.randf_range(_SEATED_STATURE_MIN, _SEATED_STATURE_MAX)
+		var spectator_basis: Basis = Basis(Vector3.UP, yaw).scaled(
+				Vector3.ONE * (stature / _FIGURE_HEIGHT))
 		transforms.append(Transform3D(spectator_basis, pos))
 		away_block.append(1 if is_upper and num_aisles > 0
 				and _section_id(arc_s) == away_section else 0)
@@ -911,6 +1266,595 @@ func _add_spectators(layout: Dictionary) -> void:
 	_flashbulbs.name = "CrowdFlashbulbs"
 	_flashbulbs.set_sources(head_mms)
 	add_child(_flashbulbs)
+
+
+# ── Ribbon board ─────────────────────────────────────────────────────────────
+
+# Turn one of this bowl's sampled paths into the {pos, inward} stations
+# BoardAdBandBuilder wants.
+#
+# The traversal is REVERSED on the way in, because this file and HockeyRink wind
+# their perimeters oppositely: _sample_offset_path runs bottom edge → left → top
+# → right, while HockeyRink's stations run right → top → left → bottom. Arc
+# length is the band's U axis, so feeding this bowl's own order would run U the
+# other way round the building and hang every wordmark mirrored.
+#
+# Reversing flips the tangent, so inward — which must still point at the rink —
+# is the +90° rotation here where the un-reversed path wanted −90°. Tangents
+# come from a central difference so a station on a corner blends its two
+# neighbours instead of inheriting one segment's normal wholesale.
+func _path_stations(offset: float) -> Array:
+	var pts: PackedVector2Array = _sample_offset_path(offset)
+	pts.reverse()
+	var stations: Array = []
+	var count: int = pts.size()
+	for i: int in count:
+		var prev: Vector2 = pts[(i - 1 + count) % count]
+		var next: Vector2 = pts[(i + 1) % count]
+		var tangent: Vector2 = (next - prev).normalized()
+		stations.append({
+			"pos": pts[i],
+			"inward": Vector2(-tangent.y, tangent.x),
+		})
+	return stations
+
+
+# One continuous band around the fascia, sampled with U repeating _RIBBON_REPEATS
+# times, so the whole board is a single mesh and a single material — and the
+# scroll is one UV write per frame rather than anything rebuilt.
+func _add_ribbon_board() -> void:
+	if upper_terraces <= 0:
+		return   # no upper deck means no fascia to mount it on
+	var stations: Array = _path_stations(_upper_deck_inner_offset())
+	var cumulative: PackedFloat32Array = BoardAdBandBuilder.cumulative_arcs(stations)
+	var perimeter: float = BoardAdBandBuilder.perimeter_of(cumulative)
+	var centre_y: float = _upper_deck_base_y() \
+			- _RIBBON_FASCIA_MARGIN - _RIBBON_HEIGHT * 0.5
+	var band: ArrayMesh = BoardAdBandBuilder.build_band(stations, cumulative,
+			[Vector2(0.0, perimeter)] as Array[Vector2],
+			[Rect2(0.0, 0.0, float(_RIBBON_REPEATS), 1.0)] as Array[Rect2],
+			_RIBBON_INSET,
+			centre_y - _RIBBON_HEIGHT * 0.5, centre_y + _RIBBON_HEIGHT * 0.5)
+	if band == null:
+		return
+
+	var strip_vp := SubViewport.new()
+	strip_vp.name = "RibbonStripViewport"
+	strip_vp.size = RibbonPainter.strip_size(AdBrands.BRANDS.size())
+	strip_vp.transparent_bg = false
+	strip_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	strip_vp.disable_3d = true
+	strip_vp.handle_input_locally = false
+	strip_vp.gui_disable_input = true
+	add_child(strip_vp)
+	_ribbon_vp = strip_vp
+
+	var painter := RibbonPainter.new()
+	painter.brands = AdBrands.BRANDS
+	strip_vp.add_child(painter)
+
+	var mi := MeshInstance3D.new()
+	mi.name = "RibbonBoard"
+	mi.mesh = band
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = strip_vp.get_texture()
+	# Unshaded so the board is its own light source rather than something the
+	# ceiling rig has to reach, which at this height and angle it does not.
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	# Double-sided like every other band in the project: BoardAdBandBuilder's
+	# winding does not survive Godot's culling the way the world-space geometry
+	# suggests it should (see HockeyRink._rebuild), so nothing built by it relies
+	# on which face the renderer thinks is front.
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
+
+	_ribbon_material = mat
+	# One repeat spans this much wall, which converts the scroll speed from
+	# metres per second into UV per second.
+	_ribbon_span_m = perimeter / float(_RIBBON_REPEATS)
+	# Editor previews hold still: a @tool node redrawing every frame for a
+	# scrolling sign is churn the editor does not need.
+	set_process(not Engine.is_editor_hint())
+
+
+func _process(delta: float) -> void:
+	if _ribbon_material == null or _ribbon_span_m <= 0.0:
+		return
+	var offset: Vector3 = _ribbon_material.uv1_offset
+	offset.x = fposmod(offset.x + delta * ribbon_scroll_speed / _ribbon_span_m, 1.0)
+	_ribbon_material.uv1_offset = offset
+
+
+# ── Vomitories ───────────────────────────────────────────────────────────────
+
+# A hole in the shell is only an improvement if it leads somewhere. Each opening
+# gets a short recessed tunnel — two side walls, a ceiling, and a back wall lit
+# as if the concourse beyond it were — so the portal reads as a way out rather
+# than as a puncture showing the background colour through the building.
+#
+# Built as two meshes because the back wall is the only lit surface: everything
+# else is the same dark concrete as the shell it is cut into.
+func _add_vomitory_tunnels() -> void:
+	if not _vomitories_wanted():
+		return
+	var walls := SurfaceTool.new()
+	var backs := SurfaceTool.new()
+	walls.begin(Mesh.PrimitiveType.PRIMITIVE_TRIANGLES)
+	backs.begin(Mesh.PrimitiveType.PRIMITIVE_TRIANGLES)
+
+	# The back of the top deck. These bore out through the shell, which is the
+	# last thing modelled — the arena has no exterior and is not meant to, so
+	# what they leave on the outside is not a consideration. Both rings are cut
+	# to the same depth, and the depth is chosen for how a portal reads from
+	# inside the bowl.
+	var shell_base: float = _top_tread_y()
+	_emit_vomitory_ring(walls, backs, _shell_offset(), shell_base,
+			minf(shell_base + vomitory_height, shell_base + shell_height))
+	# And the back of the lower bowl, boring outward UNDER the upper deck, which
+	# is where a real concourse runs.
+	var fascia_head: float = _fascia_portal_head()
+	if upper_terraces > 0 and fascia_head > _lower_top_tread_y():
+		_emit_vomitory_ring(walls, backs, _upper_deck_inner_offset(),
+				_lower_top_tread_y(), fascia_head)
+
+	walls.generate_normals()
+	backs.generate_normals()
+	# From a lit bowl a portal reads as a DARK hole with a hint of warmth deep in
+	# it — not as a bright panel, which is what the first pass painted and which
+	# reads as something stuck ON the wall rather than cut into it. The back is a
+	# little lighter than the sides on purpose: that gradient from dark edges to
+	# a warmer centre is the only depth cue a 2.6 m recess gets at this distance.
+	_add_tunnel_instance(walls.commit(), "VomitoryTunnels", Color(0.055, 0.055, 0.065))
+	_add_tunnel_instance(backs.commit(), "VomitoryLightSpill", Color(0.20, 0.16, 0.12))
+
+
+# Tunnels behind every portal in one ring of wall.
+#
+# Extruded from the removed segments themselves rather than built as a box at
+# each aisle's centre. An opening is cut by arc on the BASE path while the wall
+# it is cut into stands metres further out, so the same arc span is a WIDER hole
+# out there — wider still through a corner, and by a different amount for the
+# fascia than for the shell. A box sized to the nominal width left daylight down
+# both sides of every portal. Following the cut segments makes each tunnel
+# exactly as wide as its own hole, whatever that ring's radius did to it.
+func _emit_vomitory_ring(walls: SurfaceTool, backs: SurfaceTool, offset: float,
+		base_y: float, head_y: float) -> void:
+	var wall: PackedVector2Array = _resample_uniform(
+			_sample_offset_path(offset), _VOMITORY_SAMPLE_M)
+	var count: int = wall.size()
+	if count < 4 or head_y <= base_y:
+		return
+	var cut: PackedByteArray = _shell_cut_flags(wall)
+
+	for i: int in count:
+		if cut[i] == 0:
+			continue
+		var j: int = (i + 1) % count
+		var a: Vector2 = wall[i]
+		var b: Vector2 = wall[j]
+		var a_out: Vector2 = a + _outward_at(wall, i) * vomitory_depth
+		var b_out: Vector2 = b + _outward_at(wall, j) * vomitory_depth
+		# Back wall — the lit face at the end of the passage.
+		_emit_quad_3d(backs, a_out, b_out, base_y, head_y)
+		# Ceiling and floor. The floor matters: the ring's own walkway stops at
+		# the wall, so without one a portal looks down into nothing.
+		_emit_deck_quad(walls, a, b, b_out, a_out, head_y)
+		_emit_deck_quad(walls, a, b, b_out, a_out, base_y)
+		# Side walls, only where a run of cut segments begins or ends.
+		if cut[(i - 1 + count) % count] == 0:
+			_emit_quad_3d(walls, a, a_out, base_y, head_y)
+		if cut[j] == 0:
+			_emit_quad_3d(walls, b, b_out, base_y, head_y)
+
+
+# A horizontal quad through four ground points at height `y`.
+func _emit_deck_quad(st: SurfaceTool, a: Vector2, b: Vector2, c: Vector2,
+		d: Vector2, y: float) -> void:
+	st.add_vertex(Vector3(a.x, y, a.y))
+	st.add_vertex(Vector3(b.x, y, b.y))
+	st.add_vertex(Vector3(c.x, y, c.y))
+	st.add_vertex(Vector3(a.x, y, a.y))
+	st.add_vertex(Vector3(c.x, y, c.y))
+	st.add_vertex(Vector3(d.x, y, d.y))
+
+
+# Per-segment: is the wall between point i and i+1 a doorway? Shared by the
+# shell mesh and the tunnels so the hole and what fills it can never disagree.
+func _shell_cut_flags(wall: PackedVector2Array) -> PackedByteArray:
+	var count: int = wall.size()
+	var cut := PackedByteArray()
+	cut.resize(count)
+	for i: int in count:
+		var mid: Vector2 = (wall[i] + wall[(i + 1) % count]) * 0.5
+		cut[i] = 1 if _in_vomitory(_base_path_s(mid)) else 0
+	return cut
+
+
+# Outward (away from the rink) unit normal at a point on one of this bowl's
+# sampled paths.
+#
+# The rotation sign is the whole content of this function, and it is the opposite
+# of the one _path_stations uses, because that helper reverses the loop first.
+# On the path as _sample_offset_path emits it, the bottom edge runs −X at
+# z = −half_length, so its tangent is (−1, 0) and the rink lies at +Z: rotating
+# the tangent by −90° gives (0, +1), which points at the ice. Outward is the +90°
+# rotation. Getting this backwards bores every tunnel INTO the seating bowl,
+# which looks like the portals are projecting out of the concourse rather than
+# cut into it.
+func _outward_at(wall: PackedVector2Array, index: int) -> Vector2:
+	var count: int = wall.size()
+	var tangent: Vector2 = (wall[(index + 1) % count]
+			- wall[(index - 1 + count) % count]).normalized()
+	return Vector2(-tangent.y, tangent.x)
+
+
+# A vertical quad between two ground points. Wound either way is fine: every
+# tunnel surface is double-sided, since the only camera that ever sees one is
+# looking straight into it.
+func _emit_quad_3d(st: SurfaceTool, a: Vector2, b: Vector2,
+		y_bot: float, y_top: float) -> void:
+	st.add_vertex(Vector3(a.x, y_bot, a.y))
+	st.add_vertex(Vector3(b.x, y_bot, b.y))
+	st.add_vertex(Vector3(b.x, y_top, b.y))
+	st.add_vertex(Vector3(a.x, y_bot, a.y))
+	st.add_vertex(Vector3(b.x, y_top, b.y))
+	st.add_vertex(Vector3(a.x, y_top, a.y))
+
+
+func _add_tunnel_instance(mesh: ArrayMesh, node_name: String, color: Color) -> void:
+	if mesh == null:
+		return
+	var mi := MeshInstance3D.new()
+	mi.name = node_name
+	mi.mesh = mesh
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	# Unshaded, for two reasons. These surfaces are double-sided with winding
+	# that carries no meaning (see _emit_quad_3d), so generated normals would
+	# light half of them from behind and flatten the recess the values are there
+	# to describe. And a concourse keeps its own lights: the tunnels holding
+	# steady while the house dims for a skate-on is correct, not a miss.
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
+
+
+# ── Rinkside staff ───────────────────────────────────────────────────────────
+
+# The benches, the penalty boxes, and the timekeeper's table were all furniture
+# with nobody at it — a table with no timekeeper reads emptier than no table.
+# Nine figures fix that: two coaches behind each bench, an attendant at each
+# penalty box door, and three of the off-ice crew at the table.
+#
+# One MultiMesh pair for the lot, same body and head meshes the crowd uses, but
+# with a plain material: the crowd shader sways and hops off per-instance custom
+# data, and staff standing at their posts should do neither.
+func _build_staff() -> void:
+	var bench_x: float = rink_width / 2.0 + base_outward_offset
+	var transforms: Array[Transform3D] = []
+	var jackets: Array[Color] = []
+
+	# Coaches: two behind each bench, facing the ice. Jackets are only lightly
+	# darkened from the team colour — staff stand against dark furniture behind
+	# tinted glass, and anything nearer to black merges with the box they are in.
+	for side: float in [-1.0, 1.0]:
+		var jacket: Color = (home_color if side > 0.0 else away_color).darkened(0.3)
+		for dz: float in [-1.15, 1.15]:
+			transforms.append(_staff_transform(
+					bench_x + _STAFF_BEHIND_BENCH,
+					_tread_y_at(_STAFF_BEHIND_BENCH), side * BENCH_CENTER_Z + dz))
+			jackets.append(jacket)
+
+	# Penalty-box attendants, at the door end of each box.
+	for side: float in [-1.0, 1.0]:
+		transforms.append(_staff_transform(
+				-(bench_x + _STAFF_BEHIND_BENCH), _tread_y_at(_STAFF_BEHIND_BENCH),
+				side * (PENALTY_BOX_CENTER_Z + PENALTY_BOX_HALF_LEN - 0.4)))
+		jackets.append(Color(0.38, 0.40, 0.46))
+
+	# Timekeeping crew at the table, between the boxes.
+	for dz: float in [-0.72, 0.0, 0.72]:
+		transforms.append(_staff_transform(
+				-(bench_x + _STAFF_BEHIND_TABLE), _tread_y_at(_STAFF_BEHIND_TABLE), dz))
+		# The off-ice crew works in shirtsleeves; pale is also what separates them
+		# from the dark counter they stand behind.
+		jackets.append(Color(0.74, 0.76, 0.80))
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = _STAFF_SEED
+	var body_mm: MultiMesh = _make_staff_multimesh(_build_body_mesh(), transforms.size())
+	var head_mm: MultiMesh = _make_staff_multimesh(_build_head_mesh(), transforms.size())
+	var bounds := AABB(transforms[0].origin, Vector3.ZERO)
+	for i: int in transforms.size():
+		body_mm.set_instance_transform(i, transforms[i])
+		head_mm.set_instance_transform(i, transforms[i])
+		body_mm.set_instance_color(i, jackets[i])
+		head_mm.set_instance_color(i, _head_palette[rng.randi() % _head_palette.size()])
+		bounds = bounds.expand(transforms[i].origin)
+	# Explicit bounds for the same reason the crowd sections have them: Godot's
+	# auto-AABB is unreliable when transforms are pushed one at a time rather
+	# than as a single buffer write, and an under-sized one gets the whole
+	# MultiMesh frustum-culled. The seed box covers instance ORIGINS only, so it
+	# has to grow by the figure's own reach.
+	var reach: float = maxf(_BODY_SIZE.x, _BODY_SIZE.z) * _STAFF_SCALE
+	var stature: float = (_BODY_SIZE.y + _HEAD_SIZE.y + 0.1) * _STAFF_SCALE
+	var staff_aabb := AABB(bounds.position - Vector3(reach, 0.1, reach),
+			bounds.size + Vector3(reach * 2.0, stature, reach * 2.0))
+	body_mm.custom_aabb = staff_aabb
+	head_mm.custom_aabb = staff_aabb
+
+	for part: Array in [["StaffBodies", body_mm], ["StaffHeads", head_mm]]:
+		var mmi := MultiMeshInstance3D.new()
+		mmi.name = part[0]
+		mmi.multimesh = part[1]
+		mmi.material_override = _staff_material()
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mmi)
+
+
+# Floor height for someone standing `beyond` metres past the terraces' inner
+# edge. Staff stand a metre back from the furniture they work at, which is far
+# enough to be on the SECOND tread rather than the first — placing them at the
+# bowl's base height instead sinks them into the riser and puts the bench
+# backrest across their chest, which is where they were until this existed.
+func _tread_y_at(beyond: float) -> float:
+	var step: int = clampi(floori(beyond / tread_depth), 0, maxi(num_terraces - 1, 0))
+	return stands_base_y + float(step) * riser_height
+
+
+# Standing at (x, z) on the tread at `y`, turned to face centre ice and scaled
+# up from the seated crowd's proportions.
+func _staff_transform(x: float, y: float, z: float) -> Transform3D:
+	var basis := Basis(Vector3.UP, atan2(x, z)).scaled(Vector3.ONE * _STAFF_SCALE)
+	return Transform3D(basis, Vector3(x, y, z))
+
+
+func _make_staff_multimesh(mesh: ArrayMesh, count: int) -> MultiMesh:
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = mesh
+	mm.instance_count = count
+	return mm
+
+
+# Lit, unlike the crowd — staff stand at ice level under the rig that lights the
+# boards, close enough to the camera that flat shading would read as cardboard.
+func _staff_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.85
+	return mat
+
+
+# ── Rafter banners ───────────────────────────────────────────────────────────
+
+# Banners are spaced evenly around a ring inboard of the shell and built as one
+# band, exactly like the boards' ad panels — a 2.6 m banner on a ring this wide
+# is very nearly flat, so following the arc costs nothing and saves writing a
+# second quad builder.
+func _add_rafter_banners() -> void:
+	if shell_height <= 0.0 or BannerRegistry.BANNERS.is_empty():
+		return
+	var stations: Array = _path_stations(_shell_offset() - _BANNER_INBOARD)
+	var cumulative: PackedFloat32Array = BoardAdBandBuilder.cumulative_arcs(stations)
+	var perimeter: float = BoardAdBandBuilder.perimeter_of(cumulative)
+	# Distinct banners (one atlas cell each) versus how many hang: the registry
+	# goes round the ring more than once, so a name appears on opposite sides.
+	var unique: int = BannerRegistry.BANNERS.size()
+	var hung: int = unique * _BANNER_RING_REPEATS
+	var width: float = banner_height \
+			* float(BannerPainter.CELL_PX.x) / float(BannerPainter.CELL_PX.y)
+	if width <= 0.0 or width * hung >= perimeter:
+		return
+
+	var placements: Array[Vector2] = []
+	var uv_rects: Array[Rect2] = []
+	for i: int in hung:
+		# Evenly spaced around the ring, each centred on its share of it.
+		var centre: float = perimeter * (float(i) + 0.5) / float(hung)
+		placements.append(Vector2(centre - width * 0.5, width))
+		uv_rects.append(BannerPainter.cell_uv(i % unique, unique))
+
+	var top_y: float = _top_tread_y() + shell_height * _BANNER_TOP_FRACTION
+	var band: ArrayMesh = BoardAdBandBuilder.build_band(stations, cumulative,
+			placements, uv_rects, 0.0, top_y - banner_height, top_y)
+	if band == null:
+		return
+	# Cloth has two sides and a real banner is printed on both. A single
+	# double-sided quad would show the reverse mirrored, so the back is its own
+	# surface hung _BANNER_THICKNESS behind the front with its U reversed —
+	# which reads right from outside the ring and keeps the two off each other's
+	# depth.
+	var back_rects: Array[Rect2] = []
+	for cell: Rect2 in uv_rects:
+		back_rects.append(Rect2(cell.position.x + cell.size.x, cell.position.y,
+				-cell.size.x, cell.size.y))
+	var back_band: ArrayMesh = BoardAdBandBuilder.build_band(stations, cumulative,
+			placements, back_rects, -_BANNER_THICKNESS,
+			top_y - banner_height, top_y)
+
+	var atlas_vp := SubViewport.new()
+	atlas_vp.name = "BannerAtlasViewport"
+	atlas_vp.size = BannerPainter.atlas_size(unique)
+	atlas_vp.transparent_bg = true
+	atlas_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	atlas_vp.disable_3d = true
+	atlas_vp.handle_input_locally = false
+	atlas_vp.gui_disable_input = true
+	add_child(atlas_vp)
+	_banner_vp = atlas_vp
+
+	var painter := BannerPainter.new()
+	painter.banners = BannerRegistry.BANNERS
+	atlas_vp.add_child(painter)
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = atlas_vp.get_texture()
+	# Unshaded: nothing lights the roof space, so a lit banner is a black
+	# rectangle. Double-sided per surface, since BoardAdBandBuilder's winding
+	# does not survive culling the way the geometry suggests (see
+	# HockeyRink._rebuild) — the two surfaces, not the culling, make the sides.
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_banner_material = mat
+
+	for face: Array in [["RafterBanners", band], ["RafterBannersBack", back_band]]:
+		if face[1] == null:
+			continue
+		var mi := MeshInstance3D.new()
+		mi.name = face[0]
+		mi.mesh = face[1]
+		mi.material_override = mat
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mi)
+
+
+# ── Seats ────────────────────────────────────────────────────────────────────
+#
+# Same shape as the crowd — per-section MultiMeshes over the same angular
+# slices, so seats frustum-cull with the spectators sitting in them — but built
+# in a separate pass over the same rows rather than alongside the spectators.
+# Two reasons, and both are load-bearing:
+#
+#   A seat exists whether or not anyone is in it, so this pass has no vacancy
+#   roll. Weaving that difference into _append_spectator_row would mean two
+#   traversals of one rng stream, and the crowd's whole appearance is downstream
+#   of that stream's order.
+#
+#   Seats are bolted to the concrete: no yaw jitter, no height jitter, no
+#   animation. The crowd's sway/hop comes from its shader reading per-instance
+#   custom data; seats want none of it, so they carry no custom data and use a
+#   plain material instead.
+func _fill_seat_layout(layout: Dictionary) -> void:
+	var transforms: Array[Transform3D] = []
+	var shades: PackedFloat32Array = PackedFloat32Array()
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	rng.seed = _SEAT_SEED
+	for i: int in num_terraces:
+		_append_seat_row(transforms, shades, rng,
+				base_outward_offset + i * tread_depth + spectator_inset_from_riser,
+				stands_base_y + i * riser_height, i)
+	for j: int in upper_terraces:
+		_append_seat_row(transforms, shades, rng,
+				_upper_deck_inner_offset() + j * tread_depth + spectator_inset_from_riser,
+				_upper_deck_base_y() + j * upper_riser_height, -1)
+
+	var seat_mesh: ArrayMesh = _build_seat_mesh()
+	var section_indices: Array[PackedInt32Array] = []
+	section_indices.resize(_CROWD_SECTIONS)
+	for k: int in _CROWD_SECTIONS:
+		section_indices[k] = PackedInt32Array()
+	for i: int in transforms.size():
+		var o: Vector3 = transforms[i].origin
+		var sector: int = int(floor((atan2(o.z, o.x) + PI) / TAU * _CROWD_SECTIONS))
+		section_indices[clampi(sector, 0, _CROWD_SECTIONS - 1)].append(i)
+
+	var seat_mms: Array[MultiMesh] = []
+	for k: int in _CROWD_SECTIONS:
+		var idxs: PackedInt32Array = section_indices[k]
+		if idxs.is_empty():
+			continue
+		var mm: MultiMesh = MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = seat_mesh
+		mm.instance_count = idxs.size()
+		var seed_aabb: AABB = AABB(transforms[idxs[0]].origin, Vector3.ZERO)
+		for n_i: int in idxs.size():
+			var src: int = idxs[n_i]
+			mm.set_instance_transform(n_i, transforms[src])
+			# White scaled by the shade roll. The material's albedo carries the
+			# actual colour and multiplies through, so seat_color stays a live
+			# export instead of something baked into this cached layout.
+			var shade: float = shades[src]
+			mm.set_instance_color(n_i, Color(shade, shade, shade))
+			seed_aabb = seed_aabb.expand(transforms[src].origin)
+		mm.custom_aabb = _grow_seat_aabb(seed_aabb)
+		seat_mms.append(mm)
+	layout["seat_mms"] = seat_mms
+
+
+# One ring of seats. Mirrors _append_spectator_row's placement rules — the bench
+# cutout and the aisles take precedence over furniture the same way they take
+# precedence over people — minus the vacancy roll and every jitter.
+func _append_seat_row(transforms: Array[Transform3D], shades: PackedFloat32Array,
+		rng: RandomNumberGenerator, seat_off: float, y: float, bench_row: int) -> void:
+	var samples: PackedVector2Array = _sample_offset_path(seat_off)
+	var resampled: PackedVector2Array = _resample_uniform(samples, spectator_spacing)
+	for p: Vector2 in resampled:
+		if bench_row >= 0 and _in_bench_zone(bench_row, p):
+			continue
+		if _in_aisle(_base_path_s(p)):
+			continue
+		transforms.append(Transform3D(Basis(Vector3.UP, atan2(p.x, p.y)),
+				Vector3(p.x, y, p.y)))
+		shades.append(1.0 - rng.randf() * seat_shade_variation)
+
+
+# Unlike the crowd's, a seat's AABB needs no animation headroom — nothing here
+# sways or hops. It still needs the mesh's own extent, since the seed box only
+# covers instance ORIGINS, and the horizontal margin still has to allow for a
+# seat rotated to any heading around the bowl.
+func _grow_seat_aabb(seed_aabb: AABB) -> AABB:
+	var reach: float = Vector2(_SEAT_WIDTH, _SEAT_BACK_OFFSET
+			+ _SEAT_BACK_THICKNESS).length() * 0.5 + 0.1
+	var pos: Vector3 = seed_aabb.position - Vector3(reach, 0.05, reach)
+	var end: Vector3 = seed_aabb.end + Vector3(reach, _SEAT_BACK_HEIGHT + 0.1, reach)
+	return AABB(pos, end - pos)
+
+
+# Pan and backrest as one mesh. They are rigidly related and share a colour, so
+# splitting them would double the instance count to buy nothing — unlike the
+# crowd's body and head, which are separate only because they take different
+# per-instance colours (shirt and skin) from the same transform.
+func _build_seat_mesh() -> ArrayMesh:
+	var st: SurfaceTool = SurfaceTool.new()
+	st.begin(Mesh.PrimitiveType.PRIMITIVE_TRIANGLES)
+	_emit_box(st, Vector3(0.0, _SEAT_Y_LIFT + _SEAT_PAN_THICKNESS * 0.5, 0.0),
+			Vector3(_SEAT_WIDTH, _SEAT_PAN_THICKNESS, _SEAT_PAN_DEPTH))
+	_emit_box(st, Vector3(0.0, _SEAT_Y_LIFT + _SEAT_BACK_HEIGHT * 0.5, _SEAT_BACK_OFFSET),
+			Vector3(_SEAT_WIDTH, _SEAT_BACK_HEIGHT, _SEAT_BACK_THICKNESS))
+	st.generate_normals()
+	return st.commit()
+
+
+func _add_seats(layout: Dictionary) -> void:
+	var seat_mms: Array[MultiMesh] = layout.seat_mms
+	if seat_mms.is_empty():
+		return
+	var mat: StandardMaterial3D = _seat_material()
+	for k: int in seat_mms.size():
+		var mmi: MultiMeshInstance3D = MultiMeshInstance3D.new()
+		mmi.multimesh = seat_mms[k]
+		mmi.name = "Seats%d" % k
+		mmi.material_override = mat
+		# Shadows off for the same reason the crowd's are (see _add_spectators):
+		# thousands of instances across the eight shadow-casting ceiling lights
+		# is the arena's biggest shadow-map cost, and seat shadows up in the
+		# stands are invisible from a rink-focused camera.
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		# And out of the GI probe: SDFGI voxelizes static geometry, which is
+		# exactly what these are and exactly the volume it charges for. Seats
+		# are small, dark, and mostly under an occupant — they have nothing to
+		# contribute to bounce that the terrace beneath them doesn't already.
+		mmi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		add_child(mmi)
+
+
+# Flat and unshiny — moulded plastic, not furniture polish. Vertex colour is on
+# so the per-instance shade roll multiplies into the albedo.
+func _seat_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = seat_color
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.85
+	mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	return mat
 
 
 # Roll body/head colors for every spectator. Own rng stream (same _SEED),
@@ -974,18 +1918,20 @@ func _spectator_material() -> ShaderMaterial:
 	return _crowd_material
 
 
-# True when a spectator slot falls inside the player-bench cutout: the first
-# _BENCH_CLEAR_ROWS rows on the bench (+X) side, along the full stretch from
-# one bench's far end to the other's — including the gap BETWEEN the bench
-# spans, which is the gate/staff area; fans seated at ice level in that
-# sliver read as people sitting between the two benches.
+# True when a spectator slot falls inside a rinkside furniture cutout: the first
+# _BENCH_CLEAR_ROWS rows on either side of the bowl, along the full stretch the
+# furniture occupies — the player benches on +X, the penalty boxes and officials'
+# table on −X. Both spans include the GAP between their two halves, which is
+# gate and staff area rather than seating; fans at ice level in that sliver read
+# as people sitting between the benches.
 # Sample points are (x, z) packed as Vector2(x, y).
 func _in_bench_zone(row: int, p: Vector2) -> bool:
 	if row >= _BENCH_CLEAR_ROWS:
 		return false
-	if p.x < 0.0:
-		return false
-	return absf(p.y) < _BENCH_CENTER_Z + _BENCH_HALF_LEN + _BENCH_CLEAR_MARGIN
+	if p.x >= 0.0:
+		return absf(p.y) < BENCH_CENTER_Z + BENCH_HALF_LEN + _BENCH_CLEAR_MARGIN
+	# −X: the penalty boxes and the officials' table between them.
+	return absf(p.y) < PENALTY_BOX_CENTER_Z + PENALTY_BOX_HALF_LEN + _BENCH_CLEAR_MARGIN
 
 
 # ── Player benches ───────────────────────────────────────────────────────────
@@ -997,14 +1943,14 @@ func _build_benches() -> void:
 	var x_inner: float = rink_width / 2.0 + base_outward_offset
 	var tread_y: float = stands_base_y
 	for side: float in [-1.0, 1.0]:
-		var center_z: float = side * _BENCH_CENTER_Z
+		var center_z: float = side * BENCH_CENTER_Z
 		# Home (team 0) defends +Z, so its bench sits on the +Z half.
 		var team_color: Color = home_color if side > 0.0 else away_color
 
 		var seat := MeshInstance3D.new()
 		seat.name = "BenchSeatHome" if side > 0.0 else "BenchSeatAway"
 		var seat_mesh := BoxMesh.new()
-		seat_mesh.size = Vector3(0.42, _BENCH_SEAT_HEIGHT, _BENCH_HALF_LEN * 2.0)
+		seat_mesh.size = Vector3(0.42, _BENCH_SEAT_HEIGHT, BENCH_HALF_LEN * 2.0)
 		var seat_mat := StandardMaterial3D.new()
 		seat_mat.albedo_color = team_color.darkened(0.25)
 		seat_mat.roughness = 0.8
@@ -1017,7 +1963,7 @@ func _build_benches() -> void:
 		var backrest := MeshInstance3D.new()
 		backrest.name = "BenchBackHome" if side > 0.0 else "BenchBackAway"
 		var back_mesh := BoxMesh.new()
-		back_mesh.size = Vector3(0.06, 0.5, _BENCH_HALF_LEN * 2.0)
+		back_mesh.size = Vector3(0.06, 0.5, BENCH_HALF_LEN * 2.0)
 		var back_mat := StandardMaterial3D.new()
 		back_mat.albedo_color = Color(0.20, 0.20, 0.22)
 		back_mat.roughness = 0.9
@@ -1027,13 +1973,83 @@ func _build_benches() -> void:
 		add_child(backrest)
 
 
+# The −X answer to the benches: a box per team either side of centre ice with
+# the off-ice officials' table in the gap. Same construction as _build_benches
+# and, like it, empty furniture — 3v3 fields no reserves and the game calls no
+# penalties, so nobody ever sits here. It earns its place by breaking up the
+# only stretch of this bowl that ran crowd from corner to corner, and by putting
+# something behind the −X glass for the boards' gates to open onto.
+func _build_penalty_boxes() -> void:
+	var x_inner: float = -(rink_width / 2.0 + base_outward_offset)
+	var tread_y: float = stands_base_y
+
+	for side: float in [-1.0, 1.0]:
+		var center_z: float = side * PENALTY_BOX_CENTER_Z
+		# Matches the benches' convention: the +Z-half team is home.
+		var team_color: Color = home_color if side > 0.0 else away_color
+
+		var seat := MeshInstance3D.new()
+		seat.name = "PenaltySeatHome" if side > 0.0 else "PenaltySeatAway"
+		var seat_mesh := BoxMesh.new()
+		seat_mesh.size = Vector3(0.42, _BENCH_SEAT_HEIGHT, PENALTY_BOX_HALF_LEN * 2.0)
+		var seat_mat := StandardMaterial3D.new()
+		seat_mat.albedo_color = team_color.darkened(0.35)
+		seat_mat.roughness = 0.8
+		seat_mesh.material = seat_mat
+		seat.mesh = seat_mesh
+		seat.position = Vector3(x_inner - _BENCH_SEAT_X_OFFSET,
+				tread_y + _BENCH_SEAT_HEIGHT * 0.5, center_z)
+		add_child(seat)
+
+		var backrest := MeshInstance3D.new()
+		backrest.name = "PenaltyBackHome" if side > 0.0 else "PenaltyBackAway"
+		var back_mesh := BoxMesh.new()
+		back_mesh.size = Vector3(0.06, 0.5, PENALTY_BOX_HALF_LEN * 2.0)
+		var back_mat := StandardMaterial3D.new()
+		back_mat.albedo_color = Color(0.20, 0.20, 0.22)
+		back_mat.roughness = 0.9
+		back_mesh.material = back_mat
+		backrest.mesh = back_mesh
+		backrest.position = Vector3(x_inner - 0.57, tread_y + 0.55, center_z)
+		add_child(backrest)
+
+		# Divider between this box and the officials, so the three read as three
+		# compartments rather than one long shelf.
+		var divider := MeshInstance3D.new()
+		divider.name = "PenaltyDividerHome" if side > 0.0 else "PenaltyDividerAway"
+		var divider_mesh := BoxMesh.new()
+		divider_mesh.size = Vector3(0.72, 1.05, 0.07)
+		var divider_mat := StandardMaterial3D.new()
+		divider_mat.albedo_color = Color(0.24, 0.25, 0.28)
+		divider_mat.roughness = 0.9
+		divider_mesh.material = divider_mat
+		divider.mesh = divider_mesh
+		divider.position = Vector3(x_inner - 0.36, tread_y + 0.525,
+				side * _OFFICIALS_HALF_LEN)
+		add_child(divider)
+
+	# Timekeeper's table: a taller counter than the players' bench, since the
+	# crew works standing at it rather than sitting on it.
+	var table := MeshInstance3D.new()
+	table.name = "OfficialsTable"
+	var table_mesh := BoxMesh.new()
+	table_mesh.size = Vector3(0.60, _OFFICIALS_HEIGHT, _OFFICIALS_HALF_LEN * 2.0)
+	var table_mat := StandardMaterial3D.new()
+	table_mat.albedo_color = Color(0.17, 0.18, 0.21)
+	table_mat.roughness = 0.85
+	table_mesh.material = table_mat
+	table.mesh = table_mesh
+	table.position = Vector3(x_inner - 0.42, tread_y + _OFFICIALS_HEIGHT * 0.5, 0.0)
+	add_child(table)
+
+
 # Seat-surface center of a team's bench (top face of the seat block), in
 # ArenaStands-local space. Home (team 0) sits on the +Z half, matching
 # _build_benches. The lobby backdrop uses this to seat roster dummies.
 func bench_seat_center(team_id: int) -> Vector3:
 	var side: float = 1.0 if team_id == 0 else -1.0
 	return Vector3(rink_width / 2.0 + base_outward_offset + _BENCH_SEAT_X_OFFSET,
-			stands_base_y + _BENCH_SEAT_HEIGHT, side * _BENCH_CENTER_Z)
+			stands_base_y + _BENCH_SEAT_HEIGHT, side * BENCH_CENTER_Z)
 
 
 # ── Crowd excitement ─────────────────────────────────────────────────────────
@@ -1075,8 +2091,15 @@ func _on_body_check_broadcast(force: float) -> void:
 
 
 # Pre-game buzz: the bowl comes alive under the opening camera sweep.
-func _on_pregame_intro_started(_duration: float) -> void:
+func _on_pregame_intro_started(duration: float) -> void:
 	excite(0.55)
+	if is_instance_valid(_house_lights):
+		_house_lights.play_intro(duration)
+
+
+func _on_faceoff_prep_announced() -> void:
+	if is_instance_valid(_house_lights):
+		_house_lights.restore()
 
 
 func _emit_box(st: SurfaceTool, center: Vector3, size: Vector3) -> void:

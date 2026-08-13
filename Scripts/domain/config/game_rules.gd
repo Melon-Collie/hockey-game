@@ -692,14 +692,14 @@ const FACEOFF_MAX_ABS_Z: float = GOAL_LINE_Z - 1.0
 # ── Bench-Door Start Points (pre-game intro skate-in) ─────────────────────────
 # Where each skater begins the opening/rematch intro before skating out to its
 # faceoff slot. Both team benches sit on the +X boards (see arena_stands.gd:
-# _BENCH_CENTER_Z = 4.4); team 0 (the +Z-half team) takes the +Z bench, team 1
+# BENCH_CENTER_Z = 4.4); team 0 (the +Z-half team) takes the +Z bench, team 1
 # the -Z bench. Skaters emerge just off the boards and fan out from a small
 # per-slot stagger along the bench span. Only used for the center-ice opening
 # faceoff — every other faceoff skates in from the player's current position.
 # BENCH_DOOR_X is pulled a little in from the inner boards (INNER_HALF_WIDTH
 # 12.84) so skaters start on the ice, not clipping the kickplate.
 const BENCH_DOOR_X: float          = 11.5
-const BENCH_DOOR_CENTER_Z: float   = 4.4   # mirrors arena_stands.gd _BENCH_CENTER_Z
+const BENCH_DOOR_CENTER_Z: float   = 4.4   # mirrors arena_stands.gd BENCH_CENTER_Z
 # Per-slot fan-out along the bench span (index = team_slot). Center leaves from
 # the middle of the bench; wingers from either side, D from the outer edges,
 # so the five don't stack (3v3 uses the first three).
