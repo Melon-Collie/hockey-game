@@ -337,6 +337,10 @@ const _STAFF_BEHIND_TABLE: float = 0.88
 # Spacing the shell wall is resampled at before its openings are cut. Well under
 # the narrowest portal, so an opening always spans several segments.
 const _VOMITORY_SAMPLE_M: float = 0.25
+# The shell ring's portals are cut this fraction as deep as the lower bowl's.
+# See _add_vomitory_tunnels: nothing is modelled behind the shell, so depth out
+# there becomes a protrusion rather than a passage.
+const _SHELL_VOMITORY_DEPTH_SCALE: float = 0.42
 # Spectator body dimensions — stacked boxes matching the skater art style.
 const _BODY_SIZE: Vector3 = Vector3(0.28, 0.45, 0.28)
 const _HEAD_SIZE: Vector3 = Vector3(0.22, 0.22, 0.22)
@@ -422,6 +426,11 @@ const _BANNER_TOP_FRACTION: float = 0.86
 # Gap between a banner's two printed faces. Cloth is thinner than this; the
 # number is set by depth precision at 30 m, not by upholstery.
 const _BANNER_THICKNESS: float = 0.02
+# How many times the registry goes round the ring. There are only a handful of
+# banners and the ring is ~250 m, so hanging one of each would leave 60 m of
+# empty roof between them and most cameras seeing none. Repeating puts a banner
+# in view from anywhere without the roof becoming a wall of duplicates.
+const _BANNER_RING_REPEATS: int = 2
 
 # Civilian shirts/coats for the neutral fan slice.
 var _neutral_body_palette: Array[Color] = [
@@ -1379,16 +1388,22 @@ func _add_vomitory_tunnels() -> void:
 	walls.begin(Mesh.PrimitiveType.PRIMITIVE_TRIANGLES)
 	backs.begin(Mesh.PrimitiveType.PRIMITIVE_TRIANGLES)
 
-	# The back of the top deck.
+	# The back of the top deck. Deliberately shallower than the lower bowl's: the
+	# shell IS the building's outer skin and there is nothing modelled behind it,
+	# so a deep passage here is a box hanging in the void — visible to the free
+	# camera, which is unclamped by design. A shallow recess still reads as a
+	# portal from inside the bowl without becoming architecture on the outside.
 	var shell_base: float = _top_tread_y()
 	_emit_vomitory_ring(walls, backs, _shell_offset(), shell_base,
-			minf(shell_base + vomitory_height, shell_base + shell_height))
+			minf(shell_base + vomitory_height, shell_base + shell_height),
+			vomitory_depth * _SHELL_VOMITORY_DEPTH_SCALE)
 	# And the back of the lower bowl, boring outward UNDER the upper deck —
-	# which is where a real concourse runs.
+	# which is where a real concourse runs, and where the full depth is enclosed
+	# by the deck above it.
 	var fascia_head: float = _fascia_portal_head()
 	if upper_terraces > 0 and fascia_head > _lower_top_tread_y():
 		_emit_vomitory_ring(walls, backs, _upper_deck_inner_offset(),
-				_lower_top_tread_y(), fascia_head)
+				_lower_top_tread_y(), fascia_head, vomitory_depth)
 
 	walls.generate_normals()
 	backs.generate_normals()
@@ -1411,7 +1426,7 @@ func _add_vomitory_tunnels() -> void:
 # both sides of every portal. Following the cut segments makes each tunnel
 # exactly as wide as its own hole, whatever that ring's radius did to it.
 func _emit_vomitory_ring(walls: SurfaceTool, backs: SurfaceTool, offset: float,
-		base_y: float, head_y: float) -> void:
+		base_y: float, head_y: float, depth: float) -> void:
 	var wall: PackedVector2Array = _resample_uniform(
 			_sample_offset_path(offset), _VOMITORY_SAMPLE_M)
 	var count: int = wall.size()
@@ -1425,8 +1440,8 @@ func _emit_vomitory_ring(walls: SurfaceTool, backs: SurfaceTool, offset: float,
 		var j: int = (i + 1) % count
 		var a: Vector2 = wall[i]
 		var b: Vector2 = wall[j]
-		var a_out: Vector2 = a + _outward_at(wall, i) * vomitory_depth
-		var b_out: Vector2 = b + _outward_at(wall, j) * vomitory_depth
+		var a_out: Vector2 = a + _outward_at(wall, i) * depth
+		var b_out: Vector2 = b + _outward_at(wall, j) * depth
 		# Back wall — the lit face at the end of the passage.
 		_emit_quad_3d(backs, a_out, b_out, base_y, head_y)
 		# Ceiling and floor. The floor matters: the ring's own walkway stops at
@@ -1634,19 +1649,22 @@ func _add_rafter_banners() -> void:
 	var stations: Array = _path_stations(_shell_offset() - _BANNER_INBOARD)
 	var cumulative: PackedFloat32Array = BoardAdBandBuilder.cumulative_arcs(stations)
 	var perimeter: float = BoardAdBandBuilder.perimeter_of(cumulative)
-	var count: int = BannerRegistry.BANNERS.size()
+	# Distinct banners (one atlas cell each) versus how many hang: the registry
+	# goes round the ring more than once, so a name appears on opposite sides.
+	var unique: int = BannerRegistry.BANNERS.size()
+	var hung: int = unique * _BANNER_RING_REPEATS
 	var width: float = banner_height \
 			* float(BannerPainter.CELL_PX.x) / float(BannerPainter.CELL_PX.y)
-	if width <= 0.0 or width * count >= perimeter:
+	if width <= 0.0 or width * hung >= perimeter:
 		return
 
 	var placements: Array[Vector2] = []
 	var uv_rects: Array[Rect2] = []
-	for i: int in count:
+	for i: int in hung:
 		# Evenly spaced around the ring, each centred on its share of it.
-		var centre: float = perimeter * (float(i) + 0.5) / float(count)
+		var centre: float = perimeter * (float(i) + 0.5) / float(hung)
 		placements.append(Vector2(centre - width * 0.5, width))
-		uv_rects.append(BannerPainter.cell_uv(i, count))
+		uv_rects.append(BannerPainter.cell_uv(i % unique, unique))
 
 	var top_y: float = _top_tread_y() + shell_height * _BANNER_TOP_FRACTION
 	var band: ArrayMesh = BoardAdBandBuilder.build_band(stations, cumulative,
@@ -1668,7 +1686,7 @@ func _add_rafter_banners() -> void:
 
 	var atlas_vp := SubViewport.new()
 	atlas_vp.name = "BannerAtlasViewport"
-	atlas_vp.size = BannerPainter.atlas_size(count)
+	atlas_vp.size = BannerPainter.atlas_size(unique)
 	atlas_vp.transparent_bg = true
 	atlas_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
 	atlas_vp.disable_3d = true
