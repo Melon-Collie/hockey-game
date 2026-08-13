@@ -337,10 +337,6 @@ const _STAFF_BEHIND_TABLE: float = 0.88
 # Spacing the shell wall is resampled at before its openings are cut. Well under
 # the narrowest portal, so an opening always spans several segments.
 const _VOMITORY_SAMPLE_M: float = 0.25
-# The shell ring's portals are cut this fraction as deep as the lower bowl's.
-# See _add_vomitory_tunnels: nothing is modelled behind the shell, so depth out
-# there becomes a protrusion rather than a passage.
-const _SHELL_VOMITORY_DEPTH_SCALE: float = 0.42
 # Spectator body dimensions — stacked boxes matching the skater art style.
 const _BODY_SIZE: Vector3 = Vector3(0.28, 0.45, 0.28)
 const _HEAD_SIZE: Vector3 = Vector3(0.22, 0.22, 0.22)
@@ -1388,22 +1384,20 @@ func _add_vomitory_tunnels() -> void:
 	walls.begin(Mesh.PrimitiveType.PRIMITIVE_TRIANGLES)
 	backs.begin(Mesh.PrimitiveType.PRIMITIVE_TRIANGLES)
 
-	# The back of the top deck. Deliberately shallower than the lower bowl's: the
-	# shell IS the building's outer skin and there is nothing modelled behind it,
-	# so a deep passage here is a box hanging in the void — visible to the free
-	# camera, which is unclamped by design. A shallow recess still reads as a
-	# portal from inside the bowl without becoming architecture on the outside.
+	# The back of the top deck. These bore out through the shell, which is the
+	# last thing modelled — the arena has no exterior and is not meant to, so
+	# what they leave on the outside is not a consideration. Both rings are cut
+	# to the same depth, and the depth is chosen for how a portal reads from
+	# inside the bowl.
 	var shell_base: float = _top_tread_y()
 	_emit_vomitory_ring(walls, backs, _shell_offset(), shell_base,
-			minf(shell_base + vomitory_height, shell_base + shell_height),
-			vomitory_depth * _SHELL_VOMITORY_DEPTH_SCALE)
-	# And the back of the lower bowl, boring outward UNDER the upper deck —
-	# which is where a real concourse runs, and where the full depth is enclosed
-	# by the deck above it.
+			minf(shell_base + vomitory_height, shell_base + shell_height))
+	# And the back of the lower bowl, boring outward UNDER the upper deck, which
+	# is where a real concourse runs.
 	var fascia_head: float = _fascia_portal_head()
 	if upper_terraces > 0 and fascia_head > _lower_top_tread_y():
 		_emit_vomitory_ring(walls, backs, _upper_deck_inner_offset(),
-				_lower_top_tread_y(), fascia_head, vomitory_depth)
+				_lower_top_tread_y(), fascia_head)
 
 	walls.generate_normals()
 	backs.generate_normals()
@@ -1426,7 +1420,7 @@ func _add_vomitory_tunnels() -> void:
 # both sides of every portal. Following the cut segments makes each tunnel
 # exactly as wide as its own hole, whatever that ring's radius did to it.
 func _emit_vomitory_ring(walls: SurfaceTool, backs: SurfaceTool, offset: float,
-		base_y: float, head_y: float, depth: float) -> void:
+		base_y: float, head_y: float) -> void:
 	var wall: PackedVector2Array = _resample_uniform(
 			_sample_offset_path(offset), _VOMITORY_SAMPLE_M)
 	var count: int = wall.size()
@@ -1440,8 +1434,8 @@ func _emit_vomitory_ring(walls: SurfaceTool, backs: SurfaceTool, offset: float,
 		var j: int = (i + 1) % count
 		var a: Vector2 = wall[i]
 		var b: Vector2 = wall[j]
-		var a_out: Vector2 = a + _outward_at(wall, i) * depth
-		var b_out: Vector2 = b + _outward_at(wall, j) * depth
+		var a_out: Vector2 = a + _outward_at(wall, i) * vomitory_depth
+		var b_out: Vector2 = b + _outward_at(wall, j) * vomitory_depth
 		# Back wall — the lit face at the end of the passage.
 		_emit_quad_3d(backs, a_out, b_out, base_y, head_y)
 		# Ceiling and floor. The floor matters: the ring's own walkway stops at
