@@ -46,6 +46,44 @@ jobs:
           unzip -q /tmp/godot.zip -d godot
           chmod +x godot/Godot_v4.6.2-stable_linux.x86_64
 
+      # The GDExtension has to exist BEFORE Godot starts, or every Native* class
+      # is absent and each parity suite skips itself — which is green, and which
+      # is exactly how NativePuckStep drifted two commits from its GDScript
+      # reference and reached main (#678/#679). The suites are the only thing
+      # holding a C++ port to its reference, so CI has to build the thing it is
+      # testing. A Linux template_debug build is enough here; the shipped Windows
+      # template_release DLL is deploy.yml's job.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install SCons
+        run: python -m pip install --upgrade scons
+
+      - name: Resolve godot-cpp revision
+        id: gdcpp
+        run: echo "sha=$(git rev-parse HEAD:native/godot-cpp)" >> "$GITHUB_OUTPUT"
+
+      # godot-cpp dominates a cold build (minutes); the six kernels are seconds.
+      # SCONS_CACHE is content-addressed, so the submodule SHA pins the expensive
+      # half while the restore-key still reuses it when only native/src moved.
+      - name: Cache SCons build
+        uses: actions/cache@v4
+        with:
+          path: .scons-cache
+          key: scons-${{ runner.os }}-${{ steps.gdcpp.outputs.sha }}-${{ hashFiles('native/src/**', 'native/SConstruct', 'native/build_profile.json') }}
+          restore-keys: |
+            scons-${{ runner.os }}-${{ steps.gdcpp.outputs.sha }}-
+
+      - name: Build GDExtension
+        env:
+          SCONS_CACHE: ${{ github.workspace }}/.scons-cache
+        run: |
+          git submodule update --init --depth 1 native/godot-cpp
+          bash native/build.sh
+          ls -l native/bin/
+
       - name: Import project
         run: |
           # First launch generates .godot/imported/ for any scene/resource
@@ -53,6 +91,12 @@ jobs:
           # returns 1 even on successful import.
           ./godot/Godot_v4.6.2-stable_linux.x86_64 --headless --import --quit 2>&1 || true
 
+      # MITTS_REQUIRE_NATIVE turns "kernel absent" from a skip into a failure
+      # (tests/native_parity_guard.gd). The build step above means absent can only
+      # mean the build or the class registration broke — the one case where the
+      # old skip painted a broken gate green.
       - name: Run GUT tests
+        env:
+          MITTS_REQUIRE_NATIVE: '1'
         run: |
           ./godot/Godot_v4.6.2-stable_linux.x86_64 --headless -s addons/gut/gut_cmdln.gd -gexit

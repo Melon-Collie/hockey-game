@@ -32,7 +32,7 @@ func after_each() -> void:
 func _native_missing() -> bool:
 	if GoalieContactDetector.native_available():
 		return false
-	pending("native extension not built — see native/README.md")
+	NativeParityGuard.report_missing(self, "NativeGoalieContact")
 	return true
 
 

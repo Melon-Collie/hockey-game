@@ -41,12 +41,18 @@ fi
 # their dependents' tests down with them). Two ways the cache goes stale: a
 # reused web container carrying a cache older than the checkout (session-start's
 # import runs only on a fresh Godot install, not the already-present path), or a
-# new class_name added mid-session. A `find` for any Scripts/*.gd newer than the
-# cache is cheap on the common (fresh-cache) path; the editor import runs only
-# when something actually changed. CI does its own --import, so it never hits this.
+# new class_name added mid-session. A `find` for any *.gd newer than the cache is
+# cheap on the common (fresh-cache) path; the editor import runs only when
+# something actually changed. CI does its own --import, so it never hits this.
+#
+# tests/ is scanned as well as Scripts/, because a `class_name` declared by a
+# test helper goes stale exactly the same way — and fails worse. An unresolved
+# class is a PARSE error, and GUT skips a file it cannot parse with a warning
+# rather than a failure, so the suite stays green while the tests in that file
+# simply stop running.
 CACHE="$POSIX_DIR/.godot/global_script_class_cache.cfg"
 if [ ! -f "$CACHE" ] \
-    || [ -n "$(find "$POSIX_DIR/Scripts" -name '*.gd' -newer "$CACHE" -print -quit 2>/dev/null)" ]; then
+    || [ -n "$(find "$POSIX_DIR/Scripts" "$POSIX_DIR/tests" -name '*.gd' -newer "$CACHE" -print -quit 2>/dev/null)" ]; then
   echo "[run-gut] class cache stale — reimporting (one-time per script change)..." >&2
   "$GODOT" --headless --path "$PROJECT_DIR" --import --quit >/dev/null 2>&1 || true
 fi

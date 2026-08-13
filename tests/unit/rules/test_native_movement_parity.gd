@@ -21,7 +21,7 @@ func before_each() -> void:
 func _native_missing() -> bool:
 	if ClassDB.class_exists(&"NativeSkaterMovement"):
 		return false
-	pending("native extension not built — see native/README.md")
+	NativeParityGuard.report_missing(self, "NativeSkaterMovement")
 	return true
 
 

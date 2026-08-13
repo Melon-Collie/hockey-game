@@ -134,7 +134,7 @@ func after_all() -> void:
 func _native_missing() -> bool:
 	if _native != null:
 		return false
-	pending("native extension not built — see native/README.md")
+	NativeParityGuard.report_missing(self, "NativeSkaterGait")
 	return true
 
 
