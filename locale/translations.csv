@@ -111,3 +111,7 @@ GEAR_FACE_NONE,None,Ninguna
 GEAR_FACE_VISOR,Visor,Visera
 GEAR_FACE_CAGE,Cage,Rejilla
 GEAR_FACE_FISHBOWL,Fishbowl,Burbuja
+CLIP_SAVE_PROMPT,%s SAVE GIF,%s GUARDAR GIF
+CLIP_SAVING,SAVING GIF…,GUARDANDO GIF…
+CLIP_SAVED,Goal clip saved,Clip guardado
+CLIP_SAVE_FAILED,Goal clip save failed,Error al guardar el clip

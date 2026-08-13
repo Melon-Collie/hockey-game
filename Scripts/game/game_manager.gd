@@ -70,6 +70,12 @@ signal period_break_started(duration: float)
 signal period_intro_started(period: int, duration: float)
 signal replay_started
 signal replay_stopped
+# Goal-clip GIF export (GoalClipExporter). state is a GoalClipExporter.State —
+# the HUD reads it to swap its prompt between "save", "saving", and gone.
+# finished carries the written path, or "" when the export failed.
+signal goal_clip_state_changed(state: GoalClipExporter.State)
+signal goal_clip_available_changed(available: bool)
+signal goal_clip_export_finished(path: String, ok: bool)
 # Between-period intermission presentation. started raises the band (score +
 # countdown) on every peer INTERMISSION_SETTLE into the break — with the
 # ended period's goals looping behind it when there are any; clip_started
@@ -313,6 +319,10 @@ var _goal_replay_driver: GoalReplayDriver = null
 # Every goal's trimmed clip, kept for the whole match so the post-game screen
 # can loop all of them (the recorder ring only holds the last few seconds).
 var _goal_replay_store: GoalReplayStore = null
+# Saves the goal cinematic / post-game reel as a GIF on request. Persistent
+# (it owns a capture viewport and may be mid-encode across a teardown) while
+# the drivers it listens to are rebuilt per match — hence re-setup per spawn.
+var _goal_clip_exporter: GoalClipExporter = null
 var _post_game_replay_driver: PostGameReplayDriver = null
 # One-shot timer that starts the post-game highlight loop after the final-horn
 # beat plays on the ice, roughly when the HUD reveals the final-score card.
@@ -1554,6 +1564,20 @@ func _wire_subsystems() -> void:
 	_intermission_replay_driver.reel_stopped.connect(_on_intermission_reel_stopped)
 	_intermission_replay_driver.reel_stopped.connect(_on_local_replay_stopped)
 
+	# Goal-clip GIF export. Built once and re-pointed at each match's drivers;
+	# the intermission reel is deliberately NOT wired — its clips are the same
+	# goals the post-game reel offers at leisure, and the break is a fixed
+	# window nobody should be spending on file management.
+	if _goal_clip_exporter == null:
+		_goal_clip_exporter = GoalClipExporter.new()
+		add_child(_goal_clip_exporter)
+		_goal_clip_exporter.state_changed.connect(goal_clip_state_changed.emit)
+		_goal_clip_exporter.availability_changed.connect(goal_clip_available_changed.emit)
+		_goal_clip_exporter.export_finished.connect(goal_clip_export_finished.emit)
+		_goal_clip_exporter.set_goal_label_provider(
+				func() -> String: return String(_pending_clip_meta.get("scorer_name", "")))
+	_goal_clip_exporter.setup(_goal_replay_driver, _post_game_replay_driver)
+
 	_codec = WorldStateCodec.new()
 	_codec.setup(_registry, _state_machine,
 			get_puck, _get_puck_controller, _get_goalie_controllers, _state_buffer_manager)
@@ -2457,6 +2481,19 @@ func request_local_skip_vote() -> void:
 		_register_skip_vote(NetworkManager.local_peer_id())
 	else:
 		NetworkManager.send_skip_replay_request()
+
+
+# HUD entry point. Called from _unhandled_input when the player presses
+# save_goal_clip during the goal cinematic or the post-game reel. Purely local
+# — every peer captures its own view and writes its own file, so unlike the
+# skip vote there is nothing here to agree on.
+func request_goal_clip_export() -> void:
+	if _goal_clip_exporter != null:
+		_goal_clip_exporter.request_export()
+
+
+func can_export_goal_clip() -> bool:
+	return _goal_clip_exporter != null and _goal_clip_exporter.can_export()
 
 
 func _on_remote_skip_replay_request(peer_id: int) -> void:
@@ -4640,6 +4677,11 @@ func on_scene_exit() -> void:
 	if _intermission_replay_driver != null:
 		_intermission_replay_driver.queue_free()
 		_intermission_replay_driver = null
+	# Runs after the drivers stop, so a clip the player armed mid-cinematic has
+	# already been handed to the encoder by the stop()'s replay_stopped edge;
+	# this only drops whatever was still speculative.
+	if _goal_clip_exporter != null:
+		_goal_clip_exporter.abort()
 	_goal_replay_store = null
 	_recorder = null
 	_shot_tracker = null
