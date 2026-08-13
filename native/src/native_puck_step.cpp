@@ -355,6 +355,13 @@ double NativePuckStep::back_plane_distance(const Vector3 &p) const {
 	return (depth - net_depth - back_slope() * (double)p.y) / back_plane_norm();
 }
 
+// The back mesh is a finite rectangle, not the infinite plane its distance
+// function describes — see NetGeometry.within_back_panel for why every reader of
+// that plane has to establish the body is on the panel first.
+bool NativePuckStep::within_back_panel(double x, double slack) const {
+	return Math::abs(x) <= net_half_width + slack;
+}
+
 Vector3 NativePuckStep::back_plane_normal(double end_sign) const {
 	const double inv = 1.0 / back_plane_norm();
 	return Vector3(0.0f, (real_t)(-back_slope() * inv), (real_t)(end_sign * inv));
@@ -406,7 +413,8 @@ bool NativePuckStep::resolve_net_panels(const Vector3 &prev, Vector3 &p, Vector3
 		}
 	} else {
 		const double back_dist = back_plane_distance(p);
-		if (back_plane_distance(prev) >= 0.0 && back_dist < puck_radius) {
+		if (back_plane_distance(prev) >= 0.0 && back_dist < puck_radius &&
+				within_back_panel((double)p.x, puck_radius)) {
 			p += back_plane_normal(end_sign) * (real_t)(puck_radius - back_dist);
 			v = reflect_3d(v, Vector3(0.0f, 0.0f, (real_t)end_sign), net_restitution);
 			hit = true;

@@ -95,6 +95,7 @@ class NativePuckStep : public godot::RefCounted {
 	godot::Vector3 closest_point_on_bend(const godot::Vector3 &p, double end_z) const;
 	bool resolve_top_net(const godot::Vector3 &prev, godot::Vector3 &p, godot::Vector3 &v) const;
 	double back_plane_distance(const godot::Vector3 &p) const;
+	bool within_back_panel(double x, double slack) const;
 	double back_plane_norm() const;
 	godot::Vector3 back_plane_normal(double end_sign) const;
 	double back_slope() const;
