@@ -49,7 +49,14 @@ well under one in C++). Three consequences worth knowing:
   for the current platform exists under `bin/`, Godot logs a load error at
   startup and the `Native*` classes are simply absent — the game and the GUT
   suite still run, and parity/benchmark tests go *pending* instead of failing.
+  **In CI that skip is a failure instead** (`MITTS_REQUIRE_NATIVE=1`, see
+  `tests/native_parity_guard.gd`): the workflow builds the extension first, so
+  an absent class there means the build or the registration broke, and a skip
+  would report a gate that never ran as green.
 - `bin/` — build output, gitignored. Every machine builds its own.
+  `bin/.built-from` records the commit the binary was built from; the git hooks
+  compare it against the working tree (`.githooks/native-stale-check.sh`), since
+  a kernel built from other sources drops to the GDScript fallback silently.
 
 ## Building
 
@@ -96,8 +103,8 @@ differently.
 
 Every port is live behind a null-checked native handle created where its
 GDScript config is built — the extension missing simply leaves the handle
-null and the reference GDScript path runs (fresh clones, CI, and any platform
-without a built binary lose performance, never correctness):
+null and the reference GDScript path runs (a fresh clone, or any platform
+without a built binary, loses performance, never correctness — CI builds it):
 
 - **Gait** — inside `SkaterSkatingCoordinator` (`_apply_native`): all five
   `apply()` call sites route through the coordinator, which republishes the

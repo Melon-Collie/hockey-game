@@ -84,7 +84,7 @@ func _spawn_controller(skater: Skater) -> SkaterController:
 func _native_missing() -> bool:
 	if _nat != null:
 		return false
-	pending("native extension not built — see native/README.md")
+	NativeParityGuard.report_missing(self, "NativeBladeDangle")
 	return true
 
 

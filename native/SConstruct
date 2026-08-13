@@ -7,6 +7,7 @@
 # build_profile limits generated bindings to the classes the extension uses,
 # which keeps the first build to ~1-2 minutes instead of ~10.
 import os
+import subprocess
 
 env = SConscript("godot-cpp/SConstruct")
 
@@ -18,4 +19,43 @@ library = env.SharedLibrary(
     source=sources,
 )
 
-Default(library)
+
+# Stamp the commit the binary was built from, next to the binary itself.
+#
+# bin/ is gitignored and per-machine, so nothing in git records which sources a
+# given .so/.dll actually contains. That gap is silent in the dangerous
+# direction: a kernel built from other sources fails its `configure` — guarded,
+# so it drops to the GDScript fallback rather than erroring — and the game runs
+# and plays correctly, just on the slow path, at 120 Hz. The stamp gives the
+# git hooks something to compare the working tree against (.githooks/
+# native-stale-check.sh).
+#
+# Best-effort: an export tarball or a git-less build simply skips it, and a
+# missing stamp beside a present binary reads as "unknown, assume stale".
+#
+# AlwaysBuild, not a post-action on the library: SCons decides by content, so a
+# branch switch that lands on sources producing an identical binary relinks
+# nothing, and a stamp written only on relink would stay behind and warn forever
+# with no way to clear it. The stamp records the commit the binary is CURRENT
+# for, which is a fact about the last build attempt, not about whether bytes
+# moved. Depending on the library still means a failed compile never stamps.
+def _stamp_built_from(target, source, env):
+    stamp_path = str(target[0])
+    try:
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(stamp_path)) or ".",
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        return
+    with open(stamp_path, "w", encoding="utf-8") as f:
+        f.write(head + "\n")
+
+
+stamp = env.Command("bin/.built-from", [], env.Action(
+    _stamp_built_from, "Stamping $TARGET with the current commit"))
+env.Depends(stamp, library)
+env.AlwaysBuild(stamp)
+
+Default(library, stamp)
