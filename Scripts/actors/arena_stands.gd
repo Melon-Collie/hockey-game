@@ -325,13 +325,12 @@ const _OFFICIALS_HEIGHT: float = 0.78
 # these are standing adults seen against seated ones — but they take a plain
 # material rather than the crowd shader, because a coach does not do the wave.
 #
-# The scale is anatomy, not taste. A crowd figure is 0.69 m of body and head,
-# which reads correctly for someone SEATED, where only the torso clears the seat
-# in front. Standing, the same box has to cover a whole person: 2.5x puts it at
-# 1.73 m. The first pass used 1.28x and produced waist-high staff that vanished
-# behind the bench backrest.
+# Standing stature over the unscaled figure — the same arithmetic the seated
+# crowd uses, which is the point: staff and spectators are now sized from one
+# set of anthropometry rather than against each other. This read as enormous
+# while the crowd was undersized, and the fix was the crowd, not this number.
 const _STAFF_SEED: int = 5150
-const _STAFF_SCALE: float = 2.5
+const _STAFF_SCALE: float = _STANDING_STATURE / _FIGURE_HEIGHT
 # Outward of the furniture they work behind, so they read as standing at it.
 const _STAFF_BEHIND_BENCH: float = 0.92
 const _STAFF_BEHIND_TABLE: float = 0.88
@@ -347,23 +346,47 @@ const _HEAD_SIZE: Vector3 = Vector3(0.22, 0.22, 0.22)
 # their row (upper-bowl rows reach ~6 m, well above typical camera height).
 const _BODY_Y_LIFT: float = 0.002
 
+# ── Stature ──────────────────────────────────────────────────────────────────
+# One unscaled figure stands 0.692 m from the tread to the crown of its head.
+# That is not a person: these spectators sit with their base ON the tread rather
+# than on a raised pan, so their whole height IS sitting height, and a real adult
+# sitting height runs about 0.79 m to 0.97 m. The bowl was drawn at roughly 78%
+# of that, which is subtle enough to pass unnoticed on its own and is exactly why
+# the rinkside staff looked enormous: they were scaled to real metres against a
+# crowd that was not.
+#
+# Every stature below is divided by this to get a scale factor, so the figures
+# are sized by anthropometry in one place instead of by eye in several.
+const _FIGURE_HEIGHT: float = _BODY_Y_LIFT + _BODY_SIZE.y + 0.02 + _HEAD_SIZE.y
+# Roughly 5th-percentile female to 95th-percentile male. Rolled per spectator, so
+# a row is a mix of statures rather than a line of identical boxes — which reads
+# as a crowd of people at a glance, where a uniform one reads as a texture.
+const _SEATED_STATURE_MIN: float = 0.80
+const _SEATED_STATURE_MAX: float = 0.96
+const _CROWD_SCALE_MAX: float = _SEATED_STATURE_MAX / _FIGURE_HEIGHT
+# Standing, for the staff on their feet at the boards.
+const _STANDING_STATURE: float = 1.75
+
 # Seat furniture: a pan on the tread and a backrest behind it, in the seated
 # spectator's own local frame (local −Z faces the rink, so +Z is outward).
 #
-# Every number here is bounded by something already fixed. The seat is wider
-# than the 0.28 m body so it shows either side of an occupant, and narrower than
-# the 0.55 m spacing so neighbours don't merge into a bench. The pan reaches
-# 0.17 m forward — the spectator sits 0.18 m outward of the tread's inner edge,
-# so a deeper pan would hang over the drop. The backrest starts at 0.175 m,
-# clearing the body's 0.14 m back face, and ends at 0.225 m, well short of the
-# next riser 0.42 m out. It stands 0.38 m against the body's 0.45 m, so an
-# occupant's shoulders and head clear the top of their own seat.
+# Every number here is bounded by something already fixed, and the body it has
+# to clear is the LARGEST stature roll — 0.39 m across and deep, not the mesh's
+# nominal 0.28 m. The seat is wider than that so it shows either side of an
+# occupant, and narrower than the 0.55 m spacing so neighbours don't merge into a
+# bench. The pan reaches 0.17 m forward — the spectator sits 0.18 m outward of
+# the tread's inner edge, so a deeper pan would hang over the drop. The backrest
+# starts at 0.205 m, clearing that body's 0.195 m back face, and ends at 0.255 m,
+# short of the next riser 0.42 m out. It stands 0.38 m against a seated occupant
+# of 0.80–0.96 m, so shoulders and head clear the top of the seat.
 const _SEAT_WIDTH: float = 0.46
 const _SEAT_PAN_DEPTH: float = 0.34
 const _SEAT_PAN_THICKNESS: float = 0.05
 const _SEAT_BACK_HEIGHT: float = 0.38
 const _SEAT_BACK_THICKNESS: float = 0.05
-const _SEAT_BACK_OFFSET: float = 0.20
+# Nudged back from 0.20 once spectators grew: the tallest stature roll is also
+# the deepest body, and at 0.20 the backrest passed through it.
+const _SEAT_BACK_OFFSET: float = 0.23
 # Same trick as _BODY_Y_LIFT, for the same reason: the pan's underside would
 # otherwise be coplanar with the tread it rests on.
 const _SEAT_Y_LIFT: float = 0.002
@@ -1148,11 +1171,14 @@ func _make_crowd_multimesh(mesh: ArrayMesh, count: int) -> MultiMesh:
 # celebration hop on top, ~0.1 m of sway sideways; rotated bodies can extend
 # by the box diagonal in any horizontal direction.
 func _grow_section_aabb(seed_aabb: AABB) -> AABB:
-	var horizontal_margin: float = max(_BODY_SIZE.x, _BODY_SIZE.z) * 0.71 + 0.15
+	# Sized for the TALLEST spectator a stature roll can produce, not the mesh's
+	# own dimensions — an under-sized AABB gets the whole section frustum-culled.
+	var horizontal_margin: float = max(_BODY_SIZE.x, _BODY_SIZE.z) \
+			* _CROWD_SCALE_MAX * 0.71 + 0.15
 	var pos: Vector3 = seed_aabb.position - Vector3(horizontal_margin, 0.1, horizontal_margin)
 	var end: Vector3 = seed_aabb.end + Vector3(
 			horizontal_margin,
-			_BODY_SIZE.y + _HEAD_SIZE.y + 0.35,
+			(_BODY_SIZE.y + _HEAD_SIZE.y) * _CROWD_SCALE_MAX + 0.35,
 			horizontal_margin)
 	return AABB(pos, end - pos)
 
@@ -1184,7 +1210,12 @@ func _append_spectator_row(transforms: Array[Transform3D], anim_data: Array[Colo
 		# solving for that to equal -p.normalized() yields yaw = atan2(p.x, p.z).
 		var yaw: float = atan2(p.x, p.y) \
 				+ deg_to_rad(rng.randf_range(-spectator_yaw_jitter_deg, spectator_yaw_jitter_deg))
-		var spectator_basis: Basis = Basis(Vector3.UP, yaw)
+		# Uniform, so the head rides the body without the two needing separate
+		# transforms. Heads therefore vary a little with stature, which is not
+		# how people are built but is invisible at this level of stylization.
+		var stature: float = rng.randf_range(_SEATED_STATURE_MIN, _SEATED_STATURE_MAX)
+		var spectator_basis: Basis = Basis(Vector3.UP, yaw).scaled(
+				Vector3.ONE * (stature / _FIGURE_HEIGHT))
 		transforms.append(Transform3D(spectator_basis, pos))
 		away_block.append(1 if is_upper and num_aisles > 0
 				and _section_id(arc_s) == away_section else 0)
@@ -1361,11 +1392,13 @@ func _add_vomitory_tunnels() -> void:
 
 	walls.generate_normals()
 	backs.generate_normals()
-	_add_tunnel_instance(walls.commit(), "VomitoryTunnels",
-			concrete_color.darkened(0.55), 0.0)
-	# Warm and dim: a concourse two rooms away, not a light box.
-	_add_tunnel_instance(backs.commit(), "VomitoryLightSpill",
-			Color(0.55, 0.47, 0.36), 0.7)
+	# From a lit bowl a portal reads as a DARK hole with a hint of warmth deep in
+	# it — not as a bright panel, which is what the first pass painted and which
+	# reads as something stuck ON the wall rather than cut into it. The back is a
+	# little lighter than the sides on purpose: that gradient from dark edges to
+	# a warmer centre is the only depth cue a 2.6 m recess gets at this distance.
+	_add_tunnel_instance(walls.commit(), "VomitoryTunnels", Color(0.055, 0.055, 0.065))
+	_add_tunnel_instance(backs.commit(), "VomitoryLightSpill", Color(0.20, 0.16, 0.12))
 
 
 # Tunnels behind every portal in one ring of wall.
@@ -1430,12 +1463,22 @@ func _shell_cut_flags(wall: PackedVector2Array) -> PackedByteArray:
 	return cut
 
 
-# Outward (away from the rink) unit normal at a point on a closed CCW-ish loop.
+# Outward (away from the rink) unit normal at a point on one of this bowl's
+# sampled paths.
+#
+# The rotation sign is the whole content of this function, and it is the opposite
+# of the one _path_stations uses, because that helper reverses the loop first.
+# On the path as _sample_offset_path emits it, the bottom edge runs −X at
+# z = −half_length, so its tangent is (−1, 0) and the rink lies at +Z: rotating
+# the tangent by −90° gives (0, +1), which points at the ice. Outward is the +90°
+# rotation. Getting this backwards bores every tunnel INTO the seating bowl,
+# which looks like the portals are projecting out of the concourse rather than
+# cut into it.
 func _outward_at(wall: PackedVector2Array, index: int) -> Vector2:
 	var count: int = wall.size()
 	var tangent: Vector2 = (wall[(index + 1) % count]
 			- wall[(index - 1 + count) % count]).normalized()
-	return Vector2(tangent.y, -tangent.x)
+	return Vector2(-tangent.y, tangent.x)
 
 
 # A vertical quad between two ground points. Wound either way is fine: every
@@ -1451,8 +1494,7 @@ func _emit_quad_3d(st: SurfaceTool, a: Vector2, b: Vector2,
 	st.add_vertex(Vector3(a.x, y_top, a.y))
 
 
-func _add_tunnel_instance(mesh: ArrayMesh, node_name: String, color: Color,
-		emission_energy: float) -> void:
+func _add_tunnel_instance(mesh: ArrayMesh, node_name: String, color: Color) -> void:
 	if mesh == null:
 		return
 	var mi := MeshInstance3D.new()
@@ -1460,12 +1502,13 @@ func _add_tunnel_instance(mesh: ArrayMesh, node_name: String, color: Color,
 	mi.mesh = mesh
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
-	mat.roughness = 0.95
+	# Unshaded, for two reasons. These surfaces are double-sided with winding
+	# that carries no meaning (see _emit_quad_3d), so generated normals would
+	# light half of them from behind and flatten the recess the values are there
+	# to describe. And a concourse keeps its own lights: the tunnels holding
+	# steady while the house dims for a skate-on is correct, not a miss.
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	if emission_energy > 0.0:
-		mat.emission_enabled = true
-		mat.emission = color
-		mat.emission_energy_multiplier = emission_energy
 	mi.material_override = mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
