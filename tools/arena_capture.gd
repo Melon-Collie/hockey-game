@@ -34,10 +34,11 @@ extends SceneTree
 
 const VIEWPORT_SIZE := Vector2i(1280, 720)
 
-# The jumbotron hangs over centre ice on render layer 2, and GameCamera clears
-# that bit so it never blocks the play. A shot reproducing the gameplay view has
-# to clear it too, or the capture is a photo of the scoreboard's underside.
-const JUMBOTRON_LAYER_BIT: int = 2
+# Render layer 2 carries everything hung over the ice — the scoreboard, the
+# end-zone netting, the ceiling light housings — and GameCamera clears that bit
+# so none of it blocks the play. A shot reproducing the gameplay view has to
+# clear it too, or the capture is a photo of the scoreboard's underside.
+const OVERHEAD_LAYER_BIT: int = 2
 
 # The arena is built a frame in, not in _init: autoload identifiers inside its
 # scripts (HockeyRink reaches GameManager, ArenaStands reaches NetworkManager
@@ -115,8 +116,13 @@ const SHOTS: Array[Dictionary] = [
 	},
 	{
 		"name": "topdown",
-		"pos": Vector3(0.0, 32.0, 0.0), "look_at": Vector3(0.0, 0.0, 0.01),
-		"fov": 60.0, "hide_jumbotron": true,
+		# GameCamera's pose at full zoom, not a plan view: max_height 32 m, the
+		# default 75° tilt, and the +Z offset that tilt comes with (the camera
+		# backs off by h·tan15° so the framing centre stays under the lens). A
+		# straight-down shot is a different camera, and it misses exactly what
+		# the tilt puts in frame — the near-side stands, and the ceiling.
+		"pos": Vector3(0.0, 32.0, 8.57), "look_at": Vector3(0.0, 0.0, 0.0),
+		"fov": 50.0, "hide_overhead": true,
 		"note": "what the gameplay camera sees — in-ice ads square on, boards grazed",
 	},
 ]
@@ -170,9 +176,9 @@ func _aim(shot: Dictionary) -> void:
 	_camera.fov = shot.fov
 	_camera.position = shot.pos
 	_camera.look_at(shot.look_at as Vector3)
-	var mask: int = _camera.cull_mask | JUMBOTRON_LAYER_BIT
-	if shot.get("hide_jumbotron", false):
-		mask &= ~JUMBOTRON_LAYER_BIT
+	var mask: int = _camera.cull_mask | OVERHEAD_LAYER_BIT
+	if shot.get("hide_overhead", false):
+		mask &= ~OVERHEAD_LAYER_BIT
 	_camera.cull_mask = mask
 
 
