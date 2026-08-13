@@ -71,12 +71,12 @@ const SHOTS: Array[Dictionary] = [
 	},
 	{
 		"name": "broadcast",
-		# In the concourse gap between the decks, which is where a real side
-		# camera goes and the only place on this side that isn't inside seating:
-		# the lower bowl tops out around y 7 at x 22, the upper deck starts
-		# climbing again from x 24. Sitting anywhere else on +X photographs
-		# somebody's back.
-		"pos": Vector3(23.5, 9.5, 7.0), "look_at": Vector3(-1.0, 0.5, 1.0),
+		# Hung off the front of the upper deck, over the lower bowl — where a
+		# real side camera goes. It used to sit in the gap between the decks,
+		# which was open when that gap was 1.1 m of step; now that the second
+		# tier is a storey up, the same spot is inside the concourse with the
+		# fascia a metre from the lens.
+		"pos": Vector3(23.0, 11.2, 7.0), "look_at": Vector3(-1.0, 0.5, 1.0),
 		"fov": 52.0, "note": "the side camera a broadcast would use",
 	},
 	{
@@ -95,6 +95,18 @@ const SHOTS: Array[Dictionary] = [
 		# inside the first rows, which photographs one spectator's coat.
 		"pos": Vector3(-7.0, 2.6, 1.0), "look_at": Vector3(-19.0, 4.2, 0.0),
 		"fov": 55.0, "note": "up into the bowl — seats, occupied and empty",
+	},
+	{
+		"name": "boxes",
+		"pos": Vector3(-3.5, 1.9, 7.0), "look_at": Vector3(-13.5, 1.4, -0.5),
+		"fov": 52.0, "note": "the penalty boxes, officials' table, and the crew at them",
+	},
+	{
+		"name": "ceiling",
+		# Up from the ice toward the +Z end's lights. Aimed away from centre so
+		# the scoreboard, which hangs at the origin, is behind the lens.
+		"pos": Vector3(0.0, 1.2, 8.0), "look_at": Vector3(0.0, 22.0, 26.0),
+		"fov": 62.0, "note": "the ceiling rig — housings under the spotlights",
 	},
 	{
 		"name": "ice_ads",
