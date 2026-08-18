@@ -319,6 +319,9 @@ const PENALTY_BOX_CENTER_Z: float = 2.9
 const PENALTY_BOX_HALF_LEN: float = 1.7
 const _OFFICIALS_HALF_LEN: float = 1.0
 const _OFFICIALS_HEIGHT: float = 0.78
+# Bench behind the officials' table, the crew's equivalent of the seat block a
+# penalized player gets. Shallow enough to clear the table's own back face.
+const _OFFICIALS_SEAT_DEPTH: float = 0.36
 # Staff: the people the rinkside furniture was built for. Coaches stand behind
 # each bench; the timekeeping crew and the penalty-box attendants sit at theirs,
 # which is how a real rink works — the bench is the only post nobody works from a
@@ -700,12 +703,9 @@ func _build_terrace_mesh() -> ArrayMesh:
 	for i: int in num_terraces:
 		var inner_off: float = base_outward_offset + i * tread_depth
 		var outer_off: float = inner_off + tread_depth
-		var y_top: float = stands_base_y + i * riser_height
-		var y_bot: float = y_top - riser_height
-		var inner_pts: PackedVector2Array = _sample_offset_path(inner_off, counts.x, counts.y)
-		var outer_pts: PackedVector2Array = _sample_offset_path(outer_off, counts.x, counts.y)
-		_emit_tread(st, inner_pts, outer_pts, y_top)
-		_emit_riser(st, inner_pts, y_bot, y_top)
+		_emit_terrace_row(st, i,
+				_sample_offset_path(inner_off, counts.x, counts.y),
+				_sample_offset_path(outer_off, counts.x, counts.y))
 	# Concourse walkway: the top tread's level continues outward as a flat ring
 	# to the upper-deck fascia (or the shell wall when the deck is disabled).
 	if walkway_depth > 0.0:
@@ -907,6 +907,81 @@ func _emit_tread(st: SurfaceTool, inner: PackedVector2Array, outer: PackedVector
 		st.add_vertex(ia)
 		st.add_vertex(ob)
 		st.add_vertex(oa)
+
+
+# One lower-bowl row: its tread, the riser at its inner edge, and the side walls
+# where a rinkside well cuts it down. Every segment is decided from its own
+# midpoint, so tread, riser and wall agree on which sample the well's edge falls
+# on — the cutout lands on a segment boundary rather than through a quad.
+func _emit_terrace_row(st: SurfaceTool, row: int, inner: PackedVector2Array,
+		outer: PackedVector2Array) -> void:
+	var n: int = inner.size()
+	var floor_ys: PackedFloat32Array = PackedFloat32Array()
+	var riser_ys: PackedFloat32Array = PackedFloat32Array()
+	floor_ys.resize(n)
+	riser_ys.resize(n)
+	for i: int in n:
+		var mid: Vector2 = (inner[i] + inner[(i + 1) % n]) * 0.5
+		floor_ys[i] = _row_floor_y(row, mid)
+		riser_ys[i] = _riser_bottom_y(row, mid)
+	for i: int in n:
+		var j: int = (i + 1) % n
+		var y: float = floor_ys[i]
+		# Tread, CCW from above so the normal points +Y.
+		_emit_quad(st,
+				Vector3(inner[i].x, y, inner[i].y), Vector3(inner[j].x, y, inner[j].y),
+				Vector3(outer[j].x, y, outer[j].y), Vector3(outer[i].x, y, outer[i].y))
+		# A row inside the well is level with the one in front of it, which
+		# leaves nothing for a riser to span.
+		if riser_ys[i] < y - 0.0001:
+			_emit_quad(st,
+					Vector3(inner[i].x, riser_ys[i], inner[i].y),
+					Vector3(inner[j].x, riser_ys[i], inner[j].y),
+					Vector3(inner[j].x, y, inner[j].y),
+					Vector3(inner[i].x, y, inner[i].y))
+		var prev: float = floor_ys[(i + n - 1) % n]
+		if not is_equal_approx(prev, y):
+			# The concrete the well was carved out of, exposed at its end. Faces
+			# into the well — whichever of the two neighbouring segments is the
+			# lower one — because the terrace material culls back faces.
+			_emit_well_side(st, inner[i], outer[i], minf(prev, y), maxf(prev, y),
+					inner[j] - inner[i] if y < prev else inner[i] - inner[j])
+
+
+# End wall of a well, at one ring sample, spanning the row's tread inward-to-
+# outward and the step it cuts. `toward` points into the well.
+func _emit_well_side(st: SurfaceTool, p_in: Vector2, p_out: Vector2,
+		y_lo: float, y_hi: float, toward: Vector2) -> void:
+	var a := Vector3(p_in.x, y_lo, p_in.y)
+	var b := Vector3(p_out.x, y_lo, p_out.y)
+	var c := Vector3(p_out.x, y_hi, p_out.y)
+	var d := Vector3(p_in.x, y_hi, p_in.y)
+	if (b - a).cross(c - a).dot(Vector3(toward.x, 0.0, toward.y)) > 0.0:
+		_emit_quad(st, a, b, c, d)
+	else:
+		_emit_quad(st, a, d, c, b)
+
+
+# Floor height of row `row` at `p`. Inside a rinkside furniture cutout every
+# cleared row is one flat well at the bowl's base, so the people working there
+# share a floor with the furniture they work at; everywhere else it is that
+# row's own tread. A real rink pours a flat bench area and starts the seating
+# rake behind it — terracing straight through would stand a coach half a metre
+# above the bench they are leaning on.
+# `p` is (x, z) packed as Vector2(x, y), matching _in_bench_zone.
+func _row_floor_y(row: int, p: Vector2) -> float:
+	if _in_bench_zone(row, p):
+		return stands_base_y
+	return stands_base_y + float(row) * riser_height
+
+
+# Bottom of row `row`'s riser at `p`: the floor of the row in front of it, which
+# is what makes the row behind a well carry the whole rise out of it in one step.
+# Row 0 has no row in front — its riser is the bowl's own front face.
+func _riser_bottom_y(row: int, p: Vector2) -> float:
+	if row == 0:
+		return stands_base_y - riser_height
+	return _row_floor_y(row - 1, p)
 
 
 # Riser: vertical wall along the inner perimeter, facing toward the rink.
@@ -1608,8 +1683,11 @@ func _staff_postings(posts: Array[Vector3], jackets: Array[Color],
 	for side: float in [-1.0, 1.0]:
 		var jacket: Color = (home_color if side > 0.0 else away_color).darkened(0.3)
 		for dz: float in [-1.15, 1.15]:
+			var bench_z: float = side * BENCH_CENTER_Z + dz
 			posts.append(Vector3(bench_x + _STAFF_BEHIND_BENCH,
-					_tread_y_at(_STAFF_BEHIND_BENCH), side * BENCH_CENTER_Z + dz))
+					_floor_y_at(_STAFF_BEHIND_BENCH,
+							Vector2(bench_x + _STAFF_BEHIND_BENCH, bench_z)),
+					bench_z))
 			jackets.append(jacket)
 			standing.append(true)
 
@@ -1622,10 +1700,10 @@ func _staff_postings(posts: Array[Vector3], jackets: Array[Color],
 		jackets.append(Color(0.38, 0.40, 0.46))
 		standing.append(false)
 
-	# Timekeeping crew, seated at the table between the boxes.
+	# Timekeeping crew, on the bench behind the table between the boxes.
 	for dz: float in [-0.72, 0.0, 0.72]:
 		posts.append(Vector3(-(bench_x + _STAFF_BEHIND_TABLE),
-				_tread_y_at(_STAFF_BEHIND_TABLE), dz))
+				stands_base_y + _BENCH_SEAT_HEIGHT, dz))
 		# The off-ice crew works in shirtsleeves; pale is also what separates them
 		# from the dark counter they sit behind.
 		jackets.append(Color(0.74, 0.76, 0.80))
@@ -1633,13 +1711,13 @@ func _staff_postings(posts: Array[Vector3], jackets: Array[Color],
 
 
 # Floor height for someone standing `beyond` metres past the terraces' inner
-# edge. Staff stand a metre back from the furniture they work at, which is far
-# enough to be on the SECOND tread rather than the first — placing them at the
-# bowl's base height instead sinks them into the riser and puts the bench
-# backrest across their chest, which is where they were until this existed.
-func _tread_y_at(beyond: float) -> float:
-	var step: int = clampi(floori(beyond / tread_depth), 0, maxi(num_terraces - 1, 0))
-	return stands_base_y + float(step) * riser_height
+# edge, at (x, z). Staff stand about a metre back from the furniture they work
+# at, which is past the first tread — inside a cutout that is still the well's
+# floor, so they end up on the same level as that furniture rather than a riser
+# above it.
+func _floor_y_at(beyond: float, p: Vector2) -> float:
+	var row: int = clampi(floori(beyond / tread_depth), 0, maxi(num_terraces - 1, 0))
+	return _row_floor_y(row, p)
 
 
 # The body box is the only part of a staffer that changes with posture: standing,
@@ -2100,6 +2178,23 @@ func _build_penalty_boxes() -> void:
 	table.mesh = table_mesh
 	table.position = Vector3(x_inner - 0.42, tread_y + _OFFICIALS_HEIGHT * 0.5, 0.0)
 	add_child(table)
+
+	# What the crew sit on. Without it they would be standing at the table (the
+	# well floor puts a seated figure's head level with the counter), and every
+	# other seated staffer here sits on real furniture.
+	var crew_seat := MeshInstance3D.new()
+	crew_seat.name = "OfficialsSeat"
+	var crew_mesh := BoxMesh.new()
+	crew_mesh.size = Vector3(_OFFICIALS_SEAT_DEPTH, _BENCH_SEAT_HEIGHT,
+			_OFFICIALS_HALF_LEN * 2.0)
+	var crew_mat := StandardMaterial3D.new()
+	crew_mat.albedo_color = Color(0.22, 0.23, 0.26)
+	crew_mat.roughness = 0.85
+	crew_mesh.material = crew_mat
+	crew_seat.mesh = crew_mesh
+	crew_seat.position = Vector3(x_inner - _STAFF_BEHIND_TABLE,
+			tread_y + _BENCH_SEAT_HEIGHT * 0.5, 0.0)
+	add_child(crew_seat)
 
 
 # Seat-surface center of a team's bench (top face of the seat block), in

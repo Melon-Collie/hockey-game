@@ -373,3 +373,84 @@ func test_seat_bounds_hold_the_furniture() -> void:
 			assert_true(grown.encloses(AABB(foot - Vector3(half, 0.0, half),
 					Vector3(half * 2.0, stands._SEAT_BACK_HEIGHT, half * 2.0))),
 					"a seat at %v should sit inside the declared bounds" % foot)
+
+
+# ── Rinkside wells ───────────────────────────────────────────────────────────
+#
+# The bench, the penalty boxes and the officials' table stand on the bowl's base
+# level, but the terraces used to step straight past them — so anyone working at
+# that furniture stood on the tread behind it, a riser above the floor the
+# furniture sits on. Cutting those cleared rows down to one flat well is what
+# puts staff and furniture on the same floor.
+
+func test_cleared_rows_are_one_flat_well() -> void:
+	var stands: ArenaStands = _make_stands(3, 2)
+	var in_bench := Vector2(stands.rink_width / 2.0 + 1.0, ArenaStands.BENCH_CENTER_Z)
+	var out_in_bowl := Vector2(stands.rink_width / 2.0 + 1.0, 20.0)
+	for row: int in [0, 1]:
+		assert_almost_eq(stands._row_floor_y(row, in_bench), stands.stands_base_y,
+				0.0001, "cleared row %d should be at the well's floor" % row)
+	# Behind the cutout the rake resumes from the bowl's base, unchanged.
+	assert_almost_eq(stands._row_floor_y(1, out_in_bowl),
+			stands.stands_base_y + stands.riser_height, 0.0001,
+			"a normal row 1 should still be one riser up")
+	assert_almost_eq(stands._row_floor_y(2, in_bench),
+			stands.stands_base_y + 2.0 * stands.riser_height, 0.0001,
+			"seating rows behind the well keep their own height")
+
+
+func test_the_row_behind_a_well_carries_the_whole_rise() -> void:
+	# The rise the well swallowed has to come back somewhere, or the first seated
+	# row behind the bench floats over a hole.
+	var stands: ArenaStands = _make_stands(3, 2)
+	var in_bench := Vector2(stands.rink_width / 2.0 + 1.0, ArenaStands.BENCH_CENTER_Z)
+	assert_almost_eq(stands._riser_bottom_y(2, in_bench), stands.stands_base_y,
+			0.0001, "the row behind the well should rise from the well's floor")
+	assert_almost_eq(stands._riser_bottom_y(1, in_bench), stands.stands_base_y,
+			0.0001, "rows inside the well are level, leaving no riser to draw")
+	assert_almost_eq(stands._riser_bottom_y(0, in_bench),
+			stands.stands_base_y - stands.riser_height, 0.0001,
+			"row 0 still fronts the bowl, well or no well")
+
+
+func test_terrace_mesh_is_flat_through_the_bench_cutout() -> void:
+	# The rule above only matters if the emitted concrete follows it. Row 1's
+	# tread band inside the cutout must carry no geometry at the height it would
+	# have stepped to — that leftover step is what a coach stood on.
+	var stands: ArenaStands = _make_stands(3, 2)
+	var terraces: MeshInstance3D = stands.find_child("Terraces", false, false)
+	var verts: PackedVector3Array = (terraces.mesh as ArrayMesh) \
+			.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var stepped: float = stands.stands_base_y + stands.riser_height
+	var half_width: float = stands.rink_width / 2.0
+	var inside: int = 0
+	var outside: int = 0
+	for v: Vector3 in verts:
+		# Straight bench side only, and clear of the cutout's ends so the side
+		# walls (which legitimately span both heights) stay out of it.
+		var beyond: float = v.x - half_width
+		if v.x < 0.0 or beyond < stands.tread_depth or beyond > stands.tread_depth * 2.0:
+			continue
+		if absf(v.z) < ArenaStands.BENCH_HALF_LEN:
+			inside += 1
+			assert_almost_eq(v.y, stands.stands_base_y, 0.0001,
+					"row 1 inside the bench cutout should be at the well floor")
+		elif absf(v.z) > ArenaStands.BENCH_CENTER_Z + ArenaStands.BENCH_HALF_LEN + 2.0 \
+				and absf(v.z) < 18.0 and is_equal_approx(v.y, stepped):
+			outside += 1
+	assert_gt(inside, 0, "the cutout's tread band should exist in the mesh")
+	assert_gt(outside, 0, "the same band outside the cutout should still step up")
+
+
+func test_staff_and_their_furniture_share_a_floor() -> void:
+	# The whole point: nobody works a riser above the thing they work at.
+	var stands: ArenaStands = _make_stands(3, 2)
+	var posts: Array[Vector3] = []
+	var jackets: Array[Color] = []
+	var standing: Array[bool] = []
+	stands._staff_postings(posts, jackets, standing)
+	var seat_top: float = stands.stands_base_y + stands._BENCH_SEAT_HEIGHT
+	for i: int in posts.size():
+		var expected: float = stands.stands_base_y if standing[i] else seat_top
+		assert_almost_eq(posts[i].y, expected, 0.0001,
+				"staffer %d should stand on the furniture's own floor" % i)

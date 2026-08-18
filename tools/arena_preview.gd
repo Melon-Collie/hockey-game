@@ -47,6 +47,21 @@ const _SHOTS: Dictionary = {
 		"look_at": Vector3(14.1, 1.9, 4.4),
 		"fov": 55.0,
 	},
+	"well": {
+		"from": Vector3(7.0, 5.0, 4.4),
+		"look_at": Vector3(14.5, 0.9, 4.4),
+		"fov": 55.0,
+	},
+	"well_edge": {
+		"from": Vector3(11.0, 2.6, 13.0),
+		"look_at": Vector3(14.0, 1.0, 5.5),
+		"fov": 55.0,
+	},
+	"well_end": {
+		"from": Vector3(12.2, 1.6, 11.5),
+		"look_at": Vector3(14.3, 0.95, 6.6),
+		"fov": 50.0,
+	},
 	"sideline": {
 		"from": Vector3(11.5, 2.0, -22.0),
 		"look_at": Vector3(12.5, 2.2, 20.0),
