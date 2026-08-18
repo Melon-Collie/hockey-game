@@ -1075,13 +1075,12 @@ func _add_netting(band: ArrayMesh) -> void:
 	var mi := MeshInstance3D.new()
 	mi.name = "EndZoneNetting"
 	mi.mesh = band
-	# On the jumbotron's layer, which is the project's established home for set
-	# dressing the gameplay camera must not see (GameCamera and PovCamera both
-	# clear this bit). The netting stands 4.5 m above the glass at both ends, so
-	# left on the default layer it would hang between a top-down camera and the
-	# play whenever the puck worked the end boards. Cinematic, replay, lobby and
-	# free cameras keep the default everything-on mask and do see it.
-	mi.layers = Jumbotron.RENDER_LAYER_MASK
+	# The netting stands 4.5 m above the glass at both ends, so left on the
+	# default layer it would hang between a top-down camera and the play
+	# whenever the puck worked the end boards — hence the overhead set-dressing
+	# layer, which the play-following cameras clear and the cinematic, replay,
+	# lobby and free cameras render (see RenderLayers).
+	mi.layers = RenderLayers.OVERHEAD_DRESSING
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = _build_net_texture()
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA

@@ -22,8 +22,8 @@ func test_all_visuals_on_jumbotron_layer() -> void:
 		stack.append_array(node.get_children())
 		if node is VisualInstance3D:
 			visual_count += 1
-			assert_eq((node as VisualInstance3D).layers, Jumbotron.RENDER_LAYER_MASK,
-					"%s must render only on the jumbotron layer" % node.name)
+			assert_eq((node as VisualInstance3D).layers, RenderLayers.OVERHEAD_DRESSING,
+					"%s must render only on the overhead set-dressing layer" % node.name)
 	# Housing + column + 2 bands + 4 screens.
 	assert_eq(visual_count, 8, "unexpected visual part count")
 
@@ -31,8 +31,8 @@ func test_all_visuals_on_jumbotron_layer() -> void:
 func test_game_camera_masks_jumbotron_layer() -> void:
 	var cam: GameCamera = GameCamera.new()
 	add_child_autofree(cam)
-	assert_eq(cam.cull_mask & Jumbotron.RENDER_LAYER_MASK, 0,
-			"gameplay camera must never render the jumbotron layer")
+	assert_eq(cam.cull_mask & RenderLayers.OVERHEAD_DRESSING, 0,
+			"gameplay camera must never render the overhead set-dressing layer")
 
 
 func test_pov_camera_masks_jumbotron_layer() -> void:
@@ -41,8 +41,8 @@ func test_pov_camera_masks_jumbotron_layer() -> void:
 	# gameplay camera — it must mask the layer the same way.
 	var cam: PovCamera = PovCamera.new()
 	add_child_autofree(cam)
-	assert_eq(cam.cull_mask & Jumbotron.RENDER_LAYER_MASK, 0,
-			"POV camera must never render the jumbotron layer")
+	assert_eq(cam.cull_mask & RenderLayers.OVERHEAD_DRESSING, 0,
+			"POV camera must never render the overhead set-dressing layer")
 
 
 func test_screen_viewport_never_updates_every_frame() -> void:

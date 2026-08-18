@@ -56,15 +56,6 @@ const HOUSING_COLOR: Color = Color(0.10, 0.10, 0.12)
 const LENS_COLOR: Color = Color(1.0, 0.97, 0.90)
 const LENS_ENERGY: float = 1.9
 
-# The play-following cameras climb ABOVE the 22 m rig — GameCamera's dynamic
-# zoom tops out at 32 m, the intro crane sits at 36, and the camera-distance
-# pref scales both by up to 1.6 — and a fixture seen from above is a dark slab
-# over the crowd with its lit face pointed away. So the housings go on the
-# jumbotron's layer, the project's home for set dressing the play-following
-# cameras must not see (GameCamera and PovCamera clear this bit; the cinematic,
-# replay, lobby and free cameras keep the default mask and do see the rig).
-const FIXTURE_LAYER: int = Jumbotron.RENDER_LAYER_MASK
-
 var _lights: Array[Light3D] = []
 var _base_energy: PackedFloat32Array = PackedFloat32Array()
 # The overhead subset, in name order, that carries a visible housing.
@@ -100,6 +91,11 @@ func setup(arena_root: Node) -> void:
 # A housing under each light, oriented to it, so the rig reads as hardware. Only
 # the lens is bright; the body is dark so the fixture has a silhouette against
 # the roof rather than glowing as a whole.
+#
+# On the overhead set-dressing layer, because the play-following cameras climb
+# ABOVE the 22 m rig — GameCamera's zoom tops out at 32 m, the intro crane sits
+# at 36, and the camera-distance pref scales both by up to 1.6 — and from up
+# there a fixture is a dark slab over the crowd with its lit face pointed away.
 func _build_housings() -> void:
 	if _housed.is_empty():
 		return
@@ -133,7 +129,7 @@ func _build_housings() -> void:
 		var body := MeshInstance3D.new()
 		body.mesh = body_mesh
 		body.material_override = body_mat
-		body.layers = FIXTURE_LAYER
+		body.layers = RenderLayers.OVERHEAD_DRESSING
 		# The rig hangs above everything and casts nothing: it IS the light.
 		body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		fixture.add_child(body)
@@ -141,7 +137,7 @@ func _build_housings() -> void:
 		var lens := MeshInstance3D.new()
 		lens.mesh = lens_mesh
 		lens.material_override = _lens_material
-		lens.layers = FIXTURE_LAYER
+		lens.layers = RenderLayers.OVERHEAD_DRESSING
 		lens.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		# On the housing's aim face, a hair proud so it never z-fights the body.
 		lens.position = Vector3(0.0, 0.0,

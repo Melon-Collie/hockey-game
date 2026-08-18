@@ -34,12 +34,6 @@ extends SceneTree
 
 const VIEWPORT_SIZE := Vector2i(1280, 720)
 
-# Render layer 2 carries everything hung over the ice — the scoreboard, the
-# end-zone netting, the ceiling light housings — and GameCamera clears that bit
-# so none of it blocks the play. A shot reproducing the gameplay view has to
-# clear it too, or the capture is a photo of the scoreboard's underside.
-const OVERHEAD_LAYER_BIT: int = 2
-
 # The arena is built a frame in, not in _init: autoload identifiers inside its
 # scripts (HockeyRink reaches GameManager, ArenaStands reaches NetworkManager
 # through its dependants) do not compile-resolve until the tree is up, and a
@@ -172,13 +166,16 @@ func _on_frame() -> void:
 	_aim(_shots[_shot_index])
 
 
+# A shot reproducing the gameplay view has to clear the overhead set-dressing
+# layer the way GameCamera does, or the capture is a photo of the scoreboard's
+# underside. Every other shot keeps it, and sees the building whole.
 func _aim(shot: Dictionary) -> void:
 	_camera.fov = shot.fov
 	_camera.position = shot.pos
 	_camera.look_at(shot.look_at as Vector3)
-	var mask: int = _camera.cull_mask | OVERHEAD_LAYER_BIT
+	var mask: int = _camera.cull_mask | RenderLayers.OVERHEAD_DRESSING
 	if shot.get("hide_overhead", false):
-		mask &= ~OVERHEAD_LAYER_BIT
+		mask &= ~RenderLayers.OVERHEAD_DRESSING
 	_camera.cull_mask = mask
 
 

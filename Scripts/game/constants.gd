@@ -3,7 +3,9 @@ extends Node
 # Engine-facing constants only. Game-rule constants (faceoff timings, rink
 # geometry, puck position, icing duration, faceoff positions, max players,
 # ice friction) live in Scripts/domain/config/game_rules.gd as a class_name
-# const class.
+# const class. RENDER layers are engine-facing but not here either — they live
+# in render_layers.gd, because @tool scripts set them while building geometry
+# in the editor, where autoloads don't exist.
 
 # ── Collision Layers ──────────────────────────────────────────────────────────
 # NOTHING IN THE GAME COLLIDES THROUGH THE PHYSICS SERVER. Every contact — puck

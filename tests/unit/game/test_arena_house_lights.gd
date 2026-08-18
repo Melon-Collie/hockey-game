@@ -42,7 +42,7 @@ func test_housings_render_only_on_the_masked_layer() -> void:
 		stack.append_array(node.get_children())
 		if node is VisualInstance3D:
 			visual_count += 1
-			assert_eq((node as VisualInstance3D).layers, ArenaHouseLights.FIXTURE_LAYER,
+			assert_eq((node as VisualInstance3D).layers, RenderLayers.OVERHEAD_DRESSING,
 					"%s must render only on the overhead set-dressing layer" % node.name)
 	# Body + lens for each of the eight overhead fixtures; the dasher and bowl
 	# lights are behind the stands and get no housing at all.
@@ -52,9 +52,9 @@ func test_housings_render_only_on_the_masked_layer() -> void:
 func test_fixture_layer_is_the_one_the_play_cameras_mask_out() -> void:
 	var cam: GameCamera = GameCamera.new()
 	add_child_autofree(cam)
-	assert_eq(cam.cull_mask & ArenaHouseLights.FIXTURE_LAYER, 0,
+	assert_eq(cam.cull_mask & RenderLayers.OVERHEAD_DRESSING, 0,
 			"gameplay camera must never render the ceiling fixtures")
 	var pov: PovCamera = PovCamera.new()
 	add_child_autofree(pov)
-	assert_eq(pov.cull_mask & ArenaHouseLights.FIXTURE_LAYER, 0,
+	assert_eq(pov.cull_mask & RenderLayers.OVERHEAD_DRESSING, 0,
 			"POV camera reproduces the same top-down framing and must mask them too")
