@@ -320,11 +320,11 @@ const PENALTY_BOX_HALF_LEN: float = 1.7
 const _OFFICIALS_HALF_LEN: float = 1.0
 const _OFFICIALS_HEIGHT: float = 0.78
 # Staff: the people the rinkside furniture was built for. Coaches stand behind
-# each bench, the timekeeping crew works the table, and an attendant minds each
-# penalty box door. They are the crowd's own body and head boxes stood up — see
-# the stature block for what standing does to a seated figure — but they take a
-# plain material rather than the crowd shader, because a coach does not do the
-# wave.
+# each bench; the timekeeping crew and the penalty-box attendants sit at theirs,
+# which is how a real rink works — the bench is the only post nobody works from a
+# chair. They are the crowd's own body and head boxes, standing ones stood up per
+# the stature block, but on a plain material rather than the crowd shader,
+# because a coach does not do the wave.
 const _STAFF_SEED: int = 5150
 # Outward of the furniture they work behind, so they read as standing at it.
 const _STAFF_BEHIND_BENCH: float = 0.92
@@ -1538,49 +1538,31 @@ func _add_tunnel_instance(mesh: ArrayMesh, node_name: String, color: Color) -> v
 # with a plain material: the crowd shader sways and hops off per-instance custom
 # data, and staff standing at their posts should do neither.
 func _build_staff() -> void:
-	var bench_x: float = rink_width / 2.0 + base_outward_offset
 	var posts: Array[Vector3] = []
 	var jackets: Array[Color] = []
-
-	# Coaches: two behind each bench, facing the ice. Jackets are only lightly
-	# darkened from the team colour — staff stand against dark furniture behind
-	# tinted glass, and anything nearer to black merges with the box they are in.
-	for side: float in [-1.0, 1.0]:
-		var jacket: Color = (home_color if side > 0.0 else away_color).darkened(0.3)
-		for dz: float in [-1.15, 1.15]:
-			posts.append(Vector3(bench_x + _STAFF_BEHIND_BENCH,
-					_tread_y_at(_STAFF_BEHIND_BENCH), side * BENCH_CENTER_Z + dz))
-			jackets.append(jacket)
-
-	# Penalty-box attendants, at the door end of each box.
-	for side: float in [-1.0, 1.0]:
-		posts.append(Vector3(-(bench_x + _STAFF_BEHIND_BENCH),
-				_tread_y_at(_STAFF_BEHIND_BENCH),
-				side * (PENALTY_BOX_CENTER_Z + PENALTY_BOX_HALF_LEN - 0.4)))
-		jackets.append(Color(0.38, 0.40, 0.46))
-
-	# Timekeeping crew at the table, between the boxes.
-	for dz: float in [-0.72, 0.0, 0.72]:
-		posts.append(Vector3(-(bench_x + _STAFF_BEHIND_TABLE),
-				_tread_y_at(_STAFF_BEHIND_TABLE), dz))
-		# The off-ice crew works in shirtsleeves; pale is also what separates them
-		# from the dark counter they stand behind.
-		jackets.append(Color(0.74, 0.76, 0.80))
+	var standing: Array[bool] = []
+	_staff_postings(posts, jackets, standing)
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = _STAFF_SEED
-	# Body and head take separate transforms, where the crowd shares one: only
-	# the body stretches when a figure stands up, so the two cannot ride the
-	# same basis.
+	# Body and head take separate transforms, where the crowd shares one: a
+	# standing figure stretches in Y and its head does not, so the two cannot
+	# ride the same basis.
 	var body_mm: MultiMesh = _make_staff_multimesh(_build_body_mesh(), posts.size())
 	var head_mm: MultiMesh = _make_staff_multimesh(_build_head_mesh(), posts.size())
 	var bounds := AABB(posts[0], Vector3.ZERO)
 	for i: int in posts.size():
 		var stature: float = rng.randf_range(
 				_STANDING_STATURE_MIN, _STANDING_STATURE_MAX)
+		var girth: float = _staff_girth_scale(stature)
+		# Sitting IS the unscaled figure, so a seated staffer lifts by nothing and
+		# both transforms collapse to the spectator's.
+		var lift: float = _staff_hip_height(stature) if standing[i] else 0.0
 		var yaw: float = atan2(posts[i].x, posts[i].z)
-		body_mm.set_instance_transform(i, _staff_body_transform(posts[i], yaw, stature))
-		head_mm.set_instance_transform(i, _staff_head_transform(posts[i], yaw, stature))
+		body_mm.set_instance_transform(i,
+				_staff_body_transform(posts[i], yaw, girth, lift))
+		head_mm.set_instance_transform(i,
+				_staff_head_transform(posts[i], yaw, girth, lift))
 		body_mm.set_instance_color(i, jackets[i])
 		head_mm.set_instance_color(i, _head_palette[rng.randi() % _head_palette.size()])
 		bounds = bounds.expand(posts[i])
@@ -1605,6 +1587,45 @@ func _build_staff() -> void:
 		add_child(mmi)
 
 
+# Who works where, filled into caller-owned arrays: a post, a jacket, and
+# whether they work on their feet. Separate from the build because a MultiMesh's
+# instance transforms are write-only under the headless renderer — this is the
+# only seam a test can read the roster through.
+func _staff_postings(posts: Array[Vector3], jackets: Array[Color],
+		standing: Array[bool]) -> void:
+	var bench_x: float = rink_width / 2.0 + base_outward_offset
+
+	# Coaches: two behind each bench, on the tread a step up from the bench
+	# itself, facing the ice. Jackets are only lightly darkened from the team
+	# colour — staff stand against dark furniture behind tinted glass, and
+	# anything nearer to black merges with the box they are in.
+	for side: float in [-1.0, 1.0]:
+		var jacket: Color = (home_color if side > 0.0 else away_color).darkened(0.3)
+		for dz: float in [-1.15, 1.15]:
+			posts.append(Vector3(bench_x + _STAFF_BEHIND_BENCH,
+					_tread_y_at(_STAFF_BEHIND_BENCH), side * BENCH_CENTER_Z + dz))
+			jackets.append(jacket)
+			standing.append(true)
+
+	# Penalty-box attendants, sitting on the box's own bench at the door end —
+	# the same seat block a penalized player uses, so they need no chair.
+	for side: float in [-1.0, 1.0]:
+		posts.append(Vector3(-(bench_x + _BENCH_SEAT_X_OFFSET),
+				stands_base_y + _BENCH_SEAT_HEIGHT,
+				side * (PENALTY_BOX_CENTER_Z + PENALTY_BOX_HALF_LEN - 0.4)))
+		jackets.append(Color(0.38, 0.40, 0.46))
+		standing.append(false)
+
+	# Timekeeping crew, seated at the table between the boxes.
+	for dz: float in [-0.72, 0.0, 0.72]:
+		posts.append(Vector3(-(bench_x + _STAFF_BEHIND_TABLE),
+				_tread_y_at(_STAFF_BEHIND_TABLE), dz))
+		# The off-ice crew works in shirtsleeves; pale is also what separates them
+		# from the dark counter they sit behind.
+		jackets.append(Color(0.74, 0.76, 0.80))
+		standing.append(false)
+
+
 # Floor height for someone standing `beyond` metres past the terraces' inner
 # edge. Staff stand a metre back from the furniture they work at, which is far
 # enough to be on the SECOND tread rather than the first — placing them at the
@@ -1615,24 +1636,24 @@ func _tread_y_at(beyond: float) -> float:
 	return stands_base_y + float(step) * riser_height
 
 
-# The body box is the only part of a staffer that grows: standing, it stands in
-# for legs as well as torso, so it is stretched in Y until its top lands at the
-# neck of a figure this tall. Across, it stays at the seated scale of a person
-# this tall — shoulders are shoulders, sitting or standing.
-func _staff_body_transform(post: Vector3, yaw: float, stature: float) -> Transform3D:
-	var girth: float = _staff_girth_scale(stature)
-	var y_scale: float = girth \
-			+ _staff_hip_height(stature) / (_BODY_Y_LIFT + _BODY_SIZE.y)
+# The body box is the only part of a staffer that changes with posture: standing,
+# it stands in for legs as well as torso, so it is stretched in Y by `lift` until
+# its top lands at the neck. Across, it stays at `girth` either way — shoulders
+# are shoulders, sitting or standing — and a seated figure (lift 0) comes out as
+# exactly the spectator this geometry was drawn for.
+func _staff_body_transform(post: Vector3, yaw: float, girth: float,
+		lift: float) -> Transform3D:
+	var y_scale: float = girth + lift / (_BODY_Y_LIFT + _BODY_SIZE.y)
 	return Transform3D(
 			Basis(Vector3.UP, yaw).scaled(Vector3(girth, y_scale, girth)), post)
 
 
-# The head is the seated figure's head untouched, carried up by the legs the body
-# box grew — so the crown lands at `stature` and the neck gap survives the stretch.
-func _staff_head_transform(post: Vector3, yaw: float, stature: float) -> Transform3D:
-	var girth: float = _staff_girth_scale(stature)
+# The head is that same figure's head untouched, carried up by whatever the body
+# box grew — so the crown lands at full stature and the neck gap survives.
+func _staff_head_transform(post: Vector3, yaw: float, girth: float,
+		lift: float) -> Transform3D:
 	return Transform3D(Basis(Vector3.UP, yaw).scaled(Vector3.ONE * girth),
-			post + Vector3.UP * _staff_hip_height(stature))
+			post + Vector3.UP * lift)
 
 
 # What the crowd's scale would be for a spectator of this standing stature.
@@ -2060,8 +2081,8 @@ func _build_penalty_boxes() -> void:
 				side * _OFFICIALS_HALF_LEN)
 		add_child(divider)
 
-	# Timekeeper's table: a taller counter than the players' bench, since the
-	# crew works standing at it rather than sitting on it.
+	# Timekeeper's table: desk height, so the crew seated behind it clears the
+	# top from the chest up rather than peering over it.
 	var table := MeshInstance3D.new()
 	table.name = "OfficialsTable"
 	var table_mesh := BoxMesh.new()

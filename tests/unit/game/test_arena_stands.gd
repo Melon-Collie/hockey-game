@@ -208,18 +208,20 @@ func _staff_multimesh(stands: ArenaStands, part: String) -> MultiMesh:
 	return mmi.multimesh
 
 
-func test_staff_figures_stand_at_full_stature() -> void:
-	# Body and head ride separate transforms — only the body stretches when a
-	# figure stands up — so nothing but this arithmetic keeps the two joined. The
-	# crown has to land at the staffer's stature above the tread they stand on,
-	# with the head resting on the body rather than sunk into it.
+func test_standing_staff_reach_full_stature() -> void:
+	# Body and head ride separate transforms — only a standing body stretches —
+	# so nothing but this arithmetic keeps the two joined. The crown has to land
+	# at the staffer's stature above the tread they stand on, with the head
+	# resting on the body rather than sunk into it.
 	var stands: ArenaStands = _make_stands(3, 2)
 	var body_box: AABB = stands._build_body_mesh().get_aabb()
 	var head_box: AABB = stands._build_head_mesh().get_aabb()
 	var post := Vector3(6.0, 1.5, 2.0)
 	for stature: float in [1.52, 1.75, 1.88]:
-		var body: Transform3D = stands._staff_body_transform(post, 0.0, stature)
-		var head: Transform3D = stands._staff_head_transform(post, 0.0, stature)
+		var girth: float = stands._staff_girth_scale(stature)
+		var lift: float = stands._staff_hip_height(stature)
+		var body: Transform3D = stands._staff_body_transform(post, 0.0, girth, lift)
+		var head: Transform3D = stands._staff_head_transform(post, 0.0, girth, lift)
 		var body_top: float = body.origin.y \
 				+ body_box.end.y * body.basis.get_scale().y
 		var head_bottom: float = head.origin.y \
@@ -233,24 +235,66 @@ func test_staff_figures_stand_at_full_stature() -> void:
 				"the neck gap should stay a gap, not open into a floating head")
 
 
-func test_staff_are_the_crowd_on_their_feet() -> void:
-	# Standing widens nobody. A staffer's across-scale — what sets shoulder width
-	# and head size — must land in the same range the seated crowd rolls, or they
-	# read as giants beside the bowl instead of as adults standing in front of it.
+func test_seated_staff_are_the_spectator_figure() -> void:
+	# Sitting is the unscaled figure, so a seated staffer (no hip lift) must come
+	# out as one uniformly scaled box — the same pose the crowd is drawn in. A
+	# stretched body here is someone standing at a desk they should be sitting at.
 	var stands: ArenaStands = _make_stands(3, 2)
-	var crowd_min: float = stands._SEATED_STATURE_MIN / stands._FIGURE_HEIGHT
-	var shortest: float = stands._staff_girth_scale(stands._STANDING_STATURE_MIN)
-	var tallest: float = stands._staff_girth_scale(stands._STANDING_STATURE_MAX)
-	assert_lt(shortest, stands._CROWD_SCALE_MAX,
-			"the shortest staffer should not out-measure the largest spectator")
-	assert_gt(tallest, crowd_min,
-			"the tallest staffer should not be slighter than the smallest spectator")
-	# Height is the only axis that grows, and it grows a lot: a standing figure
-	# runs roughly twice the seated one it shares a girth with.
-	var body: Transform3D = stands._staff_body_transform(Vector3.ZERO, 0.0, 1.75)
-	var scale: Vector3 = body.basis.get_scale()
-	assert_gt(scale.y, scale.x * 2.0, "the body box should carry the legs")
-	assert_almost_eq(scale.x, scale.z, 0.0001, "girth should stay square")
+	var head_box: AABB = stands._build_head_mesh().get_aabb()
+	var post := Vector3(-6.0, 1.2, 0.0)
+	var girth: float = stands._staff_girth_scale(1.75)
+	var body: Transform3D = stands._staff_body_transform(post, 0.0, girth, 0.0)
+	var head: Transform3D = stands._staff_head_transform(post, 0.0, girth, 0.0)
+	assert_almost_eq(body.basis.get_scale().y, girth, 0.0001,
+			"a seated body should not stretch")
+	assert_eq(head.origin, post, "a seated head rides the body's own origin")
+	var crown: float = head.origin.y + head_box.end.y * girth
+	assert_almost_eq(crown - post.y, 1.75 * stands._SITTING_HEIGHT_FRACTION, 0.001,
+			"a seated staffer stands only their sitting height above the seat")
+
+
+func test_only_the_coaches_stand() -> void:
+	# Off-ice officials and box attendants work sitting down; the bench is the one
+	# post staffed on its feet. Read through _staff_postings because a MultiMesh's
+	# instance transforms come back empty under the headless renderer.
+	var stands: ArenaStands = _make_stands(3, 2)
+	var posts: Array[Vector3] = []
+	var jackets: Array[Color] = []
+	var standing: Array[bool] = []
+	stands._staff_postings(posts, jackets, standing)
+	assert_eq(posts.size(), 9, "four coaches, two attendants, three at the table")
+	assert_eq(jackets.size(), posts.size(), "every post should be dressed")
+	assert_eq(standing.count(true), 4,
+			"only the four bench coaches should be on their feet")
+	assert_eq(standing.count(false), 5,
+			"the timekeeping crew and both box attendants should be seated")
+
+
+func test_seated_staff_sit_on_the_furniture_they_work_at() -> void:
+	# The bug the render caught: staff placed on the terrace tread behind the
+	# furniture stand a riser above the floor that furniture sits on, so they read
+	# as standing ON the scorer's table. Attendants sit on the penalty bench
+	# itself, and the crew's heads must clear the table without towering over it.
+	var stands: ArenaStands = _make_stands(3, 2)
+	var posts: Array[Vector3] = []
+	var jackets: Array[Color] = []
+	var standing: Array[bool] = []
+	stands._staff_postings(posts, jackets, standing)
+	var head_box: AABB = stands._build_head_mesh().get_aabb()
+	var table_top: float = stands.stands_base_y + stands._OFFICIALS_HEIGHT
+	var seat_top: float = stands.stands_base_y + stands._BENCH_SEAT_HEIGHT
+	for i: int in posts.size():
+		if standing[i]:
+			continue
+		var girth: float = stands._staff_girth_scale(stands._STANDING_STATURE_MIN)
+		var crown: float = posts[i].y + head_box.end.y * girth
+		assert_gt(crown, table_top + 0.2,
+				"a seated staffer's head should clear the counter in front of them")
+		assert_lt(posts[i].y, table_top,
+				"nobody should be seated above the surface they work at")
+		if absf(posts[i].z) > stands.PENALTY_BOX_CENTER_Z:
+			assert_almost_eq(posts[i].y, seat_top, 0.001,
+					"box attendants sit on the box's own seat block")
 
 
 func test_staff_aabb_covers_the_standing_figures() -> void:
