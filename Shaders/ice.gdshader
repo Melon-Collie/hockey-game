@@ -25,12 +25,21 @@ uniform sampler2D scratch_tex : hint_default_black, filter_linear;
 uniform sampler2D decal_tex : source_color, hint_default_black, filter_linear_mipmap, repeat_disable;
 uniform vec2 decal_uv_min = vec2(0.0, 0.0);
 uniform vec2 decal_uv_max = vec2(1.0, 1.0);
-// In-ice sponsor panels (IceAdPainter). Unlike the center-ice patch above this
-// one covers the whole sheet, so the rink UV indexes it directly — it can afford
-// to because the panels are metres across and carry no fine detail. Guarded by
-// `ads_enabled` so switching them off costs nothing at all rather than costing a
-// fetch of an empty texture.
+// In-ice sponsor wordmarks (IceAdPainter). Unlike the center-ice patch above,
+// these are scattered over the sheet — but they cover only ~6% of it, so the
+// painter packs one cell per slot into an atlas instead of handing over a
+// rink-sized image that would be almost entirely blank. The price of that is
+// paid here: the fragment has to find which slot it is in, and where in that
+// slot's cell it lands.
+//   ads_world: xy = world (x, z) centre, zw = half extents, both in metres
+//   ads_atlas: xy = the cell's atlas UV origin, zw = its UV size
+// Fixed-size like the ring arrays below (IceAdPainter.MAX_SLOTS); ads_count says
+// how much of it is live, and `ads_enabled` skips the whole search when the rink
+// carries no ads at all.
 uniform sampler2D ads_tex : source_color, hint_default_transparent, filter_linear_mipmap, repeat_disable;
+uniform vec4 ads_world[8];
+uniform vec4 ads_atlas[8];
+uniform int ads_count = 0;
 uniform bool ads_enabled = false;
 // Plane size in world meters — used to convert parallax offset to UV.
 uniform vec2 rink_size = vec2(26.0, 60.0);
@@ -157,11 +166,30 @@ void fragment() {
 	vec2 uv = UV + xz_offset / rink_size;
 
 	vec3 base = texture(albedo_tex, uv).rgb;
-	// Sponsor panels go down first, so the center-ice art below wins wherever
-	// the two ever meet.
+	// Sponsor wordmarks go down first, so the center-ice art below wins wherever
+	// the two ever meet. Placed in WORLD metres rather than rink UV: a slot is
+	// defined in metres in AdBrands, and the atlas has no rink-wide frame to
+	// index. `xz_offset` is the parallax the albedo above was already read with,
+	// so an ad sits at the same apparent depth as the paint around it.
 	if (ads_enabled) {
-		vec4 ads = texture(ads_tex, uv);
-		base = mix(base, ads.rgb, ads.a);
+		vec2 ads_xz = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xz + xz_offset;
+		for (int i = 0; i < ads_count; i++) {
+			vec2 d = (ads_xz - ads_world[i].xy) / ads_world[i].zw;
+			if (abs(d.x) < 1.0 && abs(d.y) < 1.0) {
+				// The painter lays a cell out in the plane's own handedness —
+				// +u with world +X, +v with world +Z — so this is a straight
+				// remap of the slot's [-1, 1] local coords onto its cell.
+				vec2 cell_uv = ads_atlas[i].xy + (d * 0.5 + 0.5) * ads_atlas[i].zw;
+				// The painter's viewport renders onto transparent black, so its
+				// texture is premultiplied: composite it as such. Straight-alpha
+				// mixing would pull every antialiased glyph edge toward black,
+				// which with no panel field behind the lettering shows up as a
+				// dark halo.
+				vec4 ads = texture(ads_tex, cell_uv);
+				base = base * (1.0 - ads.a) + ads.rgb;
+				break;
+			}
+		}
 	}
 	// Composite decals BEFORE the Beer-Lambert fade so they get the same
 	// under-ice depth treatment as the lines baked into albedo_tex.

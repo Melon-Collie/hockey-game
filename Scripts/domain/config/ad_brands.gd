@@ -1,8 +1,8 @@
 class_name AdBrands
 extends RefCounted
 
-# The arena's sponsors — the dasher-board panels and the in-ice panels both draw
-# from this one table.
+# The arena's sponsors — the dasher-board panels and the in-ice wordmarks both
+# draw from this one table.
 #
 # Every name here is invented. Real marks on the boards would be a licensing
 # problem, and the house brand (Mitts) already carries its own art elsewhere in
@@ -49,14 +49,14 @@ const BRANDS: Array[Dictionary] = [
 		"bg": Color(0.07, 0.08, 0.07), "fg": Color(0.72, 0.95, 0.25), "accent": Color(0.72, 0.95, 0.25)},
 ]
 
-# In-ice sponsor panels, in rink metres: `center` is (x, z), `size` is the
+# In-ice sponsor slots, in rink metres: `center` is (x, z), `size` is the
 # panel's (x extent, z extent), `brand` indexes BRANDS.
 #
 # Hand-picked the way a rink crew picks them — the stretches of sheet that carry
 # no painted marking. One fills each neutral-zone quadrant, boxed in by the
 # centre red line, a blue line, the centre circle, and a neutral-zone dot; one
 # sits in each high slot, between the blue line and the tops of the end-zone
-# faceoff circles. A panel is long in Z and narrow in X because the wordmark runs
+# faceoff circles. A slot is long in Z and narrow in X because the wordmark runs
 # along the length of the rink, reading from the broadcast side.
 #
 # The clearances are not eyeballed: test_board_ad_layout.gd re-derives every line,

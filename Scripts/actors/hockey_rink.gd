@@ -185,9 +185,6 @@ const AD_GOAL_STRIPE_HALF: float = 0.075
 # How finely the perimeter is walked when working out which stretches of board
 # are already spoken for. 10 cm is far below the narrowest thing being avoided.
 const AD_RESERVE_STEP: float = 0.1
-# Resolution of the in-ice ad overlay. The panels are metres across with no fine
-# detail, so this sits an order of magnitude below the ice albedo's 80 px/m.
-const ICE_AD_PX_PER_METER: float = 40.0
 
 # ── Gates ────────────────────────────────────────────────────────────────────
 # Doors cut into the boards: one at the inner end of each player bench, one at
@@ -321,6 +318,17 @@ static func release_shared_cache() -> void:
 	_build_cache.clear()
 
 func _rebuild() -> void:
+	# Every one of the ~29 exports lands here, and a rebuild is not cheap: it
+	# repaints the ice albedo (a per-pixel GDScript loop over ~10 M pixels, ~1.5 s
+	# before the shared cache is warm) and rebuilds every board, glass and netting
+	# mesh. Out of the tree nothing can see the result, and _ready() rebuilds on
+	# entry with whatever the exports finally hold — so a caller or a scene
+	# override that sets several of them before add_child pays for one rebuild
+	# rather than one per property. (Declaring the exports costs nothing either
+	# way: GDScript does not run a setter for a value assigned in its own
+	# declaration.)
+	if not is_inside_tree():
+		return
 	if rink_length <= 0 or rink_width <= 0:
 		return
 
@@ -469,8 +477,15 @@ func _build_ice_texture() -> ImageTexture:
 
 	# Image-coordinate convention used throughout this function:
 	#   world +X → image +X
-	#   world +Z → image -Y   (rink length runs along image Y)
+	#   world +Z → image +Y   (rink length runs along image Y)
 	#   centre of rink → centre of image
+	# The Z direction is the one to be careful with. PlaneMesh gives the ice its
+	# UVs with v increasing toward +Z, and v = 0 is the image's TOP row, so the
+	# top of this image is the −Z end of the sheet — the opposite of the way an
+	# overhead diagram is usually drawn. IceScratchMap paints in the same frame
+	# ((world.z + half_length) → +Y), which is why a skater's cut lands under the
+	# skater. Getting it backwards is invisible on markings this symmetric and
+	# wrong the moment one isn't.
 	# All geometric positions come from GameRules so the painted lines and
 	# dots stay locked to the gameplay coordinates the puck/skaters use.
 	var blue_z: int = int(GameRules.BLUE_LINE_Z * _px_per_meter)
@@ -514,14 +529,14 @@ func _build_ice_texture() -> ImageTexture:
 	# faceoff teleports land exactly on the painted dot.
 	for dot: Vector2 in GameRules.END_ZONE_FACEOFF_DOTS:
 		var px: float = img_w / 2.0 + dot.x * _px_per_meter
-		var py: float = img_h / 2.0 - dot.y * _px_per_meter
+		var py: float = img_h / 2.0 + dot.y * _px_per_meter
 		_draw_filled_circle(img, px, py, dot_r, red_line_color)
 		_draw_circle(img, px, py, circle_r, thin_line, red_line_color)
 
 	# Neutral-zone faceoff dots (no surrounding circle per NHL spec)
 	for dot: Vector2 in GameRules.NEUTRAL_ZONE_FACEOFF_DOTS:
 		var px: float = img_w / 2.0 + dot.x * _px_per_meter
-		var py: float = img_h / 2.0 - dot.y * _px_per_meter
+		var py: float = img_h / 2.0 + dot.y * _px_per_meter
 		_draw_filled_circle(img, px, py, dot_r, red_line_color)
 
 	return ImageTexture.create_from_image(img)
@@ -1102,12 +1117,20 @@ func _add_ice_ads(mat: ShaderMaterial) -> void:
 	if not ice_ads_enabled or AdBrands.ICE_SLOTS.is_empty():
 		return
 
-	var vp_size := Vector2i(
-			maxi(int(rink_width * ICE_AD_PX_PER_METER), 1),
-			maxi(int(rink_length * ICE_AD_PX_PER_METER), 1))
+	var slots: Array[Dictionary] = []
+	for slot: Dictionary in AdBrands.ICE_SLOTS:
+		if slots.size() == IceAdPainter.MAX_SLOTS:
+			push_warning("ICE_SLOTS is longer than IceAdPainter.MAX_SLOTS; the rest are dropped")
+			break
+		slots.append({
+			"center": slot.center,
+			"size": slot.size,
+			"brand": AdBrands.brand_at(slot.brand as int),
+		})
+
 	var ads_vp := SubViewport.new()
 	ads_vp.name = "IceAdsViewport"
-	ads_vp.size = vp_size
+	ads_vp.size = IceAdPainter.atlas_size(slots)
 	ads_vp.transparent_bg = true
 	ads_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
 	ads_vp.disable_3d = true
@@ -1117,21 +1140,27 @@ func _add_ice_ads(mat: ShaderMaterial) -> void:
 	_ice_ad_vp = ads_vp
 
 	var painter := IceAdPainter.new()
-	painter.img_size = Vector2(vp_size)
-	painter.px_per_meter = ICE_AD_PX_PER_METER
-	painter.rink_size = Vector2(rink_width, rink_length)
-	var slots: Array[Dictionary] = []
-	for slot: Dictionary in AdBrands.ICE_SLOTS:
-		slots.append({
-			"center": slot.center,
-			"size": slot.size,
-			"brand": AdBrands.brand_at(slot.brand as int),
-		})
 	painter.slots = slots
 	ads_vp.add_child(painter)
 
-	# Full-rink coverage, so the shader indexes it with the rink UV directly.
+	# The two frames the shader has to bridge: where a slot sits on the ice, and
+	# where its cell sits in the atlas. Kept full-length like the ring arrays —
+	# the shader reads only the first ads_count entries.
+	var slot_world := PackedVector4Array()
+	var slot_atlas := PackedVector4Array()
+	slot_world.resize(IceAdPainter.MAX_SLOTS)
+	slot_atlas.resize(IceAdPainter.MAX_SLOTS)
+	for index: int in slots.size():
+		var centre: Vector2 = slots[index].center
+		var half: Vector2 = (slots[index].size as Vector2) * 0.5
+		slot_world[index] = Vector4(centre.x, centre.y, half.x, half.y)
+		var uv: Rect2 = IceAdPainter.cell_uv(slots, index)
+		slot_atlas[index] = Vector4(uv.position.x, uv.position.y, uv.size.x, uv.size.y)
+
 	mat.set_shader_parameter("ads_tex", ads_vp.get_texture())
+	mat.set_shader_parameter("ads_world", slot_world)
+	mat.set_shader_parameter("ads_atlas", slot_atlas)
+	mat.set_shader_parameter("ads_count", slots.size())
 	mat.set_shader_parameter("ads_enabled", true)
 
 

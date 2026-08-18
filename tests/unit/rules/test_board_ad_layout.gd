@@ -215,6 +215,38 @@ func test_every_ice_slot_names_a_real_brand() -> void:
 		assert_between(slot.brand as int, 0, AdBrands.BRANDS.size() - 1,
 				"brand index is in range")
 
+# ── In-ice atlas packing ─────────────────────────────────────────────────
+#
+# The painter gives each slot its own cell rather than one rink-sized image, and
+# the ice shader maps a slot's world rect onto that cell. The mapping only holds
+# if the cells are unstretched, disjoint, and inside the atlas.
+
+func test_every_ice_slot_fits_the_shader_arrays() -> void:
+	assert_lte(AdBrands.ICE_SLOTS.size(), IceAdPainter.MAX_SLOTS,
+			"ads_world[] and ads_atlas[] in ice.gdshader are MAX_SLOTS long")
+
+func test_ice_atlas_cells_are_unstretched() -> void:
+	var atlas := Vector2(IceAdPainter.atlas_size(AdBrands.ICE_SLOTS))
+	for i: int in AdBrands.ICE_SLOTS.size():
+		var slot_size: Vector2 = AdBrands.ICE_SLOTS[i].size
+		var uv: Rect2 = IceAdPainter.cell_uv(AdBrands.ICE_SLOTS, i)
+		var metres: Vector2 = uv.size * atlas / IceAdPainter.PX_PER_METER
+		assert_almost_eq(metres.x, slot_size.x, 0.01,
+				"cell %d covers the slot's width, so the wordmark is not squeezed" % i)
+		assert_almost_eq(metres.y, slot_size.y, 0.01,
+				"cell %d covers the slot's length" % i)
+
+func test_ice_atlas_cells_are_disjoint_and_inside_the_atlas() -> void:
+	var placed: Array[Rect2] = []
+	for i: int in AdBrands.ICE_SLOTS.size():
+		var uv: Rect2 = IceAdPainter.cell_uv(AdBrands.ICE_SLOTS, i)
+		assert_true(Rect2(0.0, 0.0, 1.0, 1.0).encloses(uv),
+				"cell %d is inside the atlas" % i)
+		for other: Rect2 in placed:
+			assert_false(other.intersects(uv),
+					"cell %d keeps its gutter from the cells before it" % i)
+		placed.append(uv)
+
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 # The reservations the shipping rink produces: centre and blue stripes on both
