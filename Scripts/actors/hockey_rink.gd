@@ -185,9 +185,6 @@ const AD_GOAL_STRIPE_HALF: float = 0.075
 # How finely the perimeter is walked when working out which stretches of board
 # are already spoken for. 10 cm is far below the narrowest thing being avoided.
 const AD_RESERVE_STEP: float = 0.1
-# Resolution of the in-ice ad overlay. The wordmarks are metres across, so this
-# sits well below the ice albedo's 80 px/m.
-const ICE_AD_PX_PER_METER: float = 40.0
 
 # ── Gates ────────────────────────────────────────────────────────────────────
 # Doors cut into the boards: one at the inner end of each player bench, one at
@@ -1102,12 +1099,20 @@ func _add_ice_ads(mat: ShaderMaterial) -> void:
 	if not ice_ads_enabled or AdBrands.ICE_SLOTS.is_empty():
 		return
 
-	var vp_size := Vector2i(
-			maxi(int(rink_width * ICE_AD_PX_PER_METER), 1),
-			maxi(int(rink_length * ICE_AD_PX_PER_METER), 1))
+	var slots: Array[Dictionary] = []
+	for slot: Dictionary in AdBrands.ICE_SLOTS:
+		if slots.size() == IceAdPainter.MAX_SLOTS:
+			push_warning("ICE_SLOTS is longer than IceAdPainter.MAX_SLOTS; the rest are dropped")
+			break
+		slots.append({
+			"center": slot.center,
+			"size": slot.size,
+			"brand": AdBrands.brand_at(slot.brand as int),
+		})
+
 	var ads_vp := SubViewport.new()
 	ads_vp.name = "IceAdsViewport"
-	ads_vp.size = vp_size
+	ads_vp.size = IceAdPainter.atlas_size(slots)
 	ads_vp.transparent_bg = true
 	ads_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
 	ads_vp.disable_3d = true
@@ -1117,21 +1122,27 @@ func _add_ice_ads(mat: ShaderMaterial) -> void:
 	_ice_ad_vp = ads_vp
 
 	var painter := IceAdPainter.new()
-	painter.img_size = Vector2(vp_size)
-	painter.px_per_meter = ICE_AD_PX_PER_METER
-	painter.rink_size = Vector2(rink_width, rink_length)
-	var slots: Array[Dictionary] = []
-	for slot: Dictionary in AdBrands.ICE_SLOTS:
-		slots.append({
-			"center": slot.center,
-			"size": slot.size,
-			"brand": AdBrands.brand_at(slot.brand as int),
-		})
 	painter.slots = slots
 	ads_vp.add_child(painter)
 
-	# Full-rink coverage, so the shader indexes it with the rink UV directly.
+	# The two frames the shader has to bridge: where a slot sits on the ice, and
+	# where its cell sits in the atlas. Kept full-length like the ring arrays —
+	# the shader reads only the first ads_count entries.
+	var slot_world := PackedVector4Array()
+	var slot_atlas := PackedVector4Array()
+	slot_world.resize(IceAdPainter.MAX_SLOTS)
+	slot_atlas.resize(IceAdPainter.MAX_SLOTS)
+	for index: int in slots.size():
+		var centre: Vector2 = slots[index].center
+		var half: Vector2 = (slots[index].size as Vector2) * 0.5
+		slot_world[index] = Vector4(centre.x, centre.y, half.x, half.y)
+		var uv: Rect2 = IceAdPainter.cell_uv(slots, index)
+		slot_atlas[index] = Vector4(uv.position.x, uv.position.y, uv.size.x, uv.size.y)
+
 	mat.set_shader_parameter("ads_tex", ads_vp.get_texture())
+	mat.set_shader_parameter("ads_world", slot_world)
+	mat.set_shader_parameter("ads_atlas", slot_atlas)
+	mat.set_shader_parameter("ads_count", slots.size())
 	mat.set_shader_parameter("ads_enabled", true)
 
 

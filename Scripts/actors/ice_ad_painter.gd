@@ -1,19 +1,37 @@
 class_name IceAdPainter
 extends Node2D
 
-# Paints the in-ice sponsor wordmarks into a full-rink SubViewport that the ice
-# shader composites BEFORE its Beer-Lambert fade — same treatment as the lines
-# baked into the albedo — so an ad reads as printed into the sheet rather than
-# laid on top of it. Only the lettering is painted: an in-ice ad is a mark frozen
-# into the sheet, so a panel field or border would read as a decal on top of it.
+# Paints the in-ice sponsor wordmarks into an atlas that the ice shader stamps
+# onto the sheet BEFORE its Beer-Lambert fade — same treatment as the lines
+# baked into the albedo — so an ad reads as printed into the ice rather than
+# laid on top of it. Only the lettering is painted: an in-ice ad is a mark
+# frozen into the sheet, so a panel field or border would read as a decal
+# sitting on it.
 #
-# Coordinate convention matches CenterIceDecals — world +X → image +X,
-# world +Z → image −Y, wordmarks rotated so their up direction points to image
-# −X — so every piece of art frozen into this ice reads the same way round.
-# In that rotated frame a slot's local +x runs along world +Z, which is why the
-# slots in AdBrands are long in Z: the wordmark runs the length of the rink.
+# One cell per slot, packed in a row. The alternative — one rink-sized image the
+# shader indexes with the rink UV directly — spends ~94% of its pixels on the
+# blank ice between six slots, so the atlas buys 2.5x the linear resolution for
+# less than half the memory. What it costs is that the shader has to find which
+# slot a fragment falls in; see `ads_world` in ice.gdshader.
+#
+# A cell's pixel axes match the rink's: +x is world +X (the slot's short axis,
+# which sets the cap height) and +y is world +Z (its long axis). The wordmark is
+# rotated a quarter turn inside that, so it runs the length of the rink and
+# reads from the broadcast side.
 
 const FONT: Font = preload("res://Assets/Fonts/BarlowSemiCondensed-ExtraBold.ttf")
+
+# Cell resolution. The wordmarks are the finest thing in this atlas, and the ice
+# is viewed nearly face-on (75 degrees of camera tilt), so a slot is magnified
+# roughly 2x on a 1080p screen at normal camera height — this is set to cover
+# that rather than to match the ice albedo's 80 px/m.
+const PX_PER_METER: float = 100.0
+# Transparent margin around every cell, so linear filtering at a cell edge can
+# only ever pull in blank ice rather than the neighbouring sponsor.
+const GUTTER_PX: int = 2
+# ads_world[] / ads_atlas[] in ice.gdshader are this long — shader arrays cannot
+# be sized at runtime. Raise both together.
+const MAX_SLOTS: int = 8
 
 # Under-ice, not on it — but the shader composites this BEFORE the Beer-Lambert
 # fade, which then washes it toward the ice fog colour, so what reaches the eye
@@ -25,27 +43,58 @@ const NAME_HEIGHT_FRACTION: float = 0.42
 const TAG_HEIGHT_FRACTION: float = 0.19
 const TEXT_INSET_FRACTION: float = 0.06
 
-var img_size: Vector2 = Vector2.ZERO
-var px_per_meter: float = 40.0
-var rink_size: Vector2 = Vector2(26.0, 60.0)
 # AdBrands.ICE_SLOTS entries, with the brand already resolved into `brand`.
 var slots: Array[Dictionary] = []
 
 
+static func cell_px(slot_size: Vector2) -> Vector2i:
+	return Vector2i(
+			maxi(1, roundi(slot_size.x * PX_PER_METER)),
+			maxi(1, roundi(slot_size.y * PX_PER_METER)))
+
+
+# Cells sit in one row, each in its own gutter, so the atlas is as tall as the
+# longest slot and as wide as all of them end to end.
+static func atlas_size(slots_in: Array[Dictionary]) -> Vector2i:
+	var width: int = GUTTER_PX
+	var height: int = 0
+	for slot: Dictionary in slots_in:
+		var cell: Vector2i = cell_px(slot.size as Vector2)
+		width += cell.x + GUTTER_PX
+		height = maxi(height, cell.y)
+	return Vector2i(maxi(width, 1), height + 2 * GUTTER_PX)
+
+
+static func cell_origin(slots_in: Array[Dictionary], index: int) -> Vector2i:
+	var x: int = GUTTER_PX
+	for i: int in index:
+		x += cell_px(slots_in[i].size as Vector2).x + GUTTER_PX
+	return Vector2i(x, GUTTER_PX)
+
+
+# The atlas UV rect the shader samples for slot `index`.
+static func cell_uv(slots_in: Array[Dictionary], index: int) -> Rect2:
+	var atlas := Vector2(atlas_size(slots_in))
+	return Rect2(Vector2(cell_origin(slots_in, index)) / atlas,
+			Vector2(cell_px(slots_in[index].size as Vector2)) / atlas)
+
+
 func _draw() -> void:
-	for slot: Dictionary in slots:
-		_draw_slot(slot)
+	for index: int in slots.size():
+		_draw_cell(index)
 
 
-func _draw_slot(slot: Dictionary) -> void:
-	var brand: Dictionary = slot.brand
-	var extent: Vector2 = slot.size
-	# Rotating by −π/2 sends local +x to world +Z and local +y to world +X, so
-	# the slot's local half-extents are its Z half-length by its X half-width.
-	var half := Vector2(extent.y, extent.x) * 0.5 * px_per_meter
+func _draw_cell(index: int) -> void:
+	var brand: Dictionary = slots[index].brand
+	var cell: Vector2i = cell_px(slots[index].size as Vector2)
+	var centre := Vector2(cell_origin(slots, index)) + Vector2(cell) * 0.5
+	# Rotating by −π/2 sends local +x to the cell's −y and local +y to its +x, so
+	# the wordmark's baseline runs the slot's long axis and the drawing rect is
+	# the cell transposed.
+	var half := Vector2(cell.y, cell.x) * 0.5
 	var rect := Rect2(-half, half * 2.0)
 
-	draw_set_transform(_world_to_image(slot.center), -PI * 0.5, Vector2.ONE)
+	draw_set_transform(centre, -PI * 0.5, Vector2.ONE)
 
 	var name_text: String = brand.name
 	var tag_text: String = brand.tag
@@ -82,10 +131,3 @@ func _fit(text: String, size: int, available: float) -> int:
 	if width <= available or width <= 0.0:
 		return size
 	return maxi(1, int(float(size) * available / width))
-
-
-# World XZ in metres → pixel in the full-rink image.
-func _world_to_image(world_xz: Vector2) -> Vector2:
-	return Vector2(
-			img_size.x * 0.5 + world_xz.x * px_per_meter,
-			img_size.y * 0.5 - world_xz.y * px_per_meter)
