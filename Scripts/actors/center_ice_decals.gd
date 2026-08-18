@@ -5,6 +5,12 @@ extends Node2D
 # SubViewport that the ice shader samples as a decal overlay. Lives at the
 # same parallax depth as the painted rink lines — so it reads as paint on
 # the concrete under the ice, with the same Beer-Lambert fade.
+#
+# The patch is centred on centre ice and everything in it is placed on the X
+# axis (the logo's up points to image −X = world −X, and the two arcs sit on
+# either side of it), so the rink's Z sense never enters here. Anything added
+# that DOES depend on it: image +Y is world +Z, the same frame HockeyRink paints
+# the albedo in.
 
 const LOGO_TEX: Texture2D = preload("res://Assets/logos/Mitts_logo_skater.svg")
 const FONT: Font = preload("res://Assets/Fonts/BarlowSemiCondensed-ExtraBold.ttf")

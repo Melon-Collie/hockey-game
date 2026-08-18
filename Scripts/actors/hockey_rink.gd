@@ -466,8 +466,15 @@ func _build_ice_texture() -> ImageTexture:
 
 	# Image-coordinate convention used throughout this function:
 	#   world +X → image +X
-	#   world +Z → image -Y   (rink length runs along image Y)
+	#   world +Z → image +Y   (rink length runs along image Y)
 	#   centre of rink → centre of image
+	# The Z direction is the one to be careful with. PlaneMesh gives the ice its
+	# UVs with v increasing toward +Z, and v = 0 is the image's TOP row, so the
+	# top of this image is the −Z end of the sheet — the opposite of the way an
+	# overhead diagram is usually drawn. IceScratchMap paints in the same frame
+	# ((world.z + half_length) → +Y), which is why a skater's cut lands under the
+	# skater. Getting it backwards is invisible on markings this symmetric and
+	# wrong the moment one isn't.
 	# All geometric positions come from GameRules so the painted lines and
 	# dots stay locked to the gameplay coordinates the puck/skaters use.
 	var blue_z: int = int(GameRules.BLUE_LINE_Z * _px_per_meter)
@@ -511,14 +518,14 @@ func _build_ice_texture() -> ImageTexture:
 	# faceoff teleports land exactly on the painted dot.
 	for dot: Vector2 in GameRules.END_ZONE_FACEOFF_DOTS:
 		var px: float = img_w / 2.0 + dot.x * _px_per_meter
-		var py: float = img_h / 2.0 - dot.y * _px_per_meter
+		var py: float = img_h / 2.0 + dot.y * _px_per_meter
 		_draw_filled_circle(img, px, py, dot_r, red_line_color)
 		_draw_circle(img, px, py, circle_r, thin_line, red_line_color)
 
 	# Neutral-zone faceoff dots (no surrounding circle per NHL spec)
 	for dot: Vector2 in GameRules.NEUTRAL_ZONE_FACEOFF_DOTS:
 		var px: float = img_w / 2.0 + dot.x * _px_per_meter
-		var py: float = img_h / 2.0 - dot.y * _px_per_meter
+		var py: float = img_h / 2.0 + dot.y * _px_per_meter
 		_draw_filled_circle(img, px, py, dot_r, red_line_color)
 
 	return ImageTexture.create_from_image(img)

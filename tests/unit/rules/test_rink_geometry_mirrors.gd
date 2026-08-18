@@ -58,3 +58,17 @@ func test_perimeter_collision_inner_face_is_the_inner_boundary() -> void:
 			"collision inner face (length) must sit at GameRules.INNER_HALF_LENGTH")
 	assert_almost_eq(corner_r - kick_half_thick, GameRules.INNER_CORNER_RADIUS, 1e-6,
 			"collision corner arc must sit at GameRules.INNER_CORNER_RADIUS")
+
+
+# Every faceoff marking has a twin at −z, which is what makes the painted sheet
+# symmetric about centre ice. The albedo image therefore looks the same whichever
+# way its Z axis runs, so nothing in the paint itself can catch a frame that is
+# upside down in Z — the first marking placed at one end only inherits the error
+# silently. This holds the symmetry the rest of the ice pipeline (IceScratchMap,
+# the in-ice ad slots) is checked against.
+func test_faceoff_markings_are_mirrored_about_centre_ice() -> void:
+	for dots: Array[Vector2] in [GameRules.END_ZONE_FACEOFF_DOTS,
+			GameRules.NEUTRAL_ZONE_FACEOFF_DOTS]:
+		for dot: Vector2 in dots:
+			assert_true(dots.has(Vector2(dot.x, -dot.y)),
+					"the dot at %s has a twin at the other end of the sheet" % dot)
