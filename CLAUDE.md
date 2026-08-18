@@ -51,7 +51,8 @@ let the user make it in the editor. Trivial single-resource `.tres` files
 (`PhysicsMaterial`, simple `StandardMaterial3D`) are safe to author directly —
 3–5 lines, no cross-references; the UID line is optional.
 
-**You can run the GUT test suite headless; you cannot run the game.** Use
+**You can run the GUT test suite headless, and you can render the arena bowl
+offscreen; you cannot run the game.** Use
 `.claude/hooks/run-gut.sh` (wraps `godot --headless -s res://addons/gut/gut_cmdln.gd`,
 honoring `.gutconfig.json`). Pass `gut_cmdln` flags through, e.g.
 `-gdir=res://tests/unit/state`.
@@ -62,6 +63,14 @@ honoring `.gutconfig.json`). Pass `gut_cmdln` flags through, e.g.
 - **Web:** the `SessionStart` hook async-installs Godot; run
   `.claude/hooks/wait-for-godot.sh` once before the first test run, then
   `.claude/hooks/run-gut.sh` (piping is fine on Linux).
+
+**To see procedural arena geometry, render it.** `.claude/hooks/render-arena.sh
+[shots]` builds an `ArenaStands` under a camera and writes PNGs to `.preview/`
+(shot list in `tools/arena_preview.gd`). Godot's `--headless` draws nothing — the
+renderer runs under `xvfb-run` on the Compatibility backend and Mesa's software
+rasterizer instead, ~40 s a run. Use it on anything whose bug is a proportion or
+a placement: a figure at twice its width passes every assertion a display-less
+test can make. It covers the stands only, not a live match.
 
 Run the suite after touching domain code and report results. **AI perf changes
 also run the benchmarks** (`bash .claude/hooks/run-gut.sh -gdir=res://benchmarks`
