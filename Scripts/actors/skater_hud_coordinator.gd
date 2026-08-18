@@ -87,18 +87,14 @@ const _BEACON_CROWD_COUNT: int            = 2
 const _BEACON_CROWD_LINGER: float         = 1.0
 const _BEACON_CROWD_CHECK_INTERVAL: float = 0.2
 
-# Slapper one-timer indicator proportions, in multiples of the zone radius.
-# MIRRORED in Shaders/ice.gdshader, which draws it — keep the two in sync.
+# Ring minimum scale for the slapper one-timer indicator, in multiples of the
+# zone radius. The arrow geometry is the shader's own (ice.gdshader draws it);
+# RETICLE_HALF_LENGTH is PUSHED into `reticle_half_len` by IceRingField, so
+# neither is mirrored here.
 const _SLAPPER_RING_MIN_SCALE: float   = 0.15
-const _ARROW_TIP_DISTANCE_UNIT: float  = 1.8
-const _ARROW_HEAD_LEN_UNIT: float      = 0.30
-const _ARROW_HEAD_HALF_W_UNIT: float   = 0.20
-const _ARROW_SHAFT_HALF_W_UNIT: float  = 0.06
-const RETICLE_HALF_LENGTH: float       = 0.06   # read by IceRingField
+const RETICLE_HALF_LENGTH: float       = 0.06
 const _RING_SEGMENTS: int              = 48
 const _SLAPPER_HUD_Y: float            = 0.05
-
-# Stamina gauge geometry, mirrored in Shaders/ice.gdshader which draws it.
 
 # Slot-ring relationship to the LOCAL player, resolved live so a late-spawning
 # local player and mid-game slot swaps self-correct. UNKNOWN keeps the neutral
