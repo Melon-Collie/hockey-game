@@ -293,6 +293,14 @@ var _native_step: RefCounted = null
 var _gather_packed := PackedFloat32Array()
 var _gather_parts: Array = []
 var _gather_goalies: Array = []
+# Drill obstacles (the tutorial/drill saucer board). Empty in a match — the
+# analytic step tests is_empty() before doing any obstacle work, so a match tick
+# pays one array read. Registered by TutorialWall; read by BOTH the host drive
+# below and PuckController's client prediction, so a drill run with a peer
+# attached predicts the same rebounds the host resolves.
+var _obstacles: Array[PuckObstacleCollision.Obstacle] = []
+var _obstacle_result: PuckObstacleCollision.Result = null
+var _obstacle_scratch: SweptDiscOBB.Result = null
 # Scratch for the same-end goalie filter in _drive_analytic — reused per tick.
 var _end_goalies: Array = []
 # Shared read-only empty (const arrays are frozen) — the no-goalies-in-range default
@@ -393,6 +401,30 @@ func set_server_mode(is_server: bool) -> void:
 		_goalie_scratch = SweptDiscOBB.Result.new()
 		_save_result = GoalieSaveRules.ContactResult.new()
 		_tick_result = PuckAuthorityRules.TickResult.new()
+		_obstacle_result = PuckObstacleCollision.Result.new()
+		_obstacle_scratch = SweptDiscOBB.Result.new()
+
+# ── Drill obstacles ───────────────────────────────────────────────────────────
+# Registered by TutorialWall while a drill stages its saucer board. The list is
+# the single store both step paths read (host drive here, client prediction in
+# PuckController), so they cannot disagree about where the board is.
+#
+# PUCK ONLY, by decision rather than by omission: a knee-high board is skate-
+# over-able, and the drills only need the flat shot stopped. The skater's own
+# analytic contact set (rink, net, goalie, other skaters) is deliberately not
+# widened for it.
+func add_obstacle(obstacle: PuckObstacleCollision.Obstacle) -> void:
+	if obstacle != null and not _obstacles.has(obstacle):
+		_obstacles.append(obstacle)
+
+
+func remove_obstacle(obstacle: PuckObstacleCollision.Obstacle) -> void:
+	_obstacles.erase(obstacle)
+
+
+func get_obstacles() -> Array[PuckObstacleCollision.Obstacle]:
+	return _obstacles
+
 
 # ── Contract for PuckController ───────────────────────────────────────────────
 func get_puck_position() -> Vector3:
@@ -892,6 +924,17 @@ func _drive_analytic(dt: float) -> void:
 				touched_post = true
 			if _tick_result.touched_net and incoming_speed >= 1.0:
 				touched_net = true
+		# Drill obstacles over THIS sub-step's segment, between the fixed geometry
+		# and the goalie. Outside step_frame_substep deliberately: that step has a
+		# C++ mirror (NativePuckStep) held to it by a parity fuzz test, and the
+		# obstacle list is a runtime registration the kernel has no notion of.
+		# Resolving here — exactly where the goalie pass already sits — keeps the
+		# native and GDScript branches above identical and equally obstacle-aware.
+		if not _obstacles.is_empty():
+			if PuckObstacleCollision.resolve(sub_prev, pos, vel, radius,
+					_obstacles, _obstacle_scratch, _obstacle_result):
+				pos = _obstacle_result.position
+				vel = _obstacle_result.velocity
 		# Goalie: swept-OBB over THIS sub-step's segment → deaden / steer / catch / live reflect.
 		var goalie_hit: bool = false
 		if not goalies.is_empty():

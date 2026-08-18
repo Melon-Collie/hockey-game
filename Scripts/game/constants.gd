@@ -19,13 +19,12 @@ extends Node
 # any part whose collision_layer is 0 (that is how set_stick_collision_enabled
 # takes the stick out of play mid-sweep).
 #
-# Layer 1 (bit 0, value  1) — tutorial/drill obstacle walls
 # Layer 3 (bit 2, value  4) — goalie stick
 # Layer 8 (bit 7, value 128) — goalie bodies (pads/body/head/glove/blocker)
-# Layers 2, 4, 5, 6, 7 are free: they tagged the skater blade Area3Ds, the puck
-# RigidBody3D, the skater CharacterBody3Ds, the boards, and the net, none of
-# which exist any more.
-const LAYER_WALLS: int          = 1
+# Layers 1, 2, 4, 5, 6, 7 are free: they tagged the tutorial/drill obstacle
+# walls, the skater blade Area3Ds, the puck RigidBody3D, the skater
+# CharacterBody3Ds, the boards, and the net, none of which exist any more.
+# (The drill wall is now an analytic box — PuckObstacleCollision — with no body.)
 const LAYER_GOALIE_STICK: int   = 4
 const LAYER_GOALIE_BODIES: int  = 128
 

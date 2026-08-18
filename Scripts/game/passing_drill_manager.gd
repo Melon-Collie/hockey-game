@@ -358,7 +358,7 @@ func _stage_wall() -> void:
 	if _wall_node == null or not is_instance_valid(_wall_node):
 		_wall_node = TutorialWall.new()
 		add_child(_wall_node)
-	_wall_node.show_wall(Vector3(center.x, 0.0, center.y), _WALL_SIZE)
+	_wall_node.show_wall(Vector3(center.x, 0.0, center.y), _WALL_SIZE, _puck)
 
 
 func _clear_wall() -> void:
