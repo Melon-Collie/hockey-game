@@ -889,7 +889,7 @@ func _begin_step(index: int) -> void:
 			# can't get there. Close to the passer, inside the airborne span.
 			_ensure_wall_node()
 			_wall_node.show_wall(Vector3(0.0, 0.0,
-					_PASS_PLAYER_POS.z - _SAUCER_WALL_AHEAD), _PASS_WALL_SIZE)
+					_PASS_PLAYER_POS.z - _SAUCER_WALL_AHEAD), _PASS_WALL_SIZE, _puck)
 
 		STEP_RECEIVE:
 			_setup_passing_drill(false)
@@ -1819,7 +1819,7 @@ func _show_targets_wave(phase: int) -> void:
 				"LOW loft clears sticks and pads mid-flight, then lands and slides. It's a mode — it stays on until you change it.")
 			_ensure_wall_node()
 			_wall_node.show_wall(
-					Vector3(0.0, 0.0, _slot_z() - _TARGET_WALL_AHEAD), _TARGET_WALL_SIZE)
+					Vector3(0.0, 0.0, _slot_z() - _TARGET_WALL_AHEAD), _TARGET_WALL_SIZE, _puck)
 			_show_target_set(_LOW_TARGETS)
 		2:
 			_set_live_copy(

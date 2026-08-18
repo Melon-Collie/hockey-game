@@ -122,6 +122,8 @@ var _goalie_provider: Callable = Callable()
 # ── Phase-3/4b loose-puck prediction scratch (client only; see _predict_loose) ──
 var _predict_frame_scratch: PuckGeometryCollision.Result = null
 var _predict_tick_result: PuckAuthorityRules.TickResult = null
+var _predict_obstacle_scratch: SweptDiscOBB.Result = null
+var _predict_obstacle_result: PuckObstacleCollision.Result = null
 # NativePuckStep (null = extension absent, GDScript step). Same factory as the
 # host drive's instance, so prediction and authority run the identical step.
 var _native_step: RefCounted = null
@@ -273,6 +275,8 @@ func setup(assigned_puck: Puck, assigned_is_server: bool) -> void:
 		# are detected analytically inside the prediction loop itself.
 		_predict_frame_scratch = PuckGeometryCollision.Result.new()
 		_predict_tick_result = PuckAuthorityRules.TickResult.new()
+		_predict_obstacle_scratch = SweptDiscOBB.Result.new()
+		_predict_obstacle_result = PuckObstacleCollision.Result.new()
 		_predict_goalie_contact = GoalieContactDetector.Contact.new()
 		_predict_obb_scratch = SweptDiscOBB.Result.new()
 		_native_step = NativePuckStepFactory.make_configured()
@@ -1175,6 +1179,16 @@ func _reachable_goalies_for(goalies: Array, start_pos: Vector3, start_vel: Vecto
 	return _reachable_goalies
 
 
+# Resolve the predicted segment against the drill obstacles registered on the
+# puck (see Puck.add_obstacle). Always fills _predict_obstacle_result, so the
+# caller can read position/velocity back unconditionally — a miss echoes the
+# inputs. The obstacle list is empty in a match, which is the only cost a normal
+# tick pays for this.
+func _resolve_predicted_obstacles(seg_prev: Vector3, seg_pos: Vector3, seg_vel: Vector3) -> void:
+	PuckObstacleCollision.resolve(seg_prev, seg_pos, seg_vel, GameRules.PUCK_COLLISION_RADIUS,
+			puck.get_obstacles(), _predict_obstacle_scratch, _predict_obstacle_result)
+
+
 # The shared prediction loop: advance (start_pos, start_vel) forward `age`
 # seconds on the host's analytic solver, writing the outcome to _sim_pos /
 # _sim_vel / _sim_stopped (members, not a return — this runs per frame and
@@ -1244,6 +1258,15 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 					tick_post = true
 				if _predict_tick_result.touched_net:
 					tick_net = true
+		# Drill obstacles, over the whole tick segment. At TICK granularity rather
+		# than the GDScript branch's sub-steps because the native branch above
+		# resolves the entire tick inside C++ and leaves no sub-step seam to hook
+		# — and the test is swept either way, so a hard shot can't tunnel. The
+		# host interleaves the same resolve per sub-step (Puck._drive_analytic);
+		# the two agree on any single-contact segment, which is every drill case.
+		_resolve_predicted_obstacles(tick_prev, pos, vel)
+		pos = _predict_obstacle_result.position
+		vel = _predict_obstacle_result.velocity
 		if tick_post and not span_post:
 			span_post = true
 			if not _pred_cue_post_prev:
@@ -1302,6 +1325,7 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 		# every collision the step resolves: at 33 m/s the remainder is ~0.28 m, so
 		# an approach frame could render the puck through a board (clamped back, but
 		# only for the boards) or inside a post / the net panels.
+		var rem_prev: Vector3 = pos
 		if _native_step != null:
 			_native_step.step_tick(pos, vel, frac, radius,
 					puck.max_speed, puck.ice_height, puck.max_height)
@@ -1316,6 +1340,12 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 						_predict_frame_scratch, _predict_tick_result)
 				pos = _predict_tick_result.position
 				vel = _predict_tick_result.velocity
+		# The partial tick is a tick: it resolves every collision the full step
+		# does, obstacles included, or a lead frame renders the puck through the
+		# drill board it just rebounded off.
+		_resolve_predicted_obstacles(rem_prev, pos, vel)
+		pos = _predict_obstacle_result.position
+		vel = _predict_obstacle_result.velocity
 	# No goal prediction, for ANY predicted puck: park an inbound puck on the
 	# goal line inside the posts and let the authoritative outcome arrive (the
 	# goal horn is a host decision, like the save).
