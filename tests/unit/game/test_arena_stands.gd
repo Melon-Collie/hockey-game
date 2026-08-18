@@ -39,7 +39,8 @@ func _crowd_count(stands: ArenaStands) -> int:
 func test_rebuild_child_inventory() -> void:
 	var stands: ArenaStands = _make_stands(3, 2)
 	for expected: String in ["Terraces", "Shell", "SpectatorBodies*",
-			"SpectatorHeads*", "BenchSeatHome", "BenchSeatAway"]:
+			"SpectatorHeads*", "BenchSeatHome", "BenchSeatAway",
+			"StaffBodies", "StaffHeads"]:
 		assert_not_null(stands.find_child(expected, false, false),
 				"rebuild should produce a %s child" % expected)
 
@@ -197,3 +198,70 @@ func _away_flag_count(stands: ArenaStands, lower: int, upper: int) -> int:
 		for flag: int in slice_flags:
 			count += flag
 	return count
+
+
+# ── Rinkside staff ───────────────────────────────────────────────────────────
+
+func _staff_multimesh(stands: ArenaStands, part: String) -> MultiMesh:
+	var mmi: MultiMeshInstance3D = stands.find_child(part, false, false)
+	assert_not_null(mmi, "rebuild should produce a %s child" % part)
+	return mmi.multimesh
+
+
+func test_staff_figures_stand_at_full_stature() -> void:
+	# Body and head ride separate transforms — only the body stretches when a
+	# figure stands up — so nothing but this arithmetic keeps the two joined. The
+	# crown has to land at the staffer's stature above the tread they stand on,
+	# with the head resting on the body rather than sunk into it.
+	var stands: ArenaStands = _make_stands(3, 2)
+	var body_box: AABB = stands._build_body_mesh().get_aabb()
+	var head_box: AABB = stands._build_head_mesh().get_aabb()
+	var post := Vector3(6.0, 1.5, 2.0)
+	for stature: float in [1.52, 1.75, 1.88]:
+		var body: Transform3D = stands._staff_body_transform(post, 0.0, stature)
+		var head: Transform3D = stands._staff_head_transform(post, 0.0, stature)
+		var body_top: float = body.origin.y \
+				+ body_box.end.y * body.basis.get_scale().y
+		var head_bottom: float = head.origin.y \
+				+ head_box.position.y * head.basis.get_scale().y
+		var head_top: float = head.origin.y + head_box.end.y * head.basis.get_scale().y
+		assert_almost_eq(head_top - post.y, stature, 0.001,
+				"a %.2f m staffer's crown should sit %.2f m over their post"
+						% [stature, stature])
+		assert_gt(head_bottom, body_top, "the head should rest above the body")
+		assert_lt(head_bottom - body_top, 0.05,
+				"the neck gap should stay a gap, not open into a floating head")
+
+
+func test_staff_are_the_crowd_on_their_feet() -> void:
+	# Standing widens nobody. A staffer's across-scale — what sets shoulder width
+	# and head size — must land in the same range the seated crowd rolls, or they
+	# read as giants beside the bowl instead of as adults standing in front of it.
+	var stands: ArenaStands = _make_stands(3, 2)
+	var crowd_min: float = stands._SEATED_STATURE_MIN / stands._FIGURE_HEIGHT
+	var shortest: float = stands._staff_girth_scale(stands._STANDING_STATURE_MIN)
+	var tallest: float = stands._staff_girth_scale(stands._STANDING_STATURE_MAX)
+	assert_lt(shortest, stands._CROWD_SCALE_MAX,
+			"the shortest staffer should not out-measure the largest spectator")
+	assert_gt(tallest, crowd_min,
+			"the tallest staffer should not be slighter than the smallest spectator")
+	# Height is the only axis that grows, and it grows a lot: a standing figure
+	# runs roughly twice the seated one it shares a girth with.
+	var body: Transform3D = stands._staff_body_transform(Vector3.ZERO, 0.0, 1.75)
+	var scale: Vector3 = body.basis.get_scale()
+	assert_gt(scale.y, scale.x * 2.0, "the body box should carry the legs")
+	assert_almost_eq(scale.x, scale.z, 0.0001, "girth should stay square")
+
+
+func test_staff_aabb_covers_the_standing_figures() -> void:
+	# Same trap as the crowd sections: an under-sized custom AABB culls the whole
+	# MultiMesh, and the seed box only covers instance origins (their feet).
+	var stands: ArenaStands = _make_stands(3, 2)
+	var bodies: MultiMesh = _staff_multimesh(stands, "StaffBodies")
+	var heads: MultiMesh = _staff_multimesh(stands, "StaffHeads")
+	assert_gt(bodies.instance_count, 0, "the rinkside furniture should be staffed")
+	assert_eq(heads.instance_count, bodies.instance_count, "one head per body")
+	assert_eq(heads.custom_aabb, bodies.custom_aabb,
+			"heads and bodies share one figure, so they share one bound")
+	assert_gt(bodies.custom_aabb.size.y, stands._STANDING_STATURE_MAX,
+			"staff bounds must clear the tallest figure standing at the highest post")
