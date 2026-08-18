@@ -318,6 +318,17 @@ static func release_shared_cache() -> void:
 	_build_cache.clear()
 
 func _rebuild() -> void:
+	# Every one of the ~29 exports lands here, and a rebuild is not cheap: it
+	# repaints the ice albedo (a per-pixel GDScript loop over ~10 M pixels, ~1.5 s
+	# before the shared cache is warm) and rebuilds every board, glass and netting
+	# mesh. Out of the tree nothing can see the result, and _ready() rebuilds on
+	# entry with whatever the exports finally hold — so a caller or a scene
+	# override that sets several of them before add_child pays for one rebuild
+	# rather than one per property. (Declaring the exports costs nothing either
+	# way: GDScript does not run a setter for a value assigned in its own
+	# declaration.)
+	if not is_inside_tree():
+		return
 	if rink_length <= 0 or rink_width <= 0:
 		return
 
