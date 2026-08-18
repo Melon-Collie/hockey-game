@@ -339,10 +339,11 @@ func _ready() -> void:
 	# node so the cursor is unprojected through THIS frame's camera rather than
 	# last frame's — otherwise a fast pan drifts the aim point behind the view.
 	process_priority = -1
-	# The jumbotron hangs over center ice, directly between this top-down
-	# camera and the play — it is spectator/lobby set dressing only, never
-	# rendered in gameplay framing (see Jumbotron's class doc).
-	cull_mask &= ~Jumbotron.RENDER_LAYER_MASK
+	# The arena's overhead set dressing — scoreboard, end-zone netting, ceiling
+	# light fixtures — hangs between this top-down camera and the play at one
+	# end of the zoom range or the other, so none of it is ever rendered in
+	# gameplay framing (see RenderLayers).
+	cull_mask &= ~RenderLayers.OVERHEAD_DRESSING
 	GameManager.pregame_intro_started.connect(play_intro)
 	GameManager.period_break_started.connect(hold_period_break_wide)
 	GameManager.period_intro_started.connect(

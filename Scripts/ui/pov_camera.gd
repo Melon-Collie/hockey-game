@@ -33,9 +33,10 @@ var _current_height: float = 15.0
 
 
 func _ready() -> void:
-	# The jumbotron hangs over center ice, directly between any top-down
-	# camera and the play — mask it out exactly like the gameplay camera does.
-	cull_mask &= ~Jumbotron.RENDER_LAYER_MASK
+	# This reproduces the top-down gameplay framing, so the overhead set
+	# dressing sits between it and the play exactly as it would there — mask
+	# the layer out the same way (see RenderLayers).
+	cull_mask &= ~RenderLayers.OVERHEAD_DRESSING
 	# Driven at render rate, so it is already continuous — see GameCamera._ready.
 	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 

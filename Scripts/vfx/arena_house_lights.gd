@@ -91,6 +91,11 @@ func setup(arena_root: Node) -> void:
 # A housing under each light, oriented to it, so the rig reads as hardware. Only
 # the lens is bright; the body is dark so the fixture has a silhouette against
 # the roof rather than glowing as a whole.
+#
+# On the overhead set-dressing layer, because the play-following cameras climb
+# ABOVE the 22 m rig — GameCamera's zoom tops out at 32 m, the intro crane sits
+# at 36, and the camera-distance pref scales both by up to 1.6 — and from up
+# there a fixture is a dark slab over the crowd with its lit face pointed away.
 func _build_housings() -> void:
 	if _housed.is_empty():
 		return
@@ -124,6 +129,7 @@ func _build_housings() -> void:
 		var body := MeshInstance3D.new()
 		body.mesh = body_mesh
 		body.material_override = body_mat
+		body.layers = RenderLayers.OVERHEAD_DRESSING
 		# The rig hangs above everything and casts nothing: it IS the light.
 		body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		fixture.add_child(body)
@@ -131,6 +137,7 @@ func _build_housings() -> void:
 		var lens := MeshInstance3D.new()
 		lens.mesh = lens_mesh
 		lens.material_override = _lens_material
+		lens.layers = RenderLayers.OVERHEAD_DRESSING
 		lens.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		# On the housing's aim face, a hair proud so it never z-fights the body.
 		lens.position = Vector3(0.0, 0.0,

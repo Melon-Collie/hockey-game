@@ -2,14 +2,11 @@
 class_name Jumbotron
 extends Node3D
 
-# Center-hung arena scoreboard — pure spectator/lobby set dressing. Every
-# visual part lives on RENDER_LAYER_MASK (render layer 2, otherwise unused in
-# the project), and GameCamera clears that bit from its cull_mask: the
-# gameplay camera is top-down over center ice, so the cube would hang
-# directly between it and the play. Only the non-gameplay cameras (lobby
-# backdrop orbit, spectator/broadcast, chase, free, goal-replay) render it —
-# they all keep Camera3D's default everything-on cull_mask, so no per-camera
-# wiring is needed.
+# Center-hung arena scoreboard — pure spectator/lobby set dressing. The
+# gameplay camera is top-down over center ice, so the cube would hang directly
+# between it and the play; every visual part therefore lives on
+# RenderLayers.OVERHEAD_DRESSING, which the play-following cameras clear and
+# every other camera renders (see there).
 #
 # The four faces share one SubViewport screen fed entirely by replicated
 # GameManager signals (score / clock / period / phase / goal / team colors),
@@ -23,10 +20,6 @@ extends Node3D
 #
 # No physics: the puck's vertical clamp (Puck.max_height 3 m) keeps play far
 # below the housing, so the board needs no collision shape.
-
-# Render layer 2 (bit for layer index 1). Everything else in the project
-# renders on the default layer 1; GameCamera masks this bit out.
-const RENDER_LAYER_MASK: int = 1 << 1
 
 const _SCREEN_SIZE: Vector2i = Vector2i(512, 256)
 # Above the environment glow threshold (1.3) so screens and trim bloom.
@@ -386,11 +379,10 @@ func _add_box(part_name: String, size: Vector3, pos: Vector3,
 	_finish_visual(mi)
 
 
-# The layer bit is the whole trick: gameplay's camera masks it out, every
-# other camera renders it by default. No shadows — the board hangs above all
-# spotlight ranges and its shadow would land on ice nobody sees it from.
+# No shadows — the board hangs above all spotlight ranges and its shadow would
+# land on ice nobody sees it from.
 func _finish_visual(mi: MeshInstance3D) -> void:
-	mi.layers = RENDER_LAYER_MASK
+	mi.layers = RenderLayers.OVERHEAD_DRESSING
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
 
