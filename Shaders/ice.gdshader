@@ -25,9 +25,9 @@ uniform sampler2D scratch_tex : hint_default_black, filter_linear;
 uniform sampler2D decal_tex : source_color, hint_default_black, filter_linear_mipmap, repeat_disable;
 uniform vec2 decal_uv_min = vec2(0.0, 0.0);
 uniform vec2 decal_uv_max = vec2(1.0, 1.0);
-// In-ice sponsor panels (IceAdPainter). Unlike the center-ice patch above this
-// one covers the whole sheet, so the rink UV indexes it directly — it can afford
-// to because the panels are metres across and carry no fine detail. Guarded by
+// In-ice sponsor wordmarks (IceAdPainter). Unlike the center-ice patch above
+// this one covers the whole sheet, so the rink UV indexes it directly — it can
+// afford to because the marks are metres across. Guarded by
 // `ads_enabled` so switching them off costs nothing at all rather than costing a
 // fetch of an empty texture.
 uniform sampler2D ads_tex : source_color, hint_default_transparent, filter_linear_mipmap, repeat_disable;
@@ -157,11 +157,15 @@ void fragment() {
 	vec2 uv = UV + xz_offset / rink_size;
 
 	vec3 base = texture(albedo_tex, uv).rgb;
-	// Sponsor panels go down first, so the center-ice art below wins wherever
+	// Sponsor wordmarks go down first, so the center-ice art below wins wherever
 	// the two ever meet.
 	if (ads_enabled) {
+		// The painter's viewport renders onto transparent black, so its texture
+		// is premultiplied: composite it as such. Straight-alpha mixing would
+		// pull every antialiased glyph edge toward black, which with no panel
+		// field behind the lettering shows up as a dark halo.
 		vec4 ads = texture(ads_tex, uv);
-		base = mix(base, ads.rgb, ads.a);
+		base = base * (1.0 - ads.a) + ads.rgb;
 	}
 	// Composite decals BEFORE the Beer-Lambert fade so they get the same
 	// under-ice depth treatment as the lines baked into albedo_tex.

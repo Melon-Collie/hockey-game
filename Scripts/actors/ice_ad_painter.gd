@@ -1,30 +1,26 @@
 class_name IceAdPainter
 extends Node2D
 
-# Paints the in-ice sponsor panels into a full-rink SubViewport that the ice
+# Paints the in-ice sponsor wordmarks into a full-rink SubViewport that the ice
 # shader composites BEFORE its Beer-Lambert fade — same treatment as the lines
 # baked into the albedo — so an ad reads as printed into the sheet rather than
-# laid on top of it. That is also why the field is a faint tint rather than a
-# solid fill: a real in-ice ad is seen through however many centimetres of ice
-# the camera angle puts in front of it.
+# laid on top of it. Only the lettering is painted: an in-ice ad is a mark frozen
+# into the sheet, so a panel field or border would read as a decal on top of it.
 #
 # Coordinate convention matches CenterIceDecals — world +X → image +X,
 # world +Z → image −Y, wordmarks rotated so their up direction points to image
 # −X — so every piece of art frozen into this ice reads the same way round.
-# In that rotated frame a panel's local +x runs along world +Z, which is why the
+# In that rotated frame a slot's local +x runs along world +Z, which is why the
 # slots in AdBrands are long in Z: the wordmark runs the length of the rink.
 
 const FONT: Font = preload("res://Assets/Fonts/BarlowSemiCondensed-ExtraBold.ttf")
 
-# Under-ice, not on it — but the shader composites these BEFORE the Beer-Lambert
-# fade, which then washes them toward the ice fog colour, so what reaches the eye
-# is a good deal fainter than the numbers suggest. They are set by how the panels
+# Under-ice, not on it — but the shader composites this BEFORE the Beer-Lambert
+# fade, which then washes it toward the ice fog colour, so what reaches the eye
+# is a good deal fainter than the number suggests. It is set by how the wordmarks
 # read in a capture, not by how they read on the palette.
-const FIELD_ALPHA: float = 0.24
-const BORDER_ALPHA: float = 0.50
 const TEXT_ALPHA: float = 0.92
-const BORDER_M: float = 0.07
-# Fractions of the panel's short axis (its cap height) and long axis.
+# Fractions of the slot's short axis (its cap height) and long axis.
 const NAME_HEIGHT_FRACTION: float = 0.42
 const TAG_HEIGHT_FRACTION: float = 0.19
 const TEXT_INSET_FRACTION: float = 0.06
@@ -45,15 +41,11 @@ func _draw_slot(slot: Dictionary) -> void:
 	var brand: Dictionary = slot.brand
 	var extent: Vector2 = slot.size
 	# Rotating by −π/2 sends local +x to world +Z and local +y to world +X, so
-	# the panel's local half-extents are its Z half-length by its X half-width.
+	# the slot's local half-extents are its Z half-length by its X half-width.
 	var half := Vector2(extent.y, extent.x) * 0.5 * px_per_meter
 	var rect := Rect2(-half, half * 2.0)
 
 	draw_set_transform(_world_to_image(slot.center), -PI * 0.5, Vector2.ONE)
-
-	draw_rect(rect, Color(brand.bg as Color, FIELD_ALPHA))
-	draw_rect(rect, Color(brand.accent as Color, BORDER_ALPHA), false,
-			BORDER_M * px_per_meter)
 
 	var name_text: String = brand.name
 	var tag_text: String = brand.tag
@@ -64,7 +56,7 @@ func _draw_slot(slot: Dictionary) -> void:
 	name_size = _fit(name_text, name_size, available)
 	tag_size = _fit(tag_text, tag_size, available)
 
-	# Wordmark above centre, tagline below it — the panel is wide enough on its
+	# Wordmark above centre, tagline below it — the slot is wide enough on its
 	# short axis to stack them, unlike the board cells.
 	var name_h: float = FONT.get_ascent(name_size) - FONT.get_descent(name_size)
 	var tag_h: float = FONT.get_ascent(tag_size) - FONT.get_descent(tag_size)

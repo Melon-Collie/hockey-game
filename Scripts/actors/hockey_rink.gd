@@ -185,8 +185,8 @@ const AD_GOAL_STRIPE_HALF: float = 0.075
 # How finely the perimeter is walked when working out which stretches of board
 # are already spoken for. 10 cm is far below the narrowest thing being avoided.
 const AD_RESERVE_STEP: float = 0.1
-# Resolution of the in-ice ad overlay. The panels are metres across with no fine
-# detail, so this sits an order of magnitude below the ice albedo's 80 px/m.
+# Resolution of the in-ice ad overlay. The wordmarks are metres across, so this
+# sits well below the ice albedo's 80 px/m.
 const ICE_AD_PX_PER_METER: float = 40.0
 
 # ── Gates ────────────────────────────────────────────────────────────────────
