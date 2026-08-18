@@ -197,3 +197,24 @@ func test_pairwise_ranking_preserved() -> void:
 				violations += 1
 	assert_eq(violations, 0,
 			"no pairwise order flips across gaps larger than RANK_GAP")
+
+
+# danger_field.gd:174 states this as an obligation in prose — "_core_quality(p)
+# must equal danger_from_margin(p, _core_margin(p))" — and keeps the two functions
+# adjacent so they cannot drift. Adjacency is not a guarantee; this is.
+#
+# The pair is the lattice's whole correctness story: _core_margin computes what
+# gets STORED at each vertex, _core_quality computes what that stored value is
+# supposed to mean. If they stop agreeing, every fielded read is silently wrong by
+# however much they disagree, and the existing ERR_BOUND test still passes —
+# because it compares the fielded read against score_shoot, which shares the same
+# open_net_danger path that _core_quality uses. Only this assertion sees the seam.
+func test_core_quality_equals_danger_from_stored_margin() -> void:
+	for p: Vector3 in _probes():
+		var quality: float = AIDangerField._core_quality(
+				p, _net, _goalie, GameRules.NET_HALF_WIDTH)
+		var margin: float = AIDangerField._core_margin(
+				p, _net, _goalie, GameRules.NET_HALF_WIDTH)
+		assert_almost_eq(quality,
+				AIActionScoring.danger_from_margin(p, _goalie, margin), 1e-6,
+				"_core_quality must equal danger_from_margin(_core_margin) at %s" % p)
