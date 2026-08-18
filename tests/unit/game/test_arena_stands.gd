@@ -309,3 +309,67 @@ func test_staff_aabb_covers_the_standing_figures() -> void:
 			"heads and bodies share one figure, so they share one bound")
 	assert_gt(bodies.custom_aabb.size.y, stands._STANDING_STATURE_MAX,
 			"staff bounds must clear the tallest figure standing at the highest post")
+
+
+# ── Cull bounds ──────────────────────────────────────────────────────────────
+#
+# Every MultiMesh here declares a custom_aabb, because Godot's auto-AABB
+# mis-culls instances pushed one transform at a time. That makes the box a hand-
+# written claim about geometry the renderer never re-checks: declare one smaller
+# than its instances and they vanish the moment the shortfall leaves the screen,
+# from some camera angles and not others. Instance transforms come back empty
+# under the headless renderer, so these test the growth rule instead — that a box
+# seeded with instance ORIGINS grows enough to hold the largest figure standing
+# at any corner of that seed.
+
+func _worst_case_figure(stands: ArenaStands, foot: Vector3, girth: float,
+		height: float) -> AABB:
+	# Widest footprint a figure can present: the body box turned 45°, so its
+	# diagonal faces the camera rather than a face.
+	var half: float = maxf(stands._BODY_SIZE.x, stands._BODY_SIZE.z) \
+			* girth * sqrt(2.0) * 0.5
+	return AABB(foot - Vector3(half, 0.0, half),
+			Vector3(half * 2.0, height, half * 2.0))
+
+
+func _assert_bounds_hold(stands: ArenaStands, grown: AABB, seed: AABB,
+		girth: float, height: float, what: String) -> void:
+	for dx: float in [0.0, 1.0]:
+		for dy: float in [0.0, 1.0]:
+			for dz: float in [0.0, 1.0]:
+				var foot: Vector3 = seed.position + seed.size * Vector3(dx, dy, dz)
+				var figure: AABB = _worst_case_figure(stands, foot, girth, height)
+				assert_true(grown.encloses(figure),
+						"%s at %v should sit inside the declared bounds" % [what, foot])
+
+
+func test_crowd_section_bounds_hold_the_tallest_spectator() -> void:
+	var stands: ArenaStands = _make_stands(3, 2)
+	var seed := AABB(Vector3(-4.0, 1.0, -3.0), Vector3(8.0, 2.4, 6.0))
+	_assert_bounds_hold(stands, stands._grow_section_aabb(seed), seed,
+			stands._CROWD_SCALE_MAX,
+			stands._FIGURE_HEIGHT * stands._CROWD_SCALE_MAX, "a spectator")
+
+
+func test_staff_bounds_hold_the_tallest_coach() -> void:
+	# The standing figure is the tall one, so the box is sized off full stature
+	# rather than the seated crowd's sitting height.
+	var stands: ArenaStands = _make_stands(3, 2)
+	var seed := AABB(Vector3(-14.1, 1.2, -5.6), Vector3(28.2, 0.06, 11.2))
+	_assert_bounds_hold(stands, stands._grow_staff_aabb(seed), seed,
+			stands._staff_girth_scale(stands._STANDING_STATURE_MAX),
+			stands._STANDING_STATURE_MAX, "a coach")
+
+
+func test_seat_bounds_hold_the_furniture() -> void:
+	var stands: ArenaStands = _make_stands(3, 2)
+	var seed := AABB(Vector3(-4.0, 1.0, -3.0), Vector3(8.0, 2.4, 6.0))
+	var grown: AABB = stands._grow_seat_aabb(seed)
+	var half: float = Vector2(stands._SEAT_WIDTH,
+			stands._SEAT_BACK_OFFSET + stands._SEAT_BACK_THICKNESS).length() * 0.5
+	for dx: float in [0.0, 1.0]:
+		for dz: float in [0.0, 1.0]:
+			var foot: Vector3 = seed.position + seed.size * Vector3(dx, 1.0, dz)
+			assert_true(grown.encloses(AABB(foot - Vector3(half, 0.0, half),
+					Vector3(half * 2.0, stands._SEAT_BACK_HEIGHT, half * 2.0))),
+					"a seat at %v should sit inside the declared bounds" % foot)

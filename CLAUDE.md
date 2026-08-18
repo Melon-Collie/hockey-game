@@ -71,6 +71,10 @@ renderer runs under `xvfb-run` on the Compatibility backend and Mesa's software
 rasterizer instead, ~40 s a run. Use it on anything whose bug is a proportion or
 a placement: a figure at twice its width passes every assertion a display-less
 test can make. It covers the stands only, not a live match.
+`ARENA_PREVIEW_AABB_AUDIT=1` skips the pretty picture and measures every
+MultiMesh's declared `custom_aabb` against the geometry it must contain — the
+check for a suspected mis-cull, and one only a real renderer can make (instance
+transforms read back empty under `--headless`).
 
 Run the suite after touching domain code and report results. **AI perf changes
 also run the benchmarks** (`bash .claude/hooks/run-gut.sh -gdir=res://benchmarks`

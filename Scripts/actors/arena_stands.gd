@@ -1566,15 +1566,7 @@ func _build_staff() -> void:
 		body_mm.set_instance_color(i, jackets[i])
 		head_mm.set_instance_color(i, _head_palette[rng.randi() % _head_palette.size()])
 		bounds = bounds.expand(posts[i])
-	# Explicit bounds for the same reason the crowd sections have them: Godot's
-	# auto-AABB is unreliable when transforms are pushed one at a time rather
-	# than as a single buffer write, and an under-sized one gets the whole
-	# MultiMesh frustum-culled. The seed box covers instance ORIGINS only, so it
-	# has to grow by the tallest figure's own reach.
-	var reach: float = maxf(_BODY_SIZE.x, _BODY_SIZE.z) \
-			* _staff_girth_scale(_STANDING_STATURE_MAX)
-	var staff_aabb := AABB(bounds.position - Vector3(reach, 0.1, reach),
-			bounds.size + Vector3(reach * 2.0, _STANDING_STATURE_MAX + 0.1, reach * 2.0))
+	var staff_aabb: AABB = _grow_staff_aabb(bounds)
 	body_mm.custom_aabb = staff_aabb
 	head_mm.custom_aabb = staff_aabb
 
@@ -1585,6 +1577,20 @@ func _build_staff() -> void:
 		mmi.material_override = _staff_material()
 		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(mmi)
+
+
+# Explicit bounds for the same reason the crowd sections have them: Godot's
+# auto-AABB is unreliable when transforms are pushed one at a time rather than as
+# a single buffer write, and an under-sized one gets the whole MultiMesh
+# frustum-culled from angles where it should be visible. The seed box covers
+# instance ORIGINS (their feet) only, so it has to grow by the tallest figure's
+# own reach — sideways by a rotated body's half-diagonal, up by a full stature.
+func _grow_staff_aabb(seed_aabb: AABB) -> AABB:
+	var reach: float = maxf(_BODY_SIZE.x, _BODY_SIZE.z) \
+			* _staff_girth_scale(_STANDING_STATURE_MAX)
+	return AABB(seed_aabb.position - Vector3(reach, 0.1, reach),
+			seed_aabb.size + Vector3(reach * 2.0, _STANDING_STATURE_MAX + 0.1,
+					reach * 2.0))
 
 
 # Who works where, filled into caller-owned arrays: a post, a jacket, and
