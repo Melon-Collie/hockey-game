@@ -183,7 +183,7 @@ extends Node
 #
 # Zero disables it entirely (belief == truth, exactly the pre-R1 goalie).
 # Difficulty-varied via GoalieSkillProfile.read_lag_s.
-@export var read_lag: float = 0.13
+@export var read_lag: float = 0.05
 # How long it takes him to CORRECT a wrong belief once the puck is in flight and
 # he can watch it. Split out of `read_lag`, which used to set both — see
 # GoalieSkillProfile.read_converge_s for why they are different quantities.

@@ -15,7 +15,7 @@ var vfx: GoalVFX = null
 
 const GOAL_WIDTH: float         = 1.83    # 72" opening width
 const NET_HEIGHT: float         = 1.22    # 48" post height
-const BASE_DEPTH: float         = 1.016   # 40" base depth (NHL rulebook)
+const BASE_DEPTH: float         = GameRules.NET_DEPTH  # 40" (NHL rulebook), single-sourced
 const TOP_DEPTH: float          = 0.559   # 22" top shelf depth
 const POST_RADIUS: float        = 0.030   # 2 3/8" OD pipe
 

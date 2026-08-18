@@ -11,15 +11,6 @@ extends GutTest
 # collider, so a drift never shows up as a physics error anyone trips over. It
 # shows up as a puck passing through a visible post, or stopping at empty air
 # beside one, with nothing else in the codebase to catch it.
-#
-# NOT ASSERTED HERE: GameRules.NET_DEPTH (1.02) vs HockeyGoal.BASE_DEPTH (1.016).
-# They are the same physical quantity — goal depth from the goal line to the back
-# frame — and they currently disagree by 4 mm, so the collision net is fractionally
-# deeper than the drawn one. 1.016 m is exactly 40" (the NHL rulebook value the
-# HockeyGoal comment cites) and 1.02 is that number rounded, which reads as drift
-# rather than intent. Resolving it means moving one of the two, which shifts either
-# puck collision or the mesh, so it is a deliberate call rather than a mechanical
-# fix. Add the assertion once the pair is single-sourced.
 
 
 func test_post_half_width_mirrors_goal_width() -> void:
@@ -69,3 +60,14 @@ func test_crown_span_derivation_holds_on_both_sides() -> void:
 			GameRules.NET_HALF_WIDTH - GameRules.NET_MOUTH_CORNER_RADIUS, 1e-6,
 			"GameRules states NET_CROWN_HALF_WIDTH as a literal — it must still satisfy " +
 			"NET_HALF_WIDTH − NET_MOUTH_CORNER_RADIUS, or the two sides describe different frames.")
+
+
+# BASE_DEPTH now reads GameRules.NET_DEPTH rather than restating it, so this holds
+# by construction — which is the point. The two used to disagree by 4 mm (1.02 vs
+# the rulebook's 1.016), leaving the collision net fractionally deeper than the one
+# on screen. The assertion is what stops a literal being pasted back in.
+func test_goal_depth_is_single_sourced() -> void:
+	assert_almost_eq(HockeyGoal.BASE_DEPTH, GameRules.NET_DEPTH, 1e-9,
+			"HockeyGoal.BASE_DEPTH must BE GameRules.NET_DEPTH, not a copy of it")
+	assert_almost_eq(GameRules.NET_DEPTH, 1.016, 1e-9,
+			"goal depth is 40 inches = 1.016 m (NHL rulebook)")

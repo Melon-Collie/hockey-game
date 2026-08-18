@@ -88,7 +88,9 @@ const GOAL_LINE_Z: float = 26.65  # rink_length / 2 - distance_from_end (30 - 3.
 const BLUE_LINE_Z: float = 7.29  # 64 ft from goal line to near edge + 0.15m to center
 const NET_HALF_WIDTH: float = 0.915      # half of goal opening (post centerline) — must match HockeyGoal post positions
 const NET_POST_RADIUS: float = 0.030     # goal-pipe radius — must match HockeyGoal.POST_RADIUS
-const NET_DEPTH: float = 1.02            # goal depth from goal line to back frame
+const NET_DEPTH: float = 1.016           # 40" goal-line-to-back-frame depth (NHL rulebook).
+                                         # HockeyGoal.BASE_DEPTH reads this — see
+                                         # test_net_geometry_mirrors.
 const NET_BACK_HALF_WIDTH: float = 1.02  # half-width at back of net (trapezoid wider end)
 const NET_HEIGHT: float = 1.22           # crossbar height (pipe centerline) — must match HockeyGoal.NET_HEIGHT
 const NET_CROWN_HALF_WIDTH: float = 0.815  # half-span of the crossbar / top net panel — must match HockeyGoal.CROWN_HALF_WIDTH
