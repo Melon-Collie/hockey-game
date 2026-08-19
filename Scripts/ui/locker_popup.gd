@@ -2,9 +2,7 @@ class_name LockerPopup
 extends Control
 
 # The locker: every equipment pick a player owns, in one modal, around a live
-# mannequin wearing all of them. Replaces the two turntable workbenches — the
-# stick had its own case and the gear had another with a skate, a fist and a
-# helmet orbiting a shared pivot, which read as a parts bin rather than a kit.
+# mannequin wearing all of them — a kit rather than a parts bin.
 #
 # Rows are grouped by the piece they dress, and the group you are working in is
 # the group the camera is looking at: land on a SKATES row and the case dollies

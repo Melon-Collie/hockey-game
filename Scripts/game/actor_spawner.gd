@@ -86,8 +86,8 @@ func spawn_single_goalie(puck: Puck, goal_line_z: float, is_server: bool,
 # ── Local player (skater + LocalController) ──────────────────────────────────
 # Returns { "skater": Skater, "controller": LocalController }. Caller is
 # responsible for calling skater.set_uniform() + skater.set_jersey_info()
-# after spawn — coloring is no longer applied here so the v2 uniform paint
-# happens in one place (PlayerRegistry / GameManager mid-game flow).
+# after spawn — coloring is deliberately not applied here, so the v2 uniform
+# paint happens in one place (PlayerRegistry / GameManager mid-game flow).
 func spawn_local_player(
 		position: Vector3,
 		is_left_handed: bool,

@@ -21,14 +21,9 @@ var _skater: Skater = null
 var _controller: SkaterController = null  # tunables, _do_release, _game_state, has_puck
 
 # ── Blade Smoothing State ─────────────────────────────────────────────────────
-# World-XZ blade position after applying the per-tick speed cap. The cap is
-# applied to the RESOLVED (ROM-clamped) blade target, not the raw cursor: each
-# tick the cursor is first solved to the reachable blade position the player is
-# actually reaching for, then the smoothed blade steps toward that at most
-# max_blade_speed * delta. Capping the resolved blade (rather than the intent)
-# keeps blade traversal speed consistent regardless of how far past ROM the
-# cursor sits — a distant cursor no longer spends the dangle budget sliding the
-# intent point through unreachable space while the blade crawls.
+# World-XZ blade position after the per-tick speed cap, which is applied to the
+# RESOLVED (ROM-clamped) target rather than the raw cursor — see step 2 of
+# apply_blade_from_mouse.
 var _smoothed_blade_world: Vector3 = Vector3.ZERO
 var _smoothed_blade_initialized: bool = false
 # Dangle velocity (world XZ, relative to the skater) — the second-order blade's
@@ -37,11 +32,8 @@ var _smoothed_blade_initialized: bool = false
 # wrister-aim paths so mode transitions never hand the inertia model a stale
 # velocity. Reset with the smoothing baseline.
 var _blade_dangle_vel: Vector3 = Vector3.ZERO
-# Skater world position (XZ) at the previous smoothing tick. The blade-speed cap
-# is applied RELATIVE to the skater: each tick the smoothed blade is first
-# carried along by the skater's own translation, so skating velocity doesn't eat
-# the dangle-speed budget. (A pure world-space cap makes the blade drag while
-# skating, and lag the cursor forever once skating speed exceeds the cap.)
+# Skater world position (XZ) at the previous smoothing tick — the blade-speed cap
+# is applied RELATIVE to the skater (step 2 of apply_blade_from_mouse).
 var _prev_skater_pos: Vector3 = Vector3.ZERO
 
 # World-XZ ROM-clamped blade TARGET for this tick — the closed-form
@@ -295,7 +287,7 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 				# lever seesaw's whole point. No spring, no overshoot: the arrive
 				# law decays approach speed to zero at the target, and the landing
 				# snap below catches the final sub-tick step exactly like the
-				# first-order path did.
+				# first-order path does.
 				var accel: float = _controller.max_blade_accel
 				var dist: float = step.length()
 				var desired := Vector3.ZERO
@@ -310,8 +302,8 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 				else:
 					_smoothed_blade_world += move
 			else:
-				# First-order path (max_blade_accel 0 = inertia disabled — the
-				# pre-v4 servo, kept bit-exact as the escape hatch).
+				# First-order path: max_blade_accel 0 disables the inertia model
+				# and the blade steps straight toward the target at the cap.
 				var step_len: float = step.length()
 				if step_len > max_step:
 					# Target is beyond the dangle-speed budget this tick — step toward it.
@@ -417,8 +409,8 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 	# iron and sinks into twine; whether the PUCK survives that is the puck's own
 	# collision to resolve (SkaterController._collide_pinned_puck_with_net), which
 	# is the only place that can answer it correctly since the puck rides a pin
-	# OFF the blade. The mid-blade contact-point proxy this used to clamp is gone
-	# with it: the blade is a segment now, so heel and toe are tested directly.
+	# OFF the blade. The blade is a segment here, so heel and toe are tested
+	# directly rather than through a mid-blade contact-point proxy.
 	clamped_heel += resolve_blade_against_net(clamped_heel).offset
 	if clamped_heel != heel_world:
 		wall_clamped = _skater.upper_body_to_local(clamped_heel)

@@ -2,32 +2,17 @@ class_name SnapshotEventLog
 extends RefCounted
 
 # Redundant delivery channel for latency-critical carrier events (pickup grant,
-# carrier change, steal, drop). The reliable RPCs stay authoritative-if-all-else-
-# fails, but on a lossy link a lost reliable packet costs a full retransmit
-# round-trip — 100+ ms of episodic latency on exactly the puck-possession
-# moments the game is about. So the host also appends its recent events as a
-# trailing block on every unreliable world-state packet: an event then survives
-# any single packet loss with zero added latency, and carrier changes arrive in
-# the same datagram as the world state they correspond to.
+# carrier change, steal, drop): the host appends its recent events as a trailing
+# block on every unreliable world-state packet, so an event survives any single
+# packet loss with zero added latency instead of costing a reliable-retransmit
+# round-trip. Both channels carry the same monotonic `event_seq`; the client
+# applies each event at most once via the `_last_applied_seq` watermark. Why the
+# dual channel is safe, and why the log is CONNECTION-scoped rather than
+# match-scoped, are in Scripts/networking/CLAUDE.md.
 #
-# Both channels carry the same monotonic `event_seq`, and the client applies
-# each event at most once via a watermark (`_last_applied_seq`):
-# - Snapshot path: `apply_block` walks the block in seq order, advances the
-#   watermark over EVERY record (including ones targeted at other peers — the
-#   seq space is global, so skipping a not-for-me seq is correct, not a gap),
-#   and dispatches only fresh, targeted records.
-# - Reliable path: `try_apply_reliable` admits a seq only if it beats the
-#   watermark. This is what makes the dual channel safe: a reliable retransmit
-#   arriving AFTER the snapshot path already applied a newer conflicting event
-#   (e.g. stale carrier=X after carrier=-1) is rejected instead of regressing
-#   carrier state. Reliable-channel self-ordering guarantees the host sent it
-#   earlier, so watermark-older == stale, never "missed".
-#
-# The log is CONNECTION-scoped, not match-scoped: seq keeps climbing across
-# "Return to Lobby" rematches (NetworkManager.prepare_for_new_game leaves it
-# alone) and only NetworkManager.reset() — which tears down the connection and
-# therefore every client watermark with it — replaces it. Resetting seq while
-# clients hold old watermarks would silently drop every event of the next match.
+# `apply_block` advances the watermark over EVERY record, including ones
+# targeted at other peers — the seq space is global, so skipping a not-for-me
+# seq is correct, not a gap.
 #
 # Hot-path notes: `record` runs per event (rare, event-driven — a Dictionary
 # alloc is fine); `append_block` fills the caller's existing buffer in place;

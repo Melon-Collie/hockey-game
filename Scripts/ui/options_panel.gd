@@ -15,8 +15,7 @@ const _SEP := MenuStyle.TEXT_SEP
 # Hard cap on the tab-content viewport. Each tab is wrapped in a fixed-height
 # ScrollContainer of this size, so every tab is identically tall (the popup never
 # resizes when switching) and any tab whose content exceeds the cap scrolls
-# instead of overflowing. Widened over the old 4-tab layout to give the 6-tab bar
-# room for its longer labels.
+# instead of overflowing. Sized to give the 6-tab bar room for its longer labels.
 const _TAB_VIEWPORT_SIZE := Vector2(560, 500)
 const _SCROLLBAR_GUTTER := 12   # reserved on every tab so columns line up scroll-or-not
 
@@ -80,7 +79,8 @@ func _ready() -> void:
 	btn_row.add_child(cancel_btn)
 
 # The live PlayerPrefs values at open time — the baseline the dirty-compare and
-# Cancel restore against. Keys must match the union of every tab's read_controls().
+# Cancel restore against. Keys must match the union of every tab's
+# read_controls(), which test_options_snapshot_keys.gd holds.
 func _snapshot() -> Dictionary:
 	return {
 		"window_mode": PlayerPrefs.window_mode,
@@ -366,9 +366,9 @@ func _on_reset_pressed() -> void:
 	_apply_values_to_controls(_defaults())
 
 # The factory-default control values. Mirrors the var initializers in PlayerPrefs
-# — keep the two in sync when a default changes. (No `locale` key by design: the
-# language dropdown is never reverted by Cancel/Defaults, matching the original
-# panel — see OptionsGameplayTab.apply_values.)
+# — keep the two in sync when a default changes. No `locale` key by design: the
+# language dropdown is never reverted by Cancel/Defaults (see
+# OptionsGameplayTab.apply_values).
 func _defaults() -> Dictionary:
 	return {
 		"window_mode": PlayerPrefs.WINDOW_MODE_BORDERLESS,

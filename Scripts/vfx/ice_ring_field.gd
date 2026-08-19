@@ -3,32 +3,19 @@ extends Node
 
 # Feeds the ice shader's analytic on-ice HUD — player rings, elevation chevrons,
 # the slapper one-timer indicator and the stamina gauge (see
-# Shaders/ice.gdshader).
+# Shaders/ice.gdshader). None of those marks is an object: a ring under a player
+# is just ice coloured differently near a position, so the shader computes it and
+# this node's whole job is to hand over the positions. Per frame that is a
+# handful of set_shader_parameter calls, regardless of roster size.
 #
-# Each ring used to be a MeshInstance3D per skater: a 48-segment alpha-blended
-# disc, parented to the skater, sitting a few millimetres above the ice. Ten of
-# those at 5v5 meant ten nodes, ten transparent draw calls in the depth-sorted
-# pass, and ten transforms to propagate every frame — to draw something that is
-# not an object at all. A ring under a player is just ice that is coloured
-# differently near a position, so the ice shader computes it directly and this
-# node's whole job is to hand it the positions.
+# Drawing them as nodes instead would put a coplanar alpha quad per skater in the
+# depth-sorted transparency pass, hovering millimetres above the ice it z-fights,
+# faceting up close. As part of the opaque ice surface there is no transparency
+# pass, nothing to z-fight, and the shader's fwidth feather antialiases
+# analytically at any camera height.
 #
-# The chevrons, the slapper indicator and the stamina gauge followed for the same
-# reason. The slapper indicator is the starkest case: five nodes on EVERY skater — a
-# reticle, an arrow root, an arrow and a gapped convergence ring — plus an
-# ArrayMesh rebuilt on convergence ticks, all so that at most ONE skater could
-# show them. Being self-only, it needs no array here at all — nor does the
-# stamina gauge.
-#
-# The per-frame cost that replaces all of it is a handful of
-# set_shader_parameter calls, regardless of roster size. What it buys beyond the
-# node count:
-#   • No transparency pass. Ten coplanar alpha quads used to be depth-sorted
-#     against each other and everything else; the ring is now part of an opaque
-#     surface.
-#   • No z-fighting. The ring IS the ice, not a plane hovering above it.
-#   • Analytic antialiasing (see the fwidth feather in the shader), so it holds
-#     up at any camera height instead of faceting up close.
+# The slapper indicator and the stamina gauge are SELF-ONLY — at most one skater
+# shows either — so they ride as scalar uniforms rather than arrays.
 #
 # Sibling of IceScratchMap: same place in the tree, same owner (HockeyRink), same
 # job of turning live skater state into something the ice shader samples.
@@ -174,8 +161,8 @@ func _process(_delta: float) -> void:
 	_material.set_shader_parameter(&"stamina_active", stamina_seen)
 
 
-# The live Skater list, rebuilt only when the roster actually changes — the
-# per-frame get_nodes_in_group() built a fresh Array every rendered frame.
+# The live Skater list, rebuilt only when the roster actually changes —
+# get_nodes_in_group() allocates a fresh Array on every call.
 #
 # Deliberately the GROUP and not PlayerRegistry.skaters(): the standalone replay
 # viewer spawns its skaters straight through ActorSpawner, outside the registry,

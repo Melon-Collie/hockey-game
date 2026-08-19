@@ -21,10 +21,9 @@ class_name GamepadAimRules
 ##     gamepad branch. Power rides the TRIGGER's analog travel (below), not the
 ##     stick, so shooting needs no flick, drag timing, or travel gate.
 ##
-## ONE THUMB, ONE JOB. Aim and power were both on the right stick (bearing and
-## push magnitude); a thumb cannot hold a bearing to a corner while metering a
-## magnitude, so every precise shot cost the other axis. Splitting power onto the
-## trigger — a separate digit with its own travel — makes the two independent.
+## ONE THUMB, ONE JOB. A thumb cannot hold a bearing to a corner while metering a
+## magnitude at the same time, so aim and power must never share the right stick:
+## power rides the trigger, a separate digit with its own travel.
 
 # Radial deadzone with edge rescale. Below `deadzone` the stick reads dead-zero
 # (so a resting stick holds the cursor and can't drift it); from the deadzone edge

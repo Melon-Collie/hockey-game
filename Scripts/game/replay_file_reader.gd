@@ -100,7 +100,7 @@ static func read(path: String) -> Dictionary:
 			payload = file.get_buffer(payload_size)
 		else:
 			payload = PackedByteArray()
-		# Defensive monotone check: FileReplayDriver._find_frame_idx assumes
+		# Defensive monotone check: ReplayFrameCursor.find_index assumes
 		# timestamps increase. A maliciously-crafted or corrupted file with
 		# out-of-order frames would silently break seek behavior. Warn once
 		# so the issue surfaces in the log.
@@ -134,53 +134,6 @@ static func read(path: String) -> Dictionary:
 	}
 
 
-# Reads only the magic + header JSON, skipping the frame stream entirely.
-# Used by the main-menu replay browser to populate the list without walking
-# 24K frames per file. Returns {ok, header, error} only.
-static func read_header_only(path: String) -> Dictionary:
-	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
-	if file == null:
-		return {"ok": false, "header": {}, "error": "open failed"}
-	if file.get_length() > _MAX_FILE_BYTES:
-		file.close()
-		return {"ok": false, "header": {}, "error": "file too large"}
-	var magic: PackedByteArray = file.get_buffer(ReplayFileWriter.MAGIC.size())
-	if magic != ReplayFileWriter.MAGIC:
-		file.close()
-		return {"ok": false, "header": {}, "error": "magic mismatch"}
-	var version: int = file.get_8()
-	if version != ReplayFileWriter.FORMAT_VERSION:
-		file.close()
-		return {"ok": false, "header": {}, "error": "unsupported format version %d" % version}
-	var header_size: int = file.get_32()
-	if header_size <= 0 or header_size > _MAX_HEADER_BYTES:
-		file.close()
-		return {"ok": false, "header": {}, "error": "header size out of range"}
-	var header_bytes: PackedByteArray = file.get_buffer(header_size)
-	file.close()
-	if header_bytes.size() != header_size:
-		return {"ok": false, "header": {}, "error": "header truncated"}
-	var parsed: Variant = JSON.parse_string(header_bytes.get_string_from_utf8())
-	if not parsed is Dictionary:
-		return {"ok": false, "header": {}, "error": "header parse failed"}
-	return {"ok": true, "header": parsed as Dictionary, "error": ""}
-
-
-# Reads the header AND footer without loading any frame payloads — walks the
-# frame stream by seeking past each record (no allocation) to reach the footer.
-# This is what the local replay browser uses to render a card (roster from the
-# header, score + box score + period_scores from the footer) cheaply across many
-# files. A 30-min game is ~21K frames of pure seeks here, vs the multi-MB
-# allocation read() would do.
-#
-# Returns { ok, header, footer, truncated, error }. `truncated` is true (and
-# footer empty) when the file has no END_OF_RECORDS sentinel — a recording that
-# crashed mid-game; the header is still valid, so the browser can list it.
-#
-# MEMOIZED (see _meta_cache): the seek walk is cheap per frame but there are tens
-# of thousands of them, and the career screen re-reads every listed replay on
-# every open — twice, since it renders local files first and again when the
-# backend history lands.
 static func read_meta(path: String) -> Dictionary:
 	var key: String = _meta_cache_key(path)
 	if not key.is_empty():

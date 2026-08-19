@@ -1,54 +1,20 @@
 class_name AIRoleFinisher
 
-# FINISHER role behavior (OZONE — `AIRoleSlots.Slot.FINISHER`).
-# Two-mode decision:
+# FINISHER role behavior (OZONE — `AIRoleSlots.Slot.FINISHER`). Stateless, and
+# two-mode: REACTIVE deflects an incoming shot and overrides everything while it
+# is active; POSITIONING stages for the next one.
 #
-#   1. REACTIVE: an incoming shot is detected (puck heading at our
-#      offensive goal at speed) — the off-puck deflection routine.
-#      Always TIP: move onto the puck path and point the blade at net
-#      for the redirect (works for on- and off-target shots). When the
-#      incoming shot is ELEVATED, also raise the blade (lift_blade) so
-#      it can reach the airborne puck — a grounded stick flies under it.
-#      Reactive overrides positioning when active.
-#
-#   2. POSITIONING: no incoming shot. FINISHER cares about exactly
-#      two things — being open for a shot, being open for a pass.
-#      score_pass(carrier, candidate) bundles both:
-#
-#         path_clearance(carrier, candidate)   ← open for a pass
-#       × score_shoot(candidate, ...)          ← open for a shot
-#       × time_decay(flight_time)              ← ~1 for in-OZ passes
-#
-#      For near-net FINISHER candidates the shot-quality term
-#      (score_shoot) dominates the gradient — small differences in
-#      angle to net, goalie position, and forward-cone pressure
-#      drive the argmax toward whichever spot has the cleanest open
-#      look. Pass-lane openness gates which of those spots are
-#      actually reachable from the current carrier position.
-#
-#      No exposure factor — FINISHER is committed to crashing the
-#      net by role definition. Defensive recovery is SUPPORT's job.
-#
-# Stateless. Reactive logic is unchanged from the original
-# `_backdoor_decision`; positioning is new in Phase 4c.
+# There is deliberately no exposure factor — FINISHER is committed to crashing
+# the net by role definition. Defensive recovery is SUPPORT's job.
 
 # Speed gate: pucks slower than this are passes / rolling, not shots.
 const INCOMING_SHOT_SPEED_M_S: float = 12.0
 
-# Weak-side staging bias: shift the positioning search center off-center to the
-# WEAK side (opposite the puck's strong side) so the FINISHER stages the
-# cross-seam one-timer option instead of stacking on the puck-side play.
-# Sized so the candidate ring (±SEARCH_STEP_M) spans the far-post/back-door
-# region rather than straddling center ice. Tunable; 0 = centered.
-#
-# This far-post staging is the SET-UP-CYCLE shape — the right spot when the
-# carrier has controlled possession low/on the wall and the defense is set,
-# where the cross-seam feed is the highest-value look. On a RUSH (carrier
-# driving the net at speed) that same spot leaves the FINISHER stranded far
-# from the play — not a threat when the odd-man chance is developing NOW. The
-# _rush_factor() blend below pulls the staging toward a genuine net-crash as
-# the carrier's closing speed rises, so the FINISHER is a real second attacker
-# on the rush and reverts to the cross-seam park once the play settles.
+# Weak-side staging bias for the SET-UP CYCLE — the shape when the carrier has
+# controlled possession low or on the wall and the defense is set, where the
+# cross-seam feed is the highest-value look. Sized so the candidate ring
+# (±SEARCH_STEP_M) spans the far-post / back-door region rather than straddling
+# centre ice. Feel tunable; 0 = centered.
 const WEAK_SIDE_BIAS_M: float = 4.0
 
 # Rush-mode weak-side bias — the staging offset at FULL rush. Still opposite
@@ -84,17 +50,8 @@ const FEED_FLIGHT_MAX_S: float = 0.6
 # blast (screen and tip are the same real estate; see tip_ev).
 const TIP_STATION_DIST_M: float = 2.5
 
-# How far in front of the opp goal the positioning search center
-# sits. Sourced from GameRules.SLOT_DIST_M — the faceoff-hash slot,
-# the prime scoring area. Keeps every polar sample (radius
-# SEARCH_STEP_M = 3) on the legal side of the goal line
-# (GOAL_LINE_BUFFER_M = 1).
-
 
 static func decide(ctx: RoleContext) -> RoleDecision:
-	# Reactive mode wins when a shot is incoming. _try_reactive
-	# returns null when no shot threat is detected; we then run
-	# positioning.
 	var reactive: RoleDecision = _try_reactive_decision(ctx)
 	if reactive != null:
 		return reactive
@@ -103,22 +60,19 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 
 # ── Reactive (incoming shot) ─────────────────────────────────────────────────
 
-# Returns a TIP or STEP_OUT decision when an incoming shot is
-# detected; null when no shot threat (caller falls through to
-# positioning). All gates produce null on miss so positioning
-# takes over instead of holding at the anchor.
+# A TIP decision when an incoming shot is detected; null when there is no shot
+# threat. Every gate produces null on a miss so positioning takes over instead
+# of the bot holding where it stands.
 static func _try_reactive_decision(ctx: RoleContext) -> RoleDecision:
 	var puck_state: PuckNetworkState = ctx.snapshot.puck_state
 	if puck_state == null:
 		return null
 
-	# Held pucks are not shots: a carrier skating the puck at speed must not
-	# flip the FINISHER into tip mode. This also covers the carrier-reaction
-	# debounce window right after a release, when a live feed still nominally
-	# reads as held — the tip reaction then starts a beat late, which is
-	# exactly what the reaction-delay difficulty knob means. (Before this
-	# gate, that window's fast-"held" puck produced a reactive not-ready
-	# decision that tore down one-timer readiness on every feed.)
+	# Held pucks are not shots: a carrier skating the puck at speed must not flip
+	# the FINISHER into tip mode. This also covers the carrier-reaction debounce
+	# window right after a release, when a live feed still nominally reads as
+	# held — the tip reaction then starts a beat late, which is exactly what the
+	# reaction-delay difficulty knob means.
 	if puck_state.carrier_peer_id != -1:
 		return null
 
@@ -144,37 +98,27 @@ static func _try_reactive_decision(ctx: RoleContext) -> RoleDecision:
 		return null
 	var path_x_at_my_z: float = puck_pos.x + puck_vel.x * t_to_my_z
 
-	# TIP. Shift target onto the puck path at our current z plane, aim
-	# mouse at goal so the blade angles toward net for a deflection /
-	# redirect. Works for both on-target shots (steers the puck through a
-	# different angle past the goalie) and off-target shots (redirects
-	# toward net).
-	#
-	# Reactive references the FINISHER's CURRENT position (self_pos)
-	# rather than a static anchor — under the no-anchors refactor
-	# FINISHER roams, so reactive responses are anchored to where
-	# the bot actually is when the puck arrives.
+	# TIP: step onto the puck path at our current z plane and aim at the goal so
+	# the blade angles for the redirect — which works on-target (steering the
+	# puck through a different angle past the goalie) and off-target alike. The
+	# station is our CURRENT z, so the tip is taken from where the bot actually
+	# is when the puck arrives rather than from a fixed anchor.
 	var d := RoleDecision.new()
 	d.target_position = Vector3(path_x_at_my_z, 0.0, ctx.self_pos.z)
 	d.aim_world_pos = Vector3(0.0, 0.0, opp_goal_z)
 	d.has_aim_override = true
-	# Elevated check: read the most-recent shooter's loft level
-	# directly from their network state (cleaner than projecting puck y
-	# velocity through gravity math). Closest teammate to the puck is the
-	# proxy for "shooter" since once the puck is in flight there's no
-	# carrier — but the bot that just released is typically still nearest.
-	# When the incoming on-net puck is airborne, raise the blade so we can
-	# actually tip it — a grounded blade flies under an elevated puck.
+	# A grounded blade flies under an elevated puck, so an airborne incoming shot
+	# has to be met with the blade raised.
 	if _last_shooter_is_elevated(ctx):
 		d.lift_blade = true
 	return d
 
 
-# True when the most recent likely shooter on our team released with any
-# loft (level > 0). Used to detect airborne shots without doing gravity
-# math on the puck. We pick the closest teammate to the puck as the proxy
-# — once the puck is in flight there's no carrier, but the bot that
-# just released is typically still nearby.
+# True when the most recent likely shooter on our team released with any loft
+# (level > 0) — read off his replicated state rather than projecting the puck's
+# y velocity through gravity. The closest teammate to the puck is the proxy for
+# "shooter": a puck in flight has no carrier, but the bot that just released is
+# typically still nearest it.
 static func _last_shooter_is_elevated(ctx: RoleContext) -> bool:
 	if ctx.snapshot.puck_state == null:
 		return false
@@ -198,12 +142,10 @@ static func _last_shooter_is_elevated(ctx: RoleContext) -> bool:
 
 # ── Positioning (no incoming shot) ──────────────────────────────────────────
 
-# Argmax over the candidate set scored with score_pass(carrier,
-# candidate). Search center sits SLOT_DIST_M in front of
-# the opp goal at center ice — the slot. Polar samples around this
-# center cover the high-slot, low-slot, and weak/strong-side post
-# regions. Falls back to self_pos when no teammate carrier (brain
-# re-tick will re-route this peer within a frame).
+# Argmax over the named staging stations, each scored as the better of its two
+# payoffs — the one-timer feed or the tip of the carrier's direct rip. Falls
+# back to self_pos when no teammate carries (the brain re-routes this peer
+# within a frame).
 static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
@@ -221,40 +163,32 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 	var teammate_positions: Array[Vector3] = ctx.scratch_teammates
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, teammate_positions)
 
-	# Rush blend: how hard the carrier is driving the net right now. 0 = set
-	# cycle (full cross-seam staging), 1 = full rush (net-crash). Pulls the
-	# staging in from the far-post slot to a genuine second-attacker threat
-	# so the FINISHER isn't stranded off the play when the odd-man chance is
-	# developing NOW (see the constant doc-blocks above).
+	# 0 = set cycle (full cross-seam staging), 1 = full rush (net-crash). The
+	# cross-seam park strands the FINISHER off an odd-man chance developing NOW,
+	# so the staging blends toward a genuine second attacker as the rush builds.
 	var rush: float = _rush_factor(ctx)
 	var weak_bias: float = lerpf(WEAK_SIDE_BIAS_M, RUSH_WEAK_SIDE_BIAS_M, rush)
 	var stage_dist: float = lerpf(GameRules.SLOT_DIST_M, RUSH_NET_DRIVE_DIST_M, rush)
 
-	# Search center: the slot, stage_dist in front of opp goal, shifted to the
-	# WEAK side so the FINISHER stages the cross-seam one-timer rather than
-	# crowding the puck-side play. strong_x is the puck's hysteretic side; the
-	# weak side is its negation. The candidate spread still reaches strong-side
-	# spots when the scoring favours them. On a rush stage_dist/weak_bias pull
-	# the whole search toward a net-crash.
+	# The slot, stage_dist in front of the opp goal, shifted to the WEAK side so
+	# the FINISHER stages the cross-seam one-timer rather than crowding the
+	# puck-side play. strong_x is the puck's hysteretic side; weak is its
+	# negation, and the candidate spread still reaches strong-side spots when the
+	# scoring favours them.
 	var search_center := Vector3(
 			-ctx.strong_x * weak_bias,
 			0.0,
 			ctx.attacking_goal_pos.z + ctx.own_goal_dir * stage_dist)
-	# Far from the station, skate at the CALCULATED center directly — the
-	# feed×shot argmax refines a seam read that will be re-taken from closer
-	# before arrival (see STATION_ARGMAX_LOD_M), and readiness needs half-step
-	# proximity anyway. The ten per-candidate goalie-predicted score_pass
-	# evals only run when their answer is consumable.
+	# Far from the station, skate at the CALCULATED center directly: the feed×shot
+	# argmax refines a seam read that will be re-taken from closer before arrival
+	# (see STATION_ARGMAX_LOD_M), and readiness needs half-step proximity anyway.
 	if not AIRoleHelpers.station_needs_refinement(ctx.self_pos, search_center):
 		d.target_position = search_center
 		return d
-	# NAMED-STATION candidate set — the one-timer geography, not a blind
-	# polar ring. The spots a finisher actually stages at are structural
-	# rink geography; the scoring (feed lane × shot value × forced goalie
-	# displacement) picks among them per the live coverage, and the
-	# incumbent keeps the hysteresis. Fewer evals than the old 8-ring AND
-	# wider coverage: a 3 m ring around one center could never span the
-	# backdoor and the high slot in the same read.
+	# NAMED-STATION candidate set — the one-timer geography, not a blind polar
+	# ring. The spots a finisher stages at are structural rink geography; the
+	# scoring picks among them per the live coverage. A ring around a single
+	# centre cannot span the backdoor and the high slot in the same read.
 	var weak: float = -ctx.strong_x
 	var goal_z: float = ctx.attacking_goal_pos.z
 	var own_dir: float = ctx.own_goal_dir
@@ -278,12 +212,11 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 		Vector3(weak * 1.5, 0.0, goal_z + own_dir * 9.5),
 	]
 	# TIP/SCREEN STATION — the shot-line post: ON the carrier→net line at
-	# crease-edge depth, where the body screens the goalie and the blade tips
-	# the point blast (they're the same spot). Tracks the carrier, so a point
-	# man walking the line drags the station with him. Its value comes from
-	# the tip term below — score_pass correctly rates a body parked in the
-	# goalie's chest as a terrible pass target, which is exactly why the old
-	# argmax never stood there.
+	# crease-edge depth, where the body screens the goalie and the blade tips the
+	# point blast (they are the same spot). It tracks the carrier, so a point man
+	# walking the line drags the station with him. Its whole value comes from the
+	# tip term below: score_pass correctly rates a body parked in the goalie's
+	# chest as a terrible pass target.
 	var to_carrier: Vector3 = carrier_pos - ctx.attacking_goal_pos
 	to_carrier.y = 0.0
 	var to_carrier_len: float = to_carrier.length()
@@ -309,33 +242,28 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 
 	var best_pos: Vector3 = ctx.self_pos
 	var best_score: float = -INF
-	# RUSH DEPTH GATE — doctrine, and deliberately not a perception.
+	# RUSH DEPTH GATE — a feel tunable, deliberately not a perception.
 	#
 	# Fired at the live goalie from this fixture's four stations, the net crash
-	# (2.7 m), the backdoor (2.8 m), the bumper (5.1 m) and the high slot
-	# (9.6 m) ALL convert 24/24 while he is still square to the carrier, and
-	# ALL convert 0/24 once he has re-squared. Location does not enter it; the
-	# only variable is whether he has recovered. So no shot-value model can
-	# order these spots, because on the shot alone they are the same spot —
-	# and an argmax over near-identical values just picks whichever noise is
-	# highest, which is how the finisher ended up staged 9.5 m out on a rush.
+	# (2.7 m), the backdoor (2.8 m), the bumper (5.1 m) and the high slot (9.6 m)
+	# ALL convert 24/24 while he is still square to the carrier and ALL convert
+	# 0/24 once he has re-squared. Location does not enter it; the only variable
+	# is whether he has recovered. So no shot-value model can order these spots —
+	# on the shot alone they are the same spot, and an argmax over near-identical
+	# values picks whichever noise is highest.
 	#
-	# What actually makes the net the right station on a rush is the second
-	# chance and the body: rebounds, tips, and a keeper who has to respect a
-	# man at the post. The rebound term is gone (see #577) and the tip term
-	# only fires for a body on the shot line, so nothing in the scoring
-	# represents it. Rather than invent a value that makes the model appear to
-	# discriminate, this states the coaching decision directly: on a rush the
+	# What makes the net the right station on a rush is the second chance and the
+	# body: rebounds, tips, and a keeper who has to respect a man at the post.
+	# Nothing in the scoring represents that (the tip term only fires for a body
+	# on the shot line), so rather than invent a value that makes the model appear
+	# to discriminate, this states the coaching decision directly: on a rush the
 	# second attacker drives the net, and perimeter stations are not his.
-	# CLAUDE.md names staging offsets as a legitimate feel tunable — the line
-	# is evaluation vs. feel, and this is feel.
 	#
-	# The cap IS stage_dist, with no margin, because there is no number to add:
-	# stage_dist is already the code's own statement of how deep the finisher
-	# belongs at this rush factor. A candidate deeper than it contradicts the
-	# staging decision that was just made. At a standstill that is SLOT_DIST_M
-	# — the slot, which a net-front role should not be behind either — and it
-	# tightens to the crease exactly as the rush develops.
+	# The cap IS stage_dist, with no margin, because stage_dist is already the
+	# code's own statement of how deep the finisher belongs at this rush factor —
+	# a candidate deeper than it contradicts the staging decision just made. At a
+	# standstill that is SLOT_DIST_M, and it tightens to the crease as the rush
+	# develops.
 	var depth_cap: float = stage_dist
 	for c: Vector3 in candidates:
 		if not AIRoleHelpers.is_legal_position(c):
@@ -344,11 +272,10 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 			continue
 		if absf(c.z - goal_z) > depth_cap:
 			continue
-		# Match the speed our carrier would actually fire at — long
-		# passes get the charged-wrister speed, short ones the quick-
-		# shot speed. Without this the lane-clear math assumes 14 m/s
-		# universally and a 12 m feed scores as if defenders had 36%
-		# more reaction time than they actually do.
+		# The speed our carrier would actually fire at — long passes get the
+		# charged-wrister speed, short ones the quick-shot speed. At a flat
+		# 14 m/s a 12 m feed scores as if defenders had 36% more reaction time
+		# than they really do.
 		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, c)
 		# Predict the goalie at the one-timer feed's release (flight only — the
 		# FINISHER fires on contact) and credit the motion: a weak-side candidate
@@ -386,27 +313,19 @@ static func _positioning_decision(ctx: RoleContext) -> RoleDecision:
 			best_pos = c
 
 	d.target_position = best_pos
-	# One-timer ready: positioning argmax already encoded "this is a
-	# high-value pass-and-shoot spot via score_pass." Once we've
-	# arrived at it, signal ready. No separate quality gate — if the
-	# spot is weak, score_pass(carrier, here) is low and the carrier
-	# won't pass, so the ready flag never gets consumed.
-	#
-	# Arrival tolerance = half a polar search step. The candidates
-	# are spaced SEARCH_STEP_M apart, so within half a step the bot
-	# is closer to the chosen anchor than to any neighbor candidate;
-	# they've effectively reached the spot.
+	# Arrival needs no separate quality gate: the argmax already encoded "this is
+	# a high-value pass-and-shoot spot", and a weak one scores low for the carrier
+	# too, so the ready flag never gets consumed. Tolerance is half a search step
+	# — inside it the bot is nearer the chosen station than any neighbouring one.
 	if ctx.self_pos.distance_to(best_pos) < AIRoleHelpers.SEARCH_STEP_M * 0.5:
 		d.is_one_timer_ready = true
 	return d
 
 
 # Rush blend in [0, 1] from the carrier's CLOSING speed toward the opp net.
-# 0 below RUSH_SPEED_LO_M_S (set cycle), 1 at/above RUSH_SPEED_HI_M_S (full
-# rush), lerped between. Only the forward (toward-attacking-goal) component
-# counts — a carrier cycling laterally at speed is not rushing the net, so it
-# shouldn't collapse the cross-seam staging. Returns 0 when the carrier's
-# state isn't resolvable (no carrier / not buffered) so staging defaults to
+# Only the forward (toward-attacking-goal) component counts — a carrier cycling
+# laterally at speed is not rushing the net and must not collapse the cross-seam
+# staging. Returns 0 when the carrier isn't resolvable, so staging defaults to
 # the set-cycle shape.
 static func _rush_factor(ctx: RoleContext) -> float:
 	if ctx.snapshot == null or ctx.snapshot.puck_state == null:

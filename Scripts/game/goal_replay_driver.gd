@@ -17,14 +17,10 @@ extends Node
 #
 # Owned by GameManager (host only). start() / stop() called from there.
 #
-# Testing: no headless unit test — this extends Node and drives LIVE scene
-# actors (Skater / Puck / Goalie nodes) via the actor-driven
-# ReplayPlaybackEngine, so it's integration-only (a live scene, poor headless
-# ROI). The unit-testable pieces it composes ARE covered: the codec's
-# side-effect-free decode_for_replay (test_world_state_codec), ReplayRecorder
-# (test_replay_recorder), and GoalReplayStore (test_goal_replay_store).
-# Consciously accepted as integration-only — see the closed GH issue on
-# agent-SM / replay-driver coverage gaps.
+# Testing: integration-only. This drives LIVE scene actors (Skater / Puck /
+# Goalie nodes) via the actor-driven ReplayPlaybackEngine, so there is no
+# headless unit test; the pieces it composes are covered instead
+# (test_world_state_codec, test_replay_recorder, test_goal_replay_store).
 
 const CLIP_DURATION: float = 8.0  # seconds of history to replay
 
@@ -65,13 +61,10 @@ var _clip_end_ts: float = 0.0
 var _virtual_clock: float = 0.0
 var _active: bool = false
 
-# Bracket cache — re-decoded only when the virtual clock crosses a frame boundary.
-var _cached_from_snap: Dictionary = {}
-var _cached_to_snap: Dictionary = {}
-var _cached_from_idx: int = -1
-var _cached_to_idx: int = -1
+# Which recorded frames bracket the virtual clock, decoded once per bracket.
+var _cursor := ReplayFrameCursor.new()
 
-var _saved_goalie_processing: Array[bool] = []
+var _sim_hold := ReplayLiveSimHold.new()
 
 var _outro_elapsed: float = -1.0  # >= 0 while holding the final frame
 # Two replay cameras: hard cam (broadcast main, current at clip start) and
@@ -133,8 +126,8 @@ func start(recorder: ReplayRecorder,
 	_clip_start_ts = timestamps[0]
 	_clip_end_ts = timestamps[timestamps.size() - 1]
 	_virtual_clock = _clip_start_ts
-	_cached_from_idx = -1
-	_cached_to_idx = -1
+	_cursor.bind(codec)
+	_cursor.reset()
 	_outro_elapsed = -1.0
 	_active = true
 	# Pull recorded events for the clip window and reset the walker so the
@@ -166,7 +159,7 @@ func start(recorder: ReplayRecorder,
 		while _next_event_idx < _events.size() and _events[_next_event_idx].host_ts < trimmed_start:
 			_next_event_idx += 1
 
-	_freeze_live_simulation()
+	_sim_hold.grab(_puck, _goalie_controllers)
 
 	_defending_goal_z = defending_goal_z
 	_has_cut_to_inside_net = false
@@ -227,13 +220,10 @@ func stop() -> void:
 	SoundManager.set_world_audio_range(SoundManager.AudioRange.LIVE)
 
 	NetworkManager.stop_replay_mode()
-	_unfreeze_live_simulation()
+	_sim_hold.release()
 	_frames = []
 	_timestamps = []
-	_cached_from_snap = {}
-	_cached_to_snap = {}
-	_cached_from_idx = -1
-	_cached_to_idx = -1
+	_cursor.reset()
 	_events = []
 	_next_event_idx = 0
 	_codec = null
@@ -299,28 +289,15 @@ func _process(delta: float) -> void:
 
 	NetworkManager.set_replay_clock(_virtual_clock)
 
-	var idx: int = _find_frame_idx(_virtual_clock)
-	if idx < 0:
+	if not _cursor.seek(_frames, _timestamps, _virtual_clock):
 		return
-	var idx_next: int = mini(idx + 1, _frames.size() - 1)
-
-	# Re-decode only when the bracket changes (every ~8.3 ms at 120 Hz).
-	if idx != _cached_from_idx or idx_next != _cached_to_idx:
-		_cached_from_snap = _codec.decode_for_replay(_frames[idx])
-		_cached_to_snap = _codec.decode_for_replay(_frames[idx_next])
-		_cached_from_idx = idx
-		_cached_to_idx = idx_next
-
-	if _cached_from_snap.is_empty():
-		return
-
-	var bracket_dt: float = _timestamps[idx_next] - _timestamps[idx]
-	var t: float = clampf((_virtual_clock - _timestamps[idx]) / bracket_dt, 0.0, 1.0) \
-			if bracket_dt > 0.0 else 0.0
 	# Pass the virtual-clock advance (slow-mo-scaled, exactly clamped at clip end)
 	# rather than the wall-frame delta, so procedural pose driven off it — the
 	# skater leg gait — keeps cadence with the on-screen motion during slow-mo.
-	_apply_interpolated_snapshot(t, bracket_dt, _virtual_clock - prev_clock)
+	ReplayPlaybackEngine.apply_interpolated_snapshot(
+			_cursor.from_snap(), _cursor.to_snap(), _cursor.alpha(), _cursor.bracket_dt(),
+			_virtual_clock - prev_clock,
+			_registry.all(), _puck, _goalie_controllers)
 	_dispatch_due_events()
 
 
@@ -332,16 +309,6 @@ func _dispatch_due_events() -> void:
 			and _events[_next_event_idx].host_ts <= _virtual_clock:
 		ReplayEventReplayer.dispatch(_events[_next_event_idx].event, _registry)
 		_next_event_idx += 1
-
-
-func _find_frame_idx(t: float) -> int:
-	var best: int = -1
-	for i: int in _timestamps.size():
-		if _timestamps[i] <= t:
-			best = i
-		else:
-			break
-	return best
 
 
 # Finds where the scoring play started. Two anchors, whichever sits closer to
@@ -417,31 +384,3 @@ func _last_contest_event_ts() -> float:
 			continue
 		return ts
 	return -1.0
-
-
-func _apply_interpolated_snapshot(t: float, dt: float, sim_delta: float) -> void:
-	ReplayPlaybackEngine.apply_interpolated_snapshot(
-			_cached_from_snap, _cached_to_snap, t, dt, sim_delta,
-			_registry.all(), _puck, _goalie_controllers)
-
-
-func _freeze_live_simulation() -> void:
-	if _puck != null:
-		# The hold flag parks the analytic loose-puck sim while playback scrubs
-		# the actors.
-		_puck.set_replay_hold(true)
-	_saved_goalie_processing.clear()
-	for gc: GoalieController in _goalie_controllers:
-		_saved_goalie_processing.append(gc.is_physics_processing())
-		gc.set_physics_process(false)
-
-
-func _unfreeze_live_simulation() -> void:
-	# After stop() the game transitions to FACEOFF_PREP which calls puck.reset();
-	# dropping the hold is all the drive needs to resume.
-	if _puck != null:
-		_puck.set_replay_hold(false)
-	for i: int in _goalie_controllers.size():
-		var was: bool = _saved_goalie_processing[i] if i < _saved_goalie_processing.size() else true
-		_goalie_controllers[i].set_physics_process(was)
-	_saved_goalie_processing.clear()

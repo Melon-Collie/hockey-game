@@ -3,10 +3,11 @@ class_name InputState
 const BYTES_SIZE: int = 24
 # Layout: u32 timestamp@0.1ms(0) f32 delta(4) s16 move.x(8) s16 move.y(10)
 #         s16 mwp.x(12) s8 mwp.y(14) s16 mwp.z(15) s16 msp.x(17) s16 msp.y(19)
-#         u16 flags(21)  flags: shoot_pressed[0] shoot_held[1] slap_pressed[2]
-#         slap_held[3] sprint_held[4] brake[5] elevation_level[6..7]
-#         block_held[8] stick_lift_held[9] stick_lift_pressed[10] quick_pass_pressed[11]
-#         hit_held[12]
+#         u16 flags(21) u8 wrister_power_t(23)
+#         flags: shoot_pressed[0] shoot_held[1] slap_pressed[2] slap_held[3]
+#         sprint_held[4] brake[5] elevation_level[6..7] block_held[8]
+#         stick_lift_held[9] stick_lift_pressed[10] quick_pass_pressed[11]
+#         hit_held[12] commit_wrister_power[13]
 
 # Highest legal loft level (ShotMechanics.ELEVATION_HIGH = 3). The 2-bit wire
 # field spans exactly 0..3, so decode's clamp to this is belt-and-braces.
@@ -35,36 +36,30 @@ var stick_lift_held: bool = false
 var stick_lift_pressed: bool = false
 var sprint_held: bool = false
 # Edge: quick-pass button pressed THIS tick. Fires an instant quick pass (the
-# fixed-power blade→cursor snap) without entering wrister aim — LMB is now always
-# a charged wrister, so the quick pass lives on its own button to remove the
-# tap-vs-hold ambiguity.
+# fixed-power blade→cursor snap) without entering wrister aim. It has its own
+# button because LMB is always a charged wrister — no tap-vs-hold ambiguity.
 var quick_pass_pressed: bool = false
-# Held THIS tick: the body-check / hit button (C). A committed "line someone up"
-# stance rather than an instantaneous impact — held so the future body-check
-# logic can read intent over a window. Networked (reconcile replays it), so it
-# lives here rather than as a loose local key read. Not yet consumed by any
-# behavior — the button is wired ahead of the hit-system redesign.
+# Held THIS tick: the body-check / hit button (Ctrl). A committed "line someone
+# up" stance rather than an instantaneous impact, so the collision resolver reads
+# intent over a window. Replicated, so reconcile replay re-derives the check's
+# full-vs-passive transfer and its stamina cost with no extra wire state.
 var hit_held: bool = false
 # Committed wrister power fraction (0..1): the controller converts it to the
 # equivalent cursor speed (ShotMechanics.wrister_speed_for_power_t) so a committed
 # shooter drives the SAME pure-mouse power model deterministically. Set by bots at
 # their shot/pass windup, and by the gamepad path from the right-stick push
-# magnitude. Mouse humans leave it at the default (unused — they read real cursor speed).
-#
-# SERIALIZED as a u8 (see to_bytes) for the gamepad path — bots are host-simulated
-# and never cross the wire, but a pad CLIENT's power has to reach the host or the
-# host re-derives it from a parked (≈0 speed) cursor and fires a floater while the
-# client predicted a full shot. Senders quantize to the wire grid BEFORE predicting
-# (LocalInputGatherer / quantize_power_t) so prediction and host agree bit-exactly.
+# magnitude. Mouse humans leave it at the default (unused — they read real cursor
+# speed). Serialized as a u8 for the gamepad path: a pad CLIENT's power has to
+# reach the host, or the host re-derives it from a parked (≈0 speed) cursor and
+# fires a floater while the client predicted a full shot.
 var bot_wrister_power_t: float = 1.0
-# Runtime, NOT serialized. True when the wrister POWER is COMMITTED rather than
-# measured from cursor motion: power comes from bot_wrister_power_t (with the travel
-# gate bypassed) instead of the real cursor speed. Set by the gamepad gatherer while
-# RT is held — the pad has no meaningful cursor speed, so the right-stick push
-# magnitude is the whole power signal (aim still flows through the positional
-# origin→cursor model, since the gamepad parks the cursor in the stick direction).
-# Serialized as flag bit [13] (see to_bytes) so a pad CLIENT's committed power
-# reaches the host instead of the host falling back to the parked cursor's speed.
+# True when the wrister POWER is COMMITTED rather than measured from cursor
+# motion: power comes from bot_wrister_power_t (with the travel gate bypassed)
+# instead of the real cursor speed. Set by the gamepad gatherer while RT is held —
+# the pad has no meaningful cursor speed, so the right-stick push magnitude is the
+# whole power signal (aim still flows through the positional origin→cursor model,
+# since the gamepad parks the cursor in the stick direction). Rides as flag bit
+# [13] so a pad CLIENT's committed power reaches the host.
 var commit_wrister_power: bool = false
 
 # Snap a power fraction to the u8 wire grid. Senders MUST run their value through
@@ -80,13 +75,12 @@ static func quantize_power_t(v: float) -> float:
 	return float(roundi(clampf(v, 0.0, 1.0) * 255.0)) / 255.0
 # BOT-ONLY, runtime, NOT serialized. The bot's committed shot DIRECTION (world XZ,
 # normalized) for a charged wrister/pass, and its committed forehand/backhand.
-# Bots have no real cursor, and the human wrister now aims POSITIONALLY (origin→
-# cursor) with forehand/backhand read from the cursor's bearing sweep — a bot's
-# cosmetic near-body wind-up cursor would make both garbage. So a bot commits its
-# aim and hand directly (like it already commits power via bot_wrister_power_t);
-# the controller uses them when bot_wrister_aim_dir is non-ZERO (see
-# SkaterController._wrister_aim_dir / _wrister_is_backhand). The fake cursor stays
-# purely cosmetic (the wind-up coil pose). Humans leave aim_dir ZERO → positional.
+# The human wrister aims POSITIONALLY (origin→cursor) with forehand/backhand read
+# from the cursor's bearing sweep, and a bot's cosmetic near-body wind-up cursor
+# would make both garbage — so a bot commits aim and hand directly, as it already
+# commits power via bot_wrister_power_t. The controller uses them when
+# bot_wrister_aim_dir is non-ZERO (SkaterController._wrister_aim_dir /
+# _wrister_is_backhand). Humans leave aim_dir ZERO → positional.
 var bot_wrister_aim_dir: Vector3 = Vector3.ZERO
 var bot_wrister_backhand: bool = false
 # BOT-ONLY, runtime, NOT serialized. The bot's committed SLAPPER direction (world
@@ -141,14 +135,12 @@ func to_bytes() -> PackedByteArray:
 
 # to_bytes' in-place twin: writes this input's BYTES_SIZE record at `offset` in a
 # caller-owned buffer. The batch send packs up to 24 inputs per RPC at 120 Hz, so
-# building each record as its own PackedByteArray and append_array-ing it churned
-# a throwaway buffer per input per batch (~1.4-2.9k/s). Same bytes as to_bytes by
-# construction — that one now delegates here.
+# a per-record PackedByteArray would churn a throwaway buffer per input per batch
+# (~1.4-2.9k/s). Same bytes as to_bytes by construction — that one delegates here.
 func write_bytes(b: PackedByteArray, offset: int) -> void:
-	# host_timestamp rides as u32 in 0.1ms units (Constants.TIME_WIRE_SCALE):
-	# constant precision over ~119h vs f32's uptime-degrading ULP, which would
-	# start quantizing adjacent per-tick stamps equal (dedupe-dropped as
-	# duplicates) after ~4.6h of host uptime.
+	# host_timestamp rides as u32 in 0.1 ms units, never f32 seconds — see the
+	# wire-timestamp invariant in Scripts/networking/CLAUDE.md. Encode with roundi
+	# so the grid round-trips exactly.
 	b.encode_u32(offset, roundi(maxf(host_timestamp, 0.0) * Constants.TIME_WIRE_SCALE))
 	b.encode_float(offset + 4, delta)
 	b.encode_s16(offset + 8,  clampi(roundi(move_vector.x * 1000.0), -32768, 32767))
@@ -156,11 +148,12 @@ func write_bytes(b: PackedByteArray, offset: int) -> void:
 	b.encode_s16(offset + 12, clampi(roundi(mouse_world_pos.x * 100.0), -32768, 32767))
 	b.encode_s8( offset + 14, clampi(roundi(mouse_world_pos.y * 100.0), -128, 127))
 	b.encode_s16(offset + 15, clampi(roundi(mouse_world_pos.z * 100.0), -32768, 32767))
-	# SIGNED s16: attack_up team-1 players negate mouse_screen_pos in the gatherer
-	# to pre-align the cursor-drag frame to world XZ (see LocalInputGatherer.gather).
-	# A u16 clamp floored those negatives to 0, so the host saw a frozen (0,0)
-	# cursor — zero wrister charge + null charge direction — and fired every drag
-	# as a tap. Screen coords (even negated, even at 8K) fit in ±32767.
+	# Must stay SIGNED: attack_up team-1 players negate mouse_screen_pos in the
+	# gatherer to pre-align the cursor-drag frame to world XZ (see
+	# LocalInputGatherer.gather). A u16 clamp would floor those negatives to 0, so
+	# the host reads a frozen (0,0) cursor — zero wrister charge, null charge
+	# direction — and fires every drag as a tap. Screen coords (even negated, even
+	# at 8K) fit in ±32767.
 	b.encode_s16(offset + 17, clampi(roundi(mouse_screen_pos.x), -32768, 32767))
 	b.encode_s16(offset + 19, clampi(roundi(mouse_screen_pos.y), -32768, 32767))
 	var flags: int = (

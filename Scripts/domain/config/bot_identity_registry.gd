@@ -53,7 +53,7 @@ class_name BotIdentityRegistry
 # migrate_legacy, so old user:// rosters keep working.
 #
 # A well-formed file with zero entries is valid — the caller treats an empty
-# pool as "use the old deterministic defaults".
+# pool as "use the built-in deterministic defaults".
 
 const _USER_JSON_PATH: String = "user://bot_identities.json"
 const _RES_JSON_PATH:  String = "res://data/bot_identities.json"

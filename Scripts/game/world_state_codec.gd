@@ -2,9 +2,8 @@ class_name WorldStateCodec
 extends RefCounted
 
 # Handles the flat PackedByteArray serialization format that `NetworkManager`
-# ferries between host and clients. Pulled out of GameManager so the wire
-# format lives in one place and the application layer speaks in typed
-# network-state objects.
+# ferries between host and clients — the one place the wire format lives, so
+# the application layer speaks in typed network-state objects.
 #
 # Two wire formats are defined here:
 #
@@ -61,10 +60,19 @@ signal clock_updated(time_remaining: float)
 signal shots_on_goal_changed(sog_0: int, sog_1: int)
 signal queue_depth_feedback(depth: int)
 
-const WS_HEADER_SIZE: int = 7      # u16 ws_seq (2) + u32 host_capture_time in 0.1ms units (4) + u8 num_skaters (1)
-const SKATER_STATE_BYTES: int = 41  # inner skater state block (was hardcoded 39 at two
-                                    # decode sites and silently truncated on the v15 grow;
-                                    # 40->41 adds knockdown_timer u8@0.01s)
+# World-state header layout. Named because three files outside this one read
+# fields out of it by byte offset — NetworkManager (sequence, and host time for
+# the PDV sample) and GameManager (host time for the recorder). Reordering the
+# header while those literals stayed put would not fail to decode; it would
+# decode the wrong field and carry on.
+# Units are u32 0.1 ms (Constants.TIME_WIRE_SCALE) — see Scripts/networking/CLAUDE.md.
+const WS_SEQUENCE_OFFSET: int = 0     # u16
+const WS_HOST_TIME_OFFSET: int = 2    # u32, 0.1 ms units
+const WS_SKATER_COUNT_OFFSET: int = 6  # u8
+const WS_HEADER_SIZE: int = 7
+const SKATER_STATE_BYTES: int = 41  # inner skater state block; every encode/decode
+                                    # site must read it from here, or a grown block
+                                    # silently truncates instead of failing
 const SKATER_BLOCK_SIZE: int = SKATER_STATE_BYTES + 5  # + u32 peer_id + u8 queue_depth
 const PUCK_BLOCK_SIZE: int = 13    # 12B pos+vel + 1B carrier_idx
 const GOALIE_BLOCK_SIZE: int = 43  # 12 root + 31 pose (glove/blocker offsets are s16-wide)
@@ -100,10 +108,10 @@ func setup(
 
 # ── World state ──────────────────────────────────────────────────────────────
 
-# Peer-id list rebuilt per broadcast (clear+append reuses capacity, unlike the
-# old `Array(_registry.all().keys())`, which allocated a fresh array per call).
-# Also the carrier index space — carrier_idx is a position in THIS list. Safe to
-# reuse because it never leaves the codec (unlike the packet — see below).
+# Peer-id list rebuilt per broadcast — clear+append reuses capacity rather than
+# allocating a fresh array per call. Also the carrier index space: carrier_idx is
+# a position in THIS list. Safe to reuse because it never leaves the codec
+# (unlike the packet — see below).
 var _peers_scratch: Array[int] = []
 # The decode-side twin of _peers_scratch: packet-order peer ids, which are the
 # index space carrier_idx resolves against. Same reuse argument — it is consumed
@@ -111,14 +119,11 @@ var _peers_scratch: Array[int] = []
 var _decoded_peers_scratch: Array[int] = []
 
 
-# The packet is sized ONCE and written at offsets, instead of the old
-# assemble-by-append that allocated a throwaway PackedByteArray per BLOCK —
-# header, per-skater id, per-skater state, puck, per-goalie, game-state — i.e.
-# ~26 per packet at 5v5 (~3.1k/s at 120 Hz). That churn lands on the host's
-# PHYSICS thread, and host stalls are what back up the client input queue into
-# the drain → reconcile chain (a 5v5 playtest logged 73 stalls in 13 min while
-# rendering at 157 fps — the allocator-pause signature). One allocation per
-# broadcast now, down from ~26.
+# The packet is sized ONCE and written at offsets — one allocation per
+# broadcast. Assembling it by appending a block at a time (header, per-skater id
+# and state, puck, per-goalie, game state) is ~26 throwaway PackedByteArrays per
+# packet at 5v5, on the host's PHYSICS thread, and host stalls are what back up
+# the client input queue into the drain → reconcile chain.
 #
 # The buffer is allocated FRESH each call and deliberately NOT reused across
 # frames: consumers RETAIN the returned packet (the goal-replay recorder rings
@@ -140,10 +145,11 @@ func encode_world_state() -> PackedByteArray:
 			+ PUCK_BLOCK_SIZE + 1 + num_goalies * GOALIE_BLOCK_SIZE
 			+ GAME_STATE_BLOCK_SIZE)
 	# Header: u16 sequence + u32 host_capture_time (0.1ms units) + u8 skater count
-	b.encode_u16(0, _ws_sequence)
+	b.encode_u16(WS_SEQUENCE_OFFSET, _ws_sequence)
 	_ws_sequence = (_ws_sequence + 1) & 0xFFFF
-	b.encode_u32(2, roundi(maxf(NetworkManager.local_time(), 0.0) * Constants.TIME_WIRE_SCALE))
-	b.encode_u8(6, num_skaters)
+	b.encode_u32(WS_HOST_TIME_OFFSET,
+			roundi(maxf(NetworkManager.local_time(), 0.0) * Constants.TIME_WIRE_SCALE))
+	b.encode_u8(WS_SKATER_COUNT_OFFSET, num_skaters)
 	var o: int = WS_HEADER_SIZE
 	# Skaters: u32 peer_id + SKATER_STATE_BYTES state + u8 queue_depth
 	for peer_id: int in _peers_scratch:
@@ -285,8 +291,8 @@ func _apply_game_state(score0: int, score1: int, new_phase: GamePhase.Phase,
 		_last_period = period
 		period_synced.emit(period)
 	# Emit only when the displayed second changes (mirrors the host's 1 Hz
-	# gate in GameManager). Per-packet emission made clients rebuild the HUD
-	# clock label + dirty its theme cache at 120 Hz for an unchanged display.
+	# gate in GameManager). Emitting per packet rebuilds the HUD clock label and
+	# dirties its theme cache at the packet rate for an unchanged display.
 	var whole_second: int = int(ceilf(t_remaining))
 	if whole_second != _last_clock_second:
 		_last_clock_second = whole_second
@@ -464,8 +470,7 @@ static func _write_skater_quantized(b: PackedByteArray, o: int, s: SkaterNetwork
 	# Flags byte: bits 0-2 shot_state (8 SkaterStateMachine.State values — FULL;
 	# a ninth costs a repack),
 	# bits 3-4 elevation_level (0..2), bit 5 ghost, bit 6 blade_up,
-	# bit 7 sprint_locked. Repacked at PROTOCOL_VERSION 11 (shot_state gave a
-	# bit to the 2-bit loft level).
+	# bit 7 sprint_locked.
 	var flags: int = (s.shot_state & 0x07) \
 			| ((clampi(s.elevation_level, 0, 3) & 0x3) << 3) \
 			| (0x20 if s.is_ghost else 0) \
@@ -475,9 +480,9 @@ static func _write_skater_quantized(b: PackedByteArray, o: int, s: SkaterNetwork
 	b.encode_u8(o, clampi(roundi(s.shot_charge * 255.0), 0, 255)); o += 1
 	b.encode_u8(o, clampi(roundi(s.stamina * 255.0), 0, 255)); o += 1
 	# Body-check stagger seconds remaining, u8 @ 0.01 s (0..2.55 s covers
-	# stagger_max_seconds 1.0 with headroom). Without this the client victim's
-	# predicted stagger was wiped to 0 on the next reconcile — full-thrust replay
-	# vs the host's penalised sim → a reconcile storm for the whole stagger window.
+	# stagger_max_seconds 1.0 with headroom). Without it the client victim's
+	# predicted stagger is wiped to 0 on the next reconcile — full-thrust replay
+	# vs the host's penalised sim, a reconcile storm for the whole stagger window.
 	b.encode_u8(o, clampi(roundi(s.stagger_timer * 100.0), 0, 255)); o += 1
 	# Body-check knockdown seconds remaining, u8 @ 0.01 s (0..2.55 s covers
 	# knockdown_max_seconds ~1.5 with headroom). Same rail/reason as stagger above:
@@ -517,8 +522,8 @@ static func _encode_skater_quantized(s: SkaterNetworkState) -> PackedByteArray:
 
 
 # The exact encode→decode round trip of the v15 move-intent octant above, as a
-# standalone value transform. The host-side stage-3 claim rewind runs it on the
-# raw buffered intent before forward-integrating, so the host integrates the
+# standalone value transform. The host-side claim rewind runs it on the raw
+# buffered intent before forward-integrating, so the host integrates the
 # SAME vector clients decoded off the wire: human WASD is 8-way (lossless), but
 # bot steering intents are analog — un-quantized they'd diverge from the octant
 # unit vector every client rendered (direction off by up to 22.5°, magnitude
@@ -638,8 +643,8 @@ static func _write_goalie_quantized(b: PackedByteArray, o: int, s: GoalieNetwork
 	b.encode_s16(o, clampi(roundi(s.position_x * 100.0), -32768, 32767)); o += 2
 	b.encode_s16(o, clampi(roundi(s.position_z * 100.0), -32768, 32767)); o += 2
 	# Wrap into (-PI, PI] BEFORE quantizing: the -Z goalie's facing lerps around
-	# base angle PI up to ~4.36 rad, which a raw clamp pinned flat at PI — so that
-	# goalie rendered facing dead-straight on every turn one way. wrapf fixes it.
+	# base angle PI up to ~4.36 rad, which a raw clamp would pin flat at PI —
+	# rendering that goalie dead-straight on every turn one way.
 	b.encode_s16(o, clampi(roundi(wrapf(s.rotation_y, -PI, PI) / PI * 32767.0), -32768, 32767)); o += 2
 	b.encode_u8(o, s.state_enum); o += 1
 	b.encode_u8(o, clampi(roundi(s.five_hole_openness * 255.0), 0, 255)); o += 1
@@ -657,8 +662,8 @@ static func _write_goalie_quantized(b: PackedByteArray, o: int, s: GoalieNetwork
 	b.encode_s8(o, _quant_angle(s.right_pad_roll)); o += 1
 	b.encode_s8(o, _quant_angle(s.right_pad_yaw)); o += 1
 	# Glove/blocker offsets use the WIDE (s16) encoding: their Y reach goes to
-	# react_hand_y_max (1.55 m), above the s8 ±1.27 m range, so above-crossbar
-	# reaches clipped ~28 cm low on clients. Pads stay s8 (they never leave the ice).
+	# react_hand_y_max (1.55 m), above the s8 ±1.27 m range, which would clip an
+	# above-crossbar reach ~28 cm low on clients. Pads stay s8 (never off the ice).
 	o = _encode_offset_wide(b, o, s.glove_offset)
 	b.encode_s8(o, _quant_angle(s.glove_yaw)); o += 1
 	b.encode_s8(o, _quant_angle(s.glove_pitch)); o += 1

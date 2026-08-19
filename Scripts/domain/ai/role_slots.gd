@@ -1,47 +1,20 @@
 class_name AIRoleSlots
 
-# Pure-function role slot assignment for the v2 possession-state model.
-# Roles are assigned per brain tick by current kinematics — the peer that
-# would ARRIVE at each slot's reference point soonest wins (momentum-aware
-# time_to_arrive at its real Speed cap, matching AILoosePuckChase and the
-# threat partition), with arrival-time hysteresis. No locking, no sticky
-# state — the bot whose body is already in (or genuinely moving into) the
-# right place gets the role, so roles "stick" naturally as long as nothing
-# kinematic reshuffles. Raw distance was the original metric; it handed
-# PRESSURE/RUSH_D1 to a nearer bot coasting AWAY over a teammate already
-# skating at the carrier — the brake-pivot turnaround read as "the wrong
-# man went".
+# Pure-function role slot assignment for the possession-state model. Roles are
+# assigned per brain tick by current kinematics — the peer that would ARRIVE at
+# each slot's reference point soonest wins (momentum-aware time_to_arrive at its
+# real Speed cap, matching AILoosePuckChase and the threat partition), with
+# arrival-time hysteresis. No locking, no sticky state: the bot whose body is
+# already in (or genuinely moving into) the right place gets the role, so roles
+# "stick" naturally as long as nothing kinematic reshuffles. Never rank by raw
+# DISTANCE — that hands PRESSURE/RUSH_D1 to a nearer bot coasting away over a
+# teammate already skating at the carrier.
 #
-# DZONE uses {PRESSURE, MARK×2}: one pressurer on the carrier, two
-# man-markers. The two MARKs are partitioned across the carrier's
-# receivers by TeamBrain's threat assignment (a distinct man each) —
-# which marker sits net-front vs. weak-side is emergent from WHICH man
-# the optimal matcher hands each, not a fixed slot.
-#
-# TRANS_DEFENSE uses {RUSH_D1, TRACK_PUCK, TRACK_MID} — the layered rush
-# defense (docs/transition-defense-plan.md §5.2), NOT man coverage.
-# RUSH_D1 goes to the LAST MAN BACK (the peer soonest to our OWN NET,
-# momentum-aware) and owns the carrier on the gap ladder; TRACK_PUCK runs
-# the carrier down from behind; TRACK_MID owns the middle lane. Two bodies
-# on the puck is correct here — one in front holding a gap, one behind
-# running him down — and it is affordable because transition is BOUNDED:
-# once the attack becomes a settled three-man threat needing a body on each
-# man, the puck is in our zone and DZONE's coverage takes over (the
-# readiness gate, plan §9).
-#
-# This replaced {CONTAIN, MARK×2}, which man-marked through transition and
-# so had markers running cover-position argmaxes from 20 m up-ice
-# mid-backcheck — the "lazy escorting, no urgency" failure. That in turn had
-# replaced a PRESSURE+BACKCHECK+CONTAIN triad where TWO peers engaged the
-# carrier FORWARD (overcommit / bad angle / breakaways).
-#
-# MARK unifies the old DZONE ANCHOR/COVER and TRANS_DEFENSE BACKCHECK, which
-# had converged to identical man-marking in the assigned-man path (see
-# AIRoleMark). It is now a DZONE-only role.
-#
-# OZONE replaces OUTLET with SUPPORT; OUTLET stays a TRANS_OFFENSE-only
-# role. BACKDOOR was renamed to FINISHER (more descriptive of the
-# scoring-threat semantics).
+# DZONE uses {PRESSURE, MARK×2}: one pressurer on the carrier, two man-markers.
+# The two MARKs are partitioned across the carrier's receivers by TeamBrain's
+# threat assignment (a distinct man each) — which marker sits net-front vs.
+# weak-side is emergent from WHICH man the optimal matcher hands each, not a
+# fixed slot. MARK is DZONE-only.
 #
 # Mixed teams: humans are teammates and get slot assignments same as
 # bots. The brain doesn't distinguish — humans drive the structure,
@@ -132,15 +105,11 @@ enum Slot {
 #   is preventing. It is also ~1.2 brain ticks (6 Hz), so it outlives the
 #   re-election cadence rather than fighting it.
 #
-#   COUPLING. Deliberately the same margin as AILoosePuckChase.HYSTERESIS_S, and
-#   re-derived with it when time_to_arrive moved from the free-ramp heuristic to
-#   the measured phase model. The chase election and the slot elections race the
-#   same bodies over the same ETA model; if their stickiness disagreed, a bot
-#   could hold the chase while losing the slot that assumes it. AIRoleSlots5
-#   references this constant rather than copying it, for the same reason.
-#
-# Tuning: raise if kinematically-similar peers still trade slots mid-play; lower
-# if a genuinely better-placed teammate takes too long to take over.
+#   COUPLING. Deliberately the same margin as AILoosePuckChase.HYSTERESIS_S. The
+#   chase election and the slot elections race the same bodies over the same ETA
+#   model; if their stickiness disagreed, a bot could hold the chase while losing
+#   the slot that assumes it. AIRoleSlots5 references this constant rather than
+#   copying it, for the same reason.
 const HYSTERESIS_PENALTY_S: float = 0.2
 
 # Hysteresis for the NEUTRAL flank L/R split, which is an X-axis SIDE
@@ -256,12 +225,11 @@ static func assign(
 			# only difference is that with three skaters there is no D pair, so
 			# RUSH_D2's mid-ice layer folds into the single mid tracker.
 			#
-			# TWO bodies on the puck is correct here, and it is not the old
-			# "PRESSURE + BACKCHECK both engage forward" failure this file's
-			# header warns about: RUSH_D1 is in FRONT of the carrier holding a
-			# gap and TRACK_PUCK is BEHIND him running him down, which is one
-			# rush being defended from both ends rather than two bodies taking
-			# bad angles from the same side. It is affordable because transition
+			# TWO bodies on the puck is correct here, and is not two bodies
+			# taking bad angles from the same side: RUSH_D1 is in FRONT of the
+			# carrier holding a gap and TRACK_PUCK is BEHIND him running him
+			# down, which is one rush defended from both ends. It is affordable
+			# because transition
 			# is BOUNDED — the moment the attack becomes a settled three-man
 			# threat that needs a body on each man, the puck is in our zone and
 			# DZONE's coverage takes over. TRANS_DEFENSE's job is to kill the rush,
@@ -370,8 +338,8 @@ static func _pick_soonest_with_hysteresis(
 # but a possession-state flip renames the slots, so BREAKOUT_STRONG becomes
 # OUTLET and BREAKOUT_WEAK becomes SUPPORT, and an exact-enum match sees NO
 # continuity across the flip. With zero stickiness the two non-carriers'
-# near-tied elections could reverse destinations at the handoff, sending them
-# on crossing paths into each other (the breakout→rush collision). Mapping
+# near-tied elections reverse destinations at the handoff and send them on
+# crossing paths into each other. Mapping
 # each slot to its continuity CLASS — the up-ice attacking option
 # (BREAKOUT_STRONG / OUTLET / FINISHER) and the trailing support
 # (BREAKOUT_WEAK / SUPPORT) — lets the peer that was the up-ice guy stay the

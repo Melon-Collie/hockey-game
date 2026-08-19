@@ -414,17 +414,16 @@ func _pin_shot_anchor() -> void:
 # On-screen anchor for the gamepad SHOT cursor: the pinned puck point, projected.
 #
 # The wrister aims POSITIONALLY — origin→cursor, where the origin is the blade/puck
-# frozen at charge start (ShotMechanics.wrister_aim_dir). Parking the cursor a fixed
-# 480 px from the BODY therefore did NOT put the shot where the stick pointed: the
-# blade sits ~1 m off the body, so origin→cursor was that line parallel-shifted by
-# the carry offset. The error is asin(offset / cursor_distance), and the cursor's
-# WORLD distance rides the dynamic zoom (10–32 m camera height ⇒ roughly 4–13 m of
-# ice under a fixed 480 px), so the bias ran ~4°–15°, flipping sign with the carry
-# side and changing with the zoom — about a net width at slot range, and
-# unlearnable because it never held still. Anchoring the cursor on the puck instead
-# makes origin→cursor the stick direction by construction, at any zoom — which is
-# also what makes the swing-chirality read work on a pad, since the stick's bearing
-# then IS the shot line's bearing.
+# frozen at charge start (ShotMechanics.wrister_aim_dir). So the cursor must NOT be
+# anchored on the BODY: the blade sits ~1 m off it, which parallel-shifts
+# origin→cursor by the carry offset. That error is asin(offset / cursor_distance),
+# and the cursor's WORLD distance rides the dynamic zoom (10–32 m camera height ⇒
+# roughly 4–13 m of ice under a fixed 480 px), so the bias runs ~4°–15°, flips sign
+# with the carry side and changes with the zoom — about a net width at slot range,
+# and unlearnable because it never holds still. Anchoring on the puck makes
+# origin→cursor the stick direction by construction at any zoom, which is also what
+# makes the swing-chirality read work on a pad: the stick's bearing then IS the
+# shot line's bearing.
 #
 # Falls back to the passed body anchor with no pin (no skater at the edge) or when
 # the pinned point is behind the camera.

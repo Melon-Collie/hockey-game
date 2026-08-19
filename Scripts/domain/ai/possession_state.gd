@@ -31,14 +31,10 @@ class_name AIPossessionState
 #     stretch OUTLET at the far blue line makes sense. One bucket for both fires
 #     that OUTLET from deep in our own zone.
 #
-# A RETRIEVAL state once sat alongside these — a loose puck in our DZ that we
-# clearly won the race to, which re-slotted the team onto the BREAKOUT posts
-# while the retriever skated back. It was removed after measurement: it never
-# gated a breakout (the same breakouts happen straight from DZONE), and it cost
-# 25-38% of ALL shape transitions, halving how long a team held its D-zone shape
-# (mean spell 0.74 s -> 1.90 s with it gone). Four measurements — two harness
-# runs and both arms of a live A/B — found no outcome benefit. See
-# docs/breakout-plan.md Phase A for the full record before resurrecting it.
+# There is deliberately no RETRIEVAL state for a loose puck in our DZ we have
+# clearly won: it gates no breakout the team does not already make straight from
+# DZONE, and it churns the shape. Read docs/breakout-plan.md Phase A before
+# adding one.
 #
 # Loose-puck handling: possession is sticky. `prev_carrier_team` carries
 # over until a new carrier sets it. The 6 Hz brain tick smooths sub-tick
@@ -48,30 +44,23 @@ class_name AIPossessionState
 enum State { DZONE, OZONE, TRANS_OFFENSE, TRANS_DEFENSE, NEUTRAL, BREAKOUT, FORECHECK }
 
 # ── Coverage readiness (docs/transition-defense-plan.md §9) ──────────────────
-# DZONE is a SHAPE, not a location. The raw table above flips to it the instant
-# the puck crosses our blue line with the opponent carrying — which re-slots all
-# five bots into zone areas even when three of them are 25 m up-ice, mid-
-# backcheck. The structure they're joining assumes five bodies are home; it was
-# being run by two, and the backcheck visibly dissolved at the line.
+# DZONE is a SHAPE, not a location, so the brain holds the rush/recovery shape
+# until the bodies the coverage assumes have arrived (AIRushRead.coverage_ready).
+# The raw table above flips to DZONE the instant the puck crosses our blue line
+# with the opponent carrying, which would re-slot bots 25 m up-ice onto zone
+# posts and dissolve the backcheck at the line. Get back, get set, THEN take
+# your man.
 #
-# Real hockey has the readiness concept explicitly: get back, get set, THEN take
-# your man. So the brain upgrades its raw DZONE result the same way it upgrades
-# to DZONE coverage — the team stays in the rush/recovery shape until the bodies the
-# coverage assumes have actually arrived (AIRushRead.coverage_ready).
+# The asymmetry this constant expresses: it is EASY to become set and HARD to
+# stop being set. Becoming unset is available instantly — the accounting is false
+# the moment men are unaccounted for. Going the other way, a settled structure
+# must not be dumped into scramble mode by one bad tick (a body straddling the
+# blue line to pressure the point is not a broken structure), so leaving coverage
+# takes a sustained stretch.
 #
-# The asymmetry that matters: it is EASY to become set and HARD to stop being
-# set. Becoming unset is the reading that fixes the reported bug (a rush arriving
-# must not re-slot the backcheck onto zone posts), and that reading is available
-# instantly — the accounting is false the moment men are unaccounted for. Going
-# the other way, a settled structure must not be dumped back into scramble mode
-# by one bad tick — a body straddling the blue line to pressure the point is not
-# a broken structure — so leaving coverage takes a sustained stretch.
-#
-# There is deliberately NO time-floor fallback. An earlier version had one, on the
-# theory that the predicate might never clear; that was true of the man-coverage
-# predicate it guarded (see AIRushRead._coverage_ready for the measurement) and it
-# made the guard the only path into the zone. A home-ness predicate is monotone in
-# recovering bodies, so it clears on its own — nothing to bound.
+# There must be NO time-floor fallback beside it. A home-ness predicate is
+# monotone in recovering bodies, so it clears on its own; a floor beside one that
+# cannot clear becomes the only path into the zone.
 const COVERAGE_HOLD_TICKS: int = 6
 
 
@@ -171,9 +160,3 @@ static func compute(
 			state = State.TRANS_DEFENSE
 
 	return Result.make(state, carrier_team)
-
-
-# Helper: returns true if `state` is a TRANS state (used by SPRINT_BY
-# locking logic in role_slots).
-static func is_transition(state: State) -> bool:
-	return state == State.TRANS_OFFENSE or state == State.TRANS_DEFENSE

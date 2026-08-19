@@ -130,21 +130,20 @@ func _physics_process(delta: float) -> void:
 	else:
 		# Live interpolation owns this body's cosmetics, so the render-rate gait
 		# hook must run. Clear _self_posing here: a replay driving this same skater
-		# via apply_replay_state raises the flag (that path poses its own gait), and
+		# via apply_replay_state raises the flag (that path poses its own gait) and
 		# nothing else lowers it on a client-rendered remote — _process_input, the
-		# only other reset, never runs on this path — so without this the flag stuck
-		# true after the first goal/intermission replay and the render hook yielded
-		# forever, freezing every remote's legs for the rest of the match. Guarded by
-		# the is_replay_mode() early-return above, so this only fires in live play.
+		# only other reset, never runs on this path — so a stuck flag makes the
+		# render hook yield forever and freezes every remote's legs for the rest of
+		# the match. Guarded by the is_replay_mode() early-return above, so this
+		# only fires in live play.
 		_self_posing = false
 		if _knockback_lead_elapsed >= 0.0:
 			_knockback_lead_elapsed += delta
 		_interpolate(delta)
-		# Cosmetic leg gait + lower-body yaw moved to render rate (_render_pose_
-		# update below, invoked from Skater._process). Age the goal-celebration
-		# timer here at physics rate, though — it used to ride the gait pass, and
-		# the render gait is visibility-gated so it can't own the timer any more
-		# (a wire-fed remote still needs its celebration leg bounce to end).
+		# Cosmetic leg gait + lower-body yaw run at render rate (_render_pose_
+		# update below, invoked from Skater._process). The goal-celebration timer
+		# ages HERE at physics rate instead: the render gait is visibility-gated
+		# and an off-screen remote still needs its celebration leg bounce to end.
 		tick_celebration(delta)
 
 # Render-rate cosmetic pose for a remote body (overrides SkaterController).
@@ -249,11 +248,10 @@ func receive_input_batch(batch: Array[InputState]) -> float:
 # to a frame and a pop lands up to a frame after its due instant. Ordinary
 # hitches add ~15-25 ms on top.
 #
-# The old 4-tick (33 ms) trigger sat INSIDE that band, so it fired 4-12/s on a
-# perfectly healthy deep queue — and every fire discards real inputs the client
-# already predicted with, which costs it one visible reconcile. Worse, the old
-# 1-tick target drained to ~8.3 ms, BELOW the 12 ms quantization floor, so the
-# very next frame read as overdue again and re-armed the trigger.
+# A trigger inside that band fires 4-12/s on a perfectly healthy deep queue, and
+# every fire discards real inputs the client already predicted with — one visible
+# reconcile each. A target below the ~12 ms quantization floor is just as wrong:
+# the very next frame reads as overdue again and re-arms the trigger.
 #
 # The trade is asymmetric and that decides the sizing: tolerating slip costs
 # input LATENCY (invisible, bounded, and corrected when it grows); draining
@@ -291,10 +289,9 @@ func _drain_backlog(now: float) -> void:
 		var overdue: float = now - stale.host_timestamp
 		last_processed_host_timestamp = stale.host_timestamp
 		# Record the lead here too. A drained input is BY DEFINITION the most
-		# overdue one in the queue, so omitting it made input_lead_ms
-		# survivorship-biased: its own max was bounded by _DRAIN_TARGET_S, and a
-		# session could report a max well under _DRAIN_TRIGGER_S while draining
-		# several times a second — the two readings looked mutually impossible.
+		# overdue one in the queue, so omitting it makes input_lead_ms
+		# survivorship-biased — its max bounded by _DRAIN_TARGET_S, which reads as
+		# mutually impossible next to a session draining several times a second.
 		# Phase-resume artifacts stay out, matching the servo's sample gate.
 		if overdue <= _DRAIN_STALE_SOLO_S:
 			NetworkTelemetry.record_input_lead(overdue)
@@ -337,8 +334,8 @@ func _drive_from_input(delta: float) -> void:
 		last_processed_host_timestamp = input.host_timestamp
 		if not _game_state.is_movement_locked():
 			# Recorded for LIVE pops only: locked-phase pops (faceoff prep,
-			# celebrations) measure phase cadence, not link health, and were
-			# skewing the metric the adaptive lead is judged by.
+			# celebrations) measure phase cadence, not link health, and would skew
+			# the metric the adaptive lead is judged by.
 			# sim_time, not wall: overdue is stamp-vs-consumption, both tick-domain.
 			# On wall time this reads the frame-bunching offset as lateness and
 			# saturates the lead servo (see NetworkManager's sim clock).
@@ -400,8 +397,8 @@ func apply_network_state(state: SkaterNetworkState, host_ts: float) -> void:
 
 # Where the HOST had this skater at host_time, from the interpolation buffer. The
 # local player's reconcile replay samples every OTHER skater here to re-resolve
-# body checks against the host's authoritative positions (Slice C) instead of
-# replaying a stale recorded impulse — so replay matches host authority. Returns a
+# body checks against the host's authoritative positions rather than replaying a
+# stale recorded impulse, so replay matches host authority. Returns a
 # shared scratch (read it before the next call) with position / velocity /
 # brake_intent, or null when the buffer can't bracket the time (warmup / gap), in
 # which case the caller skips the pair. Separate bracket scratch from _interpolate
@@ -429,24 +426,20 @@ func sample_state_at(host_time: float) -> SkaterNetworkState:
 		# convention the live render (`_interpolate`) and the host's own hit-claim
 		# rewind (`LagCompRewind.forward_predict_skater`) use.
 		#
-		# It previously FROZE at the newest sample, on the reasoning that a
-		# projected lead "could fabricate a false overlap the host never resolved."
-		# That was sound when remotes rendered in the past — freezing was
-		# conservative relative to the screen. Since the render gained stage-3
-		# forward prediction it inverted: the live step collides against a
-		# ~host-present body while replay re-resolved the same contact against one
-		# `one_way + broadcast_interval/2` older, so replay could flip overlap, the
-		# aggressor gate, and the contact normal against both the screen AND the
-		# host. Freezing was the only one of the three parties still in the past.
+		# Never freeze at the newest sample here (except past
+		# _SAMPLE_PREDICT_MAX_S): the live step collides against a ~host-present
+		# body, so a frozen replay re-resolves the same contact against one
+		# `one_way + broadcast_interval/2` older and can flip overlap, the aggressor
+		# gate, and the contact normal against both the screen AND the host.
 		var newest: SkaterNetworkState = bracket.to_state
 		_sample_scratch.position = newest.position
 		_sample_scratch.velocity = newest.velocity
 		_sample_scratch.brake_intent = newest.brake_intent
 		_sample_scratch.hit_committed = newest.hit_committed
-		# Ghost gate for the reconcile replay's body-check re-resolution: without
-		# this the scratch held the constructor default (false) forever and the
-		# replay resolved contacts against ghosted skaters the host skipped —
-		# a reconcile snap-loop for as long as the overlap persisted.
+		# Ghost gate for the reconcile replay's body-check re-resolution — left
+		# unset the scratch holds the constructor default (false) and replay
+		# resolves contacts against ghosted skaters the host skipped, a reconcile
+		# snap-loop for as long as the overlap persists.
 		_sample_scratch.is_ghost = newest.is_ghost
 		_predict_sample_forward(newest, bracket.extrapolation_dt)
 	else:
@@ -464,8 +457,8 @@ func sample_state_at(host_time: float) -> SkaterNetworkState:
 	return _sample_scratch
 
 
-# Beyond this the buffer is too stale to project honestly and the sample holds at
-# the newest snapshot instead (the old freeze, kept as the deep-loss fallback).
+# Beyond this the buffer is too stale to project honestly and the sample freezes
+# at the newest snapshot instead — the deep-loss fallback.
 # Steady state is well inside it: the gap is `input lead + one_way +
 # broadcast_interval/2` — ~115 ms even on a poor link — so the cap only engages
 # when snapshots have genuinely stopped arriving, where inventing a third of a
@@ -507,14 +500,11 @@ func _predict_sample_forward(newest: SkaterNetworkState, dt: float) -> void:
 		_sample_scratch.velocity = _fp_result.velocity
 
 func _interpolate(delta: float) -> void:
-	# Shared delay (NetworkManager) keeps the puck and other remotes on the same
-	# timeline; the per-skater lead below shifts this body toward host-present.
+	# Shared delay (NetworkManager) keeps the goalie and other remotes on the same
+	# timeline. The buffer lookup itself is a pure interpolate-in-the-past at a
+	# full interp_delay behind host-present; the forward prediction further down
+	# is what carries this body toward the shared render instant.
 	var interp_delay: float = NetworkManager.get_interpolation_delay()
-	# Lead the render time toward host-present by a fraction of the buffer depth so
-	# remote bodies sit closer to where the host actually has them — the chase gap
-	# and the client-vs-host body-check contact mismatch both shrink with it.
-	# fraction 0 == legacy "interpolate in the past"; 1 == render at present (full
-	# ~interp_delay of dead-reckon). Scales with interp_delay, so it tracks RTT/jitter.
 	var render_time: float = NetworkManager.estimated_host_time() \
 			- interp_delay
 	var bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.find_bracket(
@@ -571,10 +561,8 @@ func _interpolate(delta: float) -> void:
 		interpolated.facing = Vector2(sin(interp_fa), cos(interp_fa))
 		# Boolean/enum fields can't be lerped; take the freshest value so
 		# ghost-mode and shot-pose toggles flow through to remote skaters
-		# without a one-broadcast delay. (shot_state / elevation were
-		# previously never copied onto the interpolated object at all, so
-		# _apply_state_to_skater wrote type defaults to the skater every tick
-		# and the elevated-blade replication had no effect on remotes.)
+		# without a one-broadcast delay. Every such field must be copied here —
+		# _apply_state_to_skater writes the scratch's type defaults otherwise.
 		interpolated.is_ghost = to_state.is_ghost
 		interpolated.elevation_level = to_state.elevation_level
 		interpolated.blade_up = to_state.blade_up
@@ -593,8 +581,8 @@ func _interpolate(delta: float) -> void:
 		# newest sample, the is_extrapolating branch dead-reckons it); the stage-3
 		# intent integration below is what carries the body toward present. Any
 		# correction error is absorbed by the SmoothDamp stage. blade/top_hand are
-		# upper_body-local
-		# and ride the body through the scene tree, so they need no projection.
+		# upper_body-local and ride the body through the scene tree, so they need
+		# no projection.
 	# Stage-3 forward prediction: intent-integrate the interpolated-past body toward
 	# host-present so a remote reads at its true closing distance instead of a full
 	# interp_delay behind. The host runs the IDENTICAL integration on the hit-claim
@@ -645,8 +633,8 @@ func _interpolate(delta: float) -> void:
 	# Forward-prediction quality: the pre-damp error the smoother is about to
 	# absorb on this body (fp error + correction pressure). Teleport-scale
 	# distances (faceoff/goal resets — anything the snap guard hard-snaps) are
-	# excluded: legitimate repositions, not prediction error (they buried the
-	# real peaks under ~40 m resets in the first playtest's rows).
+	# excluded: legitimate repositions, not prediction error — at ~40 m they bury
+	# the real peaks.
 	if _smooth_initialized:
 		var residual: float = (interpolated.position - _smooth_pos).length()
 		if residual < _SMOOTH_SNAP_DIST:
@@ -656,9 +644,9 @@ func _interpolate(delta: float) -> void:
 	# absolute position instead trails a moving body by ~velocity × smooth_time) and
 	# critically-damp only the residual error toward the authoritative target. So a
 	# wrong lead, a contradicting snapshot, or an interp<->extrap branch flip blends
-	# out, while straight-line motion tracks exactly. position_smooth_time now governs
-	# how fast that residual decays, not steady tracking. Subsumes the former
-	# rejoin-blend (every seam); a large delta (teleport / faceoff / goal reset) snaps.
+	# out, while straight-line motion tracks exactly. position_smooth_time governs
+	# how fast that residual decays, not steady tracking, and it absorbs every seam
+	# on its own; a large delta (teleport / faceoff / goal reset) snaps instead.
 	var target_pos: Vector3 = interpolated.position
 	if not _smooth_initialized or _smooth_pos.distance_to(target_pos) > _SMOOTH_SNAP_DIST:
 		_smooth_pos = target_pos
@@ -723,10 +711,9 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# .set_wrister_address_side).
 	if state.shot_state == SkaterStateMachine.State.WRISTER_AIM:
 		skater.set_wrister_address_side(state.wrister_address_side)
-	# Charge drives the stick-flex load bow (Skater._update_stick_flex reads
-	# it in WRISTER_AIM every rendered frame). It was replicated and decoded
-	# but never applied here, so remote wristers always bowed at zero charge
-	# — only the release whip's minimum pop showed on other machines.
+	# Charge drives the stick-flex load bow (Skater._update_stick_flex reads it in
+	# WRISTER_AIM every rendered frame), so a remote wrister bows at the shooter's
+	# real charge rather than at zero.
 	skater.shot_charge = state.shot_charge
 	# Movement intent for the gait's input-driven reads (glide, intent
 	# crossovers, brake-gated hockey stop) — the client-rendered remote's
@@ -734,7 +721,7 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	skater.move_intent = state.move_intent
 	skater.brake_intent = state.brake_intent
 	# Replicated hit-commit so the body-check resolver reads this remote's brace /
-	# full-vs-passive delivery on this machine (the brace moved onto the Hit button).
+	# full-vs-passive delivery on this machine.
 	skater.hit_committed = state.hit_committed
 	# The skid VFX (SkaterVFX trail marks + spray) keys off skater.is_braking,
 	# which only _process_input stamps — mirror it from the replicated brake
@@ -745,11 +732,10 @@ func _apply_state_to_skater(state: SkaterNetworkState) -> void:
 	# the replicated bit so another player's sprint visibly changes their
 	# stride on this machine (the on-screen stamina tell).
 	sprint_active = state.sprint_active
-	# The stagger-stumble wobble reads the CONTROLLER's stagger_timer (the
-	# gait derives its phase from the countdown). It was replicated since v10
-	# for the local victim's reconcile, but never applied to client-rendered
-	# remotes — so a checked opponent stumbled on the host and stood rock-
-	# steady on everyone else's screen.
+	# The stagger-stumble wobble reads the CONTROLLER's stagger_timer (the gait
+	# derives its phase from the countdown), so it has to be mirrored onto
+	# client-rendered remotes as well as the local victim's reconcile — otherwise
+	# a checked opponent stumbles on the host and stands rock-steady elsewhere.
 	stagger_timer = state.stagger_timer
 	# Knockdown mirrors stagger onto client-rendered remotes: the controller value
 	# and the skater flag so the down pose and any is_knocked_down read reflect a

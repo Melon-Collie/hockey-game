@@ -1,22 +1,15 @@
 class_name AIRushRead
 
-# The team's shared transition-defense perception — ONE read per brain tick, in
-# place of every defender independently asking "can I contain everything?".
+# The team's shared transition-defense perception — ONE read per brain tick.
 # Design: docs/transition-defense-plan.md §4.
 #
-# The model this replaces (a per-station counter-channel race, since deleted) asked
-# each bot a conjunctive worst-case question: contain every channel of every
-# opponent, priced at the hardest legal feed, or retreat. Five bots asking it
-# independently all got "no" and all retreated together, which is how a defensive
-# corps ends up standing on its own goal line. Nothing in it could ever say
-# "someone else has that man".
-#
-# Real transition defense is ALLOCATED and LAYERED, and the aggression of the whole
+# Transition defense is ALLOCATED and LAYERED, and the aggression of the whole
 # structure is set by one quantity every player on the ice can see: NUMBERS BACK.
-# So that quantity is computed once, here, and shared. Everything downstream —
-# gap depth, whether the D stands up at the line, whether we play the pass or the
-# shooter, whether the team is even allowed to switch into zone coverage — reads
-# this object rather than re-deriving its own private version.
+# So it is computed once, here, and shared. Everything downstream — gap depth,
+# whether the D stands up at the line, whether we play the pass or the shooter,
+# whether the team may switch into zone coverage — reads this object rather than
+# deriving a private version, which is what lets one defender's read say
+# "someone else has that man".
 #
 # Every field is a quantity a real player perceives: who is coming, who is back,
 # how long until someone gets on the carrier's hip, is everyone accounted for.
@@ -90,9 +83,8 @@ var carrier_peer: int = -1
 var rush_eta_s: float = INF
 var entry_eta_s: float = INF
 
-# Opponents genuinely involved (see _fill_attackers). Their stay-home D is not
-# a rush threat and must not appear in anyone's math — that exclusion is most of
-# why the old model retreated from phantoms.
+# Opponents genuinely involved (see _fill_attackers). Their stay-home D is not a
+# rush threat and must not appear in anyone's math.
 var attackers: Array[int] = []
 # Velocity-led positions, index-aligned with `attackers`.
 var attacker_leads: Array[Vector3] = []
@@ -128,14 +120,12 @@ var coverage_ready: bool = false
 # puck", and "give close support to a teammate if they are under heavy pressure" —
 # so it is computed once here rather than derived twice and allowed to disagree.
 #
-# Published as a TIME rather than a 0..1 probability on purpose. The obvious
-# candidate was 1 - carry_safety, which SUPPORT already uses; measured, that is
-# effectively a STEP function ("will an opponent be on the puck inside the evade
-# horizon?"), because it answers the CARRIER's question — can I be poked right
-# now. There is no gradient in it to threshold, and its 0.4 s horizon is far too
-# late for a defenseman 40 m away who needs a head start to back off. A time lets
-# each station compare against its own notice period, which is where that
-# threshold belongs.
+# Published as a TIME on purpose, and never as a 0..1 probability: `1 -
+# carry_safety` measures as a step function, because it answers the CARRIER's
+# question (can I be poked right now) over a 0.4 s horizon. There is no gradient
+# in it to threshold, and it is far too late for a defenseman 40 m away who needs
+# a head start to back off. A time lets each station compare against its own
+# notice period, which is where that threshold belongs.
 var pressure_eta_s: float = 0.0
 
 
@@ -223,9 +213,7 @@ func fill(snapshot: WorldSnapshot, team_id: int, own_goal_z: float,
 # An opponent is IN the rush when he can be at our net within the late-man
 # window of the puck itself. Time, not position: it keeps the hard-charging
 # trailer (who is behind the puck but joining) and drops the stay-home D (who is
-# level with nothing and arriving in five seconds). The old channel model priced
-# every opponent at the hardest feed on the rink, which is how a defenseman
-# standing at his own blue line came to justify our whole team collapsing.
+# level with nothing and arriving in five seconds).
 func _fill_attackers(snapshot: WorldSnapshot, team_id: int,
 		team_id_by_peer: Dictionary, caps_by_peer: Dictionary,
 		our_net: Vector3, offside_reads: bool, own_dir: float) -> void:
@@ -238,8 +226,7 @@ func _fill_attackers(snapshot: WorldSnapshot, team_id: int,
 		# his attacking zone (our defensive zone) while the puck is not there
 		# cannot legally receive where he stands — ARCADE ghosts him, NHL whistles
 		# the touch. Counting him is how an illegal cherry-picker drags a station
-		# out of the play. (The counter-channel model read this; the shared read
-		# has to as well.)
+		# out of the play.
 		if offside_reads and pid != carrier_peer \
 				and own_dir * s.position.z > GameRules.BLUE_LINE_Z:
 			continue
@@ -360,16 +347,14 @@ static func cover_envelope_m() -> float:
 # ── Coverage readiness (the DZONE handoff gate — plan §9) ────────────────────
 #
 # "Get back, get set, THEN take your man." This answers the FIRST clause only:
-# is the structure manned? It deliberately does NOT ask whether men are already
-# covered — that was the original predicate, and it was a MAN-coverage test used to
-# gate entry into a ZONE, which covers ice rather than bodies by definition. A
-# perfectly executed zone failed it: measured against AIZoneCoverage's own anchors
-# for a settled cycle, ZONE_W_WEAK sags to the high slot ~8 m off the weak-side
-# winger (4 m envelope), and the strong-side pressure comes from up-ice of the puck
-# — correct hockey, and not "goal-side". The gate could never be satisfied by the
-# shape it gated, so a time-floor guard was doing all the real work: every cycle
-# entered the zone when a timer expired rather than when the team was set. Both the
-# clause and the guard are gone.
+# is the structure manned? It must NOT also ask whether men are already covered.
+# That is a MAN-coverage test gating entry into a ZONE, which covers ice rather
+# than bodies by definition, and a correctly executed zone fails it: measured
+# against AIZoneCoverage's own anchors for a settled cycle, ZONE_W_WEAK sags to
+# the high slot ~8 m off the weak-side winger (4 m envelope) and the strong-side
+# pressure comes from up-ice of the puck. Correct hockey, and not "goal-side" —
+# so the gate can never be satisfied by the shape it gates, and only a time floor
+# is left doing the real work.
 #
 # TWO PARTS, and doctrine sets each one.
 #
@@ -393,9 +378,9 @@ static func cover_envelope_m() -> float:
 # The requirement is capped at the bodies we HAVE (`mini`): you cannot be asked to
 # produce a defender that does not exist. Without the cap, being genuinely a man
 # short — a human who will not backcheck, a ghosted bot — makes parity unreachable
-# and the predicate permanently false, which is the failure the deleted guard
-# existed for. With it, a short-handed team reads "set" once everyone it controls is
-# home, and defends with layers instead of scrambling forever.
+# and the predicate permanently false. With it, a short-handed team reads "set"
+# once everyone it controls is home, and defends with layers instead of
+# scrambling forever.
 #
 # So the read stays MONOTONE in the recovery it waits on — arrivals only raise the
 # count, and the bar never rises — which is what makes a fallback timer unnecessary
@@ -492,17 +477,6 @@ func _lead(pos: Vector3, vel: Vector3) -> Vector3:
 	return Vector3(pos.x + dx, 0.0, pos.z + dz)
 
 
-# True when `pid` is an opponent genuinely involved in the counter. The single
-# question a station's last-man bound should be asking about a body: is he
-# actually coming, or is he furniture?
-func is_attacker(pid: int) -> bool:
-	return pid in attackers
-
-
-# Refills this instance from `other` — the freeze seam for TeamBrainView (same
-# contract as the view's dict copies: main refills only after the worker has
-# finished reading last tick's copy, so no lock is needed). Arrays are cleared
-# and refilled, never reallocated.
 func copy_from(other: AIRushRead) -> void:
 	mode = other.mode
 	is_live = other.is_live

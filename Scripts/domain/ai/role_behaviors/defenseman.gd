@@ -23,11 +23,10 @@ class_name AIRoleDefenseman
 #     inside the dots at our blue line, shading with the puck's lateral
 #     drift (the NZ 1-2-2's back wall).
 
-# Blue-line hold: how far inside the offensive zone the points stand — a
-# full puck-handling radius, so a catch's give or a backswing at the point
-# never drags the puck back across the line (the puck leaving the zone
-# un-onsides the entire attack; at the old 1 m inset a routine reception's
-# cushion did exactly that).
+# Blue-line hold: how far inside the offensive zone the points stand — a full
+# puck-handling radius, so a catch's give or a backswing at the point never drags
+# the puck back across the line and un-onsides the whole attack. One metre is not
+# enough; a routine reception's cushion clears it.
 const POINT_INSET_M: float = 2.0
 # Strong point's extra sink rows when the cycle is low (puck below the dots)
 # — down his wall toward the top of his circle, the researched wall slide.
@@ -64,12 +63,9 @@ const DBACK_PUCK_SHADE: float = 0.2
 const DBACK_SHADE_MAX_M: float = 1.5
 
 # ── O-zone rim keep-ins (breakout plan §C.3) ─────────────────────────────────
-# A board-hugging clear travelling up a point's wall would sail past the
-# walk-the-line stands (they hold the line OFF the wall) and out of the zone
-# untouched — the exact hole real rims exploit. The read classifies the
-# flight the same way the breakout side does (loose, inside the wall band,
-# fired toward our end) and is priced as the honest intercept race; losing
-# the race means holding the station, not chasing a gone puck.
+# A board-hugging clear travelling up a point's wall sails past the walk-the-line
+# stands — they hold the line OFF the wall — and out of the zone untouched, which
+# is the hole real rims exploit.
 const RIM_WALL_BAND_M: float = 1.6       # boards-hugging corridor: ~a body off the glass
 const RIM_MIN_SPEED_M_S: float = 8.0     # a FIRED clear — slower loose pucks are the
 										 # chase election's ordinary business
@@ -108,11 +104,10 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 	var line_z: float = -own_dir * (GameRules.BLUE_LINE_Z + POINT_INSET_M)
 	var side: float = ctx.strong_x if is_strong else -ctx.strong_x
 
-	# Keep-in pre-empt (see the RIM_* doc): a rim coming up MY wall — step to
-	# the boards at the line and kill it, arriving at pace (blade to the wall
-	# lane), instead of walking the line while it sails past. The weak D's
-	# middle cover on the step is the existing emergent rotation; if the race
-	# is lost the branch never fires and the stand below holds.
+	# Keep-in pre-empt: a rim coming up MY wall — step to the boards at the line
+	# and kill it at pace instead of walking the line while it sails past. The weak
+	# D's middle cover on the step is emergent rotation; a lost race never fires
+	# the branch and the stand below holds.
 	var keepin: Vector3 = _wall_rim_keepin(ctx, side)
 	if keepin.is_finite():
 		d.target_position = keepin
@@ -124,13 +119,11 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
 	var teammates: Array[Vector3] = ctx.scratch_teammates
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, teammates)
-	# Keep-in insurance is NOT in this argmax: the walk picks the best shot
-	# lane, and offensive_station_target below decides whether that stand is
-	# holdable at all (puckless high coverage doesn't chase the point off the
-	# line; a man genuinely behind it, with nobody covering, does).
-	# The strong point sinks a row down his wall when the cycle is low —
-	# puck depth measured off the ATTACKED goal line (depth_of takes the
-	# reference net's z; opp_net is the net whose zone we're cycling).
+	# Keep-in insurance is NOT in this argmax: the walk picks the best shot lane,
+	# and offensive_station_target below decides whether that stand is holdable.
+	#
+	# The strong point sinks a row down his wall when the cycle is low — puck
+	# depth measured off the ATTACKED goal line, which is what opp_net names.
 	var puck_depth: float = INF
 	if ctx.snapshot != null and ctx.snapshot.puck_state != null:
 		puck_depth = AIZoneCoverage.depth_of(
@@ -162,10 +155,10 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 				best_pos = c
 	if best_score == -INF:
 		best_pos = base_stand
-	# The pinch read (plan §13): hold the line while we have real control and
-	# either support behind or nobody behind us; otherwise back off only as far
-	# as restores the numbers. Either way, stay inside feedable range of the
-	# puck — a point 30 m from the play is not a point.
+	# The pinch read: hold the line while there is support behind us or nobody
+	# behind us; otherwise back off only as far as restores the numbers, and
+	# either way stay inside feedable range — a point 30 m from the play is not a
+	# point.
 	d.target_position = AIRoleHelpers.offensive_station_target(
 			ctx, best_pos, ctx.prev_held_forward_stand)
 	d.held_forward_stand = d.target_position.distance_to(best_pos) < 0.5
@@ -173,12 +166,11 @@ static func _decide_point(ctx: RoleContext, is_strong: bool) -> RoleDecision:
 
 
 # The keep-in intercept stand for a rim coming up this point's wall, or
-# Vector3.INF when there is none / the race is lost. The classification is
-# the shared rim-flight read (loose puck, inside the wall band on MY side,
-# fired at rim pace toward our end); the stand is my wall at the blue line,
-# just inside the zone; the gate is the intercept race — the puck's time to
-# the line (undecayed pace: underestimating its time only makes the read
-# bail earlier, the conservative direction) against my calibrated arrival.
+# Vector3.INF when there is none / the race is lost. Classified by the shared
+# rim-flight read (loose puck, inside the wall band on MY side, fired at rim pace
+# toward our end); the stand is my wall at the blue line, just inside the zone.
+# The puck's time to the line uses its undecayed pace — underestimating it only
+# makes the read bail earlier, which is the conservative direction.
 static func _wall_rim_keepin(ctx: RoleContext, side: float) -> Vector3:
 	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
 		return Vector3.INF
@@ -210,22 +202,18 @@ static func _wall_rim_keepin(ctx: RoleContext, side: float) -> Vector3:
 
 
 # ── FORECHECK: hold the line on the lane, or go home ────────────────────────
-# The shared offensive-station read (offensive_station_target), applied per lane
-# for the D pair. While the read allows it the D holds the blue line on his lane
-# (DP_LINE_INSET_M); the moment their breakout is genuinely under way (Mode.RUSH
-# with the puck theirs) he abandons it for his defensive home post. There is no
-# intermediate stand on the lane: the read is categorical, so the pair either
-# holds the line or backs out.
+# The shared offensive-station read applied per lane for the D pair: hold the
+# blue line on the lane while the read allows it, abandon it for the defensive
+# home post the moment their breakout is genuinely under way. No intermediate
+# stand — the read is categorical.
 #
-# THE PAIR DOES NOT PINCH, and that is the doctrine rather than a limitation.
-# In a 1-2-2 the D are the back layer: three forwards press, and if the puck
-# beats them the pair is what stands between it and a rush the other way. A
-# pinch is a per-puck read — my winger owns the wall, the puck is coming to me,
-# a forward is covering behind me — and the weak-side D categorically does not
-# make it. Pinching BOTH, unconditionally, turns every failed forecheck into an
-# odd-man rush; this file previously stood them 8.8 m inside the line, which is
-# also 9 m deeper than the slot election that assigns them races to. The
-# situational strong-side pinch is tracked as its own work (5v5 plan §10);
+# THE PAIR DOES NOT PINCH, and that is the doctrine rather than a limitation. In
+# a 1-2-2 the D are the back layer: three forwards press, and if the puck beats
+# them the pair is what stands between it and a rush the other way. A pinch is a
+# per-puck read — my winger owns the wall, the puck is coming to me, a forward is
+# covering behind me — and the weak-side D categorically does not make it.
+# Pinching BOTH, unconditionally, turns every failed forecheck into an odd-man
+# rush. The situational strong-side pinch is its own work (5v5 plan §10);
 # _wall_rim_keepin below is the model for the "can I win this puck" gate it
 # needs.
 static func _decide_line_hold(ctx: RoleContext, lane_x: float) -> RoleDecision:
@@ -266,13 +254,11 @@ static func _decide_valve(ctx: RoleContext) -> RoleDecision:
 
 
 # ── NEUTRAL: the goal-side back pair ─────────────────────────────────────────
-# The blue-line stand is numbers-bounded like every other station in this file
-# (AIRoleHelpers.neutral_station_target). Without it this was the one D station
-# that would hold its line no matter what was behind it — the puckwatching last
-# man who stands at his own blue line into a guaranteed breakaway. Nobody behind
-# the pair leaves the stand exactly where it was, so the NZ back wall is
-# unchanged in ordinary play; a stretch threat already past it sags the pair
-# down the retreat line to the layer that covers him.
+# The blue-line stand is numbers-bounded like every other station in this file.
+# Unbounded it is the puckwatching last man who holds his own blue line into a
+# guaranteed breakaway. Nobody behind the pair leaves the stand exactly where it
+# was, so the NZ back wall is unchanged in ordinary play; a stretch threat
+# already past it sags the pair down the retreat line to the layer covering him.
 static func _decide_back(ctx: RoleContext, side: float) -> RoleDecision:
 	var d := RoleDecision.new()
 	var own_dir: float = ctx.own_goal_dir

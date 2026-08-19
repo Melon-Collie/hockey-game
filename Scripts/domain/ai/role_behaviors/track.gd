@@ -14,19 +14,14 @@ class_name AIRoleTrack
 #     and owns whoever enters the middle from either half.
 #
 # ── Why this is a MODE, not just another position ────────────────────────────
-# The old TRANS_DEFENSE had two MARK defenders running a cover-position argmax from
-# wherever they happened to be — including 20 m up-ice, mid-backcheck. A marker
-# in that state is computing where to stand relative to a man he is nowhere near,
-# and the argmax's whole supporting apparatus (arrival brake, anti-crowd
-# rejection, incumbent hysteresis) exists to make a STATIONARY POST stable. Run
-# while you are behind the play, it reads exactly as it looked: lazy escorting,
-# no urgency, a human skating straight past.
-#
 # Real backcheckers sprint until they are back, THEN pick up. So a peer the
 # shared read classifies as not-yet-inside gets NO argmax at all — just a lane
-# recovery point and a hard sprint (RoleDecision.sprint_override). He converts to
-# coverage on the tick he crosses goal-side of the puck, and the switch is what
-# produces visible urgency.
+# recovery point and a hard sprint (RoleDecision.sprint_override) — and converts
+# to coverage on the tick he crosses goal-side of the puck. Never run a cover
+# argmax from behind the play: its whole supporting apparatus (arrival brake,
+# anti-crowd rejection, incumbent hysteresis) exists to make a STATIONARY POST
+# stable, and a marker computing where to stand relative to a man he is 20 m from
+# reads as lazy escorting while a human skates straight past.
 
 # How far off centre the two mid trackers split as they come back, so F2 and F3
 # recover through mid-ice without stacking on one point. Roughly a body plus a
@@ -39,24 +34,18 @@ const MID_LANE_SPLIT_M: float = 2.5
 const CIRCLE_TOP_INSET_M: float = 0.5
 
 # TRACK_PUCK's target on the carrier: his hip, not his body centre. Offset to
-# the defensive side of him so the tracker arrives goal-side and takes the puck,
-# rather than riding alongside and pushing him toward the net.
-#
-# Measured off his REAL position, not a velocity-led one. The lead used to be
-# applied here as well, which double-counted his motion: the route already
-# carries his velocity as a feed-forward (RoleDecision.target_velocity), so the
-# hip sat `pace x anticipation` further goal-side than the offset asked for and
-# the tracker never actually closed to it. Same defect, same fix, as the gap in
-# AIRoleRushD — see its header.
+# the defensive side of him so the tracker arrives goal-side and takes the puck
+# rather than riding alongside and pushing him toward the net. Measured off his
+# REAL position — the route already carries his velocity as a feed-forward, so a
+# lead here would put the hip `pace × anticipation` further goal-side than the
+# offset asks for and the tracker would never close to it.
 const HIP_GOAL_SIDE_M: float = 0.8
 
-# A tracker may commit a check only once he is genuinely goal-side of the
-# carrier by this margin. Hunting a hit from up-ice is how a backchecker takes a
-# run at the play, misses, and removes himself from it entirely; catching a
-# carrier from behind and finishing is the legitimate version, and the only one
-# this allows. The hit itself still has to clear AIBodyCheck's ordinary
-# separating-impulse bar, so nothing here makes bots hit more often — it makes
-# the hits they were already allowed to want reachable from one more role.
+# A tracker may commit a check only once he is genuinely goal-side of the carrier
+# by this margin. Hunting a hit from up-ice is how a backchecker takes a run at
+# the play, misses, and removes himself from it entirely; catching a carrier from
+# behind and finishing is the legitimate version, and the only one this allows.
+# The hit still has to clear AIBodyCheck's ordinary separating-impulse bar.
 const CHECK_GOAL_SIDE_MARGIN_M: float = 0.5
 
 
@@ -111,14 +100,13 @@ static func _decide_puck(ctx: RoleContext) -> RoleDecision:
 	# "moving-frame pursuit"): a backchecker's target velocity IS the carrier's,
 	# and closing the last metres is a relative problem, not a trip to a spot.
 	d.target_velocity = AIRoleHelpers.stand_ride_velocity(ctx)
-	# Track at full pace and don't brake at the target: the carrier is moving,
-	# and a backchecker who eases up at his hip has not caught him. (Riding a man,
-	# the closing profile already expresses that — it spends the closing speed and
-	# leaves him matched; the flag still covers the loose-puck fallback.)
-	# A backchecker is behind the play by definition and the whole job is closing
-	# that distance, which is what licenses the sprint override past both gap
-	# gates. A tracker the shared read already calls INSIDE is not doing that job
-	# — sprinting him at a carrier he is in front of is a step-up, not a recovery.
+	# Full pace, no brake at the target: a backchecker who eases up at the hip has
+	# not caught him. Riding a man the closing profile already expresses that, so
+	# the flag is really covering the loose-puck fallback.
+	#
+	# The sprint override past both gap gates is licensed by being behind the play
+	# — a tracker the shared read already calls INSIDE is not doing that job, and
+	# sprinting him at a carrier he is in front of is a step-up, not a recovery.
 	d.sprint_override = not inside
 	d.arrive_at_speed = true
 	# Stick on the puck: aim at the carrier's blade side so the poke/lift is
@@ -133,13 +121,12 @@ static func _decide_puck(ctx: RoleContext) -> RoleDecision:
 # How far goal-side of the carrier the tracker actually stands, and therefore
 # what the hip is allowed to ask of him.
 #
-# THE HIP IS A CATCH-UP TARGET. Arriving 0.8 m goal-side of a carrier is the
-# right errand for a man chasing him from behind — it is the spot where you take
-# the puck rather than ride alongside. It is the wrong errand for a tracker who
+# THE HIP IS A CATCH-UP TARGET — the spot where a man chasing from behind takes
+# the puck rather than riding alongside. It is the wrong errand for a tracker who
 # is ALREADY goal-side, and the election hands this slot to whoever of the
 # non-RUSH_D1 bodies reaches the puck soonest, which in a shape that is home
-# means somebody in front of the play: measured, a tracker 16.5 m off our own net
-# was sent to a hip 30 m out, with the sprint override on, to become a second
+# means somebody in front of the play: unbounded, a tracker 16.5 m off our own
+# net is sent to a hip 30 m out, sprint override on, to become a second
 # challenger on a carrier RUSH_D1 already owns.
 #
 # So the gap the hip asks for is bounded by the depth this body already owns,
@@ -170,16 +157,12 @@ static func _decide_mid(ctx: RoleContext, side: float) -> RoleDecision:
 	var d := RoleDecision.new()
 	var read: AIRushRead = ctx.rush_read
 
-	# RECOVERING: no argmax, no man — just get back through the middle, hard.
-	# This is the whole of the urgency fix (§7). The destination is the same
-	# post he will hold once home: it already rides `read.threat_axis`, so it
-	# rotates with the rush's bearing and the tracker converges on the lane the
-	# rush is actually using rather than a fixed spot. (A branch here once tried
-	# to aim further up-ice at the rush's own depth; it projected at the POST's
-	# depth instead, which measured a 0.3 m difference — it never did anything.
-	# Reinstating that idea means deciding whether a recovering tracker should
-	# CUT INSIDE to the circles, as he does now, or run a pursuit curve at the
-	# rush's shoulder. The post is the researched answer.)
+	# RECOVERING: no argmax, no man — just get back through the middle, hard
+	# (§7). The destination is the same post he will hold once home; it rides
+	# `read.threat_axis`, so it rotates with the rush's bearing and the tracker
+	# converges on the lane the rush is actually using rather than a fixed spot.
+	# A recovering tracker CUTS INSIDE to the circles rather than running a
+	# pursuit curve at the rush's shoulder — the post is the researched answer.
 	if not _is_inside(ctx, read):
 		d.target_position = _post(ctx, read, side)
 		d.sprint_override = true
@@ -212,20 +195,17 @@ static func _post(ctx: RoleContext, read: AIRushRead, side: float) -> Vector3:
 # INSIDE MY ICE. Lane ownership, not man-marking: whoever enters my ice is mine
 # while he is in it, and the deepest man in it is the one who gets covered.
 #
-# "Enters my ice" was missing, and the role's own rule — hold the post, never
-# chase out of the structure — cannot hold without it: the pick was the deepest
-# attacker on my half of the RINK, however far up-ice, and the cover geometry
-# then put the target goal-side of *him*. Measured, that sent a mid tracker at a
-# point 37 m off our own net — past the far blue line — to cover a trailer who
-# was himself 40 m out and no part of anything yet.
+# "Enters my ice" is what makes the role's own rule — hold the post, never chase
+# out of the structure — enforceable. Without it the pick is the deepest attacker
+# on my half of the RINK however far up-ice, and the cover geometry then puts the
+# target goal-side of *him*: a mid tracker 37 m off our own net, past the far
+# blue line, covering a trailer who is himself 40 m out and no part of anything.
 #
-# The bound is the tracker's own post plus a cover envelope (the span within
-# which one body owns another, AIRushRead.cover_envelope_m — the same quantity
-# the numbers reads use for "meaningfully behind"). Inside it a man has arrived
-# and is the tracker's to pick up; outside it he has not, and the answer is the
-# post. It is expressed off _post_depth so the two cannot drift apart. No clamp
-# on the resulting target is needed: cover_man_target sits goal-side of the man
-# it covers, so bounding the man bounds the stand.
+# The bound is the tracker's own post plus a cover envelope — the span within
+# which one body owns another, the same quantity the numbers reads use for
+# "meaningfully behind". Expressed off _post_depth so the two cannot drift apart.
+# No clamp on the resulting target is needed: cover_man_target sits goal-side of
+# the man it covers, so bounding the man bounds the stand.
 static func _pickup_depth_m() -> float:
 	return _post_depth() + AIRushRead.cover_envelope_m()
 

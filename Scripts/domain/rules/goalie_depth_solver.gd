@@ -4,56 +4,38 @@ class_name GoalieDepthSolver
 # "given everything pulling on my depth at once, where do I stand, and how fast do
 # I get there?"
 #
-# ── Why this exists (plan doc §3) ────────────────────────────────────────────
-# Depth was decided by a hand-ordered sequence inside GoalieController._update_depth:
-# the Buckley chart, then the lateral-pressure retreat, then the backdoor cap, then
-# the rush backflow, then a floor, a rate cap and an exponential settle — some
-# `min`, some `max`, one `move_toward` bypassing the others. Every individual model
-# was grounded and tested; the COMPOSITION was neither, and the answer was whatever
-# the statement order happened to produce. That is the mechanism by which a
-# codebase full of good models still feels hand-tuned, and it is why adding the
-# eighth constraint was going to be harder than the seventh.
-#
-# Expressed here, the rule is simple and states itself:
+# The composition rule, which is the whole design and states itself:
 #   * every constraint is a MAXIMUM RADIUS the goalie may hold;
 #   * the target is the tightest of them (floored, so no cap can bury him in the net);
 #   * the approach RATE is the rush backflow's when it binds, otherwise the
 #     ordinary settle.
-# Ordering stops being load-bearing, and a ninth constraint is one more field.
+# So statement ORDER is not load-bearing, and a further constraint is one more
+# field rather than another line in a hand-ordered sequence.
 #
-# ── Why there is no distance CURVE any more ──────────────────────────────────
-# The Buckley A/B/C/D zones are defined SITUATIONALLY, not by distance: A is for a
-# play entering the zone, B for a settled shot, C when a lateral play is live, D on
-# the post. The old static chart tried to reproduce them from threat distance
-# alone, which put A (the most aggressive depth) in the slot and B out at the
-# points — inverted, and a fifth mechanism contradicting the four situational
-# models that already existed (rush backflow = A, backdoor cap = C, RVH/VH = D).
+# There is deliberately no distance CURVE. The Buckley A/B/C/D zones are defined
+# SITUATIONALLY, not by distance (A entering the zone, B a settled shot, C a live
+# lateral play, D on the post), and the situational models here already describe
+# them: rush backflow = A, backdoor cap = C, RVH/VH = D. Depth is the solve those
+# models imply — go as far out as the races allow — so the zones are emergent.
+# Nothing binding means a genuine 1v0 is challenged aggressively (correct: there
+# is no lateral option to punish it), a live receiver pulls him back via the
+# re-square race, and the standoff keeps him off the puck in tight.
 #
-# Depth is now the SOLVE those models were already describing: go as far out as
-# the races allow. The zones stop being authored and become emergent — nothing
-# binding means a genuine 1v0 gets challenged aggressively (correct: there is no
-# lateral option to punish it), a live receiver pulls him back via the re-square
-# race, a closing rush hands him to the backflow, and the standoff keeps him off
-# the puck in tight.
-#
-# NOT changed: he is not simply parked deeper. At this game's shot speeds the
-# flight time inside ~7 m is SHORTER than the arm read (0.108 s at 5 m vs 0.18 s
-# cold), so depth cannot buy usable reaction time in the slot — the original
-# chart's "cutting the angle is what makes the save, not reflexes" reasoning holds
-# for the game even though the chart's zone LAYOUT did not.
+# He is NOT simply parked deeper. At this game's shot speeds the flight time
+# inside ~7 m is SHORTER than the arm read (0.108 s at 5 m vs 0.18 s cold), so
+# depth cannot buy usable reaction time in the slot: cutting the angle is what
+# makes the save there, not reflexes.
 #
 # Pure/static, engine-free, unit-testable. Callers own the Constraints instance
 # (rebuilt in place each tick) so the hot path allocates nothing.
 
 class Constraints:
-	# CEILING — as far out as the goalie will ever challenge. No longer a distance
-	# curve: depth is now solved as "the deepest radius the races allow", and this
-	# is simply the upper bound on that solve (BPS "A", the aggressive depth).
+	# CEILING — as far out as the goalie will ever challenge: the upper bound on
+	# the "deepest radius the races allow" solve (BPS "A", the aggressive depth).
 	var ceiling_radius: float = 0.0
-	# PHYSICAL STANDOFF — he must stay goal-side of the puck. Without this the
-	# solve happily puts him level with (or past) an in-tight threat, which is
-	# what "the goalie is right on top of me" felt like. Not a tuning curve: it is
-	# body half-depth plus stick clearance.
+	# PHYSICAL STANDOFF — he must stay goal-side of the puck; without it the solve
+	# happily puts him level with (or past) an in-tight threat. Not a tuning
+	# curve: body half-depth plus stick clearance.
 	var standoff_cap: float = INF
 	# Lateral TRACKING cap — the deepest radius from which he can still stay square
 	# to a carrier moving the puck across (the anticipatory deke / walkout answer).

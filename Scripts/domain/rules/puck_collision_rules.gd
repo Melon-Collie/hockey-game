@@ -79,9 +79,9 @@ static func deflect_velocity(
 #          deflects UP — roof the rising shot.
 #   HIGH — blade lifted high (~0.52 m pivot, reaching ~1.05 m): an airborne
 #          puck bats DOWN — the high-feed knockdown at the net mouth.
-# The old model derived up-vs-down from puck-vs-blade geometry at HIGH; the
-# sign is now the player's stated intent, so identical contacts never flip
-# outcome on a centimeter of height. Anti-cheese is preserved by the PIVOT
+# The sign is the player's stated intent, never puck-vs-blade geometry at the
+# contact, so two identical contacts cannot flip outcome on a centimetre of
+# height. Anti-cheese is preserved by the PIVOT
 # heights, not a gate: a saucer pass apexes ~0.21–0.26 m — under the MID
 # pivot — so camping an air mode still only ever meets genuinely high pucks.
 static func deflect_loft_speed(
@@ -191,8 +191,8 @@ static func poke_strip_velocity(
 # ever gets possession off this path — the puck squirts free — but its HEADING is
 # biased toward the stronger blade: the exit is the vector sum of the two blade
 # momenta, so a harder/faster sweep dominates the sum and the puck goes that
-# player's way (blade speed already reflects Hands, so no attribute term is needed
-# here). Speed is that combined momentum, clamped to [min_speed, max_speed]. When
+# player's way (blade speed already carries the build's stick/arm lever, so no
+# attribute term is needed here). Speed is that combined momentum, clamped to [min_speed, max_speed]. When
 # the two blades roughly cancel (net below deadlock_threshold — a true 50/50), the
 # puck instead pops out PERPENDICULAR to the line between the blade contact points
 # (the "pinched seed" behavior) at deadlock_speed; the caller supplies the ± side

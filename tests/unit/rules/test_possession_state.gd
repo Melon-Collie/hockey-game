@@ -126,15 +126,6 @@ func test_carrier_change_updates_team() -> void:
 	assert_eq(result.carrier_team, 1, "new carrier flips carrier_team")
 
 
-func test_is_transition_helper() -> void:
-	assert_true(AIPossessionState.is_transition(AIPossessionState.State.TRANS_OFFENSE))
-	assert_true(AIPossessionState.is_transition(AIPossessionState.State.TRANS_DEFENSE))
-	assert_false(AIPossessionState.is_transition(AIPossessionState.State.DZONE))
-	assert_false(AIPossessionState.is_transition(AIPossessionState.State.OZONE))
-	assert_false(AIPossessionState.is_transition(AIPossessionState.State.NEUTRAL))
-	assert_false(AIPossessionState.is_transition(AIPossessionState.State.BREAKOUT))
-	assert_false(AIPossessionState.is_transition(AIPossessionState.State.FORECHECK))
-
 
 func test_neutral_when_loose_puck_stationary() -> void:
 	# Faceoff drop scenario — puck loose at center, near-zero velocity.

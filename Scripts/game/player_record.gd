@@ -18,8 +18,8 @@ var is_bot: bool = false
 # PlayerRegistry.
 var is_goalie: bool = false
 var team: Team = null
-# faceoff_position used to live here but it's pure-derived from team_id +
-# team_slot. Compute it via PlayerRules.faceoff_position(record.team.team_id,
+# faceoff_position is deliberately not a field: it is pure-derived from team_id
+# + team_slot. Compute it via PlayerRules.faceoff_position(record.team.team_id,
 # record.team_slot) at the call site; the registry stays the only place that
 # knows the team/slot mapping.
 var jersey_color: Color        = Color.WHITE

@@ -16,7 +16,7 @@ class_name SkaterCollisionRules
 #      structurally impossible here, not merely tuned to zero.
 #
 # All the gameplay attributes AND the hit button enter through ONE caller-supplied
-# scalar, `transfer` (0..1): transfer = attacker Physical-delivery × hit-commit ×
+# scalar, `transfer` (0..1): transfer = attacker check-delivery × hit-commit ×
 # victim brace. It scales the shared impulse, so:
 #   * transfer → 1  : full inelastic transfer. Equal masses converge to a shared
 #                     velocity (the grind); a heavy attacker on a light victim
@@ -29,7 +29,7 @@ class_name SkaterCollisionRules
 # hand-shaped restitution curve — the grounded-model discipline (see Scripts/domain/ai/CLAUDE.md).
 #
 # The victim's own Δv magnitude (|dvel_b|) is the "how hard did it land" number the
-# stagger / knockdown / puck-strip all key off downstream, exactly as before.
+# stagger / knockdown / puck-strip all key off downstream.
 #
 # Pure/static + value-type math (Vector3, no heap allocation beyond the caller-owned
 # Result), so it is hot-path safe at 120 Hz × pairs AND — unlike an engine contact

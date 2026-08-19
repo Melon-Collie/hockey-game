@@ -22,8 +22,8 @@ class_name MenuStyle
 const TEAL        := Color(0.753, 0.847, 0.878, 1.00)
 # Brighter highlight-tip variant (#DCEEF2) — primary-button hover, accent text.
 const TEAL_HOVER  := Color(0.863, 0.933, 0.949, 1.00)
-# Low-alpha brand teal — borders, focus rings, separators. Replaces the
-# previous grey-teal so borders are on-brand instead of just "dark cool."
+# Low-alpha brand teal — borders, focus rings, separators (on-brand rather than
+# a neutral grey-teal).
 const TEAL_DIM    := Color(0.753, 0.847, 0.878, 0.28)
 # Very low-alpha brand teal — ghost-button hover fill, hover-glow surfaces.
 const TEAL_GLOW   := Color(0.753, 0.847, 0.878, 0.14)
@@ -48,9 +48,9 @@ const HUD_BG      := Color(0.07, 0.07, 0.09, 0.92)     # in-game scorebug (uncha
 # Modal scrim alpha — single source of truth so every popup uses the same dim.
 const SCRIM       := Color(0.024, 0.039, 0.071, 0.55)
 
-# Legacy button-state fills — referenced by ad-hoc styleboxes in main_menu.gd's
-# player-card hover and a few places that don't go through the theme system.
-# The themed Button (= ghost) uses transparent + teal-glow on hover instead.
+# Button-state fills, consumed by tools/build_menu_theme.gd when it bakes the
+# menu theme. The themed Button (= ghost) is transparent at rest with a teal
+# glow on hover.
 const BTN_FILL    := Color(0.067, 0.094, 0.141, 0.00)  # ghost: transparent at rest
 const BTN_HOVER   := SURFACE_ELEV
 const BTN_PRESS   := Color(0.039, 0.063, 0.102, 1.00)
@@ -62,10 +62,9 @@ const DANGER      := Color(0.878, 0.471, 0.510, 1.00)
 
 
 # ── Broadcast HUD (in-game scorebug + popup scoreboard) ──────────────────────
-# Modern indie sport HUD palette. The "broadcast" name is historical — we
-# dropped the vintage cream tones in favor of pure white + cool-neutral
-# gray to match the game's precision-sport character. Tune here to shift
-# the whole HUD warmer/cooler/punchier.
+# Modern indie sport HUD palette: pure white + cool-neutral gray, for the game's
+# precision-sport character rather than the vintage cream the "broadcast" name
+# suggests. Tune here to shift the whole HUD warmer/cooler/punchier.
 #
 # Typography is a two-font system, both OFL-licensed (embeddable in the
 # exported build — unlike the logo's own wordmark face):
@@ -93,7 +92,6 @@ const BROADCAST_SHADOW   := Color(0.0,   0.0,   0.0,   0.50)  # offset drop shad
 const BROADCAST_CREAM    := Color(1.000, 1.000, 1.000, 1.00)  # #FFFFFF primary text (was cream #F6EFE2)
 const BROADCAST_DIM      := Color(0.608, 0.627, 0.675, 1.00)  # #9BA0AC cool-neutral gray labels (was cream-dim #B8B0A0)
 const BROADCAST_SEP      := Color(0.165, 0.165, 0.220, 1.00)  # #2A2A38 column separator
-const BROADCAST_TITLE_BG := Color(0.102, 0.102, 0.149, 1.00)  # #1A1A26 scoreboard title strip
 
 
 # ── HUD ice-overlay (3D-on-ice elements: rings, glyphs, reticles) ─────────────
@@ -113,9 +111,9 @@ const HUD_LINE_THICK := 0.045              # heavier stroke for symbols (arrow, 
 # the camera pans. Relationship-relative (not absolute team), so it stays the
 # same regardless of which jersey each side wears. Blue-vs-red is
 # colorblind-safe; self is green — a third primary that stays clearly apart from
-# both the team blue and enemy red (the old cyan sat adjacent to team blue and
-# was easy to confuse mid-rush) and stays apart from the amber/red the stamina
-# ring uses for its low/locked states. These are only the DEFAULTS now: each is fully
+# both the team blue and enemy red (anything adjacent to team blue, cyan
+# included, is easy to confuse mid-rush) and stays apart from the amber/red the
+# stamina ring uses for its low/locked states. These are only DEFAULTS: each is
 # user-pickable (Options → Game → Ring Colors), and PlayerPrefs.ring_color_*
 # holds the live values that SkaterHUDCoordinator reads. The self color also
 # drives the overhead self-beacon so the on-ice ring and the floating marker
@@ -128,18 +126,9 @@ const HUD_RING_ENEMY := Color(0.95, 0.25, 0.25, 1.00)   # red  — opponents
 
 # ── Factories ─────────────────────────────────────────────────────────────────
 
-# Wrap a PanelContainer in a Control with a hard-edged, CSS-style offset drop
-# shadow. Godot's StyleBoxFlat shadow expands the shadow rect uniformly before
-# applying offset, which produces a soft-edged halo instead of the crisp
-# "spread: 0" behavior we want. This composes two panels: a shadow panel
-# (offset, behind, anti-aliasing off) and the original (at origin), with the
-# shadow size kept in sync with the original via the resized signal. The
-# Drop-shadow helper retained as a pass-through so existing HUD call sites
-# don't have to be rewritten. The drop shadow itself was removed in the
-# visual harmonization pass — the broadcast surfaces now sit flat against
-# the unified dark background, matching the menu's look. If we ever want
-# shadows back, restore the body of this function (wrap + shadow_style +
-# size sync) from git history.
+# Drop-shadow helper, retained as a pass-through so HUD call sites keep reading
+# the same: broadcast surfaces sit flat against the unified dark background, with
+# no shadow.
 static func wrap_drop_shadow(main_panel: PanelContainer, _offset: Vector2) -> Control:
 	return main_panel
 

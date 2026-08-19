@@ -2,9 +2,6 @@ class_name GameRules
 
 # Pure game-rule constants. No engine concerns here — collision layers, masks,
 # and physics tick rate live in Constants.gd (engine-facing autoload).
-#
-# This is a class_name const class, not an autoload — no registration needed.
-# Access anywhere as `GameRules.BLUE_LINE_Z`.
 
 # ── Game Flow Timings ─────────────────────────────────────────────────────────
 const GOAL_PAUSE_DURATION: float        = 2.0  # fallback for GOAL_SCORED auto-advance if replay never starts
@@ -18,8 +15,8 @@ const FACEOFF_PREP_DURATION: float = 2.0   # visible "2 → 1 → DROP!" countdo
 # extended window.
 const PREGAME_INTRO_DURATION: float = 8.0
 # Extra hold on each PERIOD-START faceoff (same sweep + bench skate-on with
-# the "2ND PERIOD" card instead of the matchup rosters — a single line, so the
-# original shorter beat).
+# the "2ND PERIOD" card instead of the matchup rosters — a single line, so a
+# shorter beat).
 const PERIOD_INTRO_DURATION: float = 4.0
 # Skate-in glide durations (see SkaterController.begin_approach). Players skate
 # from a start point to the faceoff dot instead of teleport-snapping. Each stays
@@ -43,15 +40,15 @@ const FACEOFF_STAGING_SETBACK: float   = 6.0
 # countdown) so a far player covers the distance at ~FACEOFF_SKATE_IN_SPEED
 # instead of a teleport-fast dash; per-player glide time scales with distance
 # and is capped so everyone is set before the drop. Both host (prep timer) and
-# client (cosmetic countdown) apply the same fixed extra, derived locally from
-# the faceoff kind — no wire change. Icing (nearly the whole rink to cover)
-# still skates briskly since the window can't stretch to the full length, but
-# it reads as a hard skate rather than a snap.
+# client (cosmetic countdown) derive the same fixed extra locally from the
+# faceoff kind, so it never goes on the wire. Icing (nearly the whole rink to
+# cover) still skates briskly since the window can't stretch to the full length,
+# but it reads as a hard skate rather than a snap.
 const FACEOFF_SKATE_IN_SPEED: float    = 9.0   # m/s target skate pace
 const FACEOFF_SKATE_PREP_EXTRA: float  = 1.5   # s added to the prep before the countdown
 const FACEOFF_SKATE_SETTLE: float      = 0.4   # s a skater should be set before the drop
-# Post-goal staged skate-ins all cover the same setback, so a fixed duration made
-# everyone move in eerie lockstep. Vary each player's glide time by ±this
+# Post-goal staged skate-ins all cover the same setback, so a fixed duration
+# would move everyone in eerie lockstep. Vary each player's glide time by ±this
 # fraction (deterministically, per player + goal count) so they arrive staggered
 # at slightly different speeds. Kept small enough that the slowest still lands
 # before the drop (base 1.25 s × 1.3 = 1.6 s < the 2 s post-goal prep).
@@ -59,18 +56,6 @@ const FACEOFF_STAGGER_FRACTION: float  = 0.3
 const FACEOFF_TIMEOUT: float       = 10.0
 const PERIOD_DURATION: float       = 4.0 * 60.0   # 240 s per period
 const NUM_PERIODS: int             = 3
-# Between-period break: END_OF_PERIOD runs the skate-off — every skater glides
-# from where play stopped to their bench door (PhaseCoordinator.
-# on_period_break_entered, hiding through the door on arrival) under the wide
-# period-break camera hold, then the next prep runs the bench intro back onto
-# the ice with the period card. Every break is a fixed INTERMISSION_DURATION:
-# after the INTERMISSION_SETTLE beat the intermission band + countdown come
-# up, with the period's goals looping behind them when there are any (replay
-# mode freezes the phase timer; the host's intermission timer ends the break
-# via GameStateMachine.finish_period_break) — a scoreless period holds the
-# same band over the wide rink and rides the phase timer instead. A unanimous
-# skip vote ends either break early. The worst skate-off trip (far corner →
-# bench ≈ 44 m at FACEOFF_SKATE_IN_SPEED ≈ 4.9 s) fits well inside the break.
 const PERIOD_BREAK_SETTLE: float   = 0.5   # s every skater should be set at the bench before the break ends
 # Live beat between the period horn and the intermission band / reel taking
 # over: lets the END-OF-PERIOD chyron + skate-off read first, and guarantees
@@ -78,7 +63,9 @@ const PERIOD_BREAK_SETTLE: float   = 0.5   # s every skater should be set at the
 # before the reliable replay-mode RPC branches on it.
 const INTERMISSION_SETTLE: float   = 2.0
 # Total between-period break length (settle beat + band/reel window). The
-# on-screen countdown counts the post-settle window down.
+# on-screen countdown counts the post-settle window down. Comfortably covers the
+# worst skate-off trip (far corner → bench ≈ 44 m at FACEOFF_SKATE_IN_SPEED ≈
+# 4.9 s).
 const INTERMISSION_DURATION: float = 20.0
 const OT_ENABLED: bool             = true
 const OT_DURATION: float           = 4.0 * 60.0   # 240 s per OT period
@@ -86,24 +73,25 @@ const OT_DURATION: float           = 4.0 * 60.0   # 240 s per OT period
 # ── Rink Geometry ─────────────────────────────────────────────────────────────
 const GOAL_LINE_Z: float = 26.65  # rink_length / 2 - distance_from_end (30 - 3.35)
 const BLUE_LINE_Z: float = 7.29  # 64 ft from goal line to near edge + 0.15m to center
-const NET_HALF_WIDTH: float = 0.915      # half of goal opening (post centerline) — must match HockeyGoal post positions
-const NET_POST_RADIUS: float = 0.030     # goal-pipe radius — must match HockeyGoal.POST_RADIUS
-const NET_DEPTH: float = 1.02            # goal depth from goal line to back frame
+# Net frame. HockeyGoal draws the same frame from its own constants; every pair
+# is pinned by test_net_geometry_mirrors.
+const NET_HALF_WIDTH: float = 0.915      # half of goal opening (post centerline)
+const NET_POST_RADIUS: float = 0.030     # goal-pipe radius
+const NET_DEPTH: float = 1.016           # 40" goal-line-to-back-frame depth (NHL rulebook)
 const NET_BACK_HALF_WIDTH: float = 1.02  # half-width at back of net (trapezoid wider end)
-const NET_HEIGHT: float = 1.22           # crossbar height (pipe centerline) — must match HockeyGoal.NET_HEIGHT
-const NET_CROWN_HALF_WIDTH: float = 0.815  # half-span of the crossbar / top net panel — must match HockeyGoal.CROWN_HALF_WIDTH
-# Radius of the post-to-crossbar bend — must match HockeyGoal.MOUTH_CORNER_RADIUS.
-# The frame is continuous by construction: the post stands to
-# NET_HEIGHT − this, the bend sweeps a quarter circle from there to the crossbar
-# end, and NET_CROWN_HALF_WIDTH is NET_HALF_WIDTH − this (which is how HockeyGoal
-# derives it). NetGeometry relies on that tiling — a puck leaving one surface
-# must be picked up by the next with no seam.
+const NET_HEIGHT: float = 1.22           # crossbar height (pipe centerline)
+const NET_CROWN_HALF_WIDTH: float = 0.815  # half-span of the crossbar / top net panel
+# Radius of the post-to-crossbar bend. The frame is continuous by construction:
+# the post stands to NET_HEIGHT − this, the bend sweeps a quarter circle from
+# there to the crossbar end, and NET_CROWN_HALF_WIDTH is NET_HALF_WIDTH − this
+# (which is how HockeyGoal derives it). NetGeometry relies on that tiling — a
+# puck leaving one surface must be picked up by the next with no seam.
 const NET_MOUTH_CORNER_RADIUS: float = 0.10
-const NET_TOP_DEPTH: float = 0.559       # depth of the top net panel from the goal line — must match HockeyGoal.TOP_DEPTH
+const NET_TOP_DEPTH: float = 0.559       # depth of the top net panel from the goal line
 # Coarse padding for the "is this over/near the net" footprint query below. NOT a
 # collision surface: the blade and the puck both collide with the real cage
-# (NetGeometry), where an invisible 10 cm apron is exactly the lie that made the
-# area feel broken. Do not reintroduce it into a collider.
+# (NetGeometry). Never put this apron on a collider — an invisible 10 cm skirt
+# around the net makes the whole area feel broken.
 const NET_PUCK_BUFFER: float = 0.10
 
 # Half the skater's body so the blue line keys off the body EDGE, not its
@@ -115,15 +103,15 @@ const NET_PUCK_BUFFER: float = 0.10
 # (Skater.tscn) — the canonical body half-width.
 const OFFSIDE_LINE_SLACK: float = 0.35
 
-# Rink dimensions (must match HockeyRink export values in the scene)
+# Rink dimensions. HockeyRink's export defaults mirror these — pinned by
+# test_rink_geometry_mirrors.
 const RINK_HALF_WIDTH: float     = 13.0   # half of 26 m
 const RINK_HALF_LENGTH: float    = 30.0   # half of 60 m
 const CORNER_RADIUS: float       = 8.53  # 28 ft
 const WALL_THICKNESS: float      = 0.3
-# Must match HockeyRink.KICKPLATE_PROTRUSION — the kickplate's inward lip
-# sticks 1 cm inside the boards' inner face, so the visible wall surface at
-# ice level (and stick-blade level after a board-level dump) is 1 cm closer
-# to rink center than the boards' face. The blade-clamp uses this innermost
+# The kickplate's inward lip sticks 1 cm inside the boards' inner face, so the
+# visible wall surface at ice level (and stick-blade level after a board-level
+# dump) is 1 cm closer to rink center than the boards' face. The blade-clamp uses this innermost
 # surface so the blade can't poke past the visible kickplate.
 const KICKPLATE_INWARD_LIP: float = 0.01
 # Top of the opaque board stack (kickplate + white board + cap rail); the
@@ -149,8 +137,8 @@ const CORNER_CENTER_Z: float     = INNER_HALF_LENGTH - INNER_CORNER_RADIUS  # 21
 # its CENTER that far from the boards, so the body's edge (not its center) stops
 # at the surface. The corner CENTERS are invariant under the inset (half-width
 # and corner-radius shrink by the same margin), so the straight/corner split is
-# unchanged. Default 0.0 leaves point callers (puck-OOB, blade clamp, trajectory)
-# exactly as before.
+# unchanged. Default 0.0 treats the caller as a point (puck-OOB, blade clamp,
+# trajectory).
 static func clamp_to_rink_inner(world_xz: Vector2, margin: float = 0.0) -> Vector2:
 	var half_w: float = INNER_HALF_WIDTH - margin
 	var half_l: float = INNER_HALF_LENGTH - margin
@@ -361,15 +349,13 @@ static func _push_out_of_goalie_box(world_xz: Vector2, gpos: Vector2, rot_y: flo
 	return Vector2(gpos.x + world_dx, gpos.y + world_dz)
 
 # ── Puck ──────────────────────────────────────────────────────────────────────
-# Rest height = puck collision half-height (Puck.tscn cylinder height / 2 = 0.035/2),
-# so the disc sits with its bottom face on the ice plane (y=0). Keep in sync with
-# Puck.gd `ice_height` and the Puck.tscn mesh/shape height.
+# Rest height = the disc's half-height, so its bottom face sits on the ice plane
+# (y = 0).
 const PUCK_START_POS: Vector3 = Vector3(0, 0.0175, 0)
-# Puck collision cylinder extents (Puck.tscn CylinderShape3D: radius 0.065,
-# height 0.035). The puck is angular-locked flat (axis_lock_angular_x/z), so its
-# horizontal reach is the radius and its vertical reach the half-height — the two
-# differ and GoalDetectionRules needs both to size the goal mouth to the whole
-# disc. Keep in sync with Puck.tscn.
+# Disc extents, mirroring Assets/puck_mesh.tres (pinned by
+# test_goalie_scene_mirrors). Horizontal reach is the radius and vertical reach
+# the half-height — the two differ, and GoalDetectionRules needs both to size the
+# goal mouth to the whole disc rather than to a point.
 const PUCK_COLLISION_RADIUS: float = 0.065
 const PUCK_COLLISION_HALF_HEIGHT: float = 0.0175
 # Widest |x| a puck's CENTER can cross the goal line at without clipping the
@@ -381,9 +367,8 @@ const NET_ENTRY_HALF_WIDTH: float = (
 # Puck-on-ice kinetic friction coefficient (realistic μ ~0.05–0.10). SINGLE SOURCE
 # OF TRUTH: the analytic puck step applies it directly (through PUCK_ICE_DECEL_M_S2
 # below), and the AI/client-prediction model reads the same constant — host drive and
-# model are literally the same number, so they cannot drift. (An earlier hand-synced
-# mirror once ran the model at 0.1 against live ice at 0.01 → pucks modelled ~10× too
-# draggy. There is no ice .tres.)
+# model are literally the same number, so they cannot drift. There is no ice
+# .tres; this is the only place ice friction is stated.
 const ICE_FRICTION: float = 0.05
 # Gravity used for the Coulomb conversion below. Matches Godot's engine default
 # (physics/3d/default_gravity = 9.8, un-overridden) rather than textbook 9.81;
@@ -421,9 +406,9 @@ const PUCK_OOB_GRACE_DURATION: float = 1.0
 # runs. The puck COLLIDES at that boundary, so a loose puck's own radius keeps
 # its center ≥6 cm inside — a center sustained even 1 cm past the lip means the
 # puck escaped into or through the wall (tunnelled at speed, squeezed through
-# by a board pin, or over the glass). The previous 0.2 m tolerance plus a
-# height branch left a dead zone: a puck trapped INSIDE the 0.3 m wall band at
-# ice level tripped neither and soft-locked play, invisible behind the boards.
+# by a board pin, or over the glass). Keep it this tight and unconditional: a
+# puck trapped INSIDE the 0.3 m wall band at ice level is invisible behind the
+# boards and soft-locks play, so any tolerance that clears the band hides it.
 const PUCK_OOB_XZ_TOLERANCE: float = 0.01
 
 # Puck-stuck-on-net detection. A puck that settles motionless on the net frame
@@ -486,7 +471,7 @@ const SLOT_DIST_M: float = 5.0
 # about a different "league average" than the controllers actually run.
 # Per-bot builds resolve through AISkaterCaps; these are the league-average
 # fallback for an unresolvable peer.
-# Base (Speed-2) skater top speed. 9.0 m/s ≈ 20 mph ≈ 32 km/h — a solid NHL
+# Neutral-build skater top speed. 9.0 m/s ≈ 20 mph ≈ 32 km/h — a solid NHL
 # stride. This is the *cruising* cap; the Sprint burst (sprint_max_speed_multiplier
 # on SkaterController) lifts it to ~25 mph, the real elite top speed. Tuned so
 # base + sprint both stay anchored to plausible skating speeds rather than
@@ -513,11 +498,11 @@ const POKE_RADIUS_M: float = 0.5
 # the blade-travel-gated ceiling). The min sits BELOW the quick-shot/pass
 # speed on purpose: a slow deliberate sweep is a soft touch pass, softer than
 # the fixed snap pass.
-# The maxes are the LEAGUE-AVERAGE (Shot L3) anchors, calibrated so the
-# _SHOT_POWER_MULTS spread (+/-18%, see PlayerAttributes) puts Shot L5 at an
-# elite top-of-the-NHL release:
-#   wrister 33 m/s ≈ 74 mph  (L5 ~38.9 ≈ 87 mph, L1 ~27.4 ≈ 61 mph)
-#   slapper 40 m/s ≈ 89 mph  (L5 ~47.2 ≈ 106 mph, L1 ~33.2 ≈ 74 mph)
+# The maxes are the NEUTRAL-BUILD anchors (6'1", medium flex), calibrated so the
+# build spread of PlayerAttributes.shot_power_mult (height × flex, ~±17%) tops
+# out at an elite NHL release:
+#   wrister 33 m/s ≈ 74 mph  (~38.6 ≈ 86 mph strongest, ~27.3 ≈ 61 mph weakest)
+#   slapper 40 m/s ≈ 89 mph  (~46.8 ≈ 105 mph / ~33.1 ≈ 74 mph)
 # Reception already gates hard shots (above deflect_min_speed ~22 m/s
 # receiver-relative needs a squared blade), so most of the wrister band is
 # catch-with-care territory.
@@ -552,15 +537,14 @@ const DEFAULT_LOFT_VY_HIGH_M_S: float = 4.65
 # ── Wrister power-model default (ShotMechanics.wrister_power_t) ──────────────
 # Feel tunable — live editor tuning isn't the workflow, but it's an @export on
 # SkaterController; this is the shared default so the bot AI stays calibrated to
-# the live shot. Wrister power is now the pure mouse-speed model: power is a
-# curve over the raw cursor speed (scaled by the player's Shot Power
-# Sensitivity), distance-independent. The full-power cursor-speed reference is a
-# per-setup export (wrister_mouse_speed_full), not shared here.
+# the live shot. Wrister power is a curve over raw cursor speed (scaled by the
+# player's Shot Power Sensitivity), distance-independent. The full-power
+# cursor-speed reference is a per-setup export (wrister_mouse_speed_full), not
+# shared here.
 # Feel-curve exponent on the 0..1 power parameter. Slightly above linear
 # (low-end compressive): the catchable touch-pass window spans a comfortable
-# slice of gesture space instead of rounding up toward the middle, and the
-# raised 33 m/s ceiling supplies the top-end pop that a sub-1.0 exponent
-# used to fake. (< 1.0 inflates the low end — it made soft passes HARDER.)
+# slice of gesture space instead of rounding up toward the middle. Never take it
+# below 1.0 — that inflates the low end and makes soft passes HARDER.
 const DEFAULT_WRISTER_POWER_CURVE: float = 1.1
 
 # ── Goalie Defaults ───────────────────────────────────────────────────────────
@@ -588,9 +572,9 @@ const DEFAULT_GOALIE_T_PUSH_SPEED_M_S: float = 3.8
 const DEFAULT_GOALIE_LATERAL_ACCEL_M_S2: float = 14.0
 # The pad-top seam: the height where the goalie's coverage changes hands from
 # the leg pads to the torso + arms. Mirrors the stance anatomy in
-# GoalieBodyConfigBuilder (torso bottom "glued to the pad-top seam at 0.86" —
-# body centre 1.22 minus the 0.72 Goalie.tscn torso box's half-height; keep in
-# sync if that anatomy resizes). AIActionScoring's hole model uses it as the
+# GoalieBodyConfigBuilder (torso bottom glued to the seam — body centre 1.22
+# minus the 0.72 Goalie.tscn torso box's half-height; that derivation is pinned
+# by test_goalie_scene_mirrors). AIActionScoring's hole model uses it as the
 # HIGH band's arrival floor: a lofted shot is only an over-the-pads target if
 # its arc physically crosses the net line above this seam.
 const DEFAULT_GOALIE_PAD_TOP_SEAM_M: float = 0.86
@@ -653,7 +637,7 @@ const NEUTRAL_ZONE_FACEOFF_DOTS: Array[Vector2] = [
 # END-ZONE draws override this table for the D pair only (the FACEOFF_END_*
 # constants below + PlayerRules.faceoff_position): the one dot-relative shape
 # is the real alignment at center/neutral dots, but an end-zone draw's D jobs
-# are positional, not dot-relative (plan §10, landed).
+# are positional, not dot-relative.
 const FACEOFF_OFFSETS: Array = [
 	[Vector2( 0.0,  1.5), Vector2(-4.7,  0.9), Vector2( 4.7,  0.9),
 			Vector2(-2.4,  7.0), Vector2( 2.4,  7.0)],  # team 0
@@ -671,8 +655,7 @@ const FACEOFF_OFFSETS: Array = [
 # on the goal-side arc of the circle (just outside it — the on-side rule) —
 # a won draw comes straight back to the stack for the breakout, and on a
 # loss the stack D boxes out to the net-front while the stack W releases up
-# to the strong point. The net-front itself is the goalie's at the drop —
-# the old near-post D spawn double-covered it while leaving the wall empty.
+# to the strong point. The net-front itself is the goalie's at the drop.
 # The inside winger keeps the table's hash-mark spot (the checking matchup).
 # ATTACKING side plays the points at the blue line: strong point directly
 # above the dot (the boards-side lane + draw-back target), weak point toward

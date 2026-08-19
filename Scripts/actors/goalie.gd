@@ -54,7 +54,7 @@ var blocker_shoulder_sphere: MeshInstance3D = null
 var glove_elbow_sphere: MeshInstance3D = null
 var blocker_elbow_sphere: MeshInstance3D = null
 
-# P8 dirty-skip cache for `_update_connectors`. The arm-IK + connector rebuild
+# Dirty-skip cache for `_update_connectors`. The arm-IK + connector rebuild
 # is value-type-cheap but runs every rendered frame for both goalies; the pose
 # only changes when `apply_body_config` / `apply_network_pose` move a part, and
 # a settled goalie holds its stance for seconds, so we recompute only when one
@@ -162,25 +162,25 @@ func get_body_position() -> Vector3:
 	return _body.position
 
 # Clear-sweep follow-through moves the BlockArm (and its child Stick, off which
-# the puck rebounds during saves) through the puck's exit path. Without this, that
-# "cosmetic" swing can re-strike the
-# puck moments after the clear velocity was imparted and deflect it anywhere,
-# including back into the goalie's own net. Disabled for the swing's duration.
+# the puck rebounds during saves) through the puck's exit path. Without this the
+# "cosmetic" swing can re-strike the puck moments after the clear velocity was
+# imparted and deflect it anywhere, including back into the goalie's own net.
+# Disabled for the swing's duration.
 func set_stick_collision_enabled(enabled: bool) -> void:
 	_stick.collision_layer = Constants.LAYER_GOALIE_STICK if enabled else 0
 
 
 # Cached list of this goalie's CollisionShape3D parts (pads / body / head / glove /
 # stick / blocker) for the analytic puck drive's contact queries. The subtree is
-# static after _ready — only transforms move — so one gather serves every query;
-# GoalieContactDetector re-gathering per sub-step allocated hundreds of arrays per
-# tick in a crease scramble. Runtime enable/disable (the clear-sweep stick toggle
+# static after _ready — only transforms move — so one gather serves every query.
+# Re-gathering per sub-step instead costs hundreds of array allocations per tick in
+# a crease scramble. Runtime enable/disable (the clear-sweep stick toggle
 # above) is filtered at QUERY time from the live layer/disabled flags, so the cache
 # never goes stale.
 var _collision_parts_cache: Array[CollisionShape3D] = []
-# Parallel to _collision_parts_cache: the owning StaticBody3D per part (the
-# parent-walk GoalieContactDetector paid per part per query) and each BoxShape3D's
-# half extents (its per-query `box.size * 0.5` read). Both are fixed once the
+# Parallel to _collision_parts_cache: the owning StaticBody3D per part (otherwise a
+# parent-walk per part per query) and each BoxShape3D's half extents (otherwise a
+# per-query `box.size * 0.5` read). Both are fixed once the
 # subtree exists; (-1,-1,-1) marks a non-box shape, standing in for the detector's
 # live `shape as BoxShape3D == null` skip. Lifetime matches the shapes cache (all
 # nodes are in this goalie's own subtree), so freeing the goalie frees the lot.
@@ -277,9 +277,9 @@ func get_blade_world_position() -> Vector3:
 # straight onto the scene nodes. Skips the body_config_builder entirely.
 # Rotations come in radians (matching the wire format); axes we don't carry on
 # the wire (body yaw, blocker/glove roll) are left intact so whatever was last
-# set survives. Pad yaw (the rebound-steering toe-out) IS carried as of v13 —
-# before that, remote clients rendered square pads whose rebounds appeared to
-# kick toward the corners for no visible reason.
+# set survives. Pad yaw IS carried (wire v13): it steers the rebound, so a remote
+# client rendering square pads would show rebounds kicking cornerward for no
+# visible reason.
 func apply_network_pose(state: GoalieNetworkState) -> void:
 	# Body + head positions are state-dependent (the pose builder hardcodes
 	# different y-heights per state — body 0.40 in butterfly, 1.22 standing
@@ -301,8 +301,8 @@ func apply_network_pose(state: GoalieNetworkState) -> void:
 	_block_arm.rotation = Vector3(state.blocker_pitch, state.blocker_yaw, _block_arm.rotation.z)
 
 # Seat the blade at its lie angle — the fixed shaft-to-blade angle the authored
-# geometry is missing (see GoalieStickRules.BLADE_LIE_DEG for what it cost). Once,
-# at build time: a lie is a property of the stick, so the blade stays rigid to the
+# scene geometry does not carry (GoalieStickRules.BLADE_LIE_DEG). Applied once at
+# build time: a lie is a property of the stick, so the blade stays rigid to the
 # shaft and every stance inherits it through the assembly transform. Collider and
 # mesh together, which is why the blade is held out of the stick mesh merge.
 func _apply_blade_lie() -> void:
@@ -440,12 +440,11 @@ static func _up_for_look_at(direction: Vector3) -> Vector3:
 	return Vector3.UP
 
 
-# ONE MeshInstance3D per bone, carrying the prism whose long axis is already
-# local Z (shared_arm_bone_z bakes the rotation a child node used to apply).
-# X/Y are the arm THICKNESS; Z is the length _update_arm_bone() rewrites per
-# tick — each writer reads the other's components back rather than overwriting
-# the whole vector. Same rig contract as Skater._resolve_or_create_bone_mesh,
-# which is where this collapse was proven.
+# ONE MeshInstance3D per bone, carrying the prism whose long axis is already local
+# Z (shared_arm_bone_z bakes that rotation into the mesh, so no child node has to
+# apply it). X/Y are the arm THICKNESS; Z is the length _update_arm_bone() rewrites
+# per tick — each writer reads the other's components back rather than overwriting
+# the whole vector. Same rig contract as Skater._resolve_or_create_bone_mesh.
 func _make_arm_bone() -> Node3D:
 	var mi := MeshInstance3D.new()
 	mi.mesh = SkaterMeshBuilder.shared_arm_bone_z()
@@ -467,7 +466,7 @@ func _make_sphere_mesh(radius: float) -> MeshInstance3D:
 # every frame. All positions are in goalie-local space (direct children of the
 # Goalie root), so no coordinate conversion needed.
 #
-# P8: value-type-cheap but runs every rendered frame for both goalies. Skip when
+# Value-type-cheap but runs every rendered frame for both goalies. Skip when
 # the goalie is hidden, and when no part moved since the last frame — a settled
 # goalie's `apply_body_config` lerp converges to a fixed pose, so holding a
 # stance skips the arm-IK rebuild entirely. Root translation/yaw doesn't dirty

@@ -15,8 +15,10 @@ class_name ShotReleaseRules
 # still be able to shoot. Only the one-timer contact test can refuse a shot
 # outright, because firing one requires the swing to actually have met the puck.
 
-# Mirrors PickupClaimResolver.MAX_CLAIM_AGE_S — a release timestamp older than
-# this earns no lag-comp benefits.
+# The absolute age bound on any client-stamped claim, and the single source for
+# it: LagCompRewind.claim_is_fresh reads this constant, and the four claim
+# resolvers go through that. A release timestamp older than this earns no
+# lag-comp benefits.
 const MAX_CLAIM_AGE_S: float = 0.2
 
 # Float-rounding slack on the age boundary. 0.2 isn't representable, so
@@ -40,15 +42,6 @@ const RTT_MEASURED_SLACK_MS: float = 30.0
 # ~0.707. 0.75 leaves headroom for float noise while still blocking
 # near-vertical forged directions.
 const MAX_DIRECTION_Y: float = 0.75
-
-# Maximum horizontal distance a shot origin may sit from the shooter's body
-# center — roughly full stick + arm reach. The origin the host fires from is now
-# its own blade on the tick it replays the release input, so this is pure
-# defense-in-depth: it fences any origin handed to `clamp_origin` to a reachable
-# radius of the shooter's body, which is a stable anchor (the body barely moves
-# tick to tick, unlike the swinging blade). Generous on purpose — an anti-abuse
-# fence, not a precision check.
-const MAX_ORIGIN_REACH_M: float = 2.5
 
 
 # Clamp a client-claimed RTT against the host's own measurement of that peer.
@@ -108,19 +101,6 @@ static func clamp_power(power: float, max_power: float) -> float:
 		return 0.0
 	return clampf(power, 0.0, max_power)
 
-
-# Validate a client-supplied shot ORIGIN against the shooter's body. Clamps the
-# horizontal (XZ) offset to `max_reach`; the y component is passed through
-# untouched (the host overrides it with release()'s elevation y anyway). A
-# non-finite origin falls back to the shooter's body position. See
-# MAX_ORIGIN_REACH_M for why the body — not the buffered blade — is the anchor.
-static func clamp_origin(client_origin: Vector3, shooter_pos: Vector3, max_reach: float = MAX_ORIGIN_REACH_M) -> Vector3:
-	if not client_origin.is_finite():
-		return shooter_pos
-	var off := Vector2(client_origin.x - shooter_pos.x, client_origin.z - shooter_pos.z)
-	if off.length() > max_reach:
-		off = off.normalized() * max_reach
-	return Vector3(shooter_pos.x + off.x, client_origin.y, shooter_pos.z + off.y)
 
 
 # One-timer eligibility, as one question. A one-timer is a possession-less grab

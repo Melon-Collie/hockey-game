@@ -11,8 +11,8 @@ extends RefCounted
 # is deliberately slow and sticky. It must NOT be used to decide whether a bot
 # goes and gets a live puck: that is individual reactivity, it runs on the
 # agent's own clock against the REAL carrier (SkaterAgentStateMachine
-# ._loose_elapsed_s), and conflating the two is what made bots skate past loose
-# pucks for the whole reaction window.
+# ._loose_elapsed_s); conflating the two makes bots skate past loose pucks for
+# the whole reaction window.
 #
 # COMMIT RULE — divergence time accumulates from the FIRST tick the truth differs
 # from the belief, and resets only when the truth matches it again. So:

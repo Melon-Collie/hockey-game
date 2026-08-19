@@ -2,7 +2,7 @@ class_name SideMenu
 extends CanvasLayer
 
 # Right-anchored activity menu shown when the player presses Escape during
-# free play. Replaces the old centered MainMenu. Composes the existing popups
+# free play. Composes the existing popups
 # (PlayerSettingsPopup, PlayPopup, CareerStatsScreen, OptionsPanel,
 # ConfirmDialog) — each opens as a centered overlay on top of the side panel.
 #
@@ -210,15 +210,6 @@ func close() -> void:
 	visible = false
 	closed.emit()
 
-
-func toggle() -> void:
-	if visible:
-		close()
-	else:
-		open()
-
-
-# ── Build helpers ────────────────────────────────────────────────────────────
 
 func _build_panel() -> void:
 	_root = Control.new()
@@ -520,9 +511,6 @@ func _build_footer(parent: VBoxContainer) -> void:
 	SoundManager.wire_button(bug_btn)
 	hbox.add_child(bug_btn)
 
-	# Version label. The update-checker alert dot will land here in a follow-up
-	# pass; for now we just show the build version so players know what they
-	# have.
 	var version_label := Label.new()
 	version_label.text = "v%s" % BuildInfo.VERSION
 	version_label.add_theme_font_size_override("font_size", 12)

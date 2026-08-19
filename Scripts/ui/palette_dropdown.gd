@@ -1,7 +1,7 @@
 class_name PaletteDropdown
 extends Control
 
-# Visual color picker that replaces the fruit-name OptionButton. Closed state
+# Visual color picker for a team palette slot. Closed state
 # shows the currently-selected swatch styled like a lobby card — primary bg
 # with a thin left stripe in the secondary color, rounded outside corners
 # only. Clicking opens a popup grid of every preset's swatch. The selected
@@ -100,10 +100,6 @@ func _apply_closed_colors() -> void:
 func set_selected(slot: int) -> void:
 	_selected_slot = slot
 	_apply_closed_colors()
-
-
-func get_selected() -> int:
-	return _selected_slot
 
 
 func set_disabled(b: bool) -> void:

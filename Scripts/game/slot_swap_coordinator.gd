@@ -1,8 +1,7 @@
 class_name SlotSwapCoordinator
 extends RefCounted
 
-# Validates and applies mid-game slot swaps. Split out of GameManager because
-# the request / confirmation flow is a self-contained feature.
+# Validates and applies mid-game slot swaps.
 #
 # Flow:
 #   host: request_swap(peer_id, new_team_id, new_slot, carrier)

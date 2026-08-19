@@ -4,7 +4,7 @@ class_name HitRules
 # Mirrors the NHL scorer definition: a hit is credited when a player initiates
 # body contact with an opponent IN POSSESSION of the puck, and the contact
 # causes that opponent to lose possession. Deterministic version:
-#   • impulse (hitter weight × closing velocity, so Size lowers the closing
+#   • impulse (hitter weight × closing velocity, so mass lowers the closing
 #     speed a heavy hitter needs) clears MIN_HIT_IMPULSE — the host-observed
 #     contact and the lag-comp claim both validate this same weight-scaled
 #     magnitude, so hosted and remote hitters meet one bar

@@ -1,7 +1,6 @@
 class_name PuckVFX
 extends Node3D
 
-const ICE_Y: float = 0.005               # world Y for grounded trail dots (just above ice to avoid z-fighting)
 
 # Trail uses two GPUParticles3D nodes:
 #   _trail_emitter  — runs the gap-filling particles shader (amount=1, lives forever).
@@ -16,7 +15,7 @@ const TRAIL_LIFETIME: float = 0.25  # seconds each dot lingers
 const TRAIL_AMOUNT: int = 150       # max concurrent trail dots (covers ~25 m/s at 60 fps with 0.25 s lifetime)
 
 # Speed-reactive color: cream at slow, hot orange at fast.
-const TRAIL_COLOR_SLOW: Color = Color(0.95, 0.93, 0.88, 1.0)
+const TRAIL_COLOR_SLOW: Color = IceVFX.SNOW_RGB
 const TRAIL_COLOR_FAST: Color = Color(1.0, 0.45, 0.05, 1.0)
 const TRAIL_SPEED_MIN: float = 3.0   # m/s — at or below this, full slow color
 const TRAIL_SPEED_MAX: float = 18.0  # m/s — at or above this, full fast color
@@ -54,11 +53,12 @@ var _board_puff: CPUParticles3D = null
 var _post_ping: CPUParticles3D = null
 var _last_board_puff_ms: int = 0
 var _prev_pos: Vector3 = Vector3.ZERO
-# Last trail-colour lerp factor pushed to the material. The trail colour is
-# constant below TRAIL_SPEED_MIN and above TRAIL_SPEED_MAX, so a resting or
-# steady puck re-pushed the identical colour every rendered frame.
+# Last trail-colour lerp factor pushed to the material. The colour is constant
+# below TRAIL_SPEED_MIN and above TRAIL_SPEED_MAX, so without this a resting or
+# steady puck pushes the identical colour every rendered frame.
 var _trail_color_t: float = -1.0
-# Below this, a per-frame write is invisible and not worth the servers-side push.
+# Below this a per-frame write is invisible, and a material write is a
+# RenderingServer push rather than a field assignment.
 const _WRITE_EPSILON: float = 0.001
 
 func _ready() -> void:
@@ -123,7 +123,7 @@ func _process(delta: float) -> void:
 
 	# When grounded, pin the emitter to ice level so trail dots scrape the ice surface.
 	# When airborne, follow the puck's actual Y so the trail goes with it.
-	var target_y: float = curr_pos.y if _puck.is_airborne() else ICE_Y
+	var target_y: float = curr_pos.y if _puck.is_airborne() else IceVFX.ICE_Y
 	var offset_y: float = target_y - curr_pos.y  # local offset relative to PuckVFX parent
 	if absf(_trail_emitter.position.y - offset_y) > _WRITE_EPSILON:
 		_trail_emitter.position.y = offset_y
@@ -131,27 +131,21 @@ func _process(delta: float) -> void:
 	# Speed-reactive color: lerp from cream (slow) to hot orange (fast).
 	var flat_speed: float = Vector3(vel.x, 0.0, vel.z).length()
 	var t: float = clampf((flat_speed - TRAIL_SPEED_MIN) / (TRAIL_SPEED_MAX - TRAIL_SPEED_MIN), 0.0, 1.0)
-	# Guarded on `t` rather than the resulting Color: below TRAIL_SPEED_MIN it
-	# pins at 0 (a resting or slow puck writes nothing at all), and a material
-	# write is a servers-side push, not a field assignment.
+	# Guarded on `t` rather than the resulting Color, which pins at 0 below
+	# TRAIL_SPEED_MIN — so a resting or slow puck writes nothing at all.
 	if absf(t - _trail_color_t) > _WRITE_EPSILON:
 		_trail_color_t = t
 		_trail_mat.color = TRAIL_COLOR_SLOW.lerp(TRAIL_COLOR_FAST, t)
 
-# Puck-centred visibility box, generous enough that it always overlaps the frustum
-# whenever a live trail dot could be on-screen — so the world-space trail is never
-# culled (nor its processing paused) as the puck rides the frame edge. See the
-# TRAIL_AABB_HALF_* doc-block for why the default AABB is too small.
+# Puck-centred visibility box, generous enough to overlap the frustum whenever a
+# live trail dot could be on-screen (see the TRAIL_AABB_HALF_* block).
 func _trail_visibility_aabb() -> AABB:
 	return AABB(
 			Vector3(-TRAIL_AABB_HALF_XZ, -TRAIL_AABB_HALF_Y, -TRAIL_AABB_HALF_XZ),
 			Vector3(TRAIL_AABB_HALF_XZ * 2.0, TRAIL_AABB_HALF_Y * 2.0, TRAIL_AABB_HALF_XZ * 2.0))
 
-# The gap-filling parent emitter. One particle lives for the whole game session and
-# tracks the puck's world position in CUSTOM.xyz each frame. When the puck moves more
-# than TRAIL_SPACING meters since the last recorded position, it emits a sub-particle
-# at each spacing interval along that path — filling the gap that would otherwise
-# appear at high speeds.
+# The gap-filling parent emitter (see the file header). Its single particle keeps
+# the puck's last-recorded world position in CUSTOM.xyz.
 func _make_trail_emitter() -> GPUParticles3D:
 	var e := GPUParticles3D.new()
 	e.name = "TrailEmitter"
@@ -190,8 +184,7 @@ void process() {
 
 	return e
 
-# The sub-emitter that renders each trail dot placed by the gap-filling shader.
-# Receives world-space positions only (no velocity). Color is driven each frame
+# Receives world-space positions only (no velocity). Colour is driven each frame
 # by speed via _trail_mat.color; the ramp handles the age-based alpha fade.
 func _make_trail_sub_emitter() -> GPUParticles3D:
 	var e := GPUParticles3D.new()
@@ -263,17 +256,7 @@ func _make_board_puff_emitter() -> CPUParticles3D:
 	e.gravity = Vector3(0.0, -14.0, 0.0)
 	e.scale_amount_min = 0.02
 	e.scale_amount_max = 0.05
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.5
-	sphere.height = 1.0
-	sphere.radial_segments = 4
-	sphere.rings = 2
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = Color(0.97, 0.98, 1.0, 0.85)
-	sphere.material = mat
-	e.mesh = sphere
+	e.mesh = IceVFX.blob(Color(0.97, 0.98, 1.0, 0.85))
 	return e
 
 
@@ -296,17 +279,7 @@ func _make_post_ping_emitter() -> CPUParticles3D:
 	e.gravity = Vector3(0.0, -10.0, 0.0)
 	e.scale_amount_min = 0.015
 	e.scale_amount_max = 0.03
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.5
-	sphere.height = 1.0
-	sphere.radial_segments = 4
-	sphere.rings = 2
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = Color(1.0, 0.95, 0.75, 0.95)
-	sphere.material = mat
-	e.mesh = sphere
+	e.mesh = IceVFX.blob(Color(1.0, 0.95, 0.75, 0.95))
 	return e
 
 
@@ -329,15 +302,5 @@ func _make_stick_lift_emitter() -> CPUParticles3D:
 	e.gravity = Vector3(0.0, -18.0, 0.0)
 	e.scale_amount_min = 0.02
 	e.scale_amount_max = 0.045
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.5
-	sphere.height = 1.0
-	sphere.radial_segments = 4
-	sphere.rings = 2
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = Color(1.0, 0.97, 0.85, 0.9)
-	sphere.material = mat
-	e.mesh = sphere
+	e.mesh = IceVFX.blob(Color(1.0, 0.97, 0.85, 0.9))
 	return e

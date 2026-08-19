@@ -32,7 +32,6 @@ extends RefCounted
 # Emits no signals; HitTracker.impact_landed / hit_credited fire when the
 # contact / stat land.
 
-const MAX_CLAIM_AGE_S: float = 0.2
 const MAX_RANGE_M: float = 2.0
 
 var _registry: PlayerRegistry = null
@@ -43,9 +42,10 @@ var _puck_controller_getter: Callable = Callable()  # () -> PuckController
 var _last_claim_sent: Dictionary[String, float] = {}  # client only: "hitter:victim" -> time
 # Stage-3 forward-prediction scratch (reused; receive_claim is host-only).
 var _fp_result := SkaterMovementRules.ForwardResult.new()
-# Separate scratch for the hitter's self-view catch-up so it can never alias the
-# victim reconstruction above.
-var _self_fp := SkaterMovementRules.ForwardResult.new()
+# Owns its own scratch, so the hitter reconstruction can never alias the victim
+# one above. Only its catch-up is used here — a body check carries no
+# client-authoritative blade to clamp.
+var _claimant := ClaimantView.new()
 
 
 func setup(
@@ -128,8 +128,7 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	# before any rewind / forward-predict depth reads it (see LagCompRewind).
 	interp_delay_ms = LagCompRewind.plausible_interp_delay_ms(
 			interp_delay_ms, float(NetworkManager.get_peer_ping_ms(hitter_peer_id)))
-	var now: float = NetworkManager.local_time()
-	if now - host_timestamp > MAX_CLAIM_AGE_S:
+	if not LagCompRewind.claim_is_fresh(host_timestamp):
 		return
 	var hitter_rec: PlayerRecord = _registry.get_record(hitter_peer_id)
 	var victim_rec: PlayerRecord = _registry.get_record(victim_peer_id)
@@ -177,9 +176,11 @@ func receive_claim(hitter_peer_id: int, victim_peer_id: int, host_timestamp: flo
 	# bounded by the input lead, thrust is near-balanced by friction at skating
 	# speed, so the closing-speed error is under 3% and the impulse gate would
 	# rather read the captured value than an integrated one.
-	var hit_pos: Vector3 = hitter_snap.position + LagCompRewind.self_view_catch_up(
-			hitter_snap, hitter_rec.controller as SkaterController,
-			hitter_rewind_time, _state_buffer.newest_host_timestamp(), _self_fp)
+	if not _claimant.resolve(_registry, hitter_peer_id, hitter_snap,
+			hitter_rec.controller as SkaterController,
+			hitter_rewind_time, _state_buffer.newest_host_timestamp()):
+		return
+	var hit_pos: Vector3 = hitter_snap.position + _claimant.catch_up()
 	if hit_pos.distance_to(vic_pos) > MAX_RANGE_M:
 		return
 	# Puck carrier read from the victim's rewind snapshot — that's the world the

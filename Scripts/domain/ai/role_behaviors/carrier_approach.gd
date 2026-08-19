@@ -3,10 +3,8 @@ extends RefCounted
 
 # What a defender who owns the puck carrier needs to know about him before it can
 # decide anything: where he is, how fast, which way he is going home, how much
-# route he has left, and how hard he is coming. Every role that closes a carrier
-# — the rush gap (AIRoleRushD), the in-zone pressurer (AIRolePressure) and the
-# backchecker running him down (AIRoleTrack) — derived these five from scratch,
-# with three slightly different degenerate-case guards between them.
+# route he has left, and how hard he is coming. One read shared by every role
+# that closes a carrier, so their degenerate-case guards cannot drift apart.
 #
 # Filled in place from a caller-owned instance (RoleContext.scratch_carrier_
 # approach) by AIRoleHelpers.read_carrier_approach, so the read costs no
@@ -14,8 +12,7 @@ extends RefCounted
 
 # His position, and his velocity. This is his REAL body, never a velocity-led
 # point: the stand rides him (RoleDecision.target_velocity), so leading as well
-# double-counts his motion — see AIRoleHelpers.cover_threat for the same rule on
-# the coverage side.
+# double-counts his motion.
 var carrier_pos: Vector3 = Vector3.ZERO
 var carrier_vel: Vector3 = Vector3.ZERO
 

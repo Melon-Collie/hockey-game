@@ -51,8 +51,8 @@ var _home_color_dropdown: PaletteDropdown = null
 var _away_color_dropdown: PaletteDropdown = null
 var _teams_hint: Label = null
 
-# Lobby visibility selector (host only). Offline = no Steam lobby / no peer —
-# the pre-unification "Play vs Bots" session. Friends / Public attach the
+# Lobby visibility selector (host only). Offline = no Steam lobby and no peer,
+# i.e. a bots-only session. Friends / Public attach the
 # Steam transport (async) and differ only in Steam lobby type. Offline is
 # locked out while human peers are connected: the host kicks them via the
 # grid first, deliberately — never as a toggle side effect.

@@ -14,9 +14,9 @@ extends Camera3D
 # wider game-cam framing.
 #
 # Close-play zoom-out: a fixed telephoto FOV frames a constant ANGLE, so the
-# visible width shrinks linearly with distance — play at the camera-side
-# boards (~19 m away vs ~27 m at center ice) used to get a claustrophobic
-# frame that puck wiggle could exit. Rail cams instead hold a constant frame
+# visible width shrinks linearly with distance, so play at the camera-side
+# boards (~19 m away vs ~27 m at center ice) gets a claustrophobic frame that
+# puck wiggle can exit. Rail cams instead hold a constant frame
 # WIDTH at the play (frame_width_m), exactly what a real camera operator's
 # zoom hand does: fov = 2·atan(W / 2d), floored at replay_fov so the far-side
 # wide shot keeps the published telephoto framing and only close play widens.

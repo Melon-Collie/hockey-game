@@ -7,9 +7,9 @@ extends RefCounted
 # name sit below the rings on the screen-down side.
 const RING_LINE_SCALE: float     = 2.0   # line-thickness bump for readability; visual only, never a hitbox
 const RING_OUTER_R: float        = 0.45
-# The slot ring is no longer a mesh — the ice shader draws it analytically from
-# these radii (see IceRingField). Kept here because everything else on the rig
-# is still laid out relative to the ring's outer edge.
+# The ice shader draws the slot ring analytically from these radii (see
+# IceRingField) — there is no ring mesh. They live here because everything else
+# on the rig is laid out relative to the ring's outer edge.
 const RING_INNER_R: float        = RING_OUTER_R - MenuStyle.HUD_LINE_THIN * RING_LINE_SCALE
 
 # Stamina ring — BOTW-style sprint gauge nested inside the player's own color
@@ -30,9 +30,9 @@ const STAMINA_TRACK_COLOR := Color(0.06, 0.08, 0.11, 0.55)  # read by IceRingFie
 # Player-name placement — a billboarded Label3D sitting just outside the slot
 # ring, on the screen-down side. WORLD-sized (pixel_size, not fixed_size), so a
 # name is the same size on the ice whatever the camera is doing, and grows and
-# shrinks with zoom like everything else out there. Drawing it in the 2D pass
-# instead saved a node per skater but could only pick an integer font size, so
-# the text stepped between sizes as the camera breathed.
+# shrinks with zoom like everything else out there. Do not move it to the 2D
+# pass to save the node: a 2D draw can only pick an integer font size, so the
+# text steps between sizes as the camera breathes.
 const _NAME_RADIUS: float   = RING_OUTER_R + 0.10
 const _NAME_FONT_SIZE: int  = 40
 const _NAME_PIXEL_SIZE: float = 0.005
@@ -40,9 +40,9 @@ const _NAME_ICE_Y: float    = 0.05
 const _CHEVRON_RADIUS: float = RING_OUTER_R + 0.10
 const _CHEVRON_OFFSET_DEG: float = 60.0
 # Screen-up gap between the stacked chevrons — one per loft rung above flat:
-# "^" = LOW, "^^" = MID, "^^^" = HIGH. PUBLIC because the ice shader draws them
-# now: IceRingField hands this over at setup so the spacing has one home rather
-# than a copy in the shader that silently drifts from this one.
+# "^" = LOW, "^^" = MID, "^^^" = HIGH. PUBLIC because the ice shader draws them:
+# IceRingField hands this over at setup so the spacing has one home rather than
+# a copy in the shader that silently drifts from this one.
 const CHEVRON_STACK_GAP: float = 0.11
 
 # Overhead self-beacon. A billboarded downward-arrow that floats above ONLY the
@@ -87,18 +87,13 @@ const _BEACON_CROWD_COUNT: int            = 2
 const _BEACON_CROWD_LINGER: float         = 1.0
 const _BEACON_CROWD_CHECK_INTERVAL: float = 0.2
 
-# Slapper one-timer indicator proportions, in multiples of the zone radius.
-# MIRRORED in Shaders/ice.gdshader, which draws it — keep the two in sync.
+# Ring minimum scale for the slapper one-timer indicator, in multiples of the
+# zone radius. The arrow geometry is the shader's own (ice.gdshader draws it);
+# RETICLE_HALF_LENGTH is PUSHED into `reticle_half_len` by IceRingField, so
+# neither is mirrored here.
 const _SLAPPER_RING_MIN_SCALE: float   = 0.15
-const _ARROW_TIP_DISTANCE_UNIT: float  = 1.8
-const _ARROW_HEAD_LEN_UNIT: float      = 0.30
-const _ARROW_HEAD_HALF_W_UNIT: float   = 0.20
-const _ARROW_SHAFT_HALF_W_UNIT: float  = 0.06
-const RETICLE_HALF_LENGTH: float       = 0.06   # read by IceRingField
+const RETICLE_HALF_LENGTH: float       = 0.06
 const _RING_SEGMENTS: int              = 48
-const _SLAPPER_HUD_Y: float            = 0.05
-
-# Stamina gauge geometry, mirrored in Shaders/ice.gdshader which draws it.
 
 # Slot-ring relationship to the LOCAL player, resolved live so a late-spawning
 # local player and mid-game slot swaps self-correct. UNKNOWN keeps the neutral
@@ -107,10 +102,8 @@ enum RingRelation { UNKNOWN = -1, SELF = 0, TEAMMATE = 1, ENEMY = 2 }
 
 var _skater: Skater
 
-# Drawn by the ice shader (see IceRingField), so what survives is the state it
-# needs. The gauge was a 64-segment MeshInstance3D carrying its own ShaderMaterial
-# whose world transform was rewritten every frame to follow the skater and
-# re-align the fill origin to the camera.
+# Drawn by the ice shader (see IceRingField): no mesh, no material — just the
+# state the shader reads.
 var _stamina_visible: bool = false
 var _stamina_fill: float = 1.0
 var _stamina_color: Color = Color.WHITE
@@ -124,12 +117,10 @@ var _name_label: Label3D = null
 
 # Overhead self-beacon. LAZY — null until the ring-relation resolver reports
 # SELF, and freed again if it stops (see _apply_self_beacon_relation), so exactly
-# one exists in the scene rather than one per skater. It was built eagerly in
-# setup(), which put three nodes and two materials on all ten skaters at 5v5 so
-# that ONE could show a marker; with Self Marker DISABLED it was thirty nodes for
-# nothing. Same idiom as the ping bubble below, and the same reasoning that moved
-# the flat-on-ice chrome into the shader — this one just cannot go there, because
-# it floats above the head.
+# one exists in the scene rather than three nodes and two materials on all ten
+# skaters at 5v5 so that ONE can show a marker. Same idiom as the ping bubble
+# below; neither can move into the ice shader the way the flat-on-ice chrome did,
+# because both float above the head.
 #
 # `_self_beacon` is top_level (world transform rewritten each frame, like the
 # name label) and parents an outline + fill MeshInstance.
@@ -149,15 +140,13 @@ var _beacon_linger_timer: float = 0.0
 var _ping_label: Label3D = null
 var _ping_bubble_time_left: float = 0.0
 
-# Slapper one-timer indicator, drawn by the ice shader (see IceRingField). It was
-# five nodes — indicator root, reticle, arrow root, arrow, ring — on EVERY
-# skater, so that at most one could show them. What survives is the state the
-# shader needs; the placement, rotation and stroke geometry it used to carry in
-# transforms and rebuilt ArrayMeshes are now the shader's job.
+# Slapper one-timer indicator, drawn by the ice shader (see IceRingField): just
+# the state the shader needs, no per-skater nodes. Placement, rotation and stroke
+# geometry are the shader's job.
 var _slapper_indicator_on: bool = false   # reticle + convergence ring
 var _slapper_arrow_on: bool = false
-# Skater-LOCAL, exactly as the indicator node's transform was: the world frame is
-# derived at read time, so the indicator still swings with the body.
+# Skater-LOCAL: the world frame is derived at read time, so the indicator swings
+# with the body.
 var _slapper_offset_local: Vector3 = Vector3.ZERO
 var _slapper_arrow_angle: float = 0.0
 
@@ -186,13 +175,12 @@ var _cached_chevron_dir: Vector3 = Vector3(0.0, 0.0, 1.0)
 # an unreachable sentinel that forces the first refresh to apply.
 const _RING_RECOLOR_INTERVAL: float = 0.25
 var _ring_relation_resolver: Callable = Callable()
-# Whether the ring should be drawn at all — replaces the mesh's `visible` flag
-# now that IceRingField reads state instead of the tree. TRUE by default, and
-# that matters: it replaced a MeshInstance3D, which is born `visible = true`.
-# Only the replay/spectator latch and the ghost pass ever write it, and neither
-# runs on an ordinary skater — so defaulting it false left the ring hidden from
-# spawn until the first goal replay restored it. (An UNKNOWN-relation ring still
-# cannot flash: ring_visible() also gates on a resolved relation.)
+# Whether the ring should be drawn at all — IceRingField reads this instead of a
+# node's `visible` flag. Must default TRUE: only the replay/spectator latch and
+# the ghost pass ever write it, and neither runs on an ordinary skater, so a
+# false default leaves the ring hidden from spawn until the first goal replay
+# restores it. (An UNKNOWN-relation ring still cannot flash: ring_visible() also
+# gates on a resolved relation.)
 var _ring_visible: bool = true
 var _ring_relation_cached: int = -2
 var _ring_color_cached: Color = Color(0, 0, 0, 0)  # unreachable sentinel; forces first refresh
@@ -306,10 +294,9 @@ func update(delta: float) -> void:
 # BOTW-style self-only sprint gauge. Gates on the ring-relation resolver's
 # SELF result, so only one skater in the scene ever runs the body of this.
 # Stamina lives on the LOCAL controller (it is never mirrored onto the Skater
-# node), so the controller is re-fetched per tick — the same lifecycle dodge
-# the old bottom-edge HUD bar used: the local controller changes across
-# respawns, session changes, and spectator swaps, and the fetch is a no-op
-# except on the frame it actually changes. Stays visible while ghosted —
+# node), so the controller is re-fetched per tick: it changes across respawns,
+# session changes and spectator swaps, and the fetch is a no-op except on the
+# frame it actually changes. Stays visible while ghosted —
 # sprinting back to tag up is exactly when the gauge matters.
 func _update_stamina_ring() -> void:
 	var controller: SkaterController = null
@@ -354,8 +341,7 @@ func stamina_gauge_color() -> Color:
 	return _stamina_color
 
 
-# The gauge's 12 o'clock is camera screen-UP, not a body direction — the node
-# rig got that by yawing the ring to _cached_arc_base_angle every frame.
+# The gauge's 12 o'clock is camera screen-UP, not a body direction.
 func stamina_gauge_up() -> Vector2:
 	return -_cached_screen_down
 
@@ -629,8 +615,8 @@ func set_slapper_indicator(active: bool, offset_x: float = 0.0, offset_z: float 
 
 # ── Read by IceRingField each frame ──────────────────────────────────────────
 # Local-to-world happens here rather than at store time so the indicator tracks
-# the body the way a child node did — through the RENDERED pose, since the ice
-# it is painted on is drawn at the render rate.
+# the body through the RENDERED pose — the ice it is painted on is drawn at the
+# render rate.
 func slapper_visible() -> bool:
 	return _slapper_indicator_on and not _skater.is_ghost
 
@@ -766,14 +752,4 @@ func _make_beacon_material(color: Color, render_priority: int) -> StandardMateri
 	mat.no_depth_test = true
 	mat.render_priority = render_priority
 	mat.albedo_color = color
-	return mat
-
-
-func _make_hud_ice_material() -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.albedo_color = Color(MenuStyle.HUD_ICE.r, MenuStyle.HUD_ICE.g,
-			MenuStyle.HUD_ICE.b, MenuStyle.HUD_OPACITY)
 	return mat

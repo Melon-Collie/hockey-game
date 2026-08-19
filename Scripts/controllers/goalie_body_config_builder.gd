@@ -6,10 +6,7 @@ extends RefCounted
 # `GoalieBodyConfig` describing every body part's target pos+rot. The Goalie
 # node consumes the config and lerps each part toward it.
 #
-# The scratch config is reused across every call — `Goalie.apply_body_config`
-# reads but never stores the reference, so sharing is safe and avoids the
-# largest known hot-path allocation (~150 LOC of Vector3 literals per goalie
-# per physics tick).
+# The returned config is a reused scratch instance (see `_scratch`).
 
 # ── Tuning (set by controller from exports in setup()) ───────────────────────
 var catches_left: bool = true
@@ -89,15 +86,15 @@ const STICK_TILT_RVH: float = GoalieStickRules.TILT_RVH_DEG
 # because the blocker pad is rigidly attached — swinging too far moves the
 # whole pad off the right side of the body.
 var active_blade_max_yaw_deg: float = GoalieStickRules.ACTIVE_YAW_CAP_DEG
-# Blade offset from the BlockArm assembly origin, BlockArm-local (keep in sync
-# with Goalie.tscn: Stick at y −0.25, StickBladeCollider at (−0.15, −0.67, 0)
-# inside Stick → blade centre ≈ (−0.15, −0.92, 0) below the wrist). The
-# per-state X tilt swings that below-wrist offset FORWARD: at tilt φ the
-# blade's horizontal offset from the wrist is (BLADE_ASSEMBLY_X,
-# −BLADE_ASSEMBLY_DROP·sin(φ)). The blade-aim solve rotates this offset onto
-# the wrist→puck line, so the BLADE lands on the puck instead of the assembly
-# merely pointing puck-side (the old fixed-lookahead heuristic ignored both
-# the puck's depth and this geometry).
+# Blade offset from the BlockArm assembly origin, BlockArm-local. Derived from
+# the Goalie.tscn node chain (Stick at y −0.25, StickBladeCollider at
+# (−0.15, −0.67, 0) inside it → blade centre ≈ (−0.15, −0.92, 0) below the
+# wrist), which test_goalie_scene_mirrors.gd holds against the scene. The
+# per-state X tilt swings that below-wrist offset FORWARD: at tilt φ the blade's
+# horizontal offset from the wrist is (BLADE_ASSEMBLY_X,
+# −BLADE_ASSEMBLY_DROP·sin(φ)), and the blade-aim solve rotates that offset onto
+# the wrist→puck line so the BLADE lands on the puck rather than the assembly
+# merely pointing puck-side.
 const BLADE_ASSEMBLY_X: float = GoalieStickRules.ASSEMBLY_LATERAL_M
 const BLADE_ASSEMBLY_DROP: float = GoalieStickRules.ASSEMBLY_DROP_M
 # Lunge forward extension at peak. Pushes c.blocker_pos forward (in goalie-
@@ -225,8 +222,9 @@ class Inputs:
 	var puck_play_stride_phase: float = 0.0
 	var puck_play_stride_intensity: float = 0.0
 
-# Scratch — `Goalie.apply_body_config` reads but never stores, so sharing
-# one instance is safe and avoids per-tick allocation.
+# Scratch — `Goalie.apply_body_config` reads but never stores the reference, so
+# one shared instance is safe, and it keeps ~150 lines of Vector3 literals off
+# the heap per goalie per physics tick.
 var _scratch: GoalieBodyConfig = GoalieBodyConfig.new()
 
 func build(inputs: Inputs) -> GoalieBodyConfig:
@@ -337,14 +335,14 @@ static func resting_head_position_for_state(state: int) -> Vector3:
 	return Vector3(0.0, 1.79, -0.04)
 
 
-# Vertical anatomy (matches the 0.52 × 0.72 torso box and 0.26 head in
-# Goalie.tscn — keep in sync if those resize): standing, the torso bottom
-# stays glued to the pad-top seam at 0.86 and the mask tops out at ~1.92 — a
-# 6'3"-class frame on the same scale as the skaters. The pad-top seam is
-# mirrored to the bot shot model as GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M
-# (the HIGH band's arrival floor) — keep that in sync with this anatomy too. In the save stances
-# (butterfly / slide / RVH) the torso and head TOPS are pinned to their
-# pre-resize values instead: the taller trunk grows DOWN into the pad
+# Vertical anatomy, against the 0.52 × 0.72 torso box and 0.26 head in
+# Goalie.tscn: standing, the torso bottom stays glued to the pad-top seam at
+# 0.86 and the mask tops out at ~1.92 — a 6'3"-class frame on the same scale as
+# the skaters. test_goalie_scene_mirrors.gd holds both those boxes and the
+# pad-top seam the bot shot model reads (GameRules
+# .DEFAULT_GOALIE_PAD_TOP_SEAM_M, the HIGH band's arrival floor) against the
+# scene. In the save stances (butterfly / slide / RVH) the torso and head TOPS
+# are pinned to fixed heights instead: the taller trunk grows DOWN into the pad
 # overlap, so sub-crossbar save coverage stays exactly as tuned (beatable
 # realism — the height is for the standing silhouette, not for saves).
 func _set_standing_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
@@ -354,9 +352,9 @@ func _set_standing_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	c.right_pad_rot = Vector3(0.0, -pad_toe_out_standing,  12.0)
 	c.body_pos      = Vector3(0.0,  1.22,  0.0)
 	# Slight resting flex — a goalie never fully stacks the spine, even
-	# relaxed. The head sits just forward of the spine, over the leaning
-	# chest (local -Z is forward; the old +0.12 was a sign slip that hung
-	# the head noticeably behind every other stance's head line).
+	# relaxed. The head sits just FORWARD of the spine, over the leaning chest:
+	# local -Z is forward, so a positive head z hangs it noticeably behind every
+	# other stance's head line.
 	c.body_rot      = Vector3(-4.0, 0.0, 0.0)
 	c.head_pos      = Vector3(0.0,  1.79, -0.04)
 	c.head_rot      = Vector3.ZERO
@@ -664,8 +662,8 @@ func _mirror_hands(c: GoalieBodyConfig) -> void:
 # tilt φ is (BLADE_ASSEMBLY_X, −BLADE_ASSEMBLY_DROP·sin(φ)); Godot's YXZ Euler
 # order applies the Y yaw around that tilted offset, so solving
 # yaw = angle(wrist→puck) − angle(blade offset at yaw 0) points the blade at
-# the puck itself — honouring both the puck's actual depth and the stick
-# geometry, which the old atan2(puck_x, fixed_lookahead) heuristic ignored.
+# the puck itself, honouring both the puck's actual depth and the stick
+# geometry — a fixed-lookahead atan2(puck_x, k) aims the assembly, not the blade.
 # Angle convention matches the reach math: A(v) = atan2(−v.x, −v.z), positive
 # yaw carries local −Z toward −X. Caller clamps via `max_yaw_deg`.
 func _blade_yaw_to_puck(
@@ -867,11 +865,10 @@ func _apply_elevated_shot_reaction(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	# WHERE HE BELIEVES IT IS GOING, not where it is actually going. `shot_impact_x`
 	# is the converging read belief (GoalieController._read_belief_x blended toward
 	# truth over `read_converge_time`), and aiming the arms at it is what makes a
-	# late change of aim pay. This used to be overwritten with the live puck
-	# trajectory, which made the hands clairvoyant: the whole read-staleness model
-	# was computed, replicated, converged — and then discarded for the one limb it
-	# most needed to reach. Height deception still worked because it rides the LEG
-	# drop, which reads the belief; lateral deception measured at exactly zero.
+	# late change of aim pay. Never overwrite it with the live puck trajectory:
+	# that makes the hands clairvoyant and lateral deception pays exactly zero,
+	# while the whole read-staleness model is still computed, replicated and
+	# converged for the one limb that most needs it.
 	#
 	# The VERTICAL intercept stays on the live ballistic solve. Selling the wrong
 	# height is a scroll-wheel input rather than a gesture, so it does not deserve
@@ -915,21 +912,20 @@ func _apply_elevated_shot_reaction(c: GoalieBodyConfig, inputs: Inputs) -> void:
 
 # How high a hand can actually be put, for the pose currently in `c`.
 #
-# THE COST OF GOING DOWN. The ceiling used to be a flat `react_hand_y_max` with
-# no posture term, so a goalie flat in the butterfly gloved pucks 5 cm under the
-# crossbar exactly as well as a standing one — measured, with the same hand
-# distribution (tests/unit/ai/test_goalie_butterfly_tradeoff.gd). That made the
-# butterfly a strict upgrade (it also adds lateral width via the splay), so
-# committing to the seal was never a trade, and the whole block-vs-react model
-# had nothing to balance.
+# THE COST OF GOING DOWN. A flat `react_hand_y_max` with no posture term makes
+# the butterfly a strict upgrade — it already adds lateral width via the splay,
+# and a goalie flat on the ice would glove pucks 5 cm under the crossbar exactly
+# as well as a standing one — so committing to the seal would not be a trade at
+# all and the block-vs-react model would have nothing to balance
+# (tests/unit/ai/test_goalie_butterfly_tradeoff.gd measures the trade).
 #
 # Real goaltending's trade is "seal the ice, concede the top". Here it falls out
 # of the chest anchor each pose already authors: READY sits at 1.06 and the
 # butterfly at 0.40, so the same arm reaches 0.66 m lower from the ice.
 #
-# `arm_reach_above_chest` is DERIVED, not chosen — 1.06 + 0.49 = 1.55, the old
-# flat ceiling, so upright reach is unchanged by construction and only the down
-# postures lose anything. The absolute cap stays as a hard limit on top.
+# `arm_reach_above_chest` is DERIVED, not chosen — 1.06 + 0.49 = 1.55, the
+# absolute cap, so upright reach is unchanged by construction and only the down
+# postures lose anything. That cap stays as a hard limit on top.
 func _reachable_hand_y(intercept_y: float, c: GoalieBodyConfig) -> float:
 	var ceiling: float = minf(react_hand_y_max, c.body_pos.y + arm_reach_above_chest)
 	return clampf(intercept_y, react_hand_y_min, maxf(ceiling, react_hand_y_min))

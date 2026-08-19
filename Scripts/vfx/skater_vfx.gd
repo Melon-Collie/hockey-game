@@ -1,12 +1,11 @@
 class_name SkaterVFX
 extends Node3D
 
-const TRAIL_MIN_SPEED: float = 0.5    # minimum speed for trail emission
-const SPEED_LINE_MIN_SPEED: float = 5.5  # minimum speed for speed line effect
-const TELEPORT_THRESHOLD: float = 1.0 # skip frame if skater moved this far (reconcile/faceoff guard)
+const TRAIL_MIN_SPEED: float = 0.5
+const SPEED_LINE_MIN_SPEED: float = 5.5
 
-# Hockey stop VFX — two-layer effect (surface marks + airborne spray) per blade side.
-const STOP_MIN_SPEED: float = 2.5        # minimum speed at trigger time
+# Hockey stop: a forward snowplow fan, thrown while braking above this speed.
+const STOP_MIN_SPEED: float = 2.5
 
 # Acceleration chips — a hard forward push bites the ice and kicks chips back
 # off the loaded blade. Thrust tops out at ~10.5 m/s²
@@ -31,22 +30,15 @@ const _CHECK_BURST_VEL_MIN: float = 2.5   # initial_velocity_max at a light hit
 const _CHECK_BURST_VEL_MAX: float = 9.0   # initial_velocity_max at a full hit
 
 # --- Body-check SOUND: reserved for hits with real weight behind them ---------
-# The impact BURST fires for every credited check (it scales with force via
-# check_intensity above), but the THUD is gated harder and rides its OWN curve:
-# an incidental bump or a board rub — two committed bodies grinding without a
-# real collision behind them — should make NO sound, or the hit audio
-# machine-guns through every scrum.
-#
-# The gate is in impact_force (weight x closing-speed) units — the scale whose
-# landmarks HitRules owns (MIN_HIT_IMPULSE / FULL_CHECK_IMPULSE / KNOCKDOWN_IMPULSE).
-# Sound starts AT the full-check landmark: below it the contact is a bump or a
-# board rub, and it stays silent.
-#
-# The full-volume point is deliberately NOT a landmark — it sits ABOVE the
-# knockdown landmark so the loudest thud is reserved for the hardest hits rather
-# than every knockdown-class check. It is a FEEL tunable (how hard a hit must
-# land before you hear it at all / at full), not an evaluator constant, so it is
-# hand-set on purpose and free to move without tracking the hit scale.
+# The impact BURST fires for every credited check; the THUD is gated harder and
+# rides its OWN curve, so an incidental bump or a board rub — two committed
+# bodies grinding without a real collision behind them — makes no sound at all
+# and the hit audio can't machine-gun through a scrum. Both ends are in
+# impact_force (weight × closing-speed) units, the scale HitRules' landmarks own.
+# The full-volume point is deliberately NOT one of those landmarks: it sits above
+# knockdown so the loudest thud is reserved for the hardest hits, and it is a
+# FEEL tunable (how hard a hit must land to be heard at all / at full) rather
+# than an evaluator constant, so it is free to move without tracking that scale.
 const _CHECK_SOUND_MIN_FORCE: float = HitRules.FULL_CHECK_IMPULSE  # below this: silent
 const _CHECK_SOUND_FULL_FORCE: float = 6.5   # at/above this the thud is at full volume
 # Sound: louder + lower-pitched across the audible band (full-check landmark up
@@ -57,14 +49,12 @@ const _CHECK_PITCH_LIGHT: float = 1.10   # full check — higher, snappier
 const _CHECK_PITCH_HEAVY: float = 0.90   # hardest hits — lower, heavier thud
 
 # Blade trail — same zero-gap GPU approach as puck trail, one system per skate.
-# Two dots per trail (left/right blade) pinned to ICE_Y so marks scrape the ice surface.
+# Two dots per trail (left/right blade) pinned to IceVFX.ICE_Y so marks scrape the ice surface.
 const BLADE_TRAIL_SPACING: float = 0.05   # meters between skate mark dots
 const BLADE_TRAIL_LIFETIME: float = 1.5   # seconds each mark lingers
 const BLADE_TRAIL_AMOUNT: int = 300       # max concurrent marks per blade
 const BLADE_TRAIL_RADIUS: float = 0.025   # dot radius (smaller than puck's 0.055)
-const BLADE_TRAIL_COLOR: Color = Color(0.95, 0.93, 0.88, 0.5)
 const BLADE_X_OFFSET: float = 0.12       # emitter rest offset; per-frame the emitters ride the FOOT bones
-const ICE_Y: float = 0.005              # world Y for trail dots (just above ice)
 # A blade this far above the lower boot is airborne (recovery swing, clearance
 # step) and stops marking — matches IceScratchMap.LIFT_EPS_M so the live trail
 # and the persistent scratch break in the same places.
@@ -73,10 +63,9 @@ const LIFT_EPS_M: float = 0.03
 # marks emit in world space but the visibility AABB is measured local to the node,
 # i.e. centred on the skater, and defaults to ~±4 m. A blade trail lingers 1.5 s and
 # streaks BLADE_TRAIL_LIFETIME × skate_speed (~18 m at a hard stride) behind the
-# skater — so when the skater rides the frame edge the whole trail is culled by its
-# skater-centred box, and a culled GPUParticles3D pauses processing, making the
-# gap-fill emitter emit a backward streak on re-entry. A generous skater-centred AABB
-# keeps it live whenever any mark could be on-screen. Half-extents (m) cover ~16 m/s.
+# skater, so a skater riding the frame edge has the whole trail culled by that box
+# — and a culled GPUParticles3D pauses processing, which makes the gap-fill emitter
+# lay a backward streak on re-entry. Half-extents (m) cover ~16 m/s of streak.
 const BLADE_TRAIL_AABB_HALF_XZ: float = 24.0
 const BLADE_TRAIL_AABB_HALF_Y: float = 6.0
 
@@ -105,7 +94,7 @@ func _ready() -> void:
 		_blade_trail_particles.append(sub)
 
 		var emitter: GPUParticles3D = _make_blade_trail_emitter(i)
-		emitter.position = Vector3(side_x, 0.0, 0.0)  # Y updated each frame to ICE_Y
+		emitter.position = Vector3(side_x, 0.0, 0.0)  # Y updated each frame to IceVFX.ICE_Y
 		emitter.sub_emitter = NodePath("../%s" % sub_name)
 		add_child(emitter)
 		_blade_trail_emitters.append(emitter)
@@ -122,11 +111,6 @@ func _ready() -> void:
 
 	_body_check_burst = _make_body_check_emitter()
 	add_child(_body_check_burst)
-
-	# Body-check burst + sound are driven by the host-authoritative broadcast
-	# (GameManager._on_body_check_landed → fire_body_check_burst), not by the local
-	# body_checked_player signal — so the impact reads identically on every client
-	# instead of firing off each machine's non-authoritative local collision.
 
 	_prev_pos = global_position
 
@@ -155,7 +139,7 @@ func _process(delta: float) -> void:
 
 	# Reconcile / faceoff teleport guard: skip emission on large position jumps
 	# so reconcile snaps don't trigger false trail marks or stop bursts.
-	if (curr_pos - _prev_pos).length() > TELEPORT_THRESHOLD:
+	if (curr_pos - _prev_pos).length() > IceVFX.TELEPORT_THRESHOLD:
 		_prev_pos = curr_pos
 		_prev_vel = curr_vel
 		_accel_fwd_avg = 0.0
@@ -191,8 +175,8 @@ func _process(delta: float) -> void:
 	# stride's trail into alternating push strokes.
 	var blade_l: Vector3 = skater.blade_mark_position(true)
 	var blade_r: Vector3 = skater.blade_mark_position(false)
-	_blade_trail_emitters[0].global_position = Vector3(blade_l.x, ICE_Y, blade_l.z)
-	_blade_trail_emitters[1].global_position = Vector3(blade_r.x, ICE_Y, blade_r.z)
+	_blade_trail_emitters[0].global_position = Vector3(blade_l.x, IceVFX.ICE_Y, blade_l.z)
+	_blade_trail_emitters[1].global_position = Vector3(blade_r.x, IceVFX.ICE_Y, blade_r.z)
 	var blade_base_y: float = minf(blade_l.y, blade_r.y)
 	var trails_on: bool = speed > TRAIL_MIN_SPEED
 	_blade_trail_emitters[0].emitting = trails_on and blade_l.y - blade_base_y < LIFT_EPS_M
@@ -257,11 +241,13 @@ static func check_sound_pitch_scale(force: float) -> float:
 	return lerpf(_CHECK_PITCH_LIGHT, _CHECK_PITCH_HEAVY, check_sound_intensity(force))
 
 
-# Public so ReplayEventReplayer can fire the burst during replay without
-# routing through body_checked_player — re-emitting the signal would also
-# re-trigger GameManager's hit-landed / replay-record closures, which is wrong
-# during playback (and recursive for the recorder). Burst size + velocity scale
-# with hit strength (the impact_force) so a big check throws more, faster debris.
+# Driven by the host-authoritative broadcast (GameManager._on_body_check_landed),
+# never by the local body_checked_player signal, so the impact reads identically
+# on every client instead of off each machine's non-authoritative collision.
+# Public for the same reason on the replay side: ReplayEventReplayer fires the
+# burst directly, because re-emitting the signal would re-trigger GameManager's
+# hit-landed / replay-record closures — wrong during playback, recursive for the
+# recorder. Burst size + velocity scale with the impact_force.
 func fire_body_check_burst(victim: Skater, force: float, hit_dir: Vector3) -> void:
 	if victim == null:
 		return
@@ -283,10 +269,8 @@ func _set_blade_trails_emitting(active: bool) -> void:
 	for emitter: GPUParticles3D in _blade_trail_emitters:
 		emitter.emitting = active
 
-# Skater-centred visibility box, generous enough that it always overlaps the frustum
-# whenever a live blade mark could be on-screen — so the world-space trail is never
-# culled (nor its processing paused) as the skater rides the frame edge. See the
-# BLADE_TRAIL_AABB_HALF_* doc-block for why the default AABB is too small.
+# Skater-centred visibility box, generous enough to overlap the frustum whenever
+# a live blade mark could be on-screen (see the BLADE_TRAIL_AABB_HALF_* block).
 func _blade_trail_visibility_aabb() -> AABB:
 	return AABB(
 			Vector3(-BLADE_TRAIL_AABB_HALF_XZ, -BLADE_TRAIL_AABB_HALF_Y, -BLADE_TRAIL_AABB_HALF_XZ),
@@ -347,7 +331,7 @@ func _make_blade_trail_sub_emitter(sub_name: String) -> GPUParticles3D:
 	mat.initial_velocity_min = 0.0
 	mat.initial_velocity_max = 0.0
 	mat.gravity = Vector3.ZERO
-	mat.color = BLADE_TRAIL_COLOR
+	mat.color = IceVFX.snow(0.5)  # blade marks: the faintest snow on the ice
 	var grad := Gradient.new()
 	grad.set_color(0, Color(1.0, 1.0, 1.0, 0.5))
 	grad.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
@@ -399,7 +383,7 @@ func _emit_accel_spray(skater: Skater, flat_vel: Vector3,
 	var blade: Vector3 = blade_l if use_left else blade_r
 	var backward: Vector3 = -flat_vel.normalized()
 	var world_dir: Vector3 = (backward + Vector3(0.0, 0.5, 0.0)).normalized()
-	_accel_spray_emitter.global_position = Vector3(blade.x, ICE_Y, blade.z)
+	_accel_spray_emitter.global_position = Vector3(blade.x, IceVFX.ICE_Y, blade.z)
 	_accel_spray_emitter.direction = \
 			_accel_spray_emitter.global_transform.basis.inverse() * world_dir
 	_accel_spray_emitter.emitting = true
@@ -421,7 +405,7 @@ func _make_accel_spray_emitter() -> CPUParticles3D:
 	e.gravity = Vector3(0.0, -25.0, 0.0)
 	e.scale_amount_min = 0.02
 	e.scale_amount_max = 0.045
-	e.mesh = _make_sphere_mesh(Color(0.95, 0.93, 0.88, 0.7))
+	e.mesh = IceVFX.blob(IceVFX.snow(0.7))
 	return e
 
 
@@ -441,7 +425,7 @@ func _make_stop_spray_emitter() -> CPUParticles3D:
 	e.gravity = Vector3(0.0, -25.0, 0.0)
 	e.scale_amount_min = 0.03
 	e.scale_amount_max = 0.06
-	e.mesh = _make_sphere_mesh(Color(0.95, 0.93, 0.88, 0.85))
+	e.mesh = IceVFX.blob(IceVFX.snow(0.85))
 	return e
 
 func _make_speed_lines_emitter() -> CPUParticles3D:
@@ -460,7 +444,7 @@ func _make_speed_lines_emitter() -> CPUParticles3D:
 	e.gravity = Vector3.ZERO
 	e.scale_amount_min = 0.015
 	e.scale_amount_max = 0.03
-	e.mesh = _make_sphere_mesh(Color(0.85, 0.92, 1.0, 0.5))
+	e.mesh = IceVFX.blob(Color(0.85, 0.92, 1.0, 0.5))
 	return e
 
 func _make_body_check_emitter() -> CPUParticles3D:
@@ -479,18 +463,5 @@ func _make_body_check_emitter() -> CPUParticles3D:
 	e.gravity = Vector3(0.0, -25.0, 0.0)
 	e.scale_amount_min = 0.04
 	e.scale_amount_max = 0.08
-	e.mesh = _make_sphere_mesh(Color(0.9, 0.95, 1.0, 0.9))
+	e.mesh = IceVFX.blob(Color(0.9, 0.95, 1.0, 0.9))
 	return e
-
-func _make_sphere_mesh(color: Color) -> Mesh:
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.5
-	sphere.height = 1.0
-	sphere.radial_segments = 4
-	sphere.rings = 2
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = color
-	sphere.material = mat
-	return sphere

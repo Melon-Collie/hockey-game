@@ -1,27 +1,18 @@
 class_name TeamBrain
 extends TeamStrategyView
 
-# Per-team strategy node, v2 (possession-state model). Replaces the
-# F1/F2/F3 closest-to-puck role assignment + man-to-man coverage
-# assignment with a single positional-slot system driven by team
-# possession state.
-#
-# Driven by GameManager._physics_process (host only) — ticks once
-# every TICK_PERIOD seconds (~6 Hz).
+# Per-team strategy node. Driven by GameManager._physics_process (host only) —
+# ticks once every TICK_PERIOD seconds (~6 Hz).
 #
 # Blackboard:
 #   state              — AIPossessionState.State enum (DZONE / OZONE /
 #                        TRANS_OFFENSE / TRANS_DEFENSE / NEUTRAL).
 #   slot_assignments   — Dictionary[peer_id, AIRoleSlots.Slot].
 #
-# Roles assigned by current geometry per brain tick — no SPRINT_BY
-# locking; the bot whose body is in the right place gets the role.
-# Hysteresis (1.5 m) prevents flicker from small position changes.
-#
-# `team_id_by_peer` is `Dictionary[int, int]` — live reference owned
-# by PlayerRegistry, mutated when players spawn / leave / slot-swap.
-# Read via `dict.get(pid, -1)`. Used to be a Callable; downgraded to
-# a Dictionary because AI hot loops eat Callable.call overhead.
+# `team_id_by_peer` is a live reference owned by PlayerRegistry, mutated when
+# players spawn / leave / slot-swap, so it is read via `dict.get(pid, -1)`. Keep
+# it a Dictionary and never a Callable — AI hot loops eat Callable.call
+# overhead.
 
 const TICK_PERIOD: float = 1.0 / 6.0
 # Strong-side X is sign(puck.x) but with a hysteresis band so the
@@ -56,9 +47,8 @@ var threat_assignments: Dictionary[int, int] = {}    # defender peer -> opp peer
 # Shared per-opponent shoot-threat bases for MARK's unassigned fallback (the
 # TeamBrain-shared threat memo, ARCHITECTURE Known Issues): opp peer_id -> the
 # threat_surface_shoot of his current spot against our net/goalie/full team.
-# Each unassigned marker used to recompute these near-identical surfaces every
-# ~30 Hz re-eval; the brain computes them once per ~6 Hz tick and the markers
-# consume them via RoleContext as ordering / pruning bounds. APPROXIMATE by
+# Computed once per ~6 Hz brain tick rather than per marker per ~30 Hz re-eval,
+# and consumed via RoleContext as ordering / pruning bounds. APPROXIMATE by
 # design: the memo's defender set is the full team (a marker's exact read
 # excludes its own hypothetical self — one body in a 4-defender surface), its
 # opponents are raw positions (the marker leads them by its anticipation
@@ -75,9 +65,8 @@ var _memo_defender_caps: Array[AISkaterCaps] = []
 # The team's shared transition-defense read (docs/transition-defense-plan.md
 # §4): who is genuinely attacking, who is back, the numbers, backpressure, and
 # whether coverage is accounted for. Computed ONCE per brain tick and consumed
-# by every transition-facing role, in place of each defender independently
-# racing a worst-case counter and independently concluding it is the last man
-# back. Refilled in place, never reallocated.
+# by every transition-facing role, so no defender runs a private last-man race.
+# Refilled in place, never reallocated.
 var rush_read := AIRushRead.new()
 # Last tick's recovery classification, threaded back in for the enter/hold
 # hysteresis on the recovery race (see AIRushRead.TRACK_ENTER_MARGIN_S).
@@ -208,18 +197,14 @@ func include_skater(peer_id: int) -> void:
 # force_retick() can drive it without going through the accumulator
 # rate-limit.
 func _compute_tick(snapshot: WorldSnapshot) -> void:
-	# 1. Possession state.
 	var possession: AIPossessionState.Result = AIPossessionState.compute(
 			snapshot, team_id, _own_goal_z, _team_id_by_peer, _last_carrier_team)
 	_last_carrier_team = possession.carrier_team
 	state = possession.state
 
 
-	# 1.75 The shared transition read. Computed before the slot elections so
-	#      everything downstream — the offensive stations' counter-threat set
-	#      today, the transition roles and the DZONE readiness gate as the
-	#      later phases land — reads ONE answer instead of each bot deriving
-	#      its own. Cheap: one pass over ≤10 skaters at the 6 Hz brain tick.
+	# The shared transition read, before the slot elections so everything
+	# downstream reads ONE answer instead of each bot deriving its own.
 	_prev_recovery.clear()
 	for pid: int in rush_read.recovery_by_peer:
 		_prev_recovery[pid] = rush_read.recovery_by_peer[pid]
@@ -227,28 +212,14 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 			_caps_by_peer, _prev_recovery, rule_set != GameRules.RuleSet.OFF,
 			_bot_peers)
 
-	# 1.85 COVERAGE READINESS (docs/transition-defense-plan.md §9). DZONE is a
-	#      shape, not a location: the raw table flips to it the moment the puck
-	#      crosses our blue line, which used to re-slot three still-backchecking
-	#      forwards onto zone posts and dissolve the backcheck at the line. Hold
-	#      the rush/recovery shape until the coverage we'd switch into actually
-	#      makes sense. An upgrade seam on the raw table, same shape as this one.
+	# COVERAGE READINESS (docs/transition-defense-plan.md §9): hold the
+	# rush/recovery shape until the coverage we would switch into makes sense.
+	# No fallback timer is needed because the predicate is monotone in the
+	# recovery it waits on — the rush roles themselves bring everyone home.
 	#
-	#      BOTH TEAM SIZES. The gate does not create a shape that under-covers:
-	#      it holds the rush shape exactly while somebody is still on the way home,
-	#      and in that state the zone's nominal coverage is a fiction anyway — MARK
-	#      computes a cover position from 20 m up-ice and escorts. Sprinting home
-	#      strictly beats walking to a post. And the shapes converge by
-	#      construction: RUSH_D1 is home already, TRACK_PUCK chases to the net,
-	#      the mid trackers stop at the circle tops — so the rush roles themselves
-	#      bring everyone home, satisfy the predicate, and hand off. That
-	#      convergence is why no fallback timer is needed: the predicate is
-	#      monotone in the recovery it is waiting on.
-	#
-	#      Only while an OPPONENT actually carries: a loose or dead puck in our
-	#      zone is not a rush being defended, it's DZONE's
-	#      business, and holding the rush shape over it would just stop the team
-	#      setting up around a puck nobody has.
+	# Only while an OPPONENT actually carries: a loose or dead puck in our zone is
+	# not a rush being defended, and holding the rush shape over it would stop the
+	# team setting up around a puck nobody has.
 	if state == AIPossessionState.State.DZONE \
 			and rush_read.carrier_peer != -1:
 		if rush_read.coverage_ready:
@@ -277,12 +248,10 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 		elif _strong_x < 0.0 and puck_x > STRONG_SIDE_HYSTERESIS_M:
 			_strong_x = 1.0
 
-	# 3. Slot assignment by current kinematics (momentum-aware soonest-to-
-	#    arrive elections at each peer's real Speed cap). CARRIER is fixed
-	#    to the puck holder; everything else falls out of the per-state
-	#    elections with hysteresis. No locking needed. 5v5 routes through
-	#    the position-aware group-scoped election; 3v3 keeps the legacy
-	#    path verbatim (plan §"Guiding constraint").
+	# Slot assignment by current kinematics (momentum-aware soonest-to-arrive
+	# elections at each peer's real Speed cap). CARRIER is fixed to the puck
+	# holder; everything else falls out of the per-state elections with
+	# hysteresis. 5v5 routes through the position-aware group-scoped election.
 	var prev_assignments: Dictionary = slot_assignments
 	if team_size >= 5:
 		slot_assignments = AIRoleSlots5.assign(
@@ -293,25 +262,21 @@ func _compute_tick(snapshot: WorldSnapshot) -> void:
 				snapshot, team_id, _own_goal_z, state, _team_id_by_peer,
 				prev_assignments, _strong_x, _caps_by_peer)
 	# Drop excluded peers (puppeted tutorial bots) so neither they nor any
-	# downstream consumer of get_slot steers them. AIRoleSlots.assign already
-	# may have given them a slot — erase after the fact rather than touching
-	# the call signature.
+	# downstream consumer of get_slot steers them — assign() may already have
+	# given them a slot.
 	for excluded_pid: int in _excluded_peers:
 		slot_assignments.erase(excluded_pid)
 
-	# 4. Man-on-threat partition for the backline (defensive states only).
-	#    Passes the prior assignment so AIThreatAssignment can apply switch
-	#    hysteresis; cleared to {} in non-defensive states so re-entry starts
-	#    fresh. Excluded peers are already absent from slot_assignments, so
-	#    they're never picked as defenders here.
+	# Man-on-threat partition for the backline. The prior assignment goes in so
+	# AIThreatAssignment can apply switch hysteresis. Excluded peers are already
+	# absent from slot_assignments, so they are never picked as defenders here.
 	threat_assignments = _compute_threat_assignments(snapshot, threat_assignments)
 
-	# 4.5 Shared threat memo for the markers (see threat_shoot_base_by_opp).
 	_refresh_threat_base_memo(snapshot)
 
-	# 5. Smart-ping obedience: force-slot the obeying bots (COVER_HIM also
-	#    pins its man into the threat partition, the house-pin shape). Applied
-	#    last so a live human order wins over the geometric assignment.
+	# Smart-ping obedience: force-slot the obeying bots (COVER_HIM also pins its
+	# man into the threat partition, the house-pin shape). Applied last so a live
+	# human order wins over the geometric assignment.
 	var ping_carrier: int = -1
 	if snapshot != null and snapshot.puck_state != null:
 		ping_carrier = snapshot.puck_state.carrier_peer_id
@@ -349,16 +314,11 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 	# AIRoleHelpers.resolve_defensive_play_ref already makes for the roles that
 	# consume this partition, so the brain and the marker read one play.
 	#
-	# Requiring a live carrier was measured at 36% of D-zone time with NO man
-	# assigned to ANY marker — and all-or-nothing, because the condition is
-	# team-wide. Every pass, shot, rebound and dump dissolved the whole coverage
-	# for its flight and dropped both markers into the unassigned fallback. A
-	# man is dangerous because of where he stands relative to our net, which is
-	# true whether or not anybody is holding the puck; the carrier only sharpens
-	# WHICH man matters most. With the puck standing in, the matcher's own
-	# hysteresis then keeps each marker on the man he already had, and the
-	# ex-carrier joins the men as the extra body — which is what a defence does
-	# when the puck leaves his stick.
+	# A live carrier is NOT required. A man is dangerous because of where he
+	# stands relative to our net, which holds whether or not anybody is holding
+	# the puck; the carrier only sharpens WHICH man matters most. Gating on one
+	# dissolves the whole coverage — team-wide, since the condition is — for the
+	# flight of every pass, shot, rebound and dump.
 	var play_ref: Vector3 = snapshot.puck_state.position
 	if carrier_pid != -1 and snapshot.skater_states.has(carrier_pid):
 		play_ref = snapshot.skater_states[carrier_pid].position
@@ -366,20 +326,9 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 	# THE DEFENDERS ARE EVERY BODY WHOSE JOB IS A MAN: the man-marking backline
 	# (MARK) and, in 5v5 D-zone coverage, the four zone roles not currently on
 	# the puck. Both cover a man; they differ only in whether the man may be
-	# anywhere (MARK) or must be standing in the ice they own (zone).
-	#
-	# The zone half used to choose alone — five roles each running an
-	# independent argmax over deliberately OVERLAPPING areas, with nothing
-	# coordinating them. ZONE_D_STRONG's area (everything below 8 m, no lateral
-	# bound) contains the whole net-front box and 3.5 m of the slot, so measured
-	# on the real stack 61% of D-zone ticks had at least one man covered twice
-	# and 52% of all locks issued were stacked on a man somebody else already
-	# had — including 236 ticks of three defenders on one body. Every redundant
-	# lock is a man left open somewhere else.
-	#
-	# One matching fixes it by construction, the same way the 3v3 backline has
-	# always been safe: distinct men, and the areas enter as ELIGIBILITY rather
-	# than as five separate searches.
+	# anywhere (MARK) or must be standing in the ice they own (zone). One
+	# matching over all of them keeps the men distinct by construction, with a
+	# zone role's area entering as ELIGIBILITY rather than as a private search.
 	var pressure_slot: int = AIZoneCoverage.pressure_owner(
 			_strong_x, _own_goal_z, snapshot.puck_state.position)
 	var defenders: Array[int] = []
@@ -426,11 +375,10 @@ func _compute_threat_assignments(snapshot: WorldSnapshot,
 		var mp: Vector3 = snapshot.skater_states[pid].position
 		men.append(pid)
 		man_pos[pid] = mp
-		# Area eligibility, built as the men are collected. The incumbent keeps
-		# the release margin he had under the old per-role lock, so a man
-		# skating a seam is still held a metre past the edge rather than
-		# flickering between two defenders — that hysteresis moves here and the
-		# matcher's own switch margin covers the rest.
+		# Area eligibility, built as the men are collected. The incumbent gets a
+		# release margin so a man skating a seam is held a metre past the edge
+		# rather than flickering between two defenders; the matcher's own switch
+		# margin covers the rest.
 		for def_pid: int in zone_slot_by_def:
 			var margin: float = AIZoneCoverage.AREA_RELEASE_MARGIN_M \
 					if prev.get(def_pid, -1) == pid else 0.0
@@ -562,15 +510,11 @@ func position_of(peer_id: int) -> int:
 
 
 # ── One-timer readiness signaling ───────────────────────────────────────────
-# Off-puck bots in the FINISHER role publish "I'm camped + pre-aimed,
-# fire me a pass and I'll one-time it" via set_one_timer_ready(true).
-# The carrier reads via is_one_timer_ready(peer_id) when scoring
-# passes — a ready receiver gets a no-charge goalie prediction (since
-# they fire on contact, the goalie can't react to a wind-up), which
-# leaves the goalie less settled in the seven-hole geometry and naturally
-# rewards passes to them.
-# Stored host-side on the brain, not in SkaterNetworkState — this is
-# pure AI bookkeeping that the network doesn't need to see.
+# Off-puck bots in the FINISHER role publish "I'm camped + pre-aimed, fire me a
+# pass and I'll one-time it". The carrier reads it when scoring passes: a ready
+# receiver gets a no-charge goalie prediction, since a shot fired on contact
+# gives the goalie no wind-up to react to. Host-side AI bookkeeping only — never
+# in SkaterNetworkState, the network has no use for it.
 var _one_timer_ready_by_peer: Dictionary = {}   # peer_id -> bool
 
 

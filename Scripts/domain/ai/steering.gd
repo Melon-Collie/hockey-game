@@ -8,36 +8,17 @@ class_name AISteering
 # magnitude or less. SkaterMovementRules.apply_movement does
 #   thrust_dir = Vector3(move.x, 0, move.y)
 # i.e. it treats Vector2.y as world Z. Do NOT pre-rotate by facing.
-#
-# Forces (playtest-tunable weights):
-#   - Attract to anchor              (1.0)
-#   - Repel from teammates           (0.4 over 3 m)
-#   - Repel from opponents           (0.6 over 4 m, inverse-square falloff)
-#   - Repel from boards              (0.5 within 1.5 m)
-#   - Repel from own shot lanes      (0.3 within 2 m of segment)
-# Sum, clamp to unit length.
 
-# Teammate spacing. Bumped from the original 0.4 / 3.0 m — bots
-# clumped in puck battles where several role search-centers converge
-# on the same area, so the soft field now pushes apart sooner (larger
-# radius) and harder (higher weight). Still kept below the opponent
-# repel weight (0.6): maintaining space against a checker matters more
-# than against your own formation. Tuning: raise the weight toward the
-# opponent value if bots still bunch; lower toward 0.4 if formation
-# spacing feels too loose (give-and-go support drifting wide).
+# Teammate spacing. Deliberately below OPPONENT_REPEL_WEIGHT: holding space
+# against a checker matters more than against your own formation.
 const TEAMMATE_REPEL_WEIGHT: float = 0.55
 const TEAMMATE_REPEL_RADIUS: float = 4.0
-# How far ahead (seconds) a teammate's momentum is projected when the
-# repel reads their SWEPT PATH instead of their freeze-frame body (see
-# the teammate-velocity branch in compute_move_vector). A short lead —
-# "where they're skating into over the next stride," not a route
-# prophecy — so two bots on crossing paths each feel the other's line
-# and bend apart BEFORE the bodies meet, rather than only reacting once
-# they're already point-blank (the too-late collision the freeze-frame
-# field allowed, worst at the breakout→rush handoff where two long
-# cross-ice vectors converge through center). Zero teammate velocity
-# collapses the swept segment to the body point, so a stationary
-# formation repels exactly as the old proximity field did.
+# How far ahead a teammate's momentum is projected when the repel reads their
+# SWEPT PATH instead of their freeze-frame body (the teammate-velocity branch in
+# compute_move_vector). One stride — "where they're skating into next," not a
+# route prophecy — so two bots on crossing paths feel each other's line and bend
+# apart before the bodies meet. Zero teammate velocity collapses the sweep to the
+# body point, reducing the field to plain proximity.
 const TEAMMATE_REPEL_LEAD_S: float = 0.4
 const OPPONENT_REPEL_WEIGHT: float = 0.6
 # Carrier-specific opponent repel weight. Bots with the puck weight
@@ -48,58 +29,19 @@ const OPPONENT_REPEL_WEIGHT: float = 0.6
 # them on the way to the slot.
 const OPPONENT_REPEL_WEIGHT_CARRY: float = 1.2
 const OPPONENT_REPEL_RADIUS: float = 4.0
-# ── Carrier threat-gated avoidance ───────────────────────────────────────────
-# The CARRIER's opponent repel reads THREAT, not proximity, and routes AROUND,
-# not away. The plain proximity field below let any defender within 4 m herd
-# the carrier: the carry repel weight (1.2) out-muscles the anchor pull (1.0)
-# and points radially away, so a defender approaching from up-ice pushed the
-# carrier straight backwards off its own carry line — corralled by a hint of
-# pressure, never trying to beat the man. With opponent velocities supplied
-# (compute_move_vector's carrier path), each defender instead repels:
-#   - FROM his swept reach — the closest point to the carrier on his
-#     momentum-projected path over the evasion horizon; his stick can touch
-#     anywhere within reach of that line (the same bounded-accel read as
-#     AIActionScoring.reach_clearance, league-default reach). A beaten man
-#     whose momentum carries him away exerts nothing; a committed charger's
-#     sweep produces a perpendicular SIDESTEP off his line (the matador — his
-#     body is still a collision even when the puck is safe); a jockeying
-#     defender keeps his full push.
-#   - AROUND, never back — the summed repel's component opposing the anchor
-#     direction is removed, so pressure bends the carry line around a threat
-#     but can never reverse it. Retreating is the carry DELIBERATION's call
-#     (the anchor itself moves); it must not be a reflex. A defender parked
-#     dead on the line therefore repels ~nothing — driving at him and deking
-#     (the poke-evade owns that moment) is exactly the aggressive read.
 const BOARD_REPEL_WEIGHT: float = 0.5
 const BOARD_REPEL_DISTANCE: float = 2.0
 const SHOT_LANE_REPEL_WEIGHT: float = 0.3
 const SHOT_LANE_REPEL_RADIUS: float = 2.0
-# Crease repel — pushes bots out of either goalie's crease + a small
-# extension radius. Strong weight: bots crashing the crease was the
-# main "score-by-spamming" exploit. Falloff reaches zero outside the
-# arc + CREASE_REPEL_EXTENSION; inside the arc the falloff is full
-# strength so the bot is pushed firmly out. Outward direction from
-# CreaseRules so the push is geometrically correct (rounds the arc
-# rather than snapping to an axis).
+# Crease repel. Weighted above every other repel: a bot parked in the blue paint
+# is the score-by-stacking exploit, so this must win the sum outright.
 const CREASE_REPEL_WEIGHT: float = 0.9
 const CREASE_REPEL_EXTENSION: float = 0.5
-# Net detour — route a bot that's behind a goal line back around the
-# post instead of letting the anchor pull drag its body straight
-# through the net frame. The potential field has no obstacle for the
-# net itself (crease repel zeroes out behind the goal line), so a
-# carrier that ends up behind a net — its own or the opponent's —
-# drives straight at it, jams the body, and (when it's the own net)
-# shoves the puck into the mesh. Bots never INTEND to be behind the
-# line: carry candidates are clamped to the goal-line buffer, so this
-# only ever fires on an overshoot or a loose-puck pickup, where the
-# correct play is to skate out past the post and come around the
-# front. While behind the line and laterally within the post span,
-# push hard toward the nearer post side (with a slight outward bias so
-# the body keeps its depth and rounds the post rather than pressing
-# into the frame as the inward anchor pull fights it). Releases the
-# instant the bot clears the post laterally, gets in front of the
-# line, or its target is itself behind the line (a deliberate
-# loose-puck retrieval needs no detour).
+# Net detour. The field carries no obstacle for the net frame itself — the crease
+# repel zeroes out behind the goal line — so without this the anchor pull drags a
+# body behind a net straight into the cage, and into its own mesh with the puck.
+# Bots never INTEND to be back there (carry candidates are clamped to the
+# goal-line buffer); this fires on an overshoot or a loose-puck pickup.
 const NET_DETOUR_LATERAL_WEIGHT: float = 1.5
 const NET_DETOUR_BACK_WEIGHT: float = 0.5
 # Lateral clearance past the post before the detour releases.
@@ -112,68 +54,18 @@ const NET_DETOUR_FRONT_MARGIN: float = 0.3
 const ANCHOR_DEADBAND: float = 0.5
 
 # ── Velocity-matched seek ────────────────────────────────────────────────────
-# The plain anchor pull above is a pure SEEK — it points thrust straight at the
-# anchor and ignores the bot's own momentum. A carrier drifting cross-ice
-# ("downhill") toward a central carry spot therefore ORBITS it: full thrust at
-# the spot, momentum carries the body wide, and it arcs past instead of getting
-# onto the line — the "wanted the middle, momentum won" failure. When
-# `velocity_match_speed` is supplied (the carrier's own path), the anchor term
-# instead keeps FULL thrust along the line to the anchor but subtracts the
-# PERPENDICULAR (cross-drift) component of the bot's own velocity: it drives at
-# the spot AND cancels the sideways momentum carrying the body off the line —
-# the foresight a human carrier uses (redirect the feet onto the line early
-# rather than arc around).
-#
-# Only the CROSS component is cancelled — never the along-line speed — for two
-# reasons. (1) Carry anchors are 3 m WAYPOINTS re-picked every re-eval and skated
-# THROUGH at pace (the arrival brake skips carry waypoints for the same reason);
-# bleeding forward speed just pacified the carrier so it never drove a duel.
-# (2) Subtracting the full velocity (cross AND along) weakens thrust as the bot
-# nears top speed, so friction drags it below max — the carry visibly slows. So
-# the along-line drive stays a full unit; only the sideways drift is trimmed.
-# With no cross-drift the term reduces to the plain seek (straight-line
-# approaches unchanged). The result is renormalised to unit weight, blending with
-# the repels like the seek term it replaces.
+# Only the CROSS component of our own velocity is cancelled — never the
+# along-line speed — for two physical reasons. (1) Carry anchors are WAYPOINTS
+# re-picked every re-eval and skated THROUGH at pace (the arrival brake skips
+# them for the same reason); bleeding forward speed pacifies the carrier so it
+# never drives a duel. (2) Subtracting the full velocity weakens thrust as the
+# bot nears top speed, so friction drags it below max and the carry visibly
+# slows. With no cross-drift the term reduces to the plain seek.
 
 # ── Moving-frame pursuit (a stand that rides a man) ──────────────────────────
-# Both seeks above steer at where the anchor IS. That is correct for a station —
-# a spot on the ice does not go anywhere — and wrong for every defensive stand,
-# because a gap point, a cover point and a backchecker's hip all RIDE an opponent
-# and sweep toward our net at his pace. Flown as a parked point, the trip has one
-# shape regardless of distance: sprint at the spot, arrival-brake to a STOP on it,
-# and be standing still when the man arrives. Measured on the real stack, a
-# defender who began the rush 20 m from his stand met the carrier at 10.8 m/s of
-# RELATIVE speed (head-on, already beaten); one who began 2 m away — no trip to
-# make — met him at 1.3 m/s, travelling with him, inside position established.
-# Same role, same ladder, same stand: the difference was entirely the route.
-#
-# It also made the step-up bound's own arithmetic unreachable.
-# AIRoleHelpers.settable_stand_depth reserves depth for a PIVOT ("being merely
-# stopped when the carrier arrives is not gap control"), but the field's only
-# actuator at the anchor is a brake to zero, so the pivot it paid for could never
-# be performed.
-#
-# When `anchor_velocity` is supplied the anchor term becomes a VELOCITY the bot
-# tracks rather than a point it visits:
-#
-#     desired = anchor_velocity + toward_anchor * closing(dist)
-#
-# and the thrust is whatever corrects our velocity onto it. The closing profile is
-# the arrival brake's own stopping law read as a speed rather than a trigger — the
-# fastest we can still be CLOSING at and still be matched to the frame on arrival,
-# counting the ice the frame eats from its own side — so it is built from physical
-# measurements (the brake's decel, the frame's approach) and not from a gain. It
-# is the same arithmetic the retired stand-placement bound used
-# (AIRoleHelpers.approach_speed_cap), applied continuously to the ROUTE instead of
-# once per dispatch to where the stand is put. The shape falls out at both ends:
-# far out the closing term dominates
-# and the heading is straight pursuit; as the gap closes the heading rotates onto
-# the anchor's own velocity, so the defender turns and runs WITH the play; at the
-# stand the desired velocity IS the man's and the relative speed is zero — which
-# is what "gapped up and in shape" means, and what no point-seek can express.
-#
-# Only roles that opt in pass it (Vector3.ZERO — the default — takes the seeks
-# above unchanged), so stations, carry waypoints and puck chases are untouched.
+# Below this the anchor is not really riding anything and the seeks above are
+# used instead. Passing `anchor_velocity` at all is opt-in per role (Vector3.ZERO
+# is the default), so stations, carry waypoints and puck chases are untouched.
 const MOVING_FRAME_MIN_SPEED: float = 0.05
 
 # Brake-pivot thresholds. When the bot wants to head one direction but is
@@ -190,28 +82,21 @@ const BRAKE_PIVOT_ANGLE_DEG: float = 120.0
 const BRAKE_PIVOT_RELEASE_ANGLE_DEG: float = 100.0
 const BRAKE_PIVOT_MIN_SPEED: float = 3.0
 
-# Arrival brake. Station-keeping bots (off-puck role destinations: a
-# FINISHER staging spot, a cover point, RUSH_D1's gap point) approach a
-# POINT that can stop moving — and nothing in the field slowed them
-# down: the anchor attraction is full-strength until a 0.5 m deadband,
-# and at 9 m/s friction alone needs ~11 m to stop, so a bot whose
-# target decelerated blew straight through it, then the 120° brake-
-# pivot fired on the far side and it doubled back. Overshoot-and-return
-# on every station change.
+# Arrival brake. Station-keeping bots approach a POINT that can stop moving, and
+# nothing else in the field slows them: the anchor attraction is full-strength
+# until the deadband, and at 9 m/s friction alone needs ~11 m to stop. Same
+# stopping-distance law as the offside brake, applied to a point — when the
+# CLOSING speed toward the anchor can no longer be shed inside the remaining
+# distance, press the real brake. Evaluated fresh every tick, so a target still
+# moving away never engages it and one that stops engages it exactly one
+# stopping-distance out. Hysteresis: once braking, the release margin exceeds the
+# engage margin, so shedding speed (which collapses stop_dist quadratically)
+# can't strobe the brake key.
 #
-# Same stopping-distance idea as the offside brake, applied to a point:
-# when the CLOSING speed toward the anchor can no longer be shed inside
-# the remaining distance, press the real brake. Evaluated fresh every
-# tick, so a target that keeps moving away never engages it (dist stays
-# ahead of stop_dist), while a target that stops engages it exactly one
-# stopping-distance out. Hysteresis: once braking, the release margin is
-# larger than the engage margin, so shedding speed (which collapses
-# stop_dist quadratically) doesn't strobe the brake key.
-#
-# Deliberately NOT applied to waypoint-style anchors — carry steps
-# re-picked every re-eval, loose-puck chases (arrive at speed; momentum
-# wins contested pickups), body-check commits (drive THROUGH the man) —
-# the caller opts in per call site.
+# Deliberately NOT applied to waypoint-style anchors — carry steps re-picked
+# every re-eval, loose-puck chases (arrive at speed; momentum wins contested
+# pickups), body-check commits (drive THROUGH the man) — the caller opts in per
+# call site.
 const ARRIVAL_BRAKE_DECEL_M_S2: float = 10.0
 const ARRIVAL_BRAKE_ENGAGE_MARGIN_M: float = 0.5
 const ARRIVAL_BRAKE_RELEASE_MARGIN_M: float = 1.5
@@ -245,9 +130,8 @@ const OFFSIDE_BRAKE_MARGIN_M: float = 0.35
 # pass zero too — they don't need to repel out of their own lane.
 #
 # `opponent_velocities` (index-matched to `opponent_positions`) switches the
-# opponent repel into the CARRIER threat-gated mode — see the block comment on
-# the constants above. Empty (the default) keeps the plain proximity field for
-# off-puck bots.
+# opponent repel into the CARRIER threat-gated mode — see `_carrier_threat_repel`.
+# Empty (the default) keeps the plain proximity field for off-puck bots.
 static func compute_move_vector(
 		self_pos: Vector3,
 		anchor: Vector3,
@@ -269,7 +153,7 @@ static func compute_move_vector(
 	# Attract to anchor. Three seams, most specific first: MOVING-FRAME pursuit
 	# when the anchor rides a man (anchor_velocity supplied); the velocity-matched
 	# seek when only our own cross-drift needs cancelling; the plain SEEK
-	# otherwise. See the doc blocks above.
+	# otherwise.
 	var to_anchor: Vector3 = anchor - self_pos
 	var anchor_dist: float = Vector2(to_anchor.x, to_anchor.z).length()
 	var moving_frame: bool = velocity_match_speed > 0.0 \
@@ -289,10 +173,8 @@ static func compute_move_vector(
 	elif anchor_dist > ANCHOR_DEADBAND:
 		var inv: float = 1.0 / anchor_dist
 		if velocity_match_speed > 0.0:
-			# Full thrust along the line to the anchor, minus only the
-			# PERPENDICULAR (cross-drift) component of our velocity — so we drive
-			# at the spot at pace while cancelling the sideways momentum that
-			# carries the body off the line. Renormalised to unit weight.
+			# Full thrust along the line to the anchor, minus the PERPENDICULAR
+			# component of our velocity, renormalised to unit weight.
 			var dir_x: float = to_anchor.x * inv
 			var dir_z: float = to_anchor.z * inv
 			var v_along: float = self_velocity.x * dir_x + self_velocity.z * dir_z
@@ -310,14 +192,9 @@ static func compute_move_vector(
 			force_x += to_anchor.x * inv
 			force_z += to_anchor.z * inv
 
-	# Repel from teammates within radius. Linear falloff with distance.
-	# When teammate velocities are supplied (index-matched), each teammate
-	# repels from the CLOSEST POINT on its momentum-swept segment
-	# [tp, tp + vel × TEAMMATE_REPEL_LEAD_S] rather than its freeze-frame
-	# body — so a teammate skating ACROSS this bot's path is felt along the
-	# line it's cutting into, and the two bend apart before the bodies meet.
-	# A zero-velocity (or unsupplied) teammate collapses the sweep to the
-	# body point, reproducing the plain proximity field exactly.
+	# Repel from teammates within radius, linear falloff. With velocities supplied
+	# (index-matched) the repel reads the closest point on the momentum-swept
+	# segment [tp, tp + vel × TEAMMATE_REPEL_LEAD_S] instead of the body point.
 	var have_tm_vels: bool = teammate_velocities.size() == teammate_positions.size()
 	for i: int in teammate_positions.size():
 		var tp: Vector3 = teammate_positions[i]
@@ -342,9 +219,9 @@ static func compute_move_vector(
 			force_z += dz * inv_d * falloff * TEAMMATE_REPEL_WEIGHT
 
 	# Repel from opponents. Carrier mode (velocities supplied): threat-gated,
-	# route-around — see the carrier threat-gated avoidance doc. Otherwise the
-	# plain proximity field within OPPONENT_REPEL_RADIUS (off-puck bots
-	# maintaining formation space against checkers).
+	# route-around — see `_carrier_threat_repel`. Otherwise the plain proximity
+	# field within OPPONENT_REPEL_RADIUS (off-puck bots maintaining formation
+	# space against checkers).
 	if not opponent_velocities.is_empty() \
 			and opponent_velocities.size() == opponent_positions.size():
 		var opp_force: Vector2 = _carrier_threat_repel(
@@ -393,15 +270,12 @@ static func compute_move_vector(
 		force_x += lane.x
 		force_z += lane.y
 
-	# Repel from either crease — universal, no team check. Bots crashing
-	# the crease and spamming was the main score-by-stacking exploit.
+	# Repel from either crease — universal, no team check.
 	var crease: Vector2 = _crease_repel(self_pos)
 	force_x += crease.x
 	force_z += crease.y
 
-	# Net detour — round the post when stuck behind a goal line. The
-	# crease repel above zeroes out behind the line, so without this the
-	# anchor pull drags the body straight through the net frame.
+	# Net detour — round the post when stuck behind a goal line.
 	var detour: Vector2 = _net_detour(self_pos, anchor)
 	force_x += detour.x
 	force_z += detour.y
@@ -418,13 +292,10 @@ static func compute_move_vector(
 # station on it means matching the man's velocity with no arrival to end the
 # approach — a body chasing a man off the ice rather than a defender.
 #
-# This is the structural half of that guard; the role that owns a stand is
-# expected not to publish a ride velocity for a target it did not really produce
-# (AIRolePressure's no-legal-candidate fallback is the live case). The check is
-# here as well because the failure is silent and permanent when it happens: the
-# point seek at least stops at the anchor, while an unbounded ride has no
-# terminating condition, and no repel in the field is weighted to out-muscle a
-# full-unit anchor term. Falling back to the seek recovers the ordinary behavior.
+# The failure is silent and permanent when it happens: a point seek at least
+# stops at the anchor, while an unbounded ride has no terminating condition and
+# no repel in the field is weighted to out-muscle a full-unit anchor term.
+# Falling back to the seek recovers the ordinary behavior.
 #
 # Deliberately the RINK surface and not AIRoleHelpers.is_legal_position — this
 # asks "can a body be here", not "should a stand be chosen here" (that one also
@@ -435,11 +306,17 @@ static func is_rideable_anchor(anchor: Vector3) -> bool:
 	return GameRules.clamp_to_rink_inner(xz).is_equal_approx(xz)
 
 
-# Track a stand that RIDES A MAN — see the moving-frame doc block above.
+# Track a stand that RIDES A MAN: the anchor term becomes a VELOCITY the bot
+# tracks rather than a point it visits.
 #
-# Builds the velocity we want to be travelling at (the frame's own velocity plus
-# a closing term that is spent by the time we arrive) and returns the thrust that
-# corrects our velocity onto it. Unit magnitude while there is any real error:
+#     desired = anchor_velocity + toward_anchor * closing(dist)
+#
+# The frame's own velocity plus a closing term that is spent by the time we
+# arrive; the return is the thrust that corrects our velocity onto it. Far out
+# the closing term dominates and the heading is straight pursuit; as the gap
+# closes the heading rotates onto the anchor's own velocity, so the defender
+# turns and runs WITH the play; at the stand the desired velocity IS the man's
+# and the relative speed is zero. Unit magnitude while there is any real error:
 # `move_vector` is a joystick and the physics scales it, so the intelligence is
 # in the DIRECTION — full effort along the heading that fixes the error. The
 # residual ripple as the error goes to zero is one tick of thrust (≈0.09 m/s at
@@ -487,31 +364,35 @@ static func _moving_frame_pursuit(to_anchor: Vector3, anchor_dist: float,
 	return Vector2(err_x * inv_err, err_z * inv_err)
 
 
-# The carrier's threat-gated opponent avoidance (see the doc on the constants
-# block). Per defender: project his body along his momentum over the evasion
-# horizon; his stick can touch anywhere within the league reach of that swept
-# segment, so the repel points away from the CLOSEST POINT of the sweep and its
-# strength is how deep inside that reach (plus a stick of margin) the carrier
-# sits. The summed force then loses any component opposing the anchor direction
-# — pressure bends the carry line, it never reverses it. Pure value math, no
-# allocation. `to_anchor` / `anchor_dist` are the already-computed anchor pull
-# inputs, passed through to avoid recomputing.
+# The carrier's opponent avoidance reads THREAT, not proximity, and routes
+# AROUND, not away. Per defender: project his body along his momentum over the
+# evasion horizon; his stick can touch anywhere within the league reach of that
+# swept segment, so the repel points away from the CLOSEST POINT of the sweep and
+# its strength is how deep inside that reach (plus a stick of margin) the carrier
+# sits. A beaten man whose momentum carries him away exerts nothing; a jockeying
+# defender keeps his full push. The summed force then loses any component
+# opposing the anchor direction — pressure bends the carry line, it never
+# reverses it. Retreat is the carry DELIBERATION's call (the anchor itself
+# moves); it must never be a reflex here, so a defender parked dead on the line
+# repels ~nothing and driving at him is the aggressive read the poke-evade owns.
+# Pure value math, no allocation. `to_anchor` / `anchor_dist` are the
+# already-computed anchor pull inputs, passed through to avoid recomputing.
 static func _carrier_threat_repel(self_pos: Vector3, to_anchor: Vector3,
 		anchor_dist: float, opponent_positions: Array[Vector3],
 		opponent_velocities: Array[Vector3], repel_weight: float) -> Vector2:
 	# League-default reach off the momentum line — same double-integrator model
-	# as AIActionScoring.reach_clearance (reaction-gated maneuver + stick), the
+	# as AICarrySpace.reach_clearance (reaction-gated maneuver + stick), the
 	# single source for those measurements. Steering doesn't carry per-peer
 	# caps; the league reach is the right fidelity for a soft field force.
 	var t_over: float = maxf(
-			0.0, AIActionScoring.EVADE_HORIZON_S - AIActionScoring.EVADE_REACTION_S)
-	var reach: float = 0.5 * t_over * t_over * AIActionScoring.MANEUVER_ACCEL_M_S2 \
-			+ AIActionScoring.EVADE_STICK_REACH_M
+			0.0, AICarrySpace.EVADE_HORIZON_S - AICarrySpace.EVADE_REACTION_S)
+	var reach: float = 0.5 * t_over * t_over * AICarrySpace.MANEUVER_ACCEL_M_S2 \
+			+ AICarrySpace.EVADE_STICK_REACH_M
 	var force := Vector2.ZERO
 	for i: int in opponent_positions.size():
 		var op: Vector3 = opponent_positions[i]
-		var sweep_x: float = opponent_velocities[i].x * AIActionScoring.EVADE_HORIZON_S
-		var sweep_z: float = opponent_velocities[i].z * AIActionScoring.EVADE_HORIZON_S
+		var sweep_x: float = opponent_velocities[i].x * AICarrySpace.EVADE_HORIZON_S
+		var sweep_z: float = opponent_velocities[i].z * AICarrySpace.EVADE_HORIZON_S
 		# Closest point to the carrier on the swept segment [op, op + sweep].
 		var t: float = 0.0
 		var sweep_len_sq: float = sweep_x * sweep_x + sweep_z * sweep_z
@@ -523,9 +404,9 @@ static func _carrier_threat_repel(self_pos: Vector3, to_anchor: Vector3,
 		var d: float = sqrt(dx * dx + dz * dz)
 		# Full push inside his reach, fading to zero a stick-length outside it —
 		# the same "a stick of clear room reads as safe" ramp as
-		# AIActionScoring.clearance_to_safety.
+		# AICarrySpace.clearance_to_safety.
 		var threat: float = 1.0 - clampf(
-				(d - reach) / AIActionScoring.EVADE_SAFE_MARGIN_M, 0.0, 1.0)
+				(d - reach) / AICarrySpace.EVADE_SAFE_MARGIN_M, 0.0, 1.0)
 		if threat <= 0.0:
 			continue
 		if d > 0.001:
@@ -578,9 +459,9 @@ static func _shot_lane_repel(self_pos: Vector3, lane_start: Vector3, lane_end: V
 			perp_z * inv_d * falloff * SHOT_LANE_REPEL_WEIGHT)
 
 
-# Repel out of either crease + a small extension. Outward direction comes
-# from CreaseRules so the force rounds the arc correctly (no axis snap
-# at the corners). Returns zero outside the extended crease.
+# Repel out of either crease + CREASE_REPEL_EXTENSION. Outward direction comes
+# from CreaseRules so the force rounds the arc correctly (no axis snap at the
+# corners). Returns zero outside the extended crease.
 static func _crease_repel(self_pos: Vector3) -> Vector2:
 	var xz := Vector2(self_pos.x, self_pos.z)
 	# Quick rough cull — only check the half closest to the bot.
@@ -611,7 +492,7 @@ static func _crease_repel(self_pos: Vector3) -> Vector2:
 # the nearer post side — at dead-center, around the side the anchor is
 # on — with a small outward-Z bias so the body keeps depth and rounds
 # the post instead of pressing into the frame while the inward anchor
-# pull fights it. See NET_DETOUR_* constants for the rationale.
+# pull fights it.
 static func _net_detour(self_pos: Vector3, anchor: Vector3) -> Vector2:
 	var goal_z_sign: float = signf(self_pos.z)
 	if goal_z_sign == 0.0:
@@ -661,8 +542,7 @@ static func _net_detour(self_pos: Vector3, anchor: Vector3) -> Vector2:
 # scaled down by facing misalignment), and the caller keeps move_vector on
 # the NEW direction — the same input shape a human uses (brake held + the
 # exit direction on the stick), so the cosmetic layer reads a genuine
-# hockey stop into a dig-in restart. This replaced the old `brake_pivot`
-# reverse-thrust flip when bots learned the real brake key.
+# hockey stop into a dig-in restart.
 #
 # `was_braking` is the previous tick's decision: once braking, the brake
 # holds until the opposition relaxes past BRAKE_PIVOT_RELEASE_ANGLE_DEG
@@ -680,21 +560,17 @@ static func should_brake(desired: Vector2, velocity_xz: Vector2, was_braking: bo
 	return velocity_xz.dot(desired) / (speed * desired_len) < cos(deg_to_rad(angle_deg))
 
 
-# Should the bot press the brake to ARRIVE at `anchor` instead of
-# overshooting it? See the ARRIVAL_BRAKE_* doc above. `was_braking` is
-# the previous tick's decision (hysteresis). Pure and stateless beyond
-# that flag.
+# Should the bot press the brake to ARRIVE at `anchor` instead of overshooting
+# it? See the ARRIVAL_BRAKE_* doc above. `was_braking` is the previous tick's
+# decision (hysteresis). Pure and stateless beyond that flag.
 #
-# NOT for a stand that rides a man — the caller withholds it there, and the
-# moving-frame doc block says why. This brake is an actuator on OUR OWN velocity,
-# and "overshoot" only means something when the target holds still. Measured
-# against a moving stand it fires on closing the ANCHOR is producing: a defender
-# stopped dead in front of a rush reads 6.9 m/s of closing at a stand 1 m away,
-# brakes, and braking does nothing whatsoever to slow the rush — so he stays
-# parked while it arrives. In the moving-frame path the closing profile IS the
-# arrival law (it commands a decelerating velocity, so there is nothing left for a
-# trigger to decide) and the brake-PIVOT supplies the hard actuator whenever that
-# command opposes the body's momentum.
+# NOT for a stand that rides a man — the caller withholds it there. This brake is
+# an actuator on OUR OWN velocity, and "overshoot" only means something when the
+# target holds still; against a moving stand it fires on closing the ANCHOR is
+# producing (a defender stopped dead in front of a rush reads 6.9 m/s of closing
+# at a stand 1 m away, and braking does nothing to slow the rush). In the
+# moving-frame path the closing profile IS the arrival law and the brake-PIVOT
+# supplies the hard actuator whenever that command opposes the body's momentum.
 static func should_arrival_brake(self_pos: Vector3, anchor: Vector3,
 		velocity_xz: Vector2, was_braking: bool) -> bool:
 	var speed: float = velocity_xz.length()

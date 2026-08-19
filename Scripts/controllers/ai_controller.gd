@@ -20,9 +20,8 @@ func is_ai_controlled() -> bool:
 var _agent: SkaterAgent = null
 # Cached most-recent snapshot read this tick. Public for debug inspection.
 var perceived_snapshot: WorldSnapshot = null
-# Decide→apply split (AI threading Phase 3b/3c): decide() stores the agent's
-# InputState here and apply_decision() feeds it to SkaterController. In Phase 3c
-# the worker fills this and the main thread applies it a tick later.
+# Decide→apply split: the AI worker fills this from decide() and the main thread
+# feeds it to SkaterController a tick later in apply_decision().
 # _pending_host_time is captured on the main thread (begin_tick) so decide()
 # reads no autoloads.
 var _pending_input: InputState = null
@@ -49,8 +48,8 @@ var _faceoff_input: InputState = InputState.new()
 # then in the final bot_draw_swing_time before the drop yanks the blade-aim target
 # back toward its own zone by bot_draw_pull_distance. The blade IK saturates at
 # max_blade_speed chasing that yank, so the crest is a real draw sweep (Hands sets
-# how hard) that the draw buffer retains into the live contest — instead of the
-# old "hold the blade on the puck" that produced a zero-momentum coin-flip. Timed
+# how hard) that the draw buffer retains into the live contest, rather than the
+# zero-momentum coin-flip a blade merely held on the puck produces. Timed
 # to crest just before the drop (bots are movement-locked until then and can't
 # react on the drop like a human), so a well-timed human still out-draws a bot.
 @export var bot_draw_swing_time: float = 0.18   # s before the drop the rip fires
@@ -94,13 +93,6 @@ const SHOW_DEBUG_LABEL: bool = SkaterAgentStateMachine.DEBUG_DECISIONS
 const DEBUG_LABEL_HEIGHT_M: float = 2.4    # above the head
 var _debug_label: Label3D = null
 var _debug_last_text: String = ""
-
-# Reaction delay was 0.1s in the original design but reading delayed-past
-# from StateBufferManager logged "ts predates oldest" warnings whenever the
-# buffer hadn't filled (post-rehost, post-faceoff, etc.) — for Phase 4 we
-# read the freshest captured state. A future phase can re-introduce delay
-# via clamping the requested ts to the buffer's oldest entry.
-
 
 func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> void:
 	super.setup(assigned_skater, assigned_puck, game_state)
@@ -241,8 +233,8 @@ func prep_for_decide() -> void:
 # WORKER-SAFE decision: run the agent against the frozen snapshot + strategy view
 # and store the resulting InputState for apply_decision(). Touches only the
 # agent, the passed snapshot, and captured scalars — no scene nodes or autoloads.
-# (One residual main-only write remains inside the agent — set_one_timer_ready to
-# the live brain — which Phase 3c routes through a post-dispatch collection.)
+# The agent's one write to shared team state is deferred to
+# collect_one_timer_ready(), which runs on the main thread after dispatch.
 func decide(snapshot: WorldSnapshot, delta: float) -> void:
 	perceived_snapshot = snapshot
 	_pending_input = _agent.tick(snapshot, delta, _pending_host_time)
@@ -265,8 +257,8 @@ func apply_decision(delta: float) -> void:
 	_refresh_debug_label()
 
 
-# Push the agent's one-timer readiness to its brain — MAIN thread, after dispatch
-# (AI threading Phase 3c), so the worker never writes shared team state.
+# Push the agent's one-timer readiness to its brain — MAIN thread, after
+# dispatch, so the worker never writes shared team state.
 func collect_one_timer_ready() -> void:
 	if _agent != null:
 		_agent.push_one_timer_ready()

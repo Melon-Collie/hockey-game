@@ -100,11 +100,10 @@ static func _step(p: Vector3, v: Vector3, dt: float,
 	# Board interaction. With a bounce factor, REFLECT velocity off the boards
 	# (puck caroms). Without, CLAMP position to the rink (skater approximation
 	# — no reflection). Both use clamp_to_rink_inner so the rounded corners are
-	# honoured: the old bounce path reflected off an axis-aligned RECTANGLE,
-	# giving predicted pucks up to ~3.5 m of phantom corner ice and caroms off
-	# walls that aren't there. Reflecting about the inward normal at the contact
-	# point reduces to the exact old `v.x = -v.x·bounce` on a straight wall and
-	# reflects radially in the corners.
+	# honoured; reflecting about the inward normal at the contact point reduces
+	# to `v.x = -v.x·bounce` on a straight wall and reflects radially in the
+	# corners. An axis-aligned rectangle instead would grant up to ~3.5 m of
+	# phantom corner ice and carom off walls that are not there.
 	# `board_margin` is the body's own half-extent, so its EDGE stops at the board
 	# surface rather than its centre. A puck passes its radius here: without it the
 	# disc's centre sat on the kickplate face and half of it was inside the wall,
@@ -243,16 +242,13 @@ static func step_puck(pos: Vector3, vel: Vector3, dt: float) -> Transform3D:
 # Where a loose puck comes into a receiver's reach, solved on the puck's REAL
 # path instead of the straight ray off its current velocity.
 #
-# For a puck in open ice the two agree, which is why the straight-ray read
-# survived so long. On a RIM they don't agree at all: the puck's path bends
-# through the board carom and bleeds speed to board friction, so the straight
-# continuation of its velocity leaves the rink entirely somewhere mid-corner.
-# Clamping that phantom line back onto the ice (the old fix) puts the point
-# roughly on the boards but keeps two lies that decide the play — the ARRIVAL
-# TIME is measured along the chord instead of around the arc, and the INCOMING
-# DIRECTION is the pre-carom one, so the receiver squares his blade to a line
-# the puck is no longer travelling. That is why bots misjudge rims and rim
-# retrievals specifically: not a missing behaviour, a wrong path.
+# For a puck in open ice a straight ray off the current velocity agrees with the
+# real path. On a RIM it does not: the path bends through the board carom and
+# bleeds speed to board friction, so the ray leaves the rink mid-corner. Clamping
+# it back onto the ice keeps two lies that decide the play — the ARRIVAL TIME is
+# measured along the chord instead of around the arc, and the INCOMING DIRECTION
+# is the pre-carom one, so the receiver squares his blade to a line the puck is
+# no longer travelling.
 #
 # Walks the same friction + rounded-corner-carom integration everything else
 # already trusts and reports the first point on that path the blade can touch —
@@ -265,22 +261,12 @@ static func step_puck(pos: Vector3, vel: Vector3, dt: float) -> Transform3D:
 # the body happens to occupy at the instant of asking. A meeting point is a fact
 # about two futures, and a present-frame solve cannot see one — a body metres
 # off the line never has the puck's path enter a circle drawn where it is
-# STANDING, so the walk finds no entry at all and falls back to reporting the
-# closest-approach foot. Measured on a routine feed crossing in front of a
-# receiver skating through the lane at 7 m/s, that fallback held for 16 of the
-# 21 ticks of the approach, aiming the blade at ice the arm could not reach, and
-# resolved to the real catching offset only in the last few ticks — a ~0.46 m
-# move in one tick against a cursor that slews ~0.33 (blade speed ~10 m/s at
-# 30 Hz). The stick was still swinging when the puck arrived, which is the
-# reported "rotates the stick around as the puck reaches it".
-#
-# Ridden, the same meet is available from the first tick and always sits
-# somewhere the arm can be, so the blade spends the approach in the pose it will
-# catch in. The transition does not get smaller — it gets 15 ticks of warning,
-# which is what the hands needed. Measured end to end on led feeds
-# (tests/unit/ai/test_pass_reception_catch.gd), receptions went 79% -> 83%, and
-# team possession under a live forecheck (test_point_holds_the_line) went from
-# 11% ours / 86% theirs to 29% / 16%.
+# STANDING, so the walk finds no entry at all and falls back to the
+# closest-approach foot, aiming the blade at ice the arm cannot reach until the
+# last few ticks. Against a cursor that slews ~0.33 m per tick (blade speed
+# ~10 m/s at 30 Hz) the stick is still swinging when the puck arrives. Ridden,
+# the same meet is available from the first tick and always sits somewhere the
+# arm can be, so the blade spends the approach in the pose it will catch in.
 #
 # The body is projected at CONSTANT velocity, the same read `_has_man_to_beat`
 # and the protect screen use, and only for `ride_s` — after that it is treated
@@ -304,11 +290,10 @@ static var gate_in_reach: bool = false         # true = a real entry, not just c
 # want different ones: the STANCE and the timing gate are about a patch of ice
 # (world), while the BLADE AIM is a cursor the IK chases out of a body that is
 # still skating (relative). Aiming the cursor at the world meet parks it on ice
-# the arm cannot reach until the body arrives — measured as a possession drop
-# (53% → 39% of a settled cycle) when the ride was first added, because a
-# reaching-for-nothing blade is not on the puck when the puck comes. Held as an
-# offset the blade rides the body rigidly, which is the most stable pose there
-# is, and lands exactly on the meet as the body gets there. With `from_vel`
+# the arm cannot reach until the body arrives, and a reaching-for-nothing blade
+# is not on the puck when the puck comes. Held as an offset the blade rides the
+# body rigidly, which is the most stable pose there is, and lands exactly on the
+# meet as the body gets there. With `from_vel`
 # ZERO the body does not move, so `from_pos + gate_offset == gate_point` and
 # nothing about the frozen solve changes.
 static var gate_offset: Vector3 = Vector3.ZERO

@@ -144,19 +144,20 @@ const MIN_COMMIT_TRAVEL_M: float = 0.05
 # That test is 2D on purpose: a goalie beaten in tight is often within a few
 # centimetres of the seal's lateral spot while still a full stride out in DEPTH,
 # and the seal he owes is the retreat to the post, not the sidestep. Measuring
-# the lateral leg alone (the caller's old guard) declared that slide redundant
-# and left him parked out at challenge depth with the tuck open — the same
+# the lateral leg alone declares that slide redundant and leaves him parked out
+# at challenge depth with the tuck open — the same
 # lateral-only reasoning about a 2D path that `advance_slide` documents.
 func commit_slide(current_x: float, current_depth: float, target_x: float, net_half_width: float,
 		coil_end_x: float, coil_end_depth: float) -> bool:
 	var commit_dir: float = signf(target_x - current_x)
 	# Extremity is measured against the SLIDE CLAMP LIMIT (the puck-side
 	# post-pad-edge, where target_x is already clamped to), not the post
-	# position. The old normalization (absf(target_x) / net_half_width) capped
-	# extremity at ~0.54 even on a full post-to-post slide because the clamp
-	# eats half the range — so the depth pull toward post_seal_depth barely
-	# fired and the slide looked nearly lateral instead of angling back to the
-	# post. Normalizing against the clamp limit means a wide slide goes fully
+	# position. Normalizing against the post instead (absf(target_x) /
+	# net_half_width) caps extremity at ~0.54 even on a full post-to-post slide,
+	# because the clamp eats half the range — the depth pull toward
+	# post_seal_depth barely fires and the slide reads nearly lateral rather than
+	# angling back to the post. Normalizing against the clamp limit means a wide
+	# slide goes fully
 	# back to post_seal_depth, giving the angled path real goalies use when
 	# diving from an aggressive depth.
 	var clamp_limit: float = maxf(net_half_width - pad_edge_extent, 0.001)

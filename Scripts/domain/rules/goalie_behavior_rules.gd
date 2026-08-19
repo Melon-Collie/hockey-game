@@ -237,19 +237,18 @@ static func compute_threat_position(
 
 # ── Arc-based positioning ────────────────────────────────────────────────────
 # Real goalies skate the "challenge angle" arc — a constant-radius path
-# around the goal center. This naturally pulls them back on sharp angles
-# (they sit shallower in perpendicular depth as the puck moves wide), while
-# the previous angle-bisector-on-fixed-depth math traced a near-straight line.
+# around the goal center. This naturally pulls them back on sharp angles: they
+# sit shallower in perpendicular depth as the puck moves wide.
 #
 # `radius` is the distance from goal center; callers compute it with the
 # existing depth chart against `threat_distance_to_goal`.
 #
 # ── PAST THE POST THE ARC IS NOT AVAILABLE, AND CLAMPING IS NOT THE ANSWER ───
 # Beyond a certain angle the challenge line leaves the mouth entirely: standing
-# square at the chart's radius would put the goalie OUTSIDE his own post. The old
-# behaviour clamped `x` back inside while keeping the arc's `z`, which is the
-# worst of both — the resulting point is no longer on the squaring line at all,
-# and it strands him on the near post at challenge depth.
+# square at the chart's radius would put the goalie OUTSIDE his own post.
+# Clamping `x` back inside while keeping the arc's `z` is the worst of both —
+# the resulting point is not on the squaring line at all, and it strands him on
+# the near post at challenge depth.
 #
 # That is not a small positional error, because the goalie is a WALL, not a disc.
 # His pads splay perpendicular to his facing, so squaring to a sharp-angle
@@ -305,13 +304,12 @@ static func target_arc_position(
 	if absf(goalie_x - goal_center_x) <= hw:
 		return Vector2(goalie_x, goalie_z)
 	# The challenge line has left the mouth. Blend between two physical endpoints:
-	#   EXIT  — the arc pinned to the pipe, which is what the old clamp produced
-	#           and is exactly the unclamped arc AT the exit angle, so the join is
-	#           continuous and everything shallower than the exit angle is
-	#           untouched. Deliberately the s=0 end: the clamp is only badly wrong
-	#           once it has been extrapolated well past the pipe, and re-deriving
-	#           the near-boundary position would move the goalie in a band that
-	#           measures fine.
+	#   EXIT  — the arc pinned to the pipe: exactly the unclamped arc AT the exit
+	#           angle, so the join is continuous and everything shallower than the
+	#           exit angle is untouched. Deliberately the s=0 end — a pinned arc is
+	#           only badly wrong once it has been extrapolated well past the pipe,
+	#           and re-deriving the near-boundary position would move the goalie in
+	#           a band that measures fine.
 	#   SEAL  — where post integration would put him on this side.
 	var side: float = signf(goalie_x - goal_center_x)
 	var sin_theta: float = absf(ux)
@@ -331,9 +329,8 @@ static func target_arc_position(
 			goal_line_z + direction_sign * lerpf(exit_perp, cfg.seal_depth, s))
 
 
-# Euclidean distance from threat to goal center (XZ plane). Drives the depth
-# chart for the arc — replaces the old "abs(puck.z - goal_line_z)" input
-# which ignored lateral distance.
+# Euclidean distance from threat to goal center (XZ plane) — the depth chart's
+# input for the arc, so lateral distance counts as well as depth.
 static func threat_distance_to_goal(
 		threat_position: Vector3,
 		goal_line_z: float,
@@ -522,9 +519,8 @@ static func compute_clear_velocity(
 # they can close in the remaining time covers the miss distance. All three
 # parameters are physical: a blade's reach, a competitive read delay, and the
 # lateral close pace (~half top skating speed — you slide into a lane, you
-# don't sprint at it). Real doctrine hook (audit follow-up): the sweep is only
-# the correct clear when the corner lane is OPEN; a covered lane is what makes
-# smothering the correct read.
+# don't sprint at it). The sweep is only the correct clear when the corner lane
+# is OPEN; a covered lane is what makes smothering the correct read.
 class SweepLaneConfig:
 	var stick_reach: float = 1.3       # m — lane defender blade reach
 	var reaction_delay: float = 0.08   # s — competitive read before closing starts
@@ -605,11 +601,11 @@ static func puck_resting_on_goalie(
 #   THE RELEASE HAS TO BE HIDDEN. If the goalie saw the puck leave the blade, he
 #   has the trajectory; a body it flies past afterwards can obscure it but cannot
 #   un-read it. Only a shooter who is himself behind the screen costs the goalie
-#   the pickup. (Testing against the SHOT line instead — the old model — charged
-#   the goalie for every body that happened to sit near the flight path, including
-#   ones nowhere near his eyeline, and simultaneously let a body standing DEAD IN
-#   FRONT OF HIM off for a shot aimed at a post, because the flight path diverges
-#   from the sightline by more than a body width over 10 m.)
+#   the pickup. Never test against the SHOT line instead: that charges the goalie
+#   for every body near the flight path including ones nowhere near his eyeline,
+#   and simultaneously lets a body standing DEAD IN FRONT OF HIM off for a shot
+#   aimed at a post, because the flight path diverges from the sightline by more
+#   than a body width over 10 m.
 #
 #   IT ENDS WHEN THE PUCK LEAVES THE SHADOW, not when it draws level with the
 #   body. A shot angled away from the screener clears his silhouette early; only
@@ -829,8 +825,8 @@ static func screen_peek_offset(
 # Lateral distance a standing goalie covers in `t` seconds pushing from rest:
 # accelerate at `accel` up to `max_speed`, then hold. Mirrors the move_toward
 # ramp in GoalieController._move_along_arc, so race math built on this matches
-# what the live push can actually deliver (the from-rest ramp is a big share of
-# short races — omitting it flattered the goalie by ~v²/2a metres).
+# what the live push can actually deliver — the from-rest ramp is a big share of
+# a short race (~v²/2a metres of it).
 static func reachable_lateral_distance(max_speed: float, accel: float, t: float) -> float:
 	if t <= 0.0 or max_speed <= 0.0:
 		return 0.0
@@ -871,9 +867,9 @@ static func travel_time_from_rest(dist: float, max_speed: float, accel: float) -
 # body that might touch the puck and ruin the read — so it assumes instant full
 # speed and over-states the danger. This prices a FAVOUR: the goalie's own
 # coverage, which he is about to trade net position for. Assuming instant full
-# speed there credits him coverage nobody can deliver — measured, it read a
-# defender 5 m off the backdoor man as arriving in 0.43 s, enough to talk the
-# goalie into challenging and the bots out of a genuinely open cross-seam feed.
+# speed there credits him coverage nobody can deliver: it reads a defender 5 m
+# off the backdoor man as arriving in 0.43 s, enough to talk the goalie into
+# challenging and the bots out of a genuinely open cross-seam feed.
 # A body accelerates; making it start from rest is what separates "my D is ON
 # him" from "my D is in the vicinity".
 static func defender_arrival_time(dist: float, stick_reach: float,
@@ -928,30 +924,23 @@ static func puck_play_race_clear(
 #
 # The CLOCK is the puck's too, and for the same reason. The puck's arrival at
 # the tuck point is what scores, so its own lateral rate is what the goalie is
-# racing — not the carrier's body. Reading the body instead missed the move
-# this rule exists for: a forehand→backhand beat on a rush is a shooter driving
+# racing — never the carrier's body. The move this rule exists for is exactly
+# where the two differ: a forehand→backhand beat on a rush is a shooter driving
 # STRAIGHT AT the net (almost no lateral body velocity) who moves the PUCK
-# across the crease faster than the goalie can push. The body read scored that
-# as "not a drive" and left him standing while the puck went around him. Dividing
-# the puck's distance-to-post by the body's speed also just mixed two objects'
-# kinematics in one race.
-#
-# The dangle protection is not the velocity term, it is the point-of-no-return
-# gate above plus the caller's quiet-eye confirmation window: a stickhandle that
-# swings the puck past the sealing reach and pulls it back does not HOLD the
-# verdict, so it never commits him. Baiting the drop with a wide pull and
-# cutting back is the intended counter, not a bug.
+# across the crease faster than the goalie can push. Racing the puck's
+# distance-to-post against the body's speed also mixes two objects' kinematics
+# into one race.
 #
 # ONSET AND PERSISTENCE ARE DIFFERENT QUESTIONS, which is why there are two
 # functions. `is_beaten_wide` is the onset: it needs the puck genuinely moving
 # across, because a puck that is not going anywhere has not beaten anybody yet.
-# `beaten_wide_holds` is what keeps the verdict alive afterwards, and it drops
-# the velocity term entirely — the beat is a fact about GEOMETRY, and a puck
-# that decelerates once it is around the goalie does not un-beat him. Asking the
-# onset question every tick instead is self-cancelling: the verdict turns off at
-# the exact moment the move completes and the puck settles wide, which is when
-# the seal is most needed. Only bringing the puck back inside the sealing reach
-# (or out of the in-tight zone) releases it.
+# `beaten_wide_holds` keeps the verdict alive afterwards and drops the velocity
+# term entirely — the beat is a fact about GEOMETRY, and a puck that decelerates
+# once it is around the goalie does not un-beat him. Asking the onset question
+# every tick instead is self-cancelling: the verdict would turn off at the exact
+# moment the move completes and the puck settles wide, which is when the seal is
+# most needed. Only bringing the puck back inside the sealing reach (or out of
+# the in-tight zone) releases it.
 #
 # Deliberately NOT triggered by: the puck trailing the drive (above), slow
 # lateral movement (min_lateral_speed — genuine puck travel, not a jitter; stay
@@ -1105,8 +1094,7 @@ static func rush_retreat_rate(
 # it across, the less depth you can afford. Coming out is a bet that he shoots
 # rather than moves — and this is the price of that bet.
 #
-# Returns INF when nothing binds (a stationary or slow carrier). Replaces the old
-# `pull-per-m/s-of-deficit` curve, which was a shape parameter standing in for this.
+# Returns INF when nothing binds (a stationary or slow carrier).
 static func lateral_tracking_cap(
 		threat_dist: float, lateral_speed: float, push_speed: float) -> float:
 	var v: float = absf(lateral_speed)
@@ -1161,13 +1149,12 @@ static func cross_crease_race_lost(
 # honest react/push race, so respecting the backdoor opens the carrier's
 # direct-shot angle instead of buffing the goalie into a wall.
 #
-# ── HE HAS DEFENCEMEN, AND THEY WERE INVISIBLE ───────────────────────────────
-# The cap priced every weak-side body as a free one-timer man whether or not one
-# of the goalie's own was standing on him, which is the opposite of the most
-# taught read in the sport: on a 2-on-1 you TAKE THE SHOOTER and trust your D to
-# take the pass. Backing off for a covered man gave away the carrier's angle for
-# nothing, and — worse — meant a defenceman doing his job bought his goalie
-# nothing at all.
+# ── HE HAS DEFENCEMEN ───────────────────────────────────────────────────────
+# Pricing every weak-side body as a free one-timer man, whether or not one of
+# the goalie's own is standing on him, inverts the most taught read in the
+# sport: on a 2-on-1 you TAKE THE SHOOTER and trust your D to take the pass.
+# Backing off for a covered man gives away the carrier's angle for nothing, and
+# means a defenceman doing his job buys his goalie nothing at all.
 #
 # Coverage enters in the model's own currency, TIME, and as a race like
 # everything else: `defender_arrival_time` is how long until the nearest
@@ -1181,7 +1168,7 @@ static func cross_crease_race_lost(
 # This is a positioning trade, not a save buff, and it cuts both ways: the
 # goalie challenges harder when the back door is covered and gives up more if
 # the feed still gets through, and he retreats the moment his D leaves. Bad
-# coverage now costs, which is the point.
+# coverage costs, which is the point.
 class BackdoorThreatConfig:
 	var pass_speed: float = 0.0            # m/s — assumed feed pace (puck flight)
 	var release_time: float = 0.0          # s — receiver's one-timer swing
@@ -1262,12 +1249,12 @@ static func unset_fraction(planar_speed: float, scrambling: bool, cfg: MovementR
 # it comes from (Panchuk & Vickers; CSA's set-and-sighted threshold) measures a
 # CONTINUUM of read quality against settle time — there is no speed at which a
 # keeper's prepared response vanishes between one frame and the next. Gating it
-# on a threshold instead made the credit all-or-nothing at ~0.6 m/s of the
-# goalie's own travel: a step across it flipped him from dropping on every slot
-# shot to dropping on none, and in tight — where he is still converging off the
-# rush and never settles inside the band at all — he collected it never. That is
-# the same binary-vs-proportional failure `movement_read_penalty` documents
-# above, in the larger of the two terms.
+# on a threshold instead makes the credit all-or-nothing at ~0.6 m/s of the
+# goalie's own travel: a step across that line flips him from dropping on every
+# slot shot to dropping on none, and in tight — where he is still converging off
+# the rush and never settles inside the band at all — he collects it never. That
+# is the same binary-vs-proportional failure `movement_read_penalty` documents
+# below, in the larger of the two terms.
 #
 # Still additive-only in spirit: `unset` = 1 returns `base` exactly, so this can
 # never price a read SLOWER than the cold baseline, and the movement penalty
@@ -1297,11 +1284,10 @@ static func prearmed_read_delay(base: float, prearmed: float,
 #   momentum in that failure for the drift to model, which is why it keeps a real
 #   latency cost where the travelling case does not.
 #
-# Loading the whole caught-moving cost onto one latency (the pre-drift model) made
-# the penalty binary in RANGE rather than proportional: absorbed entirely by a
-# point shot's ~0.57 s flight, and larger than a 5 m slot shot's ~0.20 s flight,
-# so against a moving goalie in tight the shooter did not face a late read — he
-# faced a statue.
+# Loading the whole caught-moving cost onto one latency instead makes the penalty
+# binary in RANGE rather than proportional: absorbed entirely by a point shot's
+# ~0.57 s flight, and larger than a 5 m slot shot's ~0.20 s flight, so against a
+# moving goalie in tight the shooter faces a statue rather than a late read.
 static func movement_read_penalty(planar_speed: float, scrambling: bool, cfg: MovementReadConfig) -> float:
 	var delay: float = unset_fraction(planar_speed, false, cfg) * cfg.speed_delay
 	if scrambling:
@@ -1327,10 +1313,9 @@ static func movement_read_penalty(planar_speed: float, scrambling: bool, cfg: Mo
 const PAD_BOX_WIDTH_M: float = GoalieAnatomy.PAD_BOX_WIDTH_M
 const STANDING_PAD_CENTER_X_M: float = 0.22
 
-# Stick geometry, aim and cover now live in GoalieStickRules — the blade is a
-# body part with its own model, not a footnote on the pads. See that file for
-# why (it was absent from the planning model entirely) and for the measured
-# standing reach the pad column above does NOT account for.
+# Stick geometry, aim and cover live in GoalieStickRules — the blade is a body
+# part with its own model, not a footnote on the pads. See that file for the
+# measured standing reach the pad column above does NOT account for.
 
 static func five_hole_gap_m(is_down: bool, openness: float) -> float:
 	var op: float = maxf(openness, 0.0)

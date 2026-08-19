@@ -10,24 +10,23 @@ extends RefCounted
 # defensive half — distinct from STANDING so animation can show engagement.
 # VH_LEFT / VH_RIGHT are the post-integrated stance for a sharp-angle SHOT
 # threat still in FRONT of the goal line (post pad vertical for short-side-high
-# coverage); RVH_* stays the at/below-goal-line seal (wraps, walkouts). New
-# values are APPENDED so existing numeric values — duplicated in
-# domain/ai/role_behaviors/carrier.gd and on the wire as state_enum (u8) —
-# are preserved.
+# coverage); RVH_* stays the at/below-goal-line seal (wraps, walkouts).
+#
+# The numeric values ride the wire as `state_enum` (u8), so new states are only
+# ever APPENDED — reordering silently re-labels every goalie on every client.
 # COVERING is the smother: the goalie collapses over a loose puck in the
 # crease when every sweep lane is covered — the real cover/freeze, resolved by
 # ruleset (NHL: whistle + defensive-zone faceoff; ARCADE: short hold, then a
-# live release). Appended last to preserve wire numbering.
+# live release).
 # PLAYING_PUCK is the tier-1 behind-net rim stop: skate out around the post,
 # paddle-down stop at the boards behind the net, skate back — "stop it, leave
-# it, get back", gated by an ultra-conservative go/no-go race. Appended last
-# to preserve wire numbering.
+# it, get back", gated by an ultra-conservative go/no-go race.
 # CATCHING / CATCHING_DOWN are the glove catch-and-hold: the puck is pinned in
 # the glove (squeeze-and-look), split into upright and butterfly variants so
 # clients' state-keyed body/head heights render the right silhouette. Same
 # ruleset-split resolution as COVERING when held under pressure; an
 # unpressured catch quick-drops and plays on (the real delay-of-game
-# incentive). Appended last to preserve wire numbering.
+# incentive).
 enum State {
 	STANDING, BUTTERFLY, RECOVERING, RVH_LEFT, RVH_RIGHT, READY, SLIDING, COILING,
 	VH_LEFT, VH_RIGHT, COVERING, PLAYING_PUCK, CATCHING, CATCHING_DOWN,

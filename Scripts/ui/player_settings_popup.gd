@@ -23,7 +23,6 @@ signal jersey_number_changed(new_number: int)
 signal handedness_changed(is_left: bool)
 signal position_changed(position: int)
 signal preferred_color_changed(color_slot: int)
-signal attributes_changed(attrs: PlayerAttributes)
 
 # Hover tooltips. Headline effects only.
 const _HEIGHT_TOOLTIP: String = "Frame length: reach, stick length, and the speed/agility/shot baselines.\nSmall = shiftier with quicker turns; big = longer reach & harder shot."
@@ -743,12 +742,11 @@ func _apply() -> void:
 	if _is_build_dirty() and not _build_locked:
 		var new_attrs: PlayerAttributes = _pending_attributes()
 		PlayerPrefs.set_player_attributes(new_attrs)
-		# Update NetworkManager._peer_attributes[1] so the next spawn picks
-		# the new values up. The emitted signal also re-applies the multipliers
-		# to the live local skater when allowed (offline / free-play only —
+		# Updates NetworkManager._peer_attributes[1] so the next spawn picks the
+		# new values up, and its local_attributes_changed re-applies the
+		# multipliers to the live local skater (offline / free-play only —
 		# GameManager's handler is the gate).
 		NetworkManager.apply_local_attributes(new_attrs)
-		attributes_changed.emit(new_attrs)
 	if _pending_tape != int(_snapshot.get("tape", StickTapeConfig.DEFAULT_CODE)):
 		PlayerPrefs.stick_tape_code = _pending_tape
 		NetworkManager.apply_local_tape(_pending_tape)

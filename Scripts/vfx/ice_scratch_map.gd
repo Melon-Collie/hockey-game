@@ -13,7 +13,6 @@ extends Node3D
 # Match SkaterVFX gating constants so visual trails and persistent scratches
 # react to the same situations.
 const TRAIL_MIN_SPEED: float = 0.5
-const TELEPORT_THRESHOLD: float = 1.0
 # A blade this far above the lower of the two boots is airborne (the recovery
 # swing, the crossover clearance step) and leaves no mark. Relative to the
 # other boot rather than an absolute ice height, so crouch depth and body drop
@@ -161,14 +160,10 @@ func _process(_delta: float) -> void:
 	var half_w: float = rink_width * 0.5
 	var half_l: float = rink_length * 0.5
 
-	# Drop entries for skaters that left the tree. Resolving via
-	# instance_from_id keeps the dict strongly typed while still tolerating
-	# freed keys — instance_from_id returns null once the object is gone,
-	# is_instance_valid filters the null, and erase(int) bypasses the
-	# typed-Object-key validator that the previous Dictionary[Skater, Array]
-	# shape ran into. Iterate the dict directly (no per-frame .keys() Array
-	# alloc) and defer erase() to a reusable scratch — mutating a Dictionary
-	# mid-iteration is unsafe.
+	# Drop entries for skaters that left the tree. instance_from_id returns null
+	# once the object is gone and is_instance_valid filters that. Iterate the dict
+	# directly (no per-frame .keys() Array alloc) and defer erase() to a reusable
+	# scratch — mutating a Dictionary mid-iteration is unsafe.
 	_stale_ids.clear()
 	for id: int in _prev_state:
 		var tracked: Skater = instance_from_id(id) as Skater
@@ -195,11 +190,9 @@ func _process(_delta: float) -> void:
 		var left_world: Vector3 = skater.blade_mark_position(true)
 		var right_world: Vector3 = skater.blade_mark_position(false)
 		# World (x, z) -> viewport pixel. Godot's PlaneMesh places UV (0,0) at
-		# world (-size.x/2, -size.y/2), so UV.y (and therefore pixel-Y when
-		# this texture is sampled) increases with world Z. The existing rink
-		# line drawing in HockeyRink looks correct because every feature it
-		# bakes into the albedo is Z-symmetric — skater marks are the first
-		# asymmetric thing, which is why the flip only shows up here.
+		# world (-size.x/2, -size.y/2), so UV.y — and therefore pixel-Y when this
+		# texture is sampled — increases with world Z. HockeyRink's baked lines
+		# are Z-symmetric and so can't reveal a flipped axis; skate marks can.
 		var left_px: Vector2 = Vector2(
 			(left_world.x + half_w) * px_x,
 			(left_world.z + half_l) * px_z
@@ -223,9 +216,9 @@ func _process(_delta: float) -> void:
 			prev_left = entry[1]
 			prev_right = entry[2]
 			# Reuse the existing 3-slot Array in place — Vector2/Vector3 are
-			# inline value-type Variants, so this allocates nothing. Replaces the
-			# per-skater, per-frame [pos, left_px, right_px] literal that was the
-			# dominant heap-churn source here.
+			# inline value-type Variants, so this allocates nothing. A fresh
+			# [pos, left_px, right_px] literal per skater per frame would be the
+			# dominant heap churn in this file.
 			entry[0] = pos
 			entry[1] = left_px
 			entry[2] = right_px
@@ -235,7 +228,7 @@ func _process(_delta: float) -> void:
 
 		if skater.is_ghost or not had_prev:
 			continue
-		if (pos - prev_pos).length() > TELEPORT_THRESHOLD:
+		if (pos - prev_pos).length() > IceVFX.TELEPORT_THRESHOLD:
 			continue
 		var flat_vel: Vector3 = Vector3(skater.velocity.x, 0.0, skater.velocity.z)
 		if flat_vel.length() < TRAIL_MIN_SPEED:
@@ -298,8 +291,8 @@ func _on_eraser_draw() -> void:
 	_pending_wipe_widths.clear()
 
 
-# The live Skater list, rebuilt only when the roster actually changes — the
-# per-frame get_nodes_in_group() built a fresh Array every rendered frame.
+# The live Skater list, rebuilt only when the roster actually changes —
+# get_nodes_in_group() allocates a fresh Array on every call.
 #
 # Deliberately the GROUP and not PlayerRegistry.skaters(): the standalone replay
 # viewer spawns its skaters straight through ActorSpawner, outside the registry,

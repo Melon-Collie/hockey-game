@@ -25,8 +25,7 @@ extends RefCounted
 # The catalogue is wire data: the model index travels in the packed
 # GearStyleConfig code, so rows must only ever be APPENDED — reordering or
 # removing one silently re-equips every player who had picked it. Index 0 is
-# the house MITTS stick, exactly the look every skater carried before models
-# existed.
+# the house MITTS stick — the stock look an untouched player carries.
 
 const ANCHOR_BUTT: int = 0
 const ANCHOR_BLADE: int = 1

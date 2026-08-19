@@ -21,9 +21,8 @@ extends RefCounted
 # the action IN the usercmd (the rewind happens when the command is executed,
 # never when it arrives), and what Overwatch gets by buffering command frames to
 # their referenced tick. Mitts' own shot release already works this way — the
-# host replays the release input instead of taking an RPC, after an
-# arrival-timed release RPC produced exactly this bug against a stale
-# pre-release blade — so this brings the four claim paths onto that footing.
+# host replays the release input instead of taking an RPC — so this brings the
+# four claim paths onto that footing.
 #
 # Release is gated on the BUFFER's newest capture, not on wall time: capture
 # runs end-of-tick (`PostPhysicsNetHook`), so wall-now is always a tick ahead of

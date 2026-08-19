@@ -5,14 +5,19 @@ extends GutTest
 # wedge that freezes a skater the goalie shoves across the goal line).
 #
 # Geometry under test (near/positive-Z net):
-#   GOAL_LINE_Z        = 26.65   front face (open mouth) — NOT radius-inset
-#   NET_DEPTH          =  1.02   back panel at |z| = 27.67 (+ radius)
-#   NET_BACK_HALF_WIDTH=  1.02   side panels at |x| = 1.02 (+ radius)
+#   GOAL_LINE_Z          front face (open mouth) — NOT radius-inset
+#   NET_DEPTH            back panel at |z| = GOAL_LINE_Z + NET_DEPTH (+ radius)
+#   NET_BACK_HALF_WIDTH  side panels at |x| = NET_BACK_HALF_WIDTH (+ radius)
+#
+# Derived from GameRules rather than restated as literals: test_net_geometry_mirrors
+# is what pins those constants, so this file is free to test the projection alone.
+# Restating them here meant a constant could move and leave this test asserting the
+# old geometry against the new function.
 
 const TOL: float = 0.001
-const GOAL_Z: float = 26.65
-const BACK_HW: float = 1.02
-const DEPTH: float = 1.02
+const GOAL_Z: float = GameRules.GOAL_LINE_Z
+const BACK_HW: float = GameRules.NET_BACK_HALF_WIDTH
+const DEPTH: float = GameRules.NET_DEPTH
 
 # ── Points outside the box are untouched ──────────────────────────────────────
 
@@ -69,7 +74,7 @@ func test_radius_insets_back_and_sides_not_front() -> void:
 	# Front (mouth) face is NOT inset — a body centered on the goal line is clear.
 	var front: Vector2 = GameRules.push_out_of_net(Vector2(0.0, GOAL_Z), radius)
 	assert_almost_eq(front.y, GOAL_Z, TOL, "center on goal line is outside → untouched")
-	# Back panel inset by radius: the body edge stops at 27.67, center at 27.67+r.
+	# Back panel inset by radius: the body edge stops at the back face, center at +r.
 	var back: Vector2 = GameRules.push_out_of_net(Vector2(0.0, 27.9), radius)
 	assert_almost_eq(back.y, GOAL_Z + DEPTH + radius, TOL, "back face inset by radius")
 	# Side panel inset by radius.

@@ -23,6 +23,65 @@ execute; they never reach up. Goalie *math* is pure and lives in
 | `domain/rules/goalie_depth_solver.gd` | depth constraint composition |
 | `domain/rules/goalie_stick_rules.gd` | stick geometry and coverage |
 
+### Delete the copy, don't correct the number
+
+Nothing connects a literal to the collider it was copied from, so every
+hand-built replica of the keeper in the planner — pad splay, glove reach, torso
+size, the depth chart, the band harness — drifts off the body that actually makes
+the saves, silently and without anyone being wrong on purpose. `GoalieAnatomy`
+(his dimensions) and `GoalieStickRules` (his stick, split out because the blade
+also owns an aim solve) are the single source: anything the planner believes
+about the keeper's SHAPE derives from them, so changing the body moves the
+planner for free.
+
+## What kills a collaborator extraction
+
+**A collaborator may accept any number of inputs written from outside. It must
+exclusively own every field it writes itself.**
+
+Measured across the goalie's own collaborators — contested means a field both the
+collaborator and the controller assign:
+
+| collaborator | caller-written fields | contested | methods that died |
+|---|---|---|---|
+| `goalie_puck_play` | 20 | 0 | 0 of 11 |
+| `goalie_shot_reaction` | 7 | 2 | 0 of 10 |
+| `goalie_slide_behavior` | 13 | 2 | 0 of 13 |
+| `goalie_crease_clear` | 37 | 12 | 17 of 27 |
+
+`GoaliePuckPlay` takes the most caller-written fields of any of them and is
+perfectly healthy, so "the caller writes to it" is not the problem. Sharing
+ownership of one field is. Once the controller writes `_clear.cover_cooldown_timer`
+it has re-derived when to write it — the lifecycle — and the collaborator's own
+`tick_cover_cooldown` is redundant from that moment. Twelve contested fields
+produced seventeen unreachable methods, none of which failed anything.
+
+Copy `GoaliePuckPlay`'s field layout: tuning pushed at config time, geometry set
+once at setup, trip state owned outright, and an explicit "requests to the
+controller" block read after `advance()`. One per-tick entry point that takes the
+world as arguments and clears its own outputs at the top.
+
+## Depth is the A/B/C/D ladder, and it is not compressed inward
+
+The Buckley zones are *situational*, not a distance chart. A is ~2 ft outside the
+crease top — challenge a rush, a breakaway, or a clean look and force the shooter
+to beat you. B is heels at the crease top, where most shots are faced. C is the
+middle of the blue paint, held when a lateral play is live. D is on the post or
+tracking behind the net.
+
+At these shot speeds a slot shot leaves almost no lateral reaction window (~0.04 m
+of travel in flight), so **cutting the angle by challenging is what makes the
+save, not reflexes** — depth pulled inward to look safer is a goalie who cannot
+make the save he is standing there to make. The "play conservative on a lateral
+threat" read is produced dynamically by the lateral tracking cap and the backdoor
+depth cap, never baked into a distance curve.
+
+The anchors are real geometry: the NHL crease top is ~4.5 ft ≈ 1.37 m, which is
+`CreaseRules.STRAIGHT_DEPTH`. Depth is gated on a real rink landmark (goal line →
+blue line) rather than a tuned distance, because geometry alone would park him at
+the challenge ceiling for a puck at the far blue line, where the net subtends
+almost nothing.
+
 ## Beatable realism
 
 The goalie should look and move like a real goalie while staying deliberately
@@ -37,6 +96,13 @@ Two recurring traps, both measured:
   Every change that made him block or commit earlier has measured as *more saves*
   AND *deception ceasing to pay*. Deception paying negatively is the tell. If a
   change produces that signature, it is wrong even when the save count improves.
+  Three separate changes have produced it: removing the `not _reaction.reacting`
+  gate on the block branch (dot-line beatability 16/288 → 25/288, a cold five-hole
+  window opening from nothing to 17 cm, wrong-height deception falling to 4/14
+  against a 6/14 baseline); counting `WRISTER_AIM` as a shot declaration in the
+  block-or-react launch clock (4/14 across all three deception arms, against 6/14
+  telegraphed and 11/14 wrong-height under the read); and the tip doctrine in
+  `GoalieSaveSelection`.
 - **Blocking concedes the top of the net.** Any path that blocks a shot already
   read as elevated is strictly wrong. The block model has no `impact_y`.
 
@@ -48,6 +114,44 @@ the drop as one motion instead of landing square and re-deciding. Onset needs th
 puck genuinely moving across; *persistence* deliberately drops that term, because
 a puck that settles wide has not un-beaten him. Pulling it back inside the
 sealing reach is what un-commits him, and baiting that commit is the counter.
+
+**The goalie can be WRONG, deterministically.** His committed belief about where
+a shot is going is the aim he read `read_lag` seconds ago, sampled from the
+shooter's published `predicted_shot_velocity`, converging onto the true line over
+`read_converge_time` once the puck is in flight. This is not RNG and must not
+become RNG — both teams field identical goalies and it has to read that way. The
+error is a pure function of what the SHOOTER did with their aim: a stable aim
+through the wind-up means the stale sample EQUALS the truth, so a telegraphed
+shot is read exactly as well as before, while a late swing against the grain
+beats him by exactly the amount the shooter moved the aim. Repeatable, symmetric,
+attributable. What falls out with no extra authoring: a long shot converges
+before it arrives and is read correctly; an in-tight one does not and beats him;
+a screen costs ACCURACY as well as tempo, because there is nothing to converge
+with while the puck is hidden; and a deflection resets the read, so a tip in
+tight beats him while a tip from distance does not.
+
+**Being unset is DIRECTIONAL, and that is the point.** Momentum he cannot cancel
+plus an open trail leg means: shoot against his motion and he cannot get back,
+shoot with it and he over-slides. Both are counter-playable, and neither makes a
+*set* goalie harder to beat. Loading the cost of being unset onto read latency
+instead is the wrong model — latency is not directional — which is why
+`move_read_speed_delay` is deliberately small.
+
+**The prime is a permission to move, not a save buff.** The quiet-eye prearm and
+the slot-proximity prime only make the limbs START moving; the cold arm read
+outlasts a slot shot's flight, so uncredited the goalie never moves at all. The
+flat reach-speed cap still bounds how much net he covers, so a corner picked out
+of that reach beats him — "pick a corner, don't face a statue" is the in-tight
+window this exists to create. A quick-release snap FROM RANGE never earns the
+windup prime, which is the real "quick release beats the read" edge.
+
+**The taught response to a clean windup is GET SET — square, stopped, at depth —
+not retreat.** Backing in concedes angle exactly when the goalie has his best
+look, and a windup is MORE read time, which is why slapshots convert lower than
+snap shots. Being set emerges rather than being applied: the charging carrier
+glides, so the arc target goes stationary and the movement converges. No depth
+concession is applied anywhere; screened windups are handled by the blocking
+drop, not by depth.
 
 ## Behind-net puck play — the doctrine
 
@@ -91,11 +195,60 @@ goalie they do not face. See the AI MIRROR note in `goalie_skill_profile.gd`.
 `SkaterShotPoseCoordinator`, `SkaterSkatingCoordinator`. `GameManager` calls
 methods on the controller and never pokes collaborator internals.
 
+**Attributes v4, one line each.** Skating splits into three height-routed
+sub-levers, so a small player can be explosive and shifty without owning the top
+gear and a big weak skater feels bad in the TURN rather than glued to the ice.
+Hands has no lever by constitution — "your hands are you" — so the blade caps
+derive from lever geometry rather than a fidelity table: the long lever sweeps
+but cannot cut back, the short lever is the scalpel. Shot means "what a charge
+buys you, and how fast you can charge it", never the uncharged snap. Stamina is
+height-flavoured metabolism with no attribute touching it: small is short
+repeatable bursts, big is one long drive then a slow refill. Full detail lives in
+`Scripts/domain/state/CLAUDE.md`.
+
 `apply_attributes` is **idempotent**: it captures baseline values on first call
 and recomputes from those baselines every time, so repeated applies (the
 free-play picker) never compound. Config objects built from `@export`s are cached
 here and rebuilt on apply — do not restore per-tick rebuilds for live tuning,
 which is not a workflow on this project.
+
+## The gait publishes channels; it never writes body rotations
+
+`SkaterSkatingCoordinator` is the whole procedural gait — no skeleton, no
+animation clips, everything derived from replicated velocity plus the intent
+byte, so it costs zero network state and a wire-fed remote animates identically
+to a locally-simulated one. It runs at RENDER rate (`Skater._process`,
+visibility-gated) and is guarded by `not is_replaying` so reconcile replay never
+over-spins the phase — which also means it can own no timer, and is why the
+celebration window is aged by its callers at physics rate instead.
+
+**It writes leg swing, foot eversion, edge loads and the crouch drop directly
+onto `Skater`, and never a torso or lower-body rotation.** Everything rotational
+is *published* as a field for `SkaterPoseCoordinator` to sum into one write:
+`trunk_pitch_add` / `trunk_roll_add` (torso texture), `stop_yaw_offset` (hockey
+stop), `travel_align_yaw` (hip-to-travel alignment, which the pivot also drives
+while engaged), `shot_hip_yaw` (shot coil and uncoil), and `pivot_hold`
+(authority, which fades the generic facing-lag pump out of the sum). Two writers
+tracking one rotation on different clocks is a wobble, not a pose — hence one
+summing site rather than five writers. The trunk texture in particular goes onto
+the cosmetic torso, helmet and shoulder BONES, never onto the `UpperBody` node,
+whose rotation carries the blade markers and is therefore gameplay geometry.
+
+## Build once, fill scratch
+
+A per-tick collaborator that produces a compound result should own ONE
+long-lived scratch instance and fill it, rather than returning a fresh
+`Dictionary` / `Array` / `RefCounted` per call. It is safe exactly when the
+consumer reads the result and never stores the reference: `GoalieBodyConfig` is
+read and lerped into the parts by `Goalie.apply_body_config`, so one instance
+serves both goalies forever and keeps ~150 lines of `Vector3` literals off the
+heap per goalie per physics tick.
+
+Where two consumers can interleave, give each its own scratch instead of sharing
+one — `RemoteController` keeps `_sample_bracket` separate from `_scratch_bracket`
+so a reconcile-time sample cannot clobber the live render bracket. Document the
+"consume before the next call" lifetime at the returning function, since that is
+the one thing a caller can get wrong.
 
 ## Hot path
 

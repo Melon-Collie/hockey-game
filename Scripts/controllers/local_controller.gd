@@ -13,12 +13,9 @@ const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
 # camera impact kick).
 signal hit_received(impulse: Vector3)
 
-# Trajectory-based reconcile: thresholds compare the client's prediction *at
-# host_timestamp T* against the server's authoritative state at T, looked up
-# from _prediction_history. Prediction lead (the natural client-ahead-of-server
-# offset, ~0.33-0.6m at skating speeds) is subtracted out by the timestamp
-# match, so these thresholds gate only true non-determinism: body-check
-# impulse mis-replay, contested collision resolution, etc.
+# Compared predicted-vs-server at the SAME host_timestamp, so the prediction
+# lead is already subtracted out and these can stay tight: they gate only true
+# non-determinism (body-check mis-replay, contested collision resolution).
 @export var reconcile_position_threshold: float = 0.05
 @export var reconcile_velocity_threshold: float = 0.3
 # Upper-body rotation divergence past this triggers reconcile. Pose evolution
@@ -33,26 +30,16 @@ signal hit_received(impulse: Vector3)
 var _gatherer: LocalInputGatherer = null
 var _current_input: InputState = InputState.new()
 var _input_history: Array[InputState] = []
-# Per-tick prediction snapshots keyed by input.host_timestamp. Used to compute
-# true divergence against server state at the same timestamp instead of
-# comparing current client position (which is ahead by prediction lead).
+# Per-tick prediction snapshots keyed by input.host_timestamp.
 var _prediction_history: Array[PredictedState] = []
 const _PREDICTION_HISTORY_CAP: int = _PhysicsConstants.PHYSICS_TICK * 2  # ~2 s, matches the reconcile input cap
-# Highest ack (last_processed_host_timestamp) a reconcile has already consumed.
-# The host broadcasts world state every tick but only advances the ack when it
-# pops a due input, so consecutive broadcasts often repeat the same ack. The
-# first reconcile at ack T matches its prediction and then trims it away, so a
-# repeated ack would find_at-miss, fall back to the live (prediction-lead-ahead)
-# position, and fire a spurious snap. Gate on this so a stale ack is skipped —
-# a genuine desync is still caught on the next *advanced* ack. Reset wherever
+# Highest ack (last_processed_host_timestamp) a reconcile has already consumed;
+# gates the stale-ack early-out in reconcile(). Reset wherever
 # _prediction_history is cleared (teleport / dead-puck lock).
 var _last_reconcile_ack_ts: float = 0.0
 # Set true in _physics_process on any tick that processed an input (normal play
 # or FACEOFF_PREP), cleared on ticks that didn't (early-outs, dead-puck drain).
-# The actual prediction snapshot is deferred to skater.post_move_integrated so it
-# captures the post-move position — the same sub-step the host broadcasts — which
-# removes the ~1-tick client-behind phase offset that drove the reconcile storm.
-# The flag preserves the exact per-tick gating the inline snapshot calls had.
+# Gates the deferred snapshot connected in setup().
 var _snapshot_pending: bool = false
 var _team_id: int = -1  # set at setup; needed for client-side offside prediction
 var last_reconcile_error: float = 0.0
@@ -67,11 +54,11 @@ var _pickup_claim_floor: float = 0.0
 var _was_in_poke_range: bool = false
 var _poke_cooldown: float = 0.0
 var _poke_claim_floor: float = 0.0
-# Body checks are no longer recorded-and-replayed as cached impulses. Reconcile
-# replay instead RE-RESOLVES skater-vs-skater contact each replayed tick against
-# where the host actually had the other skaters (sampled from their interpolation
-# buffers via this provider) — so the replayed trajectory matches host authority
-# rather than a stale impulse captured against the live (interpolated) positions.
+# Reconcile replay RE-RESOLVES skater-vs-skater contact each replayed tick
+# against where the host actually had the other skaters (sampled from their
+# interpolation buffers via this provider), so the replayed trajectory matches
+# host authority rather than an impulse captured against live interpolated
+# positions. Never cache a recorded impulse and replay that instead.
 # Provider: func(exclude_skater: Skater, host_ts: float) -> Array of
 # {skater, position, velocity, hit}. Set by GameManager (_sample_historical_others).
 var _historical_others_provider: Callable = Callable()
@@ -95,17 +82,18 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	camera.skater = assigned_skater
 	camera.puck = assigned_puck
 	camera.local_controller = self
-	# Drives the camera shake / impact feedback. No longer records the impulse for
-	# replay — reconcile re-resolves contact from buffered history instead (see
-	# _historical_others_provider), so live prediction stays uncoupled from replay.
+	# Drives the camera shake / impact feedback only — reconcile re-resolves
+	# contact from buffered history (see _historical_others_provider), so live
+	# prediction stays uncoupled from replay.
 	skater.body_check_impulse_applied.connect(
 		func(impulse: Vector3) -> void:
 			hit_received.emit(impulse))
 	# Capture the reconcile prediction snapshot AFTER the body has integrated this
 	# tick (integration + collisions + clamps), matching the post-move sub-step
-	# the host samples for its broadcast. _snapshot_pending gates it to exactly the
-	# ticks the old inline calls fired on. Fires at Skater priority 0, after this
-	# controller's priority -1 pass has already set _current_input and the flag.
+	# the host samples for its broadcast — a pre-move capture puts a ~1-tick
+	# client-behind phase offset into every comparison. Fires at Skater priority
+	# 0, after this controller's priority -1 pass has set _current_input and the
+	# flag.
 	skater.post_move_integrated.connect(func() -> void:
 		if _snapshot_pending:
 			_snapshot_pending = false
@@ -260,7 +248,6 @@ func _physics_process(delta: float) -> void:
 	var input: InputState = gathered
 	_current_input = input
 	_input_history.append(_current_input)
-	# Cap history size to prevent unbounded growth
 	# Cap scales with RTT so sustained high-loss can't grow the buffer unboundedly:
 	# 2× RTT worth of frames (min 0.2 s, max 2 s of ticks) covers the in-flight window.
 	var rtt_cap: int = clampi(int(NetworkManager.get_latest_rtt_ms() / 1000.0 * float(Constants.PHYSICS_TICK)) * 2, Constants.PHYSICS_TICK / 5, Constants.PHYSICS_TICK * 2)
@@ -279,10 +266,10 @@ func _physics_process(delta: float) -> void:
 	if not _is_host and NetworkManager.is_clock_ready() and not skater.is_ghost and not puck.pickup_locked and _sm.get_state() != State.SHOT_BLOCKING:
 		var blade_pos_for_claim: Vector3 = skater.get_blade_contact_global()
 		# Branch on the CLIENT-side carrier view (PuckController, driven by the
-		# carrier events) — puck.carrier is host-only and never set on clients,
-		# so gating on it made this always read "loose": the poke/stick-lift
-		# claim branch was unreachable and the pickup branch re-claimed a
-		# carried puck (pinned ~0 m from the blade) for entire carries.
+		# carrier events). Never gate this on puck.carrier: it is host-only and
+		# never set on clients, so it reads "loose" forever here — the
+		# poke/stick-lift branch goes unreachable and the pickup branch
+		# re-claims a carried puck (pinned ~0 m from the blade) for whole carries.
 		var pctrl: PuckController = GameManager.puck_controller
 		var view_carrier_pid: int = pctrl.get_client_carrier_peer_id() if pctrl != null else -1
 		var view_carrier: Skater = pctrl.get_client_carrier_skater() if pctrl != null else null
@@ -386,9 +373,7 @@ func _physics_process(delta: float) -> void:
 			_was_in_poke_range = false
 
 func _append_prediction_snapshot() -> void:
-	# Per-input prediction snapshot keyed by host_timestamp so reconcile can
-	# compare predicted-vs-server at the same instant (subtracting prediction lead
-	# out of the divergence). Appended on every gathered input — including frozen
+	# Appended on every gathered input — including frozen
 	# FACEOFF_PREP frames (position locked, velocity zero) — so a broadcast that
 	# acks a prep-phase input after the lock lifts finds a match instead of falling
 	# back to the live position and firing a spurious reconcile on the first touch.
@@ -413,9 +398,9 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	if server_state.is_ghost:
 		skater.set_ghost(true)
 	elif skater.is_ghost:
-		# has_puck, not the host-only puck.carrier (see _predict_offside) — with
-		# the dead read this hold-back also REFUSED the server's authoritative
-		# un-ghost while the carrier's own geometry still looked offside.
+		# has_puck, not the host-only puck.carrier (see _predict_offside): a
+		# carrier is never offside, and reading it wrong here also refuses the
+		# server's authoritative un-ghost.
 		var puck_z: float = puck.global_position.z if puck != null else 0.0
 		if not InfractionRules.is_offside(skater.global_position.z, _team_id, puck_z, has_puck):
 			skater.set_ghost(false)
@@ -426,9 +411,9 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		return
 	# Front-trim the acked prefix of each history. All three arrays are
 	# timestamp-sorted (appended chronologically), so everything at or before
-	# last_processed_host_timestamp sits at the front. The previous filter()
-	# rebuilds allocated a fresh array + ran a lambda per element on every
-	# broadcast (120 Hz), even in the healthy no-reconcile case.
+	# last_processed_host_timestamp sits at the front. Trimmed in place — a
+	# filter() rebuild allocates a fresh array per broadcast at 120 Hz, even in
+	# the healthy no-reconcile case.
 	# The trim boundary carries TS_MATCH_EPSILON slack: the ack arrives
 	# through the 0.1ms wire grid while local stamps are full-precision f64,
 	# so without it the exact acked input could survive the trim (grid value
@@ -437,14 +422,12 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	# unacked input. find_at below uses the pure ack (its own epsilon match
 	# handles the grid error symmetrically).
 	var ack_ts: float = server_state.last_processed_host_timestamp
-	# Stale-ack gate: the host broadcasts every tick but only advances the ack when
-	# it pops a due input, so consecutive broadcasts routinely repeat the same ack.
-	# The first reconcile at ack T matches its prediction and then trims it away
-	# (below), so a repeated ack would find_at-miss, fall back to the live position
-	# (which leads the server by prediction lead), and fire a spurious snap — the
-	# false corrections that dominate reconcile churn on a clean connection. There
-	# is no new confirmed input to compare against, so skip: a real desync is still
-	# caught on the next advanced ack, at the normal cadence. Ghost state above is
+	# Stale-ack gate: consecutive broadcasts routinely repeat the same ack (the
+	# host advances it only when it pops a due input). The first reconcile at ack
+	# T matches its prediction and then trims it away below, so a repeat would
+	# find_at-miss, fall back to the prediction-lead-ahead live position, and fire
+	# a spurious snap. There is no new confirmed input to compare against, so
+	# skip; a real desync is caught on the next advanced ack. Ghost state above is
 	# authoritative every broadcast and has already been applied.
 	if not ReconciliationRules.ack_is_new(ack_ts, _last_reconcile_ack_ts, PredictedState.TS_MATCH_EPSILON):
 		return
@@ -630,10 +613,10 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		# runs after the integration step, so it (a) evaluates contact geometry at the
 		# POST-integration self position — the same instant host_ts=T samples the others
 		# at and the authoritative snapshot captures — and (b) applies dvel after the
-		# move, landing it on the next tick. Running before integration (the old
-		# recorded-impulse slot) offset the geometry ~one tick of travel and mis-phased
-		# dvel; a fixed recorded vector didn't care, but position-based re-resolution
-		# does. sep still lands before the clamps below. Replaces the impulse bridge.
+		# move, landing it on the next tick. Never move it before integration: that
+		# offsets the geometry by ~one tick of travel and mis-phases dvel, which
+		# position-based re-resolution (unlike a recorded impulse) is sensitive to.
+		# sep still lands before the clamps below.
 		_replay_resolve_body_checks(input.host_timestamp, input.hit_held)
 		# Clamp to the rink boundary after every replay step — the same analytic
 		# projection the live tick applies. Without this, a board interaction that
@@ -645,15 +628,13 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		skater.clamp_body_to_net()
 		# And the goalie footprint, for the same reason.
 		skater.clamp_body_to_goalies()
-		# Re-record this input's prediction from the corrected trajectory. The
-		# stale pre-correction snapshots were made on the trajectory the replay
-		# just abandoned, so without this every subsequent advanced ack in the
-		# unacked span re-trips the threshold against them and re-runs a full
-		# reconcile (~an RTT window of redundant corrections per real
-		# divergence). The live body follows this same replayed trajectory, so
-		# the re-recorded history stays honest for later comparisons. Matched
-		# by timestamp (epsilon-tolerant) rather than assumed 1:1 — the live
-		# capture is deferred to post_move_integrated and can skip a tick.
+		# Re-record this input's prediction from the corrected trajectory: the
+		# pre-correction snapshots sit on the trajectory the replay just
+		# abandoned, so leaving them re-trips the threshold on every subsequent
+		# advanced ack in the unacked span — ~an RTT window of redundant
+		# corrections per real divergence. Matched by timestamp
+		# (epsilon-tolerant) rather than assumed 1:1: the live capture is
+		# deferred to post_move_integrated and can skip a tick.
 		while replay_hist_i < _prediction_history.size() \
 				and _prediction_history[replay_hist_i].host_timestamp \
 					< input.host_timestamp - PredictedState.TS_MATCH_EPSILON:
@@ -702,28 +683,14 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		if server_still_aiming:
 			apply_server_shot_state = false
 	# The one-timer's committed hold is CLIENT-OWNED outright — the server never
-	# overrides it, in either direction. Unlike every other guard here that is a
-	# safe blanket rather than an enumeration, because the hold SELF-TERMINATES
-	# within one_timer_retention_time: the worst a wrong local state can do is
-	# survive a fraction of a second before the timer expires into FOLLOW_THROUGH
-	# on its own. (Blocking FOLLOW_THROUGH that way would be a real risk — it has
-	# no such bound, which is why it enumerates.)
-	#
-	# What the server can send here is one of two things. Behind: the lagged
-	# pre-release state, since the host has not processed the slap-release input
-	# yet — applying it re-arms a wind-up the player already let go of (and the
-	# held button can't re-fire the rising-edge entry) or ejects the swing to
-	# skating. Ahead: FOLLOW_THROUGH, which skips the client's own release — the
-	# host still fires the one-timer off the input stream, so the shot survives,
-	# but this client never seeds its prediction and watches its own shot arrive
-	# a round trip late. The ahead case should be unreachable — the client
-	# applies inputs immediately while the host gates consumption on
-	# host_timestamp, so the client leads by the input lead and its hold always
-	# expires first — but the failure is invisible when it isn't, so don't bet
-	# the shot on it.
-	#
-	# Real progressions are unaffected: a stoppage cancels the swing through
-	# teleport_to -> _cancel_active_charge, which does not route through here.
+	# overrides it in either direction. Safe as a blanket (every other guard here
+	# enumerates) because the hold SELF-TERMINATES within one_timer_retention_time,
+	# so a wrong local state survives a fraction of a second at worst. Both
+	# directions are wrong to apply: a lagged pre-release state re-arms a wind-up
+	# the player already released, and a server FOLLOW_THROUGH skips the client's
+	# own release so it never seeds its shot prediction. Real progressions are
+	# unaffected — a stoppage cancels the swing through teleport_to ->
+	# _cancel_active_charge, which does not route through here.
 	if apply_server_shot_state and pre_state == SkaterStateMachine.State.ONE_TIMER_RETENTION:
 		apply_server_shot_state = false
 	# Symmetric guard for the reverse direction: don't revert from an aiming state
@@ -740,16 +707,12 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 				server_state.shot_state == SkaterStateMachine.State.SKATING_WITHOUT_PUCK
 		if client_aiming and server_skating:
 			apply_server_shot_state = false
-	# Same protection for the puckless one-timer wind-up. It has no puck, so the
-	# has_puck guard above never covers it: a client charging a one-timer
-	# (SLAPPER_CHARGE_WITHOUT_PUCK) is ejected the moment the server's lagged
-	# shot_state — still SKATING_WITHOUT_PUCK because the slap press hasn't been
-	# processed there yet — is applied. The eject silently kills the wind-up (the
-	# held RMB can't re-fire the rising-edge entry) and strands the aim arrow on
-	# screen with no one-timer reticle. Hold the local state until the server
-	# catches up; any real progression still applies — the puck arriving flips
-	# the server to SLAPPER_CHARGE_WITH_PUCK, a release to FOLLOW_THROUGH, neither
-	# of which is SKATING_WITHOUT_PUCK.
+	# Same protection for the puckless one-timer wind-up, which has no puck so the
+	# has_puck guard above never covers it: the server's lagged
+	# SKATING_WITHOUT_PUCK (slap press not processed there yet) ejects the wind-up,
+	# and the held RMB can't re-fire the rising-edge entry — the aim arrow strands
+	# on screen with no reticle. Real progressions still apply: the puck arriving
+	# flips the server to SLAPPER_CHARGE_WITH_PUCK, a release to FOLLOW_THROUGH.
 	if apply_server_shot_state \
 			and pre_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITHOUT_PUCK \
 			and server_state.shot_state == SkaterStateMachine.State.SKATING_WITHOUT_PUCK:
@@ -757,12 +720,11 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 	if apply_server_shot_state:
 		_sm.set_state(server_state.shot_state as SkaterStateMachine.State)
 	# Wrister charge is a local control input (the player's precision sweep), not a
-	# server-owned consequence — importing the host's value here yanked the live
-	# charge to the host's lagged re-sim every broadcast (felt as rubber-banded
-	# charge, and starved forehand shots into the old quick-shot branch). The
-	# save/restore above already keeps replay from inflating it; leave the local
-	# prediction authoritative. (Determinism work will let the host re-derive the
-	# shot from inputs; charge does not round-trip through server state.)
+	# server-owned consequence. Never import the host's value here: it yanks the
+	# live charge to the host's lagged re-sim every broadcast, which reads as
+	# rubber-banded charge. The save/restore above already keeps replay from
+	# inflating it; the local prediction stays authoritative and charge does not
+	# round-trip through server state.
 	skater.set_facing(_pose.facing)
 	skater.set_upper_body_rotation(_pose.upper_body_angle)
 	skater.set_lower_body_lag(_pose.lower_body_lag)
@@ -773,12 +735,11 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 		last_reconcile_error = predicted.position.distance_to(server_state.position)
 	else:
 		last_reconcile_error = (skater.global_position - server_state.position).length()
-	# Count the reconcile HERE, at the per-world-state source, not once per rendered
-	# frame in GameManager._observe_telemetry. The old deferral sampled at render
-	# rate, so a client below the ~120 Hz world-state rate coalesced multiple
-	# reconciles into one and undercounted reconcile_per_sec (a 60fps client capped
-	# the metric at 60/s no matter the true rate). This runs only past the snap
-	# threshold, so it still counts real corrections only.
+	# Count the reconcile HERE, at the per-world-state source, never once per
+	# rendered frame: a render-rate sample coalesces multiple reconciles on a
+	# client slower than the world-state rate and caps reconcile_per_sec at the
+	# frame rate. This runs only past the snap threshold, so it counts real
+	# corrections only.
 	NetworkTelemetry.record_reconcile(last_reconcile_error)
 	# Attribution: did this reconcile fire against a replay-RE-RECORDED
 	# prediction (the correction echoing through replay approximations) or a
@@ -824,7 +785,7 @@ func reconcile(server_state: SkaterNetworkState) -> void:
 
 
 # Re-resolve the local skater's body-check contact for one replayed tick against
-# the OTHER skaters' host-authoritative positions at `host_ts` (Slice C). Applies
+# the OTHER skaters' host-authoritative positions at `host_ts`. Applies
 # BOTH the velocity impulse AND the positional push-out (sep) to the local skater
 # only — the historical others are read-only. Both are required to match the host:
 # the live resolver applies sep every tick (Skater._resolve_player_collisions), so
@@ -884,10 +845,9 @@ func _replay_resolve_body_checks(host_ts: float, local_hit_held: bool) -> void:
 			skater.velocity += _replay_collision_result.dvel_a
 			skater.global_position += _replay_collision_result.sep_a
 		else:
-			# Other is the aggressor, local is the victim. Now that hit-commit is
-			# replicated, the attacker's full-vs-passive delivery is known (was assumed
-			# passive), and the local brace comes from the replayed input's hit_held —
-			# the brace moved onto the Hit button.
+			# Other is the aggressor, local is the victim: the attacker's
+			# full-vs-passive delivery comes from the replicated hit-commit, the
+			# local brace from the replayed input's hit_held.
 			var transfer: float = other.body_check_transfer \
 					* (1.0 if ohit else other.hit_passive_transfer_mult) \
 					* (skater.body_check_brace_resistance if local_hit_held else 1.0)
@@ -937,9 +897,9 @@ func _update_one_timer_indicator() -> void:
 		# No slapper aim active — force BOTH HUD elements down. The arrow is
 		# normally cleared by _hide_slapshot_hud on every deliberate exit, but a
 		# reconcile force-set of shot_state leaves a slapper state without routing
-		# through it; without this the aim arrow used to strand on screen with no
-		# reticle. Driving both off from the live state every tick makes the local
-		# HUD self-correcting regardless of how the state was left.
+		# through it, stranding the arrow on screen with no reticle. Driving both
+		# off from the live state every tick makes the local HUD self-correcting
+		# regardless of how the state was left.
 		skater.set_slapper_indicator(false)
 		skater.set_slapshot_arrow(false)
 
@@ -952,9 +912,9 @@ func _predict_offside() -> void:
 	if GameManager.get_rule_set() != GameRules.RuleSet.ARCADE:
 		return
 	# has_puck, NOT puck.carrier — puck.carrier is host-only (never set on
-	# clients), so it read false here even while legally carrying and the
-	# "carriers are never offside" exemption was dead in local prediction:
-	# a body-leading zone entry self-ghosted the carrier.
+	# clients), so reading it here reports false while legally carrying, killing
+	# the "carriers are never offside" exemption in local prediction: a
+	# body-leading zone entry self-ghosts the carrier.
 	var offside: bool = InfractionRules.is_offside(
 		skater.global_position.z, _team_id, puck.global_position.z, has_puck)
 	# Only predict offside → ghost. Icing ghost comes from server via reconcile.

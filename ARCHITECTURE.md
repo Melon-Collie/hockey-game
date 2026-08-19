@@ -385,6 +385,75 @@ The `GameStateMachine` exposes `is_movement_locked()` — true during `GOAL_SCOR
 
 ---
 
+## Puck contact signals are queued, not fanned out inside the tick
+
+Every contact the analytic drive detects (boards, post, net, goalie touch, goalie
+catch) and every interaction `PuckController` drives (blade deflect, body block)
+is latched into a fixed-size queue on `Puck` rather than emitted where it is
+detected. Each `emit` reaches sounds, VFX, RPC sends, stat tracking and replay
+recording, and those emission sites sit inside the 120 Hz timed physics section.
+
+`GameManager` drains the queue (`Puck.drain_contact_events`) at physics priority
+2, in emission order, in the SAME physics frame, immediately BEFORE the snapshot
+capture and broadcast — so clients observe exactly the event-vs-state ordering a
+synchronous emit would have given them.
+
+Overflow policy is drop-newest with a `push_warning`: the capacity covers every
+emitter's per-tick maximum several times over, so an overflow means a runaway
+emitter, and dropping the newest preserves the older events and their order.
+
+`puck_stripped` and `puck_released` are the two exceptions and stay synchronous
+everywhere, because their listeners read call-scoped transient state off the same
+stack — `PuckController.is_processing_stick_lift`, the queued release velocity
+read by the dump-release check, and the goalie reaction back-date consumed by
+`_on_puck_released`.
+
+## The goalie is deliberately not skinned
+
+His moving parts are `StaticBody3D`s carrying real colliders: the puck bounces
+off the pads, the glove and the stick, and the poke geometry reads the blade
+collider's world position. `apply_body_config` moves six of them per tick and
+their meshes are children that ride along for free — bones would not replace
+those writes, since the bodies still have to move for collision; they would add
+one write per mesh.
+
+What does apply is the rigid merge the boot and helmet already use: several
+meshes that never move relative to each other and share a material collapse to
+one node, one mesh, one draw call. The absorbed nodes are resolved by path and
+freed, so anything that must stay addressable has to stay OUT of its merge — the
+goalie stick blade is the standing example (`GoalieMeshBuilder._merge_stick`).
+
+## The skater body is two skinned meshes, not a node tree
+
+`SkaterMeshBuilder` assembles `shared_upper_skin_mesh` (fourteen `UpperBone`s,
+seventeen `UpperSurface`s) and `shared_leg_skin_mesh` (sixteen `LegBone`s,
+twenty-two `LegSurface`s). Both are cached and shared by the whole roster:
+per-skater colour is a surface override, per-build sizing rides the scale inside
+a bone's pose, and no mesh is ever mutated per instance.
+
+`Skater._build_arm_rig` / `_build_leg_rig` read the scene's authored transforms
+out of `Scenes/Skater.tscn` and then **free those nodes**, so the `.tscn` stays
+the place proportions are authored while nothing survives at runtime to be
+transformed. A node renamed in the editor is therefore not a missing-node error —
+it is a bone silently left at identity, which is why
+`test_skater_scene_mirrors.gd` asserts every authored path still resolves.
+
+Four properties make a bone pose mean exactly a node's local transform, and all
+four have to hold: every vertex weighted 1.0 to one bone, identity bone rests,
+identity skin binds, and part geometry left in its own local space. The upper
+bone list is flat (all fourteen posed independently in `UpperBody`'s space); the
+leg list is a chain (`Leg` → `Shin`) because the gait rotates hips and knees
+separately. The goalie and the puck still hang meshes on nodes and subclass
+`SkaterMeshBuilder` only for its geometry helpers.
+
+**No mesh in the skater rig may take `material_override`.** It overrides every
+surface of a multi-surface mesh at once, which erases the boot's steel runner and
+its gear-coloured laces, or the helmet's head and neck skin, the moment the
+parent is painted. Paint through `SkaterMeshBuilder.surface_override()` and the
+`Skater` surface seams, which duplicate the shared default on first use — the
+default lives on the mesh the whole roster shares, so writing it directly
+repaints every player.
+
 ## Confusing Boundaries
 
 **`GameStateMachine` vs `PhaseCoordinator` vs `GameManager`:** `GameStateMachine` is a domain `RefCounted` — pure state, no signals, no engine refs, lives on both host and client. `PhaseCoordinator` owns phase-entry side effects (puck lock, goalie reset, faceoff teleport), the goal pipeline, and the goal-replay cinematic (start/stop `GoalReplayDriver`, host-only state-machine advance on natural replay end); emits signals upward including `replay_started`/`replay_stopped`. `GameManager` owns `GoalReplayDriver` Node lifecycle (`add_child`/`queue_free`) and `ReplayFileWriter` lifecycle (open/close/rollover), but delegates cinematic driving to `PhaseCoordinator`. `GameManager` wires everything together and is the only one that **dispatches RPCs to / mutates state on** `NetworkManager`. Read-only timing queries (`estimated_host_time`, `get_latest_rtt_ms`, `is_clock_ready`, `estimated_input_stamp_time`) are an explicit exception — controllers call these directly so prediction / interpolation / input stamping can run without an orchestration hop. `LocalController.send_pickup_claim` is the one *write* exception: it dispatches an RPC directly because pickup-claim eligibility is checked on every physics tick and routing the call through GameManager would add a per-tick orchestration hop for a hot-path check. Do not extend this exception to other RPCs without revisiting the rule. `NetworkManager` holds no references to controllers: it pulls outbound input batches via a `Callable` provider set by GameManager (`set_input_batch_provider`), and emits `input_batch_received(peer_id, inputs)` for inbound batches which GameManager routes through `_registry`.

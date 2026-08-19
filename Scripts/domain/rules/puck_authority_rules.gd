@@ -37,8 +37,8 @@ static func advance_loose_puck(pos: Vector3, vel: Vector3, dt: float,
 # One tick of loose-puck motion against ALL static geometry — integration + ice
 # friction + gravity + board caroms (advance_loose_puck) and the goal frame
 # (posts, crossbar, top + back/side net panels), sub-stepped near the thin frame
-# exactly like the host drive. This is THE shared step of the Phase-3
-# predict-and-reconcile: Puck._drive_analytic (host authority) and the client's
+# exactly like the host drive. This is THE shared step of predict-and-reconcile:
+# Puck._drive_analytic (host authority) and the client's
 # loose-puck prediction both call it, so their static-geometry trajectories
 # agree by construction — the definition of the determinism migration. The
 # goalie is deliberately NOT here: the host interleaves its swept goalie pass

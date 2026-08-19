@@ -1,104 +1,37 @@
 class_name AIActionScoring
 
 # Pure-function utility scoring for on-puck actions. Each score is a
-# multiplicative composition of factors in [0, 1].
+# multiplicative composition of factors in [0, 1]. `score_shoot` is xG-SHAPED
+# (peak in the slot, fading with range and angle) but NOT magnitude-calibrated:
+# read the outputs as RELATIVE shot quality, never as a goal probability.
 #
-# ── Design intent: geometric xG ──────────────────────────────────────────────
-# `score_shoot` approximates expected goals (xG) — the probability a shot beats
-# the goalie given its geometry and the defensive context. It is a GEOMETRIC
-# model, not a curve fit: it scores the best of the five goalie holes (the net
-# each clears past the goalie's reaction-gated, height-appropriate cover — see
-# the hole-model block below), then multiplies by lane clearance and forward-cone
-# pressure. Distance, angle, and coverage all EMERGE from that geometry; there
-# are no hand-tuned distance/angle curves. It is xG-SHAPED (peak in the slot,
-# fades with range/angle) but NOT magnitude-calibrated: treat the outputs as
-# RELATIVE shot quality, not actual goal probability.
-#
-# Everything else cascades from xG-shape:
-#   - `score_pass` = lane-clear × `score_shoot(receiver)` — a pass is
-#     only valuable if the receiver has a higher-quality shot than us.
-#   - `score_at(pos)` = max(`score_shoot(pos)`, carry-to-slot) — used by
-#     the carrier's CARRY candidates: a position is good if it offers a
-#     better future shot, OR it brings us toward a position that does.
-#
-# When tuning constants, ask "would this change make the shot quality
-# rank ordering match a human's read of those scenarios?", not "does
-# this number feel right in isolation". A learned xG model (baked grid
-# from playtest data) is a future replacement for `score_shoot`.
-#
-# Two leaf scorers (score_shoot, score_pass) plus a recursive depth-2
-# score_at(pos) defined in the SM. Top-level options compete uniformly:
+# Top-level options compete uniformly, on one scale:
 #
 #   shoot:  score_shoot(self_pos)
 #   pass:   score_at(receiver_lead) × lane_clear × time_factor
 #   carry:  score_at(candidate)     × path_clearance × time_factor
 #
-# score_at(pos) = max(score_shoot(pos), carry_to_slot_from_pos)
+# score_at(pos) = max(score_shoot(pos), carry_to_slot_from_pos), defined in the
+# carrier. There is deliberately no leaf-pass term inside it: at depth 2 only
+# the receiver's own shot and carry-to-slot are considered, which bounds the
+# recursion and keeps two bots out of a mutual pass loop.
 #
-# No leaf-pass term inside score_at — at depth 2 we only consider the
-# receiver's shot and their carry-to-slot. Stops the bot from
-# evaluating chains of passes (which can run away into mutual
-# back-and-forth pass loops) and bounds the recursion cleanly.
-#
-# Dumps do NOT compete on this scale — they are priced in their own currency
-# (a concession, plus a race the dump-in earns a gain from) and meet the carry
-# in AIRoleCarrier's commit compete. No open-man / advance / receiver_pressure
-# heuristics — the recursive score_at captures "what could the receiver do"
-# with their actual options.
+# Dumps do NOT compete on this scale — they are priced in their own currency (a
+# concession, plus the race the dump-in earns a gain from) and meet the carry in
+# AIRoleCarrier's commit compete.
 
-# Pressure on a shooter/carrier is a physical contest, not a density curve —
-# see release_contest_clean: each opponent's blade races to the release point
-# over the real windup window, in the lane model's reach vocabulary.
-
-# Value-map regime boundary: the attacking BLUE LINE. `_score_at` prices positions
-# by real shot danger (score_shoot) once the CARRIER is in the offensive zone, and
-# by position_potential (the progression value map) while the carrier is outside
-# it. The two scales never have to be compared: because of offsides a bot in the
-# O-zone never evaluates an out-of-zone spot (the valve prunes them), and a carrier
-# outside prices EVERY candidate — including the entry target — on the position_
-# potential scale. So the O-zone is pure xG's domain (goalie-aware, better than any
-# positional proxy there), and it needs no establishment floor: entry is driven by
-# position_potential, which already climbs from the blue line toward the slot, so an
-# in-zone target out-scores staying outside on that one shared scale. The only
-# in-vs-out decision made ON THIS SCALE is the choice to CARRY into the zone, and
-# it is made entirely in position_potential currency. The dump-and-chase is real
-# but is not one of these candidates: it lives in AIRoleCarrier._best_dump and
-# competes against the raw carry in its own currency.
-
-# Position-potential closeness ramp. position_potential is only used
-# by `_score_at` while the CARRIER is OUTSIDE the offensive zone —
-# once in the zone the bot prices real shot danger (score_shoot) alone.
-# So closeness only needs to give a sensible "anywhere on the
-# rink toward the slot is better than further away" gradient for
-# positioning bots — and, since it climbs monotonically toward the slot,
-# it is also what pulls a carrier across the blue line into the zone.
-#
-# Closeness ramps linearly: 1.0 at the slot (peak), 0.0 at the
-# goal-to-goal distance (rink length, derived from
-# GameRules.GOAL_LINE_Z * 2 — about 53 m). Inside the slot it ramps
-# back down to 0 at the goal mouth, so a hypothetical "carry past the
-# slot" candidate scores worse than the slot itself.
-#
 # Shared read-only empty arrays for the optional opponent-context args below.
-# A `const` array is instantiated once at class load and is read-only, so passing
-# it (instead of a fresh `[]` literal) at the internal pass-through sites binds the
-# one shared instance rather than allocating an empty array on every call — the
-# leaf scorers (score_shoot / score_pass / lane_clear) fire tens of times per
-# carrier compete × bots, so those per-call empties were real per-dispatch heap
-# churn. Read-only guarantees a stray mutation errors loudly rather than corrupting
-# the shared instance; every callee only reads these.
+# Passing these instead of a fresh `[]` at the internal pass-through sites keeps
+# the leaf scorers (score_shoot / score_pass / lane_clear), which fire tens of
+# times per carrier compete × bots, from allocating an empty array per call.
 #
-# NOTE: these are for ARGUMENT sites, NOT parameter defaults. A shared empty used
-# as a *default value* trips a Godot type-binding error at call time, so the `= []`
-# param defaults below stay literals — they only allocate when a caller omits the
-# arg anyway, and the hot callers pass their scratch arrays. Public so hot omitters
-# (carrier `_score_at`) can pass the shared empty explicitly.
-#
-# EMPTY_VEC3 is a read-only `static var`, NOT a `const`: a typed-`const` array
-# (`Array[Vector3]`) loses its element type when passed as a typed-array argument
-# (Godot rejects it — "does not have the same element type"), whereas a typed
-# static var keeps it. `_static_init` freezes it read-only so the safety net holds.
-# EMPTY_CAPS is untyped, so a plain read-only `const` is fine there.
+# Two traps. They are for ARGUMENT sites only: a shared empty used as a
+# *parameter default* trips a Godot type-binding error at call time, so the
+# `= []` defaults below stay literals. And EMPTY_VEC3 must be a `static var`,
+# not a `const`: a typed-`const` array loses its element type when passed as a
+# typed-array argument (Godot rejects it — "does not have the same element
+# type"), whereas a typed static var keeps it. EMPTY_CAPS is untyped, so a
+# read-only `const` is fine there.
 static var EMPTY_VEC3: Array[Vector3] = []
 const EMPTY_CAPS: Array = []
 
@@ -137,10 +70,9 @@ const SLOT_RADIUS_M: float = 6.0
 # (t_reach — the shooter→goalie gap at the band's pace), NOT the flight to the
 # goal line: the save happens where the puck crosses his reach envelope, which a
 # challenging keeper puts a large fraction of the flight closer to the shooter.
-# Budget on flight-to-net instead and he is silently handed the whole flight to
-# deploy — from 4 m a top-band arc passes him at 0.14 s, before his 0.18 s arm
-# read even fires, yet scores against a 0.25 s flight and reads as glove-covered.
-# That single error is enough to make a set keeper an unbeatable wall.
+# Never budget on the flight to the goal line: that hands him the whole flight
+# to deploy, and from 4 m a top-band arc passes his body at 0.14 s — before his
+# 0.18 s arm read even fires — while scoring against a 0.25 s flight.
 #
 # Each hole reads its own height BAND, and the bands differ in exactly the two
 # ways a real goalie's do — a wider always-covered CORE and a slower REACTION —
@@ -155,31 +87,28 @@ const SLOT_RADIUS_M: float = 6.0
 #
 # The band cores/reaches are grounded, not fitted:
 #  · LOW  — legs/pads AND the stick. The pad column alone is only
-#           LOW_CORE_STANDING_M standing, and the wider butterfly core exists
-#           only after the leg read + pads-to-floor drop
-#           (GOALIE_BUTTERFLY_DROP_S — the same gate the five-hole seal runs),
-#           so an in-tight low shot beats the DROP exactly as it does against
-#           the live keeper. What it does not beat is the paddle already lying
-#           on the ice: stick_low_cover() floors the band by the BLADE'S OWN
-#           WIDTH from the first frame, un-raced, which is why the standing
-#           keeper's low net measures shut in tight — where angle compression
-#           makes even that narrow blade span most of the mouth. A DOWN
-#           goalie's splayed pads exceed it.
+#           LOW_CORE_STANDING_M standing; the wider butterfly core exists only
+#           after the leg read + pads-to-floor drop (GOALIE_BUTTERFLY_DROP_S —
+#           the same gate the five-hole seal runs), so an in-tight low shot
+#           beats the DROP exactly as it does against the live keeper. What it
+#           does not beat is the paddle already lying on the ice:
+#           stick_low_cover() floors the band by the BLADE'S OWN WIDTH from the
+#           first frame, un-raced, which is why the standing keeper's low net
+#           measures shut in tight — where angle compression makes even that
+#           narrow blade span most of the mouth. A DOWN goalie's splayed pads
+#           exceed it.
 #  · HIGH — glove/blocker, NARROWEST core (held up they leave the top corners)
 #           but the longest reach (out to 0.85 m ≈ glove_max_x_outward) on a slow
 #           ARM reaction. In tight the glove can't extend -> roof it; at range it
 #           gets there -> top corners shut. This is the over-the-shoulder read.
 # Total HIGH reach (CORE+EXT = 0.85) mirrors the live goalie's glove_max_x_outward.
-# The stick is deliberately absent from HIGH: the blade is 0.07 m tall, so an
-# elevated puck clears it. Adding it to LOW and NOT to HIGH is the point — it
-# makes the flat shot worse and leaves the roof alone, which is the band choice
-# the live keeper's save distribution rewards (GoalieStickRules).
 #
-# There is no MID/armpit band and no STATIC body-side hole: that seam only opens
-# when the goalie commits an arm elsewhere. The replicated pose (goalie_hands)
-# makes that condition visible, so HIGH cover races from where each hand actually
-# is (_band_cover's per-side hand read) and the seam emerges exactly when a hand
-# is genuinely caught low or wide — never as a phantom the resting stance covers.
+# The model has no MID/armpit band and no STATIC body-side hole: that seam only
+# opens when the goalie commits an arm elsewhere. The replicated pose
+# (goalie_hands) makes that condition visible, so HIGH cover races from where
+# each hand actually is (_band_cover's per-side hand read) and the seam emerges
+# exactly when a hand is genuinely caught low or wide — never as a phantom the
+# resting stance covers.
 #
 # [LOW, HIGH] half-width, fully deployed. LOW must track the live butterfly's
 # real splayed pad edge — pad_local_offset 0.42 + butterfly_pad_half_width 0.42
@@ -196,53 +125,38 @@ const LOW_CORE_STANDING_M: float = (
 		+ GoalieBehaviorRules.PAD_BOX_WIDTH_M * 0.5)
 
 # ── The keeper's STICK, the LOW band's primary surface while he is upright ───
-# The paddle lying across the ice was the model's missing body part: every
-# `stick` in this file is LANE_DEFENDER_REACH_M, a SKATER's blade in a passing
-# lane, so the planner scored the low net off pad geometry alone. Measured
-# against the live keeper (tests/unit/ai/test_goalie_low_cover.gd): inside 7 m
-# NOTHING scores at any aim point out to either post, and backing the reaction
-# push out brackets the true standing half-width at 0.59-0.64 m — against the
-# 0.36 m pad column the planner was using. That gap is the +1.00 slot error in
-# test_slot_shot_value_truth.gd, where the keeper stick-saved 24/24 of the
-# flat corners the model rated near-certain.
-#
-# Four properties decide how it enters, and all four are measured, not chosen:
-#   · SYMMETRIC — the blade-aim solve yaws the paddle toward the threat, so
-#     both sides measure identically. This keeper's stick is not the stick-side
-#     -only asset a real goalie's is.
-#   · NOT reaction-gated — it is already lying on the ice in the stance, which
-#     is exactly why it eats the in-tight shot the pads have no time to drop
-#     for. It floors the CORE; the lateral push still adds on top.
+# Every other `stick` in this file is LANE_DEFENDER_REACH_M, a SKATER's blade in
+# a passing lane. This one is the goalie's paddle lying across the ice, and four
+# properties decide how it enters:
+#   · SYMMETRIC — the blade-aim solve yaws the paddle toward the threat, so both
+#     sides measure identically. This keeper's stick is not the stick-side-only
+#     asset a real goalie's is.
+#   · NOT reaction-gated — it is already on the ice in the stance, which is why
+#     it eats the in-tight shot the pads have no time to drop for. It floors the
+#     CORE; the lateral push still adds on top.
 #   · LOW BAND ONLY — the blade is GoalieStickRules.BLADE_HEIGHT_M (0.07 m)
-#     tall, so an elevated puck clears it entirely. Adding it here and NOT to
+#     tall, so an elevated puck clears it entirely. Entering it here and NOT in
 #     HIGH is the whole point: it does not make every shot worse, it makes the
-#     flat shot worse and leaves the roof alone, which is the band choice the
-#     live keeper's save distribution actually rewards.
-#   · ITS OWN WIDTH, NOT ITS REACH. This is the one that was wrong at first,
-#     and the distinction is easy to lose. standing_lateral_reach() is a
-#     PLACEMENT ENVELOPE — the furthest off centre the blade can be swung. The
-#     band cover it feeds is consumed as a DISC half-width by the tangent-cone
-#     occlusion, i.e. as surface the keeper presents everywhere at once. Using
-#     the envelope there gives him a 0.64 m solid disc instead of a 0.38 m
-#     blade, and projected to the net plane that covers 84-100% of the mouth at
-#     EVERY range: 0.83 m of a 0.91 m half at 7.8 m, 0.76 m at 11 m. Every flat
-#     hole read shut everywhere, so the model roofed instead — and against the
-#     live keeper the roof scored 0% at 7.8 m where the flat shot scored 50%
-#     (tests/unit/ai/test_real_goalie_shot_outcomes.gd). Racing the envelope
-#     does not fix it either: at 7.8 m the flight gives him 0.25 s against a
-#     0.09 s deploy, so any reaction ramp saturates straight back to 0.64. The
-#     error is geometric, not temporal. The blade covers the width it HAS,
-#     where it is; the envelope is where it can be PUT, and a per-hole
-#     placement race is what would price that — not a floor.
+#     FLAT shot worse and leaves the roof alone, which is the band choice the
+#     live keeper's save distribution rewards.
+#   · ITS OWN WIDTH, NOT ITS REACH — do not feed standing_lateral_reach() here.
+#     That is a PLACEMENT ENVELOPE, the furthest off centre the blade can be
+#     swung; the band cover is consumed as a DISC half-width by the tangent-cone
+#     occlusion, i.e. surface the keeper presents in every direction at once.
+#     The envelope makes him a 0.64 m solid disc instead of a 0.38 m blade,
+#     which projects over 84-100% of the mouth at every range and shuts the flat
+#     net everywhere. The error is geometric, not temporal, so racing the
+#     envelope does not fix it either (at 7.8 m the flight gives him 0.25 s
+#     against a 0.09 s deploy — any ramp saturates back to 0.64). Pricing where
+#     the blade can be PUT needs a per-hole placement race, not a wider floor.
 #
 # Read from the blade's own box in GoalieStickRules (the same source the POSED
 # stick reads), so the planned stick and the posed stick cannot drift apart.
 static func stick_low_cover() -> float:
 	return GoalieStickRules.BLADE_WIDTH_M * 0.5
-# Reaction-gated extension to the placement. LOW has none of its own any more:
-# the pad column's widening IS the butterfly drop (core lerp), and everything
-# beyond it is the real lateral push (_goalie_lateral_reach in _band_cover) —
-# the old 0.15 "pad push" was a stand-in for the push term that now exists.
+# Reaction-gated extension to the placement. LOW has none of its own: the pad
+# column's widening IS the butterfly drop (core lerp), and everything beyond it
+# is the lateral push (_goalie_lateral_reach in _band_cover).
 const HOLE_BAND_EXT: Array[float] = [0.0, 0.45]
 const GOALIE_ARM_DEPLOY_S: float = 0.09   # reaction ramp width — time to extend to the placement.
 										  # Hard baseline: HIGH-band EXT (0.45) / glove_react_max_speed
@@ -256,7 +170,7 @@ static func _delay_at_height(arrival_y: float, goalie_down: bool) -> float:
 	# Which limb has to answer decides the latency, and that is a question about
 	# the puck's HEIGHT against his current pad top — not about a band index.
 	# Standing, the pad column runs to the seam, so everything under it is legs
-	# and everything over it is arms: exactly the old LOW/HIGH split. Down, the
+	# and everything over it is arms: exactly the LOW/HIGH split. Down, the
 	# pads collapse to 0.28 m and the answer changes — an over-the-pad puck is
 	# the HANDS' problem now, and it pays the slower arm read.
 	if arrival_y <= GoalieAnatomy.pad_span(goalie_down).y:
@@ -306,9 +220,9 @@ static func _best_high_rung(dist: float, shot_speed_m_s: float,
 	var best_cover: float = INF
 	# The floor is HIS PAD TOP, not a fixed seam: a rung arriving under the
 	# pads is the pad column's business, which the flat holes already model.
-	# Standing that is the 0.86 m seam — identical to the old constant — but
-	# once he is down the pads collapse to 0.28 m and the rungs between become
-	# real targets. No puck inset here: eligibility is "is he pad there", and
+	# Standing that is the 0.86 m seam; once he is down the pads collapse to
+	# 0.28 m and the rungs between become real targets. No puck inset here:
+	# eligibility is "is he pad there", and
 	# the cover model below charges whatever actually is at that height.
 	var floor_y: float = GoalieAnatomy.pad_span(goalie_down).y
 	for i: int in 3:
@@ -347,11 +261,6 @@ static func _high_band_pace(dist: float, shot_speed_m_s: float,
 	return shot_speed_m_s / sqrt(1.0 + tan_a * tan_a)
 
 
-# Horizontal pace (m/s) of a shot at hole band `band` over `dist` to the net —
-# HIGH holes fly the full-pace contact-point arc (0.0 when the band is
-# structurally closed), FLAT bands the committed full pace. The five-hole
-# rides the LOW band. Divides the shooter→goalie gap for the reach budget
-# (t_reach).
 # The rung a hole's shot flies: FLAT along the ice for the low bands, the
 # posture-picked rung for a HIGH hole (ELEVATION_FLAT there means the band is
 # structurally closed — no rung clears his pads without missing high). Callers
@@ -383,6 +292,10 @@ static func _rung_arrival(level: int, dist: float, shot_speed_m_s: float,
 			loft_tans[level - ShotMechanics.ELEVATION_LOW])
 
 
+# Horizontal pace (m/s) of a shot at hole band `band` over `dist` to the net —
+# HIGH holes fly the full-pace contact-point arc (0.0 when the band is
+# structurally closed), FLAT bands the committed full pace. The five-hole rides
+# the LOW band. Divides the shooter→goalie gap for the reach budget (t_reach).
 static func _band_pace(band: int, dist: float, shot_speed_m_s: float,
 		loft_tans: Vector3 = DEFAULT_LOFT_TANS, goalie_dist: float = -1.0,
 		goalie_down: bool = false) -> float:
@@ -454,12 +367,10 @@ static func _cover_at_height(arrival_y: float, t_read: float, goalie_down: bool,
 		# The structural floor is the trunk/head actually at this height
 		# (GoalieAnatomy), not a single declared core — which is the whole
 		# point of resolving height. Above the standing seam it is floored by
-		# the legacy HIGH core: 0.40 was measured for that band and the raw
+		# HOLE_BAND_CORE[HIGH]: 0.40 was measured for that band and the raw
 		# box list under-represents it there (shoulders and arm roots are not
-		# colliders), so replacing it outright would be a calibration change
-		# dressed as a refactor. Below the seam — the over-the-pad and armpit
-		# heights the two-band model could not express — the geometry stands
-		# on its own.
+		# colliders). Below the seam — the over-the-pad and armpit heights —
+		# the geometry stands on its own.
 		var structural: float = GoalieAnatomy.structural_cover_half_width_at(
 				arrival_y, goalie_down)
 		if arrival_y >= GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M:
@@ -467,7 +378,7 @@ static func _cover_at_height(arrival_y: float, t_read: float, goalie_down: bool,
 		# With the replicated pose in scope (goalie_hands finite, a signed
 		# hole side), the reaction race STARTS where the hand actually is
 		# instead of at a declared stance core: a READY hand (parked at ~the
-		# torso edge) reproduces the legacy deploy, a hand committed LOW
+		# torso edge) deploys at the stance rate, a hand committed LOW
 		# (butterfly, gloves at pad height) must LIFT to the puck's height
 		# before its lateral coverage counts, and a hand caught on the wrong
 		# side contributes nothing this side beyond the structure.
@@ -540,9 +451,7 @@ static func _cover_at_height(arrival_y: float, t_read: float, goalie_down: bool,
 # high hole are both open there is nothing the roof buys. So best_shot_loft
 # takes the flattest hole whose opening is within this fraction of the widest —
 # committing to a roof only when the top is meaningfully the better way in.
-# (The SCORE is still the widest opening; this only picks the loft. The old
-# rationale — "you can sail a high shot over the bar" — died with the fixed-vy
-# model: an on-net HIGH now arrives at the target height by construction.)
+# The SCORE is still the widest opening; this only picks the loft.
 const LOFT_TIE_FRAC: float = 0.85
 const HOLE_BAND_LOW: int = 0
 const HOLE_BAND_HIGH: int = 1
@@ -580,8 +489,8 @@ const FIVE_CENTER_REF_M: float = 1.6
 # delay (not a reaction-killing scalar) makes the recovery emergent: a long
 # flight hands the delay back through the same reach race — the drop, the
 # glove, and the lateral push all still land — while a quick release inside
-# the delayed read meets a goalie who never moved. The old separate
-# "recovery fade" constant is gone; the race IS the fade.
+# the delayed read meets a goalie who never moved. The race IS the fade; it
+# needs no separate recovery constant.
 const UNSETTLE_READ_PENALTY_S: float = 0.15
 
 # The sharpest release scatter the game actually produces (the Hard bot hand;
@@ -602,8 +511,7 @@ const MIN_RELEASE_SPREAD_RAD: float = 0.010
 #     where in that swing he is;
 #   · the puck's own radius — a puck whose centre passes within a radius of the
 #     edge is clipped, and _band_cover ALREADY adds PUCK_COLLISION_RADIUS to
-#     the cover for exactly that. Charging it again here was a double-count,
-#     and it is where most of the original 0.07 came from;
+#     the cover for exactly that. Charging it again here is a double-count;
 #   · the lateral push — explicit and kinematic (_goalie_lateral_reach).
 # What is left is the timing residual the push model cannot resolve: his
 # position at arrival versus the prediction, within one read quantum. At the
@@ -622,14 +530,12 @@ const GOALIE_EDGE_SOFTNESS_M: float = 0.03
 # exactly where it was aimed (real_goalie_shot_harness.shot_velocity_at is the
 # same launch the bots execute).
 #
-# It was briefly 0.030 — invented to buy the currency some range back when the
-# ramp saturated at a 0.02 rad window. That was a shape parameter dressed as
-# physics, and it cost exactly what the grounded-models rule says it would:
-# the model under-read every real chance by a third, because it was charging
-# shots for a scatter the simulation does not produce. The range came from the
-# goalie's stick instead — real geometry, which shrinks the in-tight windows
-# that were saturating. Kept as a named zero so the seam is visible if the
-# shot ever DOES gain dispersion (a wobbling puck, a contested release).
+# Do not raise it to buy the decision currency more range when the make ramp
+# saturates: a nonzero scatter here charges every shot for dispersion the
+# simulation does not produce, and it under-reads real chances by about a
+# third. Range comes from real geometry (the goalie's stick shrinks the
+# in-tight windows). Kept as a named zero so the seam is visible if the shot
+# ever DOES gain dispersion (a wobbling puck, a contested release).
 const PLACEMENT_DISPERSION_RAD: float = 0.0
 
 # What _hole_margin returns for a hole that is not a target at all — behind the
@@ -642,8 +548,8 @@ const HOLE_STRUCTURALLY_CLOSED_RAD: float = -1.0
 # toward the puck-at-release X — ACCELERATING onto the edge (the live keeper's
 # lateral_accel ramp) up to max push speed, never snapping to it. The ramp is
 # what a hard lateral cut in tight genuinely beats: over a sub-quarter-second
-# release window an accelerating keeper covers centimetres where a snap-to-speed
-# model covered half a metre and read every deke as tracked. The reaction delay
+# release window an accelerating keeper covers centimetres, not the half metre
+# a snap-to-speed model would. The reaction delay
 # and accel ramp are difficulty-synced (set_goalie_profile); the top speed is a
 # const because no tier varies GoalieController.t_push_speed.
 const GOALIE_MAX_LATERAL_SPEED_MPS: float = GameRules.DEFAULT_GOALIE_T_PUSH_SPEED_M_S
@@ -681,28 +587,20 @@ static var goalie_arm_deploy_s: float = GOALIE_ARM_DEPLOY_S
 # target_depth_for_puck_distance — the Buckley chart the live goalie skates),
 # and a CLOSING carrier retreats him along the speed-matched backflow curve
 # (rush_retreat_depth) until he is at goal-line depth by the time the attacker
-# reaches the crease. Both are already the live GoalieController's behaviour;
-# the planning model used to ignore them and hold the keeper at whatever depth
-# he happened to occupy when the read was taken.
+# reaches the crease. Both are the live GoalieController's behaviour.
 #
 # The planner reads this as a RETREAT-ONLY correction (see planned_goalie_depth):
 # it gives ground as the play comes to him and never challenges out on its own.
 #
-# That freeze is why bots refused to drive the net. Coverage here is a TANGENT
-# CONE off the keeper's body, so his apparent size grows as the SHOOTER closes
-# on him — with his depth pinned out at challenge range, every metre the carrier
-# gained made the net read MORE covered, not less. A 3 m release against a
-# keeper frozen at aggressive depth (1.75 m out, so 1.25 m from the puck) has
-# him subtending a wider cone than the whole net: open_net_danger ~0, from the
-# most dangerous ice on the rink. The gradient therefore pointed AWAY from the
-# net everywhere inside the dots, no drive or cut could ever out-score standing
-# still, and the compete fell through to whatever was safest — the back pass.
-# With the real backflow that same 3 m release meets a keeper who has retreated
-# to ~0.85 m, sits ~2.15 m away, and leaves honest corners open: driving in gains
-# value again, exactly as it does on the ice, and the bail-out stops being the
-# only positive-EV action. (That was 0.7 m while the retreat landed on the post;
-# `rush_arrive_depth` explains why it no longer does, and the margin over a
-# keeper frozen at 1.75 is what this paragraph is actually about.)
+# Never hold his depth frozen while the shooter closes. Coverage here is a
+# TANGENT CONE off the keeper's body, so a keeper pinned out at challenge depth
+# appears to GROW as the shooter approaches: a 3 m release against a keeper held
+# at 1.75 m out is only 1.25 m from the puck and subtends a wider cone than the
+# whole net, so open_net_danger reads ~0 from the most dangerous ice on the
+# rink. The in-zone gradient then points AWAY from the goal, nothing out-scores
+# standing still, and the compete falls through to the safest option — the back
+# pass. With the backflow he has retreated to ~0.85 m by then, sits ~2.15 m off
+# the release, and leaves honest corners open.
 #
 # Values mirror GoalieController's export defaults (cited per field); the two
 # tier-varied depths ride set_goalie_profile like every other synced read.
@@ -794,10 +692,10 @@ static func closing_toward(pos: Vector3, vel: Vector3, goal: Vector3) -> float:
 # planner cannot see — an RVH/VH post seal, a backdoor cap, the lateral-pressure
 # pull, a recovery, a slide. Snapping him out to the chart's challenge station
 # would invent an aggressive challenge the real keeper may already have declined,
-# and would silently re-price every settled look. What the planner was actually
-# MISSING is the one depth change the play itself forces: he gives ground as the
-# puck comes to him. So a static read returns his current depth unchanged (every
-# existing calibration holds) and only an approach moves him.
+# and would silently re-price every settled look. The one depth change the play
+# itself forces is the retreat — he gives ground as the puck comes to him — so a
+# static read returns his current depth unchanged and only an approach moves
+# him.
 static func planned_goalie_depth(
 		goalie_now: Vector3,
 		attacking_goal: Vector3,
@@ -827,16 +725,14 @@ static func planned_goalie_depth(
 				dist, _rush_cfg_planning)
 		if rush_target < target:
 			target = rush_target
-			# Speed-matched backflow: a fast rush backs him in fast — and a slow
-			# one backs him in SLOWLY, which is the half this used to miss. While
-			# the backflow is retreating him it OWNS the motion and bypasses the
-			# ordinary rate cap entirely (GoalieDepthSolver.solve), so the rate is
-			# the backflow's own and not the faster of the two. Taking the max
-			# only agreed with the live keeper while the curve happened to be
-			# steeper than `depth_max_speed`; flatten the curve and the planner
-			# retreats him a fifth of a metre further than he actually goes.
-			# Zero means the curve is flat here (outside its sloped segments), and
-			# there the live solve does fall back to the settle — so does this.
+			# Speed-matched backflow: a fast rush backs him in fast, a slow one
+			# SLOWLY. While the backflow retreats him it OWNS the motion and
+			# bypasses the ordinary rate cap entirely (GoalieDepthSolver.solve),
+			# so the rate is the backflow's own — never the max of the two, which
+			# agrees with the live keeper only while the curve happens to be
+			# steeper than `depth_max_speed`. Zero means the curve is flat here
+			# (outside its sloped segments), and there the live solve falls back
+			# to the settle — so does this.
 			var rush_rate: float = GoalieBehaviorRules.rush_retreat_rate(
 					dist, closing_speed_m_s, _rush_cfg_planning)
 			if rush_rate > 0.0:
@@ -902,25 +798,22 @@ const GOALIE_SETTLE_REF_S: float = 0.20
 #   reach(τ*)   = REACH + CLOSE_SPEED · max(0, τ* − REACTION)
 #   block       = clamp((reach − miss) / REACH, 0, 1)
 #
-# This REPLACES the old separable `perp_factor × reaction_factor` product,
-# which multiplied "how close to the line" by "how much flight time" — so a
-# defender draped on the carrier (dead on the line, but low flight-time
-# because they sit near the release) scored block ≈ 0, `lane_clear` read ≈ 1,
-# and the pass turnover cost collapsed to zero. Posing it as reachability
-# fixes that at the root: a defender already within a stick of the path
-# blocks fully regardless of timing (no closing required), while a defender
-# off the path must physically close the gap (CLOSE_SPEED × available time)
-# before the puck passes. It is also VELOCITY-AWARE — a defender bearing down
-# on the lane is dead-reckoned INTO it (higher block); one drifting away is
-# credited less — which the old position-only model could not express.
+# Reachability, never a separable "how close to the line" × "how much flight
+# time" product: that form scores a defender draped on the carrier (dead on the
+# line, but near the release so the flight time is short) at block ≈ 0, reads
+# the lane clear, and collapses the pass turnover cost to zero. Posed as
+# reachability, a defender already within a stick of the path blocks fully
+# regardless of timing, while one off the path must physically close the gap
+# (CLOSE_SPEED × available time) before the puck passes. It is also
+# VELOCITY-AWARE: a defender bearing down on the lane is dead-reckoned INTO it,
+# one drifting away is credited less.
 #
 # Faster pucks still thread better for free: a shorter flight T leaves less
 # time to close, shrinking reach. All three parameters are physical, not
 # feel-tuned:
 #   REACH       — blade reach of a lane defender (stick length).
 #   REACTION    — competitive read delay before they start closing (~2 ticks
-#                 at 30 Hz; not the 0.15 s "casual" delay that let passes
-#                 leak through).
+#                 at 30 Hz).
 #   CLOSE_SPEED — a defender's lateral adjustment pace. About half top skating
 #                 speed: they pivot / crossover into the lane, they do not
 #                 straight-line sprint at it.
@@ -954,18 +847,6 @@ const WRISTER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 const SLAPPER_SHOT_SPEED_M_S: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
 const PASS_SPEED_M_S: float = GameRules.DEFAULT_QUICK_PASS_POWER_M_S
 
-# Target ARRIVAL speed at the receiver — the "magnet" pace a bot aims to hit its
-# teammate at. Crisp enough to beat a defender's reaction and shrink the pass's
-# hang time (which the EV's time-decay penalizes), yet still catchable: reception
-# judges RECEIVER-RELATIVE speed (deflects a poorly-angled blade only above
-# deflect_min_speed 22 relative; a squared blade catches to 30), so 21.5 catches
-# a stationary receiver at any angle, and a led receiver skating WITH the pass
-# sees it slower still — only a receiver closing hard on the feed needs to square
-# up. Every bot pass now aims for the SAME crisp arrival speed regardless of
-# distance — the earlier
-# distance-ramp made close feeds far too soft (down toward the ~11 m/s floor),
-# which both looked weak and, via the longer flight time, made the EV under-value
-# passing relative to holding/shooting.
 # Target CLOSING speed at reception — the puck's speed in the RECEIVER'S frame
 # when it arrives, which is what PuckReceptionRules judges (#373). Under that
 # model's ceilings (any-angle catch ≤ deflect_min 22, squared ≤ 30), 20 sits
@@ -991,10 +872,10 @@ const PASS_TARGET_CLOSING_M_S: float = 20.0
 # toward 30 for crisper feeds that lean harder on the receiver squaring up.
 const PASS_RECEIVE_CEILING_M_S: float = 26.0
 
-# Reference charged-pass speed (~mid-ramp). No longer a fixed release target —
-# pass speed is distance-adaptive via pass_launch_speed — but kept as a
-# representative pass speed for lane/threat tests and any caller that wants a
-# single "typical charged pass" number.
+# Reference charged-pass speed (~mid-ramp). Not a release target — a real pass
+# is distance-adaptive via pass_launch_speed — but a representative pass speed
+# for lane/threat tests and any caller that wants a single "typical charged
+# pass" number.
 const PASS_CHARGE_SPEED_M_S: float = (
 		GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
 		+ (GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
@@ -1029,12 +910,11 @@ const PASS_CHARGE_SPEED_M_S: float = (
 # receiver-motion quadratic, the friction compensation, and the executable floor.
 # So a lower tier throws a puck that ARRIVES soft and still gets there.
 #
-# It used to multiply the finished LAUNCH instead, which is why the knob was
-# retired at 1.0 for every tier: scaling after the solve discards the solve. A
-# receiver streaking away at 6 m/s needs a 26 m/s world arrival to close at 20;
-# knocking that launch to 0.7 delivers ~12 m/s of closing instead of 20, and the
-# feed dies behind him. Scaling the target hands the same receiver a 23 m/s
-# arrival for a 17 m/s close — softer by exactly the dial, and still caught.
+# Never apply it to the finished LAUNCH — scaling after the solve discards the
+# solve. A receiver streaking away at 6 m/s needs a 26 m/s world arrival to
+# close at 20; knocking that launch to 0.7 delivers ~12 m/s of closing and the
+# feed dies behind him, where scaling the target hands him a 23 m/s arrival for
+# a 17 m/s close: softer by exactly the dial, and still caught.
 # Defaults to 1.0, which is bit-identical to the unscaled solve, so the
 # cross-player threat model (expected_pass_speed) is untouched by the knob.
 static func pass_launch_speed(distance: float, max_launch: float,
@@ -1060,7 +940,7 @@ static func pass_launch_speed(distance: float, max_launch: float,
 		# (along > 0) pushes the soft floor ABOVE that pace, so we fire HARDER to
 		# lead — the give-with-the-puck read is preserved. Curling back toward the
 		# passer (along < 0) pulls both bounds down, but the crisp ceiling caps how
-		# far: instead of collapsing to the min-wrister floor (the old "super soft"
+		# far: rather than collapsing to the min-wrister floor (a "super soft"
 		# floater), the launch only softens to what the receiver can still catch.
 		var soft_arrival: float = along + sqrt(maxf(0.0,
 				target_closing * target_closing - perp_sq))
@@ -1264,34 +1144,14 @@ static func delay_discount(delay_s: float) -> float:
 # geometry — no curves. best_shot_loft returns the same winner's elevation
 # class so the shot's loft matches where it's aimed.
 #
-# ── The SOFT EDGE, and why the old ramp had no range ─────────────────────────
-# This used to be clamp(window / (2·spread), 0, 1) — a ramp on the bot's own
-# release scatter, treating the goalie's cover edge as a knife-edge: one side
-# certain goal, the other certain save. Two properties made it unusable as the
-# value a carry beam maximises (measured in test_shot_currency_saturation.gd):
-#
-#   CEILING — spread is 0.01 rad on Hard and floored there for everyone, so
-#     the ramp saturated at a 0.020 rad window. The whole empty net subtends
-#     0.298 rad from the dot line, so an opening one-fifteenth of an open net
-#     already read 1.000. Most of the dangerous ice pinned at exactly 1.000,
-#     which means NOTHING could out-score a set keeper — and so the carry
-#     planner's unsettle read (carrier.gd's cand_unsettled, which fires
-#     correctly at 1.00 on a cross-slot drive) bought precisely zero. There
-#     was no headroom above "set goalie" for moving him to pay into.
-#
-#   FLOOR — everything the cover overlapped read exactly 0.000, with the
-#     overlap DEPTH thrown away by _hole_open_angle's clamp. A dead-flat zero
-#     has no gradient, so "he covers this now, but two strides left opens him"
-#     was indistinguishable from hopeless. Those zeros sat exactly on the
-#     walk-out ice, which is where making him move is easiest.
-#
-# Both come from the same fiction. The boundary between goal and save is not a
-# line: the keeper's edge moves with pose (stance vs. mid-drop vs. splayed),
-# with tracking lag inside the read quantum, and with the deflection-vs-clean
-# -miss lottery at the pad edge; the puck's arrival is scattered by more than
-# the release angle. So the model now carries ONE uncertainty for that whole
-# boundary (GOALIE_EDGE_SOFTNESS_M, in metres at the keeper, combined in
-# quadrature with the shooter's release scatter) and applies it consistently:
+# ── The soft edge ────────────────────────────────────────────────────────────
+# The boundary between goal and save is not a line: the keeper's edge moves
+# with pose (stance vs. mid-drop vs. splayed), with tracking lag inside the read
+# quantum, and with the deflection-vs-clean-miss lottery at the pad edge; the
+# puck's arrival is scattered by more than the release angle. So the model
+# carries ONE uncertainty for that whole boundary (GOALIE_EDGE_SOFTNESS_M, in
+# metres at the keeper, combined in quadrature with the shooter's release
+# scatter) and applies it consistently:
 #
 #   margin  = best_signed_margin — how far the net clears his cover edge,
 #             NEGATIVE by the overlap depth when he has it covered
@@ -1299,11 +1159,21 @@ static func delay_discount(delay_s: float) -> float:
 #             smoothly toward zero instead of clamping to it
 #   P(make) = _placement_probability(w_eff, σ)
 #
-# For a genuinely open window (margin ≫ σ) softplus is the identity and this
-# is the old geometry unchanged. What it adds is gradient at both ends: a
-# covered look is small-but-ordered by HOW covered, and an open one keeps
-# climbing instead of pinning. That is what lets "carry left and make him
-# track" out-score "pass it back and let him re-square".
+# For a genuinely open window (margin ≫ σ) softplus is the identity and this is
+# plain geometry. What it adds is gradient at both ends: a covered look is
+# small-but-ordered by HOW covered, and an open one keeps climbing instead of
+# pinning. That is what lets "carry left and make him track" out-score "pass it
+# back and let him re-square".
+#
+# Never go back to clamping a raw window against release scatter alone
+# (test_shot_currency_saturation.gd measures both failures). At the Hard hand's
+# floored 0.01 rad that ramp saturates at a 0.020 rad opening — one fifteenth
+# of the 0.298 rad empty net subtended from the dot line — so most dangerous
+# ice pins at 1.000, nothing can out-score a set keeper, and moving him buys
+# exactly zero. At the other end a hard zero throws the overlap DEPTH away, so
+# "he covers this now, but two strides left opens him" is indistinguishable
+# from hopeless, precisely on the walk-out ice where making him move is
+# easiest.
 #
 # NOTE this is the BOT'S decision currency and nothing else. expected_goals
 # (the post-game analytic) is a separate function on the same geometry with a
@@ -1335,10 +1205,9 @@ static func open_net_danger(
 	# The two spreads are kept SEPARATE, and the distinction is load-bearing.
 	# The keeper's edge fuzziness widens the effective WINDOW (his wall is not
 	# a line); the shooter's dispersion decides whether the puck lands in it.
-	# Fusing them into one sigma — as this first did — inverts the scatter
-	# dial: a wider hand made the fuzzed window wider too, so a covered shot
-	# scored HIGHER the worse you shot. Nothing the shooter does may ever
-	# improve the geometry.
+	# Never fuse them into one sigma: a wider hand would then widen the fuzzed
+	# window too, so a covered shot scores HIGHER the worse you shoot. Nothing
+	# the shooter does may ever improve the geometry.
 	return danger_from_margin(shooter, goalie_pos, margin, aim_spread_rad)
 
 
@@ -1373,17 +1242,15 @@ const _HALFNORM_VAR: float = 0.3633802276
 # Max error 0.075 against a dense numerical reference across the whole
 # (margin, σ_p, σ_e) operating grid, mean 0.014, at the cost of one erf.
 #
-# HOW THEY COMPOSE MATTERS, and the first version got it wrong. Softening the
-# window by σ_e and then hitting that softened window with precision σ_p
-# treats edge uncertainty as extra window the shooter can reliably exploit:
-# the tail came out proportional to σ_e/σ_p, so an identical shot — the same
-# number of edge sigmas inside the cover — scored 0.041 against a distant
-# keeper and 0.343 against a near one. Nothing physical says how covered you
-# are should depend on his range once you have measured it in his own
-# uncertainty. Composing them as independent variances removes that
-# (max error against the reference 0.654 → 0.075), and it also makes the
-# scatter dial monotone: a wider hand raises the mean penalty AND the spread,
-# so it can only ever lower the value.
+# The two must compose as independent VARIANCES. Softening the window by σ_e
+# and then hitting that softened window with precision σ_p instead treats edge
+# uncertainty as extra window the shooter can reliably exploit: the tail comes
+# out proportional to σ_e/σ_p, so an identical shot — the same number of edge
+# sigmas inside the cover — scores 0.041 against a distant keeper and 0.343
+# against a near one, and nothing physical says how covered you are should
+# depend on his range once you have measured it in his own uncertainty.
+# Variances also keep the scatter dial monotone: a wider hand raises the mean
+# penalty AND the spread, so it can only ever lower the value.
 static func _make_probability(margin: float, sigma_p: float,
 		sigma_e: float) -> float:
 	var spread: float = sqrt(
@@ -1407,9 +1274,8 @@ static func goalie_edge_spread(shooter: Vector3, goalie_pos: Vector3) -> float:
 # 1σ of where the shot actually ARRIVES, in radians: the shooter's aim error
 # (the tier dial / the bot's own hand) in quadrature with the dispersion every
 # release carries however well aimed — blade contact, puck roll, release
-# timing. Without that floor the dial alone governs saturation, and at the
-# Hard hand's 0.01 rad the currency pins at a 0.02 rad window, which is the
-# no-range failure this whole model exists to fix.
+# timing. Without that floor the dial alone governs saturation, and at the Hard
+# hand's 0.01 rad the currency pins at a 0.02 rad window.
 static func placement_spread(aim_spread_rad: float) -> float:
 	var aim: float = maxf(aim_spread_rad, MIN_RELEASE_SPREAD_RAD)
 	return sqrt(aim * aim + PLACEMENT_DISPERSION_RAD * PLACEMENT_DISPERSION_RAD)
@@ -1487,10 +1353,9 @@ static func best_open_angle(
 #      spread here too would double-count it (at range, spread × distance would
 #      exceed the net and zero every point shot).
 #   2. EXECUTION — the release spread, as a Gaussian placement distribution over
-#      that window. This is the half the old model gave away for free, which is
-#      why a deke that yawned the net open read ~0.9 however brutal the actual
-#      shot was, why the curve was non-monotonic (a max over binary hole tests is
-#      a cliff, not a probability), and why it returned HARD ZERO both in tight
+#      that window. Geometry alone rates a deke that yawns the net open at ~0.9
+#      however brutal the shot itself is, and a max over binary hole tests is a
+#      cliff rather than a probability — non-monotonic, hard zero both in tight
 #      and from the point.
 #
 # Passes are excluded upstream — expected_goals only ever sees a shot the
@@ -1646,10 +1511,10 @@ static func _choose_shot_hole(
 		loft_tans: Vector3 = DEFAULT_LOFT_TANS) -> int:
 	# Chosen on the SIGNED margin, not the clamped opening, so the hole the bot
 	# aims at is the hole open_net_danger scored. With a soft cover edge a
-	# marginally-covered corner still carries real value; the clamped chooser
-	# saw every such hole as 0.0, found "nothing open", and fell back to dead
-	# centre — so the bot fired a goal-crest shot while the compete had priced
-	# a corner. Now it targets the LEAST-BAD hole and the two agree. Only a
+	# marginally-covered corner still carries real value, and choosing on the
+	# clamped opening reads every such hole as 0.0, finds "nothing open", and
+	# falls back to dead centre — a goal-crest shot while the compete priced a
+	# corner. On the signed margin it targets the LEAST-BAD hole instead. Only a
 	# structurally impossible hole (behind the line, unreachable band, sealed
 	# post, smothered release) is off the table.
 	var best_margin: float = HOLE_STRUCTURALLY_CLOSED_RAD
@@ -1807,8 +1672,8 @@ static func _hole_open_angle(
 # fits between his pads or it does not, and that verdict does NOT foreshorten:
 # a slot at half a puck-width is equally unthreadable from 5 m and from 25 m.
 # Dividing the shortfall by range (the way an open window's angular size
-# legitimately shrinks) made a fully SEALED slot read as "a hair closed" from
-# distance, which the soft edge then paid out on — a 32 m point shot scoring
+# legitimately shrinks) makes a fully SEALED slot read as "a hair closed" from
+# distance, which the soft edge then pays out on — a 32 m point shot scoring
 # 0.20 off a five-hole that is physically shut. So a slot the puck cannot pass
 # is structurally closed; only a real opening is measured as an angle. The
 # unsettle gradient is upstream of this, in `slot` itself (the drop race), so
@@ -1944,20 +1809,18 @@ static func _hole_margin(
 			# five_hole_gap_m): standing it's a real ~0.20 m ice-to-pad-top slot
 			# the goalie seals by DROPPING once he reads the release — legs
 			# reaction delay then pads-to-floor, raced against the puck reaching
-			# HIM (t_reach) — so only an in-tight release beats the drop (the
-			# shot the model used to score zero). Down, the residual gap (slide
-			# leak) is already the measurement and there is nothing left to
-			# drop. The paddle lying ACROSS the slot is charged too, while he
-			# is upright: the blade is nearly twice the standing slot (0.38 m
-			# vs ~0.20 m) and stays over the centre even yawed to the cap, so
-			# standing it shuts the five outright. That was once deliberately
-			# unmodeled on the grounds that active-blade intent yaws it away
-			# from an off-centre shooter — but that is exactly what `centrality`
-			# already prices, and the measurement is unambiguous: the live
-			# keeper stick-saves 24/24 of the straight-on in-tight looks the
-			# unmodeled slot rated ~0.9 (test_slot_shot_value_truth.gd). DOWN is
-			# left alone — the residual there is the slide leak between sprawled
-			# pads, not the slot the paddle lies over.
+			# HIM (t_reach) — so only an in-tight release beats the drop. Down,
+			# the residual gap (slide leak) is already the measurement and there
+			# is nothing left to drop. The paddle lying ACROSS the slot is
+			# charged too, while he is upright: the blade is nearly twice the
+			# standing slot (0.38 m vs ~0.20 m) and stays over the centre even
+			# yawed to the cap, so standing it shuts the five outright. Its yaw
+			# away from an off-centre shooter is not a reason to leave it out —
+			# that is what `centrality` prices — and the live keeper stick-saves
+			# 24/24 of the straight-on in-tight looks an unmodeled slot rates
+			# ~0.9 (test_slot_shot_value_truth.gd). DOWN is left alone: the
+			# residual there is the slide leak between sprawled pads, not the
+			# slot the paddle lies over.
 			var gap: float = goalie_five_hole_m
 			if not goalie_down:
 				var seal: float = clampf(
@@ -1976,8 +1839,7 @@ static func _hole_margin(
 			# model has no height resolution inside the LOW band, so it cannot
 			# represent "over the blade, between the pads" as a distinct hole;
 			# given that, keeping the slot open and letting the drop race decide
-			# is the branch that matches both the live keeper and the shipped
-			# behaviour on main, which defines that helper and never calls it.
+			# is the branch that matches the live keeper.
 			#
 			# Centrality narrows the SLOT (off-axis you see less daylight
 			# between the pads) rather than scaling the finished margin —
@@ -2013,10 +1875,10 @@ static func _hole_margin(
 	# paper cutout on the x-axis: he squares to the puck, so he presents the
 	# band's cover half-width perpendicular to the shooter's sightline from any
 	# bearing. The covered bearing interval is the disc's tangent cone. For a
-	# frontal shooter this reduces to the old net-plane point projection
+	# frontal shooter this reduces to a net-plane point projection
 	# (tan β ≈ cover / depth), but from a sharp angle the body's DEPTH occludes
-	# the cross-crease lane — the old zero-depth model left the far post "open"
-	# from beside the net, which is where the hopeless bad-angle fires came from.
+	# the cross-crease lane. A zero-depth model instead leaves the far post
+	# "open" from beside the net — the hopeless bad-angle fire.
 	var covb_lo: float
 	var covb_hi: float
 	if dv < 0.001:
@@ -2033,8 +1895,8 @@ static func _hole_margin(
 		var beta: float = asin(clampf(cover / sqrt(d_sq), 0.0, 1.0))
 		# Bounded ABOVE by the far post (a keeper entirely off the net can only
 		# open the net's own width) but NOT below: clamping the near side to the
-		# post is what threw the overlap depth away and flat-lined the covered
-		# region at exactly 0.
+		# post throws the overlap depth away and flat-lines the covered region
+		# at exactly 0.
 		covb_lo = minf(alpha - beta, net_hi)
 		covb_hi = maxf(alpha + beta, net_lo)
 
@@ -2157,8 +2019,8 @@ const TIP_DEFLECT_MIN_SPEED_M_S: float = 22.0
 # outgoing error — ~±14° (0.25 rad) of scatter on where the redirect actually
 # goes. This is the physical difference between a tip (get a piece, change
 # the line) and a swept one-timer (a genuinely aimed release): without it a
-# stationed tipper's redirect read as corner-picking sniper fire and
-# out-scored the open backdoor tap-in in a 2-on-0.
+# stationed tipper's redirect reads as corner-picking sniper fire and
+# out-scores the open backdoor tap-in in a 2-on-0.
 const TIP_AIM_SPREAD_RAD: float = 0.25
 
 
@@ -2246,10 +2108,10 @@ static func score_shoot(
 		loft_tans: Vector3 = DEFAULT_LOFT_TANS) -> float:
 	# No shot from on/behind the goal line: the mouth faces the other way, so there
 	# is no straight line from a back-there release into the net. Checked BEFORE
-	# the release clamp below — clamping a behind-the-net release used to teleport
-	# it to a phantom point-blank spot in front of the goalie, which scored a
-	# behind-the-net carrier's "shot" as a doorstep open net (the wraparound is a
-	# CARRY around the post, never a direct fire from back there).
+	# the release clamp below: clamping a behind-the-net release teleports it to
+	# a phantom point-blank spot in front of the goalie, scoring a behind-the-net
+	# carrier's "shot" as a doorstep open net (the wraparound is a CARRY around
+	# the post, never a direct fire from back there).
 	if (shooter.z - attacking_goal.z) * -signf(attacking_goal.z) < 0.001:
 		return 0.0
 	# The puck can't be shot from behind the goalie — clamp the shooter to the jam
@@ -2396,16 +2258,16 @@ static func score_shoot_threat_fielded(
 
 
 # ── Predicted post-seal (RVH/VH) — the ONE xG model, consistent inputs ─────────
-# score_shoot is the single xG model. The only reason it gave two answers for the
-# same spot was its INPUTS: the shoot-now eval reads the LIVE goalie's seal state
-# (GoalieNetworkState.post_seal_x_sign) and threads it, while predictive callers
-# (carry candidates, pass receivers) left the seal at its unsealed default — so a
-# shot origin down at a sharp angle scored a PHANTOM far-side open net, and the
-# bot would carry to that "shot" only to meet a live keeper already walled at the
-# post (the "carries there, never shoots" bug). This predicts the seal a
-# competent keeper WILL adopt at a spot, from the SAME geometric trigger the live
-# goalie uses (GoalieBehaviorRules.is_puck_in_defensive_zone), so the predictive
-# paths feed the model the same coverage the shoot-now path reads live.
+# score_shoot is the single xG model, so it can only give two answers for the
+# same spot through its INPUTS. The shoot-now eval reads the LIVE goalie's seal
+# state (GoalieNetworkState.post_seal_x_sign) and threads it; a predictive
+# caller (carry candidate, pass receiver) has no such state, and left at the
+# unsealed default a sharp-angle origin scores a PHANTOM far-side open net that
+# the bot carries to and then meets a keeper already walled at the post. So the
+# seal a competent keeper WILL adopt is predicted here from the SAME geometric
+# trigger the live goalie uses (GoalieBehaviorRules.is_puck_in_defensive_zone),
+# and the predictive paths feed the model the coverage the shoot-now path reads
+# live.
 #
 # Mirrors GoalieController.zone_post_z / rvh_early_angle (the RVH/VH trigger):
 # within this depth of the goal line AND past this bearing off the goal normal,
@@ -2431,9 +2293,9 @@ const GOALIE_SEAL_ANGLE_RAD: float = deg_to_rad(80.0)
 #    body edge and the far pipe by its radius). Pure projection geometry
 #    (posts + the live stance span the band model already uses), so it scales
 #    with range by construction: the slot and any honest mid look stay far
-#    wider than a body and are untouched. Without this, a close sharp-angle
-#    release (~65°+, past the 2 m zone) scored a phantom far-side window and
-#    the carry surface drifted bots to the dead corner.
+#    wider than a body and are untouched. Without it a close sharp-angle
+#    release (~65°+, past the 2 m zone) scores a phantom far-side window and
+#    the carry surface drifts bots to the dead corner.
 static func derive_post_seal_x_sign(shooter: Vector3, attacking_goal: Vector3) -> float:
 	var net_normal_z: float = -signf(attacking_goal.z)
 	var forward: float = (shooter.z - attacking_goal.z) * net_normal_z
@@ -2487,8 +2349,8 @@ const GOALIE_JAM_DISTANCE_M: float = 0.4
 #
 # A release on/behind the GOAL LINE is returned unchanged: there is no shot from
 # back there at all (score_shoot hard-zeros it, and every hole's forward guard
-# reads 0 net). Clamping it used to invent a legal-looking point-blank release in
-# front of the keeper — the phantom that had bots firing from behind the net.
+# reads 0 net). Clamping it instead invents a legal-looking point-blank release
+# in front of the keeper — the phantom that has bots firing from behind the net.
 static func release_ahead_of_goalie(
 		release: Vector3, attacking_goal: Vector3, goalie_pos: Vector3) -> Vector3:
 	var net_normal_z: float = -signf(attacking_goal.z)
@@ -2511,13 +2373,13 @@ static func goalie_arc_match_x(
 	# A POST-SEALED look (derive_post_seal_x_sign — the RVH/VH zone or the
 	# dead-angle erasure) has no arc to square on: there is nothing to defend
 	# wide of the post, so the competent keeper's square IS the post. Without
-	# this, the arc formula extrapolated past the net frame at sharp angles
-	# (a keeper "squared" ~0.7 m wide of the post), the seal's deployment
-	# race read him as stranded off the post he would really be sealing, and
-	# the arc-x's hypersensitivity out there saturated the unsettle credit —
-	# a carry to the dead corner scored a phantom certain goal. Post-clamping
-	# here keeps prediction, unsettle, and the seal race mutually consistent
-	# (all three share this function).
+	# this the arc formula extrapolates past the net frame at sharp angles (a
+	# keeper "squared" ~0.7 m wide of the post), the seal's deployment race
+	# reads him as stranded off the post he would really be sealing, and the
+	# arc-x's hypersensitivity out there saturates the unsettle credit — a carry
+	# to the dead corner scores a phantom certain goal. Post-clamping here keeps
+	# prediction, unsettle, and the seal race mutually consistent (all three
+	# share this function).
 	var seal: float = derive_post_seal_x_sign(puck_pos, attacking_goal)
 	if seal != 0.0:
 		return attacking_goal.x + seal * GameRules.NET_HALF_WIDTH
@@ -2527,8 +2389,8 @@ static func goalie_arc_match_x(
 	# The goalie squares along his ARC — his lateral offset can never exceed his
 	# own radial distance from the goal (fully lateral = on the goal line at his
 	# radius). Off the arc there is no squaring, only a keeper who abandoned the
-	# cage. Unbounded, a near-goal-line puck reference exploded the arc-x toward
-	# the corner boards — a phantom far-side opening that had bots firing from
+	# cage. Unbounded, a near-goal-line puck reference explodes the arc-x toward
+	# the corner boards — a phantom far-side opening that has bots firing from
 	# beside the net while rounding it. Moderate angles are untouched (their
 	# arc-x sits well inside the radius, wider than the posts — which is real:
 	# an out-challenging goalie legitimately squares past the post line).
@@ -2549,9 +2411,9 @@ static func goalie_arc_match_x(
 # puck continuously as the bot skates there (gradual move, not a relocation it
 # reacts to from a standstill), so on arrival it is square, full stop. Using the
 # react-then-slide predict_goalie_pos for a carry under-tracks the keeper —
-# especially at a short release lookahead, where it is predicted to fall short of
-# arc-matching a diagonal step and leak the far side, which had the bot chasing an
-# ever-receding "one more cut catches him moving" shot into the crease. The
+# especially at a short release lookahead, where he is predicted to fall short of
+# arc-matching a diagonal step and leak the far side, which sends the bot chasing
+# an ever-receding "one more cut catches him moving" shot into the crease. The
 # caught-moving credit belongs to puck RELOCATIONS (shots/passes), not carries.
 static func goalie_squared_pos(
 		goalie_now: Vector3, attacking_goal: Vector3, puck_pos: Vector3,
@@ -2575,10 +2437,9 @@ static func goalie_squared_pos(
 # arc angle from the goal matches the shooter's. Since the goalie sits
 # much closer to the goal than the shooter, that's
 #   arc_x = goalie_depth × (puck.x - goal.x) / puck_forward_from_goal
-# An earlier version used puck.x directly as the slide target —
-# geometrically wrong for off-axis shooters, and a source of bot-
-# carry exploits because diagonal carry candidates appeared as "open
-# net" plays even when a perfectly-tracking goalie would cover them.
+# Never use puck.x directly as the slide target: it is geometrically
+# wrong for off-axis shooters, and diagonal carry candidates then read
+# as "open net" plays a perfectly-tracking goalie would cover.
 #
 # `goalie_now` is the goalie's current world position.
 # `attacking_goal` is the goal the puck is aimed at; provides goal
@@ -2587,7 +2448,7 @@ static func goalie_squared_pos(
 # `puck_pos_at_release` is where the puck will be when fired (= the
 # shooter's position for direct shots; receiver lead for passes;
 # carry candidate for carry-then-shoot).
-# ── The backdoor pre-arm (planning keeper), rebuilt on hole-model v3 ─────────
+# ── The backdoor pre-arm (planning keeper) ──────────────────────────────────
 # A live goalie who can see a one-timer man on the weak side is never out at
 # full carrier-challenge depth when the feed goes — his challenge radius is
 # capped by GoalieBehaviorRules.backdoor_depth_cap (the same rule the real
@@ -2607,10 +2468,10 @@ static func goalie_squared_pos(
 #   hands       — predicted_goalie_hands sunk by that tightness: an
 #                 at-the-buzzer keeper crosses the line mid-push with his
 #                 hands at the slide height, so the band above the pads
-#                 stays honestly open — the "merely strong" outcome. This
-#                 is the piece the first pre-arm attempt lacked: without
-#                 the sunk hands, score_shoot priced the on-line keeper as
-#                 a SET wall and proven-reachable feeds erased to zero.
+#                 stays honestly open — the "merely strong" outcome. The
+#                 sunk hands are load-bearing: without them score_shoot
+#                 prices the on-line keeper as a SET wall and erases
+#                 proven-reachable feeds to zero.
 # Fill via resolve_feed_keeper (one call, static outputs — the scratch
 # pattern; single-threaded AI tick), consumed by the feed evaluators.
 static var feed_keeper_pos: Vector3 = Vector3.INF
@@ -2753,8 +2614,7 @@ static func predict_goalie_pos(
 
 
 # PREDICTED hands for a keeper in motion — the pose accompaniment to
-# predict_goalie_pos, and THE seam the backdoor pre-arm rebuild needs
-# (ARCHITECTURE Known Issues): a pushing/recovering goalie's hands ride at
+# predict_goalie_pos: a pushing/recovering goalie's hands ride at
 # the SLIDING pose height (glove y 0.55, GoalieBodyConfigBuilder's slide —
 # arms tucked for the push, not presented in the band), so a keeper
 # predicted to be moving at release is scored against hands that genuinely
@@ -2810,13 +2670,12 @@ static func goalie_unsettled(
 #   - score_shoot(receiver): receiver's value as a shooter from where
 #                            they are (geometry × shot lane × pressure).
 #
-# Receiver-quality terms (open-man, advancement) are gone — at top
-# level the carrier evaluates each teammate via a recursive
-# score_at(receiver) that captures "they could shoot or drive to
-# slot." This leaf score_pass is what score_at falls back to for the
-# shoot branch from a receiver position; it doesn't recurse further
-# (no leaf-pass at depth 2) so the bot can't get into infinite
-# pass-back-and-forth evaluation loops.
+# No receiver-quality terms (open-man, advancement): at top level the
+# carrier evaluates each teammate via a recursive score_at(receiver)
+# that captures "they could shoot or drive to slot". This leaf is what
+# score_at falls back to for the shoot branch from a receiver position;
+# it does not recurse further (no leaf-pass at depth 2), so the bot
+# cannot get into infinite pass-back-and-forth evaluation loops.
 static func score_pass(
 		shooter: Vector3,
 		receiver: Vector3,
@@ -2882,12 +2741,10 @@ static func _is_past_goal_line(pos: Vector3, attacking_goal: Vector3) -> bool:
 
 # ── Release contest: the pressure read, as a physical race ────────────────────
 # P(the release completes clean) in [0, 1] against every nearby opponent —
-# the factor score_shoot and position_potential multiply by. Replaces the
-# old _opponent_density curve (linear 1−d/K falloff × cube-of-cosine × a
-# count-of-2 normalizer) with the contest it was approximating: to disrupt
-# the action, an opponent's BLADE must reach the RELEASE POINT — the puck
-# held a carry-handle ahead of the body toward the target — while the puck
-# is still on the blade.
+# the factor score_shoot and position_potential multiply by. Pressure here is a
+# physical contest, never a density curve: to disrupt the action, an opponent's
+# BLADE must reach the RELEASE POINT — the puck held a carry-handle ahead of the
+# body toward the target — while the puck is still on the blade.
 #
 # Per opponent, the lane model's own vocabulary (same reach convention,
 # read delay, and lateral close pace as _lane_block_at, so the two contest
@@ -2915,7 +2772,7 @@ static func _is_past_goal_line(pos: Vector3, attacking_goal: Vector3) -> bool:
 # planted on the release point leaves the clean floor at
 # read_delay / T_window per opponent — contested shots still get off
 # sometimes, which is what lets a bot shoot through traffic when the
-# window is worth it (the old 2-count saturation zeroed those outright).
+# window is worth it.
 static func release_contest_clean(release_pt: Vector3,
 		opponents: Array[Vector3], opponent_caps: Array = []) -> float:
 	var t_window: float = SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S
@@ -3313,30 +3170,11 @@ static func lane_loss_point(from: Vector3, to: Vector3,
 	return best_point
 
 
-# Position potential in [0, 1] — "value of being at this position,
-# regardless of any specific shot or pass." Three multiplicative
-# factors:
-#
-#   closeness    = 1 at slot, ramps to 0 at goal mouth (inside) and
-#                  to 0 at the rink length (outside).
-#   angle_factor = the goal mouth's projected width from this bearing
-#                  (cos of the angle off the goal normal = forward/dist);
-#                  1 head-on, 0 along the goal line — real foreshortening.
-#   openness     = release_contest_clean (could a carrier act from here
-#                  before a nearby blade reaches the puck)
-#
-# Used by `_score_at` only when the evaluator is OUTSIDE shooting
-# range — inside the range, the bot uses score_shoot alone (committed
-# to a real shot evaluation). The cross-boundary case (evaluator
-# outside, candidate inside) takes max(shoot, potential) so entry
-# into shooting range is rewarded by the higher of the two.
-#
-# Behind the attacking goal line: returns 0 (no shooting potential).
 # True when `pos` is on the attacking side of the attacking blue line — the
-# offensive zone. The value-map regime boundary (see POSSESSION_BASELINE):
-# `_score_at` prices in-zone positions by shot danger and out-of-zone positions by
-# position_potential, and a carrier already in the zone won't carry or pass back
-# out of it. Sign-folded so it works for either attacking direction.
+# offensive zone, and the value-map regime boundary: `_score_at` prices in-zone
+# positions by shot danger and out-of-zone positions by position_potential, and
+# a carrier already in the zone won't carry or pass back out of it. Sign-folded
+# so it works for either attacking direction.
 # `buffer` demands the position sit that much DEEPER than the line — the
 # carrier's blue-line keep-out bands (retreat / reception) use it so "in the
 # zone" can mean "in the zone with margin for the stick's reach".
@@ -3345,6 +3183,11 @@ static func in_offensive_zone(pos: Vector3, attacking_goal: Vector3,
 	return pos.z * signf(attacking_goal.z) > GameRules.BLUE_LINE_Z + buffer
 
 
+# Position potential in [0, 1] — the value of being at this position with no
+# specific shot or pass in view, as closeness × the goal mouth's projected width
+# from this bearing × openness (each derived below). `_score_at` reads it only
+# while the CARRIER is outside the offensive zone; in the zone the bot prices
+# real shot danger instead. Behind the attacking goal line it returns 0.
 static func position_potential(
 		pos: Vector3,
 		attacking_goal: Vector3,
@@ -3852,9 +3695,9 @@ static func counter_rush_cost(
 	# price the hardest feed to each other opponent's spot and HIS carry
 	# home (gather → carry, same restart-from-rest read as the retrieve
 	# channels), and let the min compete with the lone-carrier time. This
-	# is what makes an everyone-deep shape genuinely expensive: the lone
-	# read let a corner collector's 5+ s lug keep the covering set full
-	# while the stretch man at center turned it into a ~4 s strike.
+	# is what makes an everyone-deep shape genuinely expensive: on the lone
+	# read a corner collector's 5+ s lug keeps the covering set full, while
+	# the stretch man at centre turns it into a ~4 s strike.
 	for j: int in opponents.size():
 		var j_speed: float = SKATER_REF_SPEED_M_S
 		var j_mult: float = AISkaterCaps.LEAGUE_SPRINT_SPEED_MULT
@@ -4034,1253 +3877,11 @@ static func pass_miss_loss_point(from: Vector3, receiver: Vector3) -> Vector3:
 	return Vector3(receiver.x + dx * inv, 0.0, receiver.z + dz * inv)
 
 
-# ── Reachable-set evasion (pursuit-evasion possession safety) ────────────────
-# Whether a defender threatens the puck is not "how close is he" but "can he get
-# a stick to it given his MOMENTUM and reaction." Each skater is a bounded-accel
-# body: over a short horizon its body rides its velocity to (pos + vel·T) and can
-# deviate from that line by at most ½·A·(T−reaction)² (a double integrator's
-# reachable set), with the stick reaching further. So a defender's stick can
-# touch anywhere within (maneuver + stick) of his MOMENTUM-projected position.
-#
-# This is what the old proximity model (puck_safety) can't see: a hard charger's
-# disk rides downrange to where you WERE, leaving the space he vacated wide open
-# (beat him by letting him overshoot); a contained/jockeying defender's disk stays
-# on you (real containment); a stick on the puck stays a strip threat. The carrier
-# evades by placing the puck in his own handling envelope at a point outside every
-# defender disk — the SEAM. Two seam reads share one sampler: the max-clearance
-# seam (best_evade_point) is the honest "can I keep the puck at all" safety read,
-# and the objective-DIRECTED seam (best_evade_point_toward) is the playmaking one
-# — the safe sample with the most progress toward the carry objective, so the
-# deke goes PAST the man toward the spot the carrier wants, and doubles as a
-# carry candidate. prefers_brake_check prices the third maneuver (stop dead, let
-# a committed checker's reach fly past) in the same clearance currency.
-#
-# The BOARDS bound the seam search, not the clearance itself: a wall doesn't
-# strip the puck (a carrier 0.3 m off the boards with no defender in reach is
-# perfectly safe), it removes ESCAPE OPTIONS — the puck can't be handled through
-# it. So the seam samplers intersect the handling envelope with the playing
-# surface (off-surface samples are rejected), and the wall-pincer humans
-# actually use emerges: pinned against the boards, half the envelope is illegal,
-# the best legal seam runs along the wall, and its clearance from the sealing
-# defender is honestly small.
-const MANEUVER_ACCEL_M_S2: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
-const EVADE_HORIZON_S: float = 0.40    # a deke/cut's length — the evasion look-ahead
-const EVADE_REACTION_S: float = 0.15   # a defender reads a cut before he can redirect to it
-const EVADE_STICK_REACH_M: float = (   # how far a defender's stick touches from his body
-		GameRules.DEFAULT_STICK_LENGTH_M + GameRules.DEFAULT_BLADE_LENGTH_M)
-# A full stick of clear room reads as fully safe; inside the reach reads as 0.
-const EVADE_SAFE_MARGIN_M: float = EVADE_STICK_REACH_M
-# Envelope sampling for the seam search (rings × angles). Coarse is fine — the
-# seam is a broad region, not a point.
-const EVADE_SAMPLE_RINGS: Array[float] = [0.4, 0.8, 1.0]
-const EVADE_SAMPLE_ANGLES: int = 12
-# A strip needs the blade ON the puck, so a sample sitting exactly at the edge
-# of a defender's best-case reach (clearance 0) is escapable in the model's own
-# terms — but the model reacts only once (the reaction gate), while a real
-# defender re-reads continuously. One blade-length of air is the physical slop
-# that survives that re-read: the puck stays a blade off his best-case touch.
-# Samples at or above this clearance are treated as genuinely SAFE by the
-# objective-directed seam (progress may be preferred among them); below it,
-# clearance itself is the only currency.
-const EVADE_SAFE_CLEAR_MIN_M: float = GameRules.DEFAULT_BLADE_LENGTH_M
-
-
-# Gap (metres) from a puck point to the nearest board. Negative outside the
-# playing surface — the seam samplers reject those samples (the handling
-# envelope intersected with the rink; see the boards note above). Uses the
-# INNER extents (the surface the puck actually lives on, inside kickplate lip
-# + wall half-thickness).
-static func board_gap_m(point: Vector3) -> float:
-	return minf(GameRules.INNER_HALF_WIDTH - absf(point.x),
-			GameRules.INNER_HALF_LENGTH - absf(point.z))
-
-
-# Clearance (metres) of a puck point from every defender's reachable stick at
-# `time` — >0 means no defender's stick TIP nominally reaches it (that much
-# room), <0 means covered. Pure float math, no allocation.
-#
-# NOMINAL, not best-case: the defender's coverage is the calibrated
-# time_to_arrive phase model in distance form — coast on momentum through the
-# reaction gate, shed excess cross-speed at the measured rate, brake out a
-# retreat (losing ground while braking), then a speed-capped pursuit ramp at
-# the measured net accel (RAMP_EFFICIENCY) — plus the stick span. Measured
-# against a committed defender under the real movement rules + rate-limited
-# blade (the #27 probe): crossing times track reality within ~0.05 s at rest
-# and toward-motion across 2–12 m, where the old best-case 0.5·a·t² lunge
-# over-reached by 3+ m at long windows (the pacified-carrier bug) while
-# UNDER-reaching close-in. Known optimistic spots, same as time_to_arrive's:
-# short perpendicular cuts at speed (the steering miss-loop). The safety maps
-# below carry the residual as a measured probability band.
-# `abort_below`: exact argmax pruning for sample-scanning callers (the seam
-# search) — once the running worst drops below it, the exact value cannot
-# matter to the caller, so the defender loop stops early. Default −INF scans
-# every defender (every value-consuming caller).
-static func reach_clearance(
-		puck_point: Vector3, time: float,
-		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		opponent_caps: Array = [], maneuver_time: float = -1.0,
-		carry_dir: Vector2 = Vector2.ZERO, carry_speed: float = 0.0,
-		abort_below: float = -INF) -> float:
-	var n: int = opponents.size()
-	if n == 0 or opponent_vels.size() != n:
-		return EVADE_SAFE_MARGIN_M   # nothing to evade — fully clear
-	# `maneuver_time` is the defender's COMMIT window — how long he actively
-	# pursues the sample point; the body coasts on momentum for the remainder.
-	# Default (< 0) commits the whole window (the carry/hold reads). The
-	# PASS-RECEPTION and carry-END reads pass a short window (EVADE_HORIZON_S /
-	# CARRY_LUNGE_WINDOW_S): the defender isn't credited with committing to the
-	# catch spot for the whole flight — the in-flight interception is the lane
-	# model's ledger, and at a carry's arrival the carrier is established and
-	# protecting.
-	var w: float = time if maneuver_time < 0.0 else minf(time, maneuver_time)
-	var has_caps: bool = opponent_caps.size() == n
-	var gated: bool = carry_speed > 0.0
-	var worst: float = INF
-	for i: int in n:
-		var accel: float = MANEUVER_ACCEL_M_S2
-		var stick: float = EVADE_STICK_REACH_M
-		var vmax: float = SKATER_REF_SPEED_M_S
-		var grip: float = 1.0
-		if has_caps:
-			# Per-opponent build — Acceleration (max_accel) sets the ramp, reach
-			# (blade_span) the stick, Speed (max_speed) the cap. Empty caps →
-			# league constants for all (every non-attribute caller).
-			var caps: AISkaterCaps = opponent_caps[i]
-			if caps != null:
-				accel = caps.max_accel
-				stick = caps.blade_span
-				vmax = caps.max_speed
-				grip = caps.lateral_grip
-		# PRESCREEN (exact): the phase model's total ground toward the point is
-		# bounded by the whole window at the better of current pace or cap
-		# (coast ≤ |v|·coast, capped pursuit ≤ vmax·τ; shed/brake only lose
-		# ground) — so clearance ≥ dist − speed_ub·time − stick. When even that
-		# floor can't come under the running worst, this defender cannot move
-		# the min and the full model is skipped. L1 speed (≥ L2) keeps the
-		# bound conservative; squared compare avoids the sqrt. In a 5v5 scene
-		# this collapses the far bodies to a handful of flops each.
-		var speed_ub: float = maxf(vmax,
-				absf(opponent_vels[i].x) + absf(opponent_vels[i].z))
-		var need: float = worst + speed_ub * time + stick
-		if need <= 0.0:
-			continue
-		var sdx: float = puck_point.x - opponents[i].x
-		var sdz: float = puck_point.z - opponents[i].z
-		if sdx * sdx + sdz * sdz >= need * need:
-			continue
-		if gated:
-			# ESCAPE-SPEED gate (opt-in, `carry_speed > 0`): a defender chasing
-			# near the carrier's pace along `carry_dir` (world XZ as Vector2(x,z))
-			# is committed to keeping up — only his surplus accel can redirect
-			# onto the puck. Momentum progress (v0 below) is untouched: a faster
-			# chaser still runs the carry down; a pace-matched one holds the gap.
-			var v_along_carry: float = opponent_vels[i].x * carry_dir.x \
-					+ opponent_vels[i].z * carry_dir.y
-			accel *= clampf(1.0 - maxf(v_along_carry, 0.0) / carry_speed, 0.0, 1.0)
-		var clear: float = _reach_clearance_one(
-				puck_point.x, puck_point.z, time, w,
-				opponents[i].x, opponents[i].z,
-				opponent_vels[i].x, opponent_vels[i].z, accel, stick, vmax, grip)
-		if clear < worst:
-			worst = clear
-			if worst < abort_below:
-				return worst
-	return worst
-
-
-# One defender's nominal reach clearance (see reach_clearance): coast on
-# momentum until the commit window `w` opens, react, then shed / brake / ramp
-# toward the point at the calibrated net kinematics. Factored out so the carry
-# reads can additionally sample each defender at its own closest-approach
-# moment on the path.
-static func _reach_clearance_one(point_x: float, point_z: float, time: float,
-		w: float, ox: float, oz: float, vx: float, vz: float,
-		accel: float, stick: float, vmax: float,
-		lateral_grip: float = 1.0) -> float:
-	var tau: float = maxf(0.0, minf(time, w) - EVADE_REACTION_S)
-	var coast: float = time - tau
-	var px: float = ox + vx * coast
-	var pz: float = oz + vz * coast
-	var dx: float = point_x - px
-	var dz: float = point_z - pz
-	var dist: float = sqrt(dx * dx + dz * dz)
-	var d: float = 0.0
-	if tau > 0.0 and dist > 0.001:
-		var inv: float = 1.0 / dist
-		var v_along: float = (vx * dx + vz * dz) * inv
-		var v_perp: float = absf((vx * dz - vz * dx) * inv)
-		# Shed excess cross-speed (a pure delay, as calibrated — perpendicular
-		# authority = thrust × lateral_grip, the same quantity the movement
-		# core scales), then brake out any retreat (losing ground), then the
-		# capped pursuit ramp (pure accel — grip never limits parallel drive).
-		var agility: float = maxf(accel * lateral_grip, 0.001) / SHED_ACCEL_DEFAULT_M_S2
-		var tau_p: float = tau - maxf(0.0, v_perp - VM_FREE_SHED_M_S * agility) \
-				/ (VM_SHED_DECEL_M_S2 * agility)
-		if tau_p > 0.0:
-			var v0: float = v_along
-			if v0 < 0.0:
-				var t_b: float = minf(-v0 / REVERSAL_BRAKE_DECEL_M_S2, tau_p)
-				d = v0 * t_b + 0.5 * REVERSAL_BRAKE_DECEL_M_S2 * t_b * t_b
-				v0 += REVERSAL_BRAKE_DECEL_M_S2 * t_b
-				tau_p -= t_b
-			v0 = minf(v0, vmax)
-			var a_net: float = maxf(accel * RAMP_EFFICIENCY, 0.001)
-			var t_r: float = (vmax - v0) / a_net
-			if tau_p <= t_r:
-				d += v0 * tau_p + 0.5 * a_net * tau_p * tau_p
-			else:
-				d += (vmax * vmax - v0 * v0) / (2.0 * a_net) + vmax * (tau_p - t_r)
-	return dist - d - stick
-
-
-# ── The safety maps: measured strip probability over nominal clearance ────────
-# Production contact is a SWEEP standard, not a tip touch: a strip lands when
-# the blade segment passes within the puck-contact radius
-# (PuckController.PICKUP_RADIUS — mirrored by the duel harness), so nominal
-# tip-standard contact actually connects at +POKE_CONTACT_RADIUS_M of
-# clearance. The two maps below are the measured CDFs around that boundary for
-# the two regimes the #27 probe separated:
-#   DWELL (clearance_to_safety) — the puck holds still at the sample (a stand,
-#     a carry's arrival, a reception): contact is deterministic — the probe's
-#     committed defender ALWAYS strips a dwelling puck it nominally reaches —
-#     so the band is just the model's own measured crossing error, ± one blade
-#     length around the contact boundary.
-#   TRANSIT (transit_clearance_to_safety) — the puck is passing through the
-#     sample mid-carry: the defender must MEET a moving target on a
-#     reaction-delayed read, and the staged-carry ensemble shows a wide mixed
-#     band — every carry at or below TRANSIT_STRIP_CLEAR_M was stripped, none
-#     above TRANSIT_SAFE_CLEAR_M was, outcomes mixed between.
-const POKE_CONTACT_RADIUS_M: float = 0.5
-const DWELL_HALF_BAND_M: float = GameRules.DEFAULT_BLADE_LENGTH_M
-const TRANSIT_STRIP_CLEAR_M: float = -0.4
-const TRANSIT_SAFE_CLEAR_M: float = 0.6
-
-
-# Dwelling-puck safety: 0 once the sweep standard is nominally met
-# (POKE_CONTACT_RADIUS_M − DWELL_HALF_BAND_M), 1 a blade past it. The map for
-# every hold/stand/arrival/reception read.
-static func clearance_to_safety(clearance: float) -> float:
-	return clampf(
-			(clearance - (POKE_CONTACT_RADIUS_M - DWELL_HALF_BAND_M))
-					/ (2.0 * DWELL_HALF_BAND_M),
-			0.0, 1.0)
-
-
-# Moving-puck safety: the measured mixed band for a puck traversing the sample
-# at stride (see the map doc above). Lenient relative to the dwell map by
-# construction — outrunning a reaction-delayed pursuit is real protection.
-static func transit_clearance_to_safety(clearance: float) -> float:
-	return clampf((clearance - TRANSIT_STRIP_CLEAR_M)
-			/ (TRANSIT_SAFE_CLEAR_M - TRANSIT_STRIP_CLEAR_M), 0.0, 1.0)
-
-
-# Lunge window for a defender's stick redirect onto a carried puck AT ITS
-# ARRIVAL SPOT — the maneuver-time bound the carry safety/strip reads apply
-# to their END sample only. At the destination the carrier is established and
-# protecting (the evade envelope owns that moment — same reasoning as the
-# pass-reception read's short window), so the defender gets his real lunge,
-# not a full-window t² repositioning that read every honest-length carry
-# destination as covered near any body (the pacified carrier). The MID
-# sample deliberately keeps the full-window pursuit read: en route the puck
-# traverses the defender's pursuit envelope at stride, where protection is
-# weakest — that asymmetry is what prices "thread the gauntlet" carries as
-# dangerous while leaving a peel-out to open ice safe. Same value as the
-# reception lunge (one poke moment).
-const CARRY_LUNGE_WINDOW_S: float = EVADE_HORIZON_S
-
 # Base puck-protect reach: how far a carrier holds the puck off his body while
 # handling. Hands scales it (a better handler protects it further out / threads a
 # tighter seam) — callers pass the scaled value; this is the league default.
 const EVADE_CARRY_HANDLE_M: float = 0.9
 
-
-# Worst reachable clearance along a carry from→to reached at `arrival_time`.
-# Samples the mid-point and the destination (each at its own time, defenders
-# momentum-projected) and returns the tightest — so a carry that ends in a seam
-# but threads a defender mid-route is still penalised. from == to gives the
-# static hold read (is this spot clear over the window).
-# `apply_escape` turns on reach_clearance's escape-speed gate (see that doc): a
-# defender the carrier is out-skating along this carry can't sustain a strip. The
-# carry direction and pace come from (from, to, arrival_time) — the carrier drives
-# from→to at exactly that pace — so nothing else need be supplied. Default off
-# reproduces the prior model for every non-carry caller.
-static func carry_clearance(from: Vector3, to: Vector3, arrival_time: float,
-		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		opponent_caps: Array = [], apply_escape: bool = false) -> float:
-	var carry_dir := Vector2.ZERO
-	var carry_speed: float = 0.0
-	if apply_escape and arrival_time > 0.0:
-		var dx: float = to.x - from.x
-		var dz: float = to.z - from.z
-		var dist: float = sqrt(dx * dx + dz * dz)
-		if dist > 0.001:
-			carry_dir = Vector2(dx / dist, dz / dist)
-			carry_speed = dist / arrival_time
-	# MID sample: full-window pursuit (the en-route gauntlet — see
-	# CARRY_LUNGE_WINDOW_S). END sample: pursuit bounded to the arrival
-	# lunge — the carrier is established and protecting there.
-	var c_mid: float = reach_clearance(
-			from.lerp(to, 0.5), arrival_time * 0.5, opponents, opponent_vels,
-			opponent_caps, -1.0, carry_dir, carry_speed)
-	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels,
-			opponent_caps, minf(arrival_time, CARRY_LUNGE_WINDOW_S),
-			carry_dir, carry_speed)
-	return minf(c_mid, c_end)
-
-
-# ── Crossing sample: the meeting-strip band ──────────────────────────────────
-# The mid/end samples can straddle a defender the carry path MEETS between
-# them — a pinch wall just past `from`, a forechecker met in the first
-# quarter — and the strip lands at the meeting moment neither sample sees.
-# The staged-crossing ensemble (probe: committed seeker under the real
-# movement / blade / check_poke rules, sweeping pace 3–12.5 m/s relative ×
-# miss distance × closing geometry) measured the meeting outcome as a pure
-# DISTANCE band on the contact envelope's own radii, NOT a speed effect:
-# every naked crossing whose momentum-line miss distance penetrated the
-# stick circle by more than the poke contact radius was swept, at every
-# tested pace (the presented blade owns that core), while crossings grazing
-# the outer poke-slop ring escaped at pace (blade tracking lag misses the
-# fringe). A dwell-time gate was hypothesized and REJECTED by the
-# measurement — the naked band edges are simply:
-#   core = blade_span − POKE_CONTACT_RADIUS_M   → keep 0 (swept)
-#   edge = blade_span                            → keep 1 (grazed at pace)
-#
-# PROTECTION is the second measured half: re-running the ensemble with a
-# protecting carrier (puck ridden on the handle envelope away from the
-# threat) shifted the whole band by CROSSING_PROTECT_SHIFT_M — a lone
-# defender is beaten at almost any crossing geometry (only a tight head-on
-# meeting still strips), which is the duel harness's own emergent truth.
-# The shift is a SHARED, DIRECTIONAL budget: the puck line can displace one
-# way, so threats on one side get the full credit while an OPPOSED pair (the
-# pinch wall, the corralling pincer) split it to nothing — the optimal
-# lateral shift between the per-side worst crossings, bounded by the
-# measured displacement. That single mechanism is why lone containers are
-# beatable while walls are genuinely dangerous.
-#
-# Slow grazes ARE stripped in reality, but by pursuit, not the meeting —
-# and pursuit is exactly what the mid/end transit samples already price
-# (verified in the ensemble: every slow-graze strip cell reads dead at the
-# mid sample). Only the window INTERIOR is sampled here; the endpoints are
-# the mid/end samples' job.
-const CROSSING_PROTECT_SHIFT_M: float = 0.8
-
-
-static func carry_crossing_keep(from: Vector3, to: Vector3, arrival_time: float,
-		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		opponent_caps: Array = []) -> float:
-	var n: int = opponents.size()
-	if n == 0 or opponent_vels.size() != n or arrival_time <= 0.0:
-		return 1.0
-	var dx: float = to.x - from.x
-	var dz: float = to.z - from.z
-	var seg: float = sqrt(dx * dx + dz * dz)
-	if seg < 0.001:
-		return 1.0
-	var dirx: float = dx / seg
-	var dirz: float = dz / seg
-	var inv_t: float = 1.0 / arrival_time
-	var pvx: float = dx * inv_t   # puck velocity along the carry
-	var pvz: float = dz * inv_t
-	var pv_len: float = seg * inv_t
-	var has_caps: bool = opponent_caps.size() == n
-	# Per-side worst crossing, in band units (d_min − span so different builds'
-	# spans compose): the shared protect shift then resolves between the sides.
-	var worst_l: float = INF
-	var worst_r: float = INF
-	for i: int in n:
-		var span: float = EVADE_STICK_REACH_M
-		if has_caps:
-			var caps: AISkaterCaps = opponent_caps[i]
-			if caps != null:
-				span = caps.blade_span
-		var r0x: float = from.x - opponents[i].x
-		var r0z: float = from.z - opponents[i].z
-		# PRESCREEN (exact): the meeting can't come nearer than the current
-		# separation minus the whole window's relative travel (|rv| ≤ |pv| +
-		# |v|, L1-bounded), so margin ≥ |r0| − rv_ub·T − span. A margin at or
-		# above the full protect budget is RESULT-identical to absence: the
-		# side it would post ≥ SHIFT on either keeps its own worst (min) or,
-		# as a lone entry, resolves through the shift to the same clamped
-		# keep the single-sided formula gives (the two branches agree once
-		# one side's slack covers the whole budget). Squared compare, no sqrt.
-		var rv_ub: float = pv_len \
-				+ absf(opponent_vels[i].x) + absf(opponent_vels[i].z)
-		var far_need: float = span + CROSSING_PROTECT_SHIFT_M + rv_ub * arrival_time
-		if r0x * r0x + r0z * r0z >= far_need * far_need:
-			continue
-		var rvx: float = pvx - opponent_vels[i].x
-		var rvz: float = pvz - opponent_vels[i].z
-		var rv_sq: float = rvx * rvx + rvz * rvz
-		if rv_sq < 0.0001:
-			continue   # co-moving: no meeting — endpoints cover it
-		var t_star: float = -(r0x * rvx + r0z * rvz) / rv_sq
-		if t_star <= 0.0 or t_star >= arrival_time:
-			continue   # closest approach outside the window — endpoints cover it
-		var mx: float = r0x + rvx * t_star
-		var mz: float = r0z + rvz * t_star
-		var d_min: float = sqrt(mx * mx + mz * mz)
-		# Which side of the carry line the defender crosses on (m is puck −
-		# defender at t*, so the defender sits at −m relative to the path).
-		var margin: float = d_min - span
-		if margin <= -(POKE_CONTACT_RADIUS_M + CROSSING_PROTECT_SHIFT_M):
-			# Deeper than the full protect credit can ever recover — swept
-			# regardless of the other side's slack.
-			return 0.0
-		if dirx * (-mz) - dirz * (-mx) >= 0.0:
-			if margin < worst_l:
-				worst_l = margin
-		else:
-			if margin < worst_r:
-				worst_r = margin
-	if worst_l == INF and worst_r == INF:
-		return 1.0
-	# Optimal shared lateral shift of the puck line between the two sides,
-	# bounded by the measured protect displacement (a shift toward the right
-	# widens every left-side gap and narrows every right-side one).
-	var eff: float
-	if worst_l < INF and worst_r < INF:
-		var x: float = clampf((worst_r - worst_l) * 0.5,
-				-CROSSING_PROTECT_SHIFT_M, CROSSING_PROTECT_SHIFT_M)
-		eff = minf(worst_l + x, worst_r - x)
-	else:
-		eff = (worst_l if worst_l < INF else worst_r) + CROSSING_PROTECT_SHIFT_M
-	return clampf((eff + POKE_CONTACT_RADIUS_M) / POKE_CONTACT_RADIUS_M, 0.0, 1.0)
-
-
-# Possession safety [0, 1] of a carry — the regime-aware map application (see
-# the safety-map doc above reach_clearance): the MID sample is a moving puck
-# (transit band), the END sample a dwelling one (the carrier arrives there),
-# a stand (from == to) dwells at both, and each defender the path MEETS
-# between the fixed samples contributes the measured crossing band
-# (carry_crossing_keep). Callers use this instead of
-# clearance_to_safety(carry_clearance(...)), which forced one map onto both
-# regimes.
-static func carry_safety(from: Vector3, to: Vector3, arrival_time: float,
-		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		opponent_caps: Array = [], apply_escape: bool = false) -> float:
-	var carry_dir := Vector2.ZERO
-	var carry_speed: float = 0.0
-	var dx: float = to.x - from.x
-	var dz: float = to.z - from.z
-	var dist: float = sqrt(dx * dx + dz * dz)
-	if apply_escape and arrival_time > 0.0 and dist > 0.001:
-		carry_dir = Vector2(dx / dist, dz / dist)
-		carry_speed = dist / arrival_time
-	if dist < 0.001:
-		# A stand: the puck dwells the whole window — both samples read dwell.
-		var s_mid: float = clearance_to_safety(reach_clearance(
-				from, arrival_time * 0.5, opponents, opponent_vels,
-				opponent_caps))
-		if s_mid <= 0.0:
-			return 0.0
-		return minf(s_mid, clearance_to_safety(reach_clearance(
-				from, arrival_time, opponents, opponent_vels,
-				opponent_caps, minf(arrival_time, CARRY_LUNGE_WINDOW_S))))
-	# Sequential early-outs — each factor can only lower the min, so any zero
-	# skips the remaining defender loops. In a scramble most candidates die at
-	# the first read; the hot-path cost of the three-sample honesty is paid
-	# only by candidates that are actually alive.
-	var crossing: float = carry_crossing_keep(
-			from, to, arrival_time, opponents, opponent_vels, opponent_caps)
-	if crossing <= 0.0:
-		return 0.0
-	var t_mid: float = transit_clearance_to_safety(reach_clearance(
-			from.lerp(to, 0.5), arrival_time * 0.5, opponents, opponent_vels,
-			opponent_caps, -1.0, carry_dir, carry_speed))
-	if t_mid <= 0.0:
-		return 0.0
-	return minf(crossing, minf(t_mid, clearance_to_safety(reach_clearance(
-			to, arrival_time, opponents, opponent_vels,
-			opponent_caps, minf(arrival_time, CARRY_LUNGE_WINDOW_S),
-			carry_dir, carry_speed))))
-
-
-# WHERE a carry gets stripped, if it does: the EARLIEST covered point on the path.
-# The turnover cost of a carry is priced HERE, not at the destination — a strip
-# surrenders the puck where you were caught, in the traffic you were skating
-# through, not the safe spot you were headed for. Chronological, not tightest: the
-# reach balloons with time (maneuver ∝ time²), so a far destination reads as
-# "more covered", but a puck stripped mid-route never reaches it — the mid-point
-# strip happens first. Mirrors lane_loss_point for passes; from == to is a stand.
-static func carry_strip_point(from: Vector3, to: Vector3, arrival_time: float,
-		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		opponent_caps: Array = [], apply_escape: bool = false) -> Vector3:
-	var carry_dir := Vector2.ZERO
-	var carry_speed: float = 0.0
-	if apply_escape and arrival_time > 0.0:
-		var ddx: float = to.x - from.x
-		var ddz: float = to.z - from.z
-		var ddist: float = sqrt(ddx * ddx + ddz * ddz)
-		if ddist > 0.001:
-			carry_dir = Vector2(ddx / ddist, ddz / ddist)
-			carry_speed = ddist / arrival_time
-	# Sample windows must mirror carry_safety exactly so the strip point and
-	# the safety read agree on which sample is covered (crossing = the
-	# meeting-strip band's SHIFT-ADJUSTED core, mid = full pursuit, end =
-	# arrival lunge). The earliest core-hit crossing pre-empts the fixed
-	# samples when the meeting happens first — a pinch wall driven into
-	# strips at the wall.
-	var cross_t: float = INF
-	var cross_pt: Vector3 = to
-	var seg_x: float = to.x - from.x
-	var seg_z: float = to.z - from.z
-	var seg_len: float = sqrt(seg_x * seg_x + seg_z * seg_z)
-	if arrival_time > 0.0 and seg_len > 0.001 \
-			and opponent_vels.size() == opponents.size():
-		var dirx: float = seg_x / seg_len
-		var dirz: float = seg_z / seg_len
-		var inv_t: float = 1.0 / arrival_time
-		var pvx: float = seg_x * inv_t
-		var pvz: float = seg_z * inv_t
-		var has_caps: bool = opponent_caps.size() == opponents.size()
-		# Pass 1: per-side worst margins → the shared protect shift, exactly
-		# as carry_crossing_keep resolves it.
-		var worst_l: float = INF
-		var worst_r: float = INF
-		for i: int in opponents.size():
-			var rvx: float = pvx - opponent_vels[i].x
-			var rvz: float = pvz - opponent_vels[i].z
-			var rv_sq: float = rvx * rvx + rvz * rvz
-			if rv_sq < 0.0001:
-				continue
-			var r0x: float = from.x - opponents[i].x
-			var r0z: float = from.z - opponents[i].z
-			var t_star: float = -(r0x * rvx + r0z * rvz) / rv_sq
-			if t_star <= 0.0 or t_star >= arrival_time:
-				continue
-			var mx: float = r0x + rvx * t_star
-			var mz: float = r0z + rvz * t_star
-			var span: float = EVADE_STICK_REACH_M
-			if has_caps:
-				var caps: AISkaterCaps = opponent_caps[i]
-				if caps != null:
-					span = caps.blade_span
-			var margin: float = sqrt(mx * mx + mz * mz) - span
-			if dirx * (-mz) - dirz * (-mx) >= 0.0:
-				worst_l = minf(worst_l, margin)
-			else:
-				worst_r = minf(worst_r, margin)
-		var shift: float = CROSSING_PROTECT_SHIFT_M
-		var both: bool = worst_l < INF and worst_r < INF
-		if both:
-			shift = clampf((worst_r - worst_l) * 0.5,
-					-CROSSING_PROTECT_SHIFT_M, CROSSING_PROTECT_SHIFT_M)
-		# Pass 2 (earliest crossing whose shift-adjusted margin hits the core)
-		# runs only when some crossing could be swept even under the most
-		# favourable shift — the common open-ice case skips it entirely.
-		if minf(worst_l, worst_r) \
-				<= -POKE_CONTACT_RADIUS_M + CROSSING_PROTECT_SHIFT_M:
-			for i: int in opponents.size():
-				var rvx2: float = pvx - opponent_vels[i].x
-				var rvz2: float = pvz - opponent_vels[i].z
-				var rv_sq2: float = rvx2 * rvx2 + rvz2 * rvz2
-				if rv_sq2 < 0.0001:
-					continue
-				var r0x2: float = from.x - opponents[i].x
-				var r0z2: float = from.z - opponents[i].z
-				var t_star2: float = -(r0x2 * rvx2 + r0z2 * rvz2) / rv_sq2
-				if t_star2 <= 0.0 or t_star2 >= arrival_time or t_star2 >= cross_t:
-					continue
-				var mx2: float = r0x2 + rvx2 * t_star2
-				var mz2: float = r0z2 + rvz2 * t_star2
-				var span2: float = EVADE_STICK_REACH_M
-				if has_caps:
-					var caps2: AISkaterCaps = opponent_caps[i]
-					if caps2 != null:
-						span2 = caps2.blade_span
-				var margin2: float = sqrt(mx2 * mx2 + mz2 * mz2) - span2
-				var left: bool = dirx * (-mz2) - dirz * (-mx2) >= 0.0
-				var eff: float = margin2 + CROSSING_PROTECT_SHIFT_M
-				if both:
-					eff = margin2 + (shift if left else -shift)
-				if eff <= -POKE_CONTACT_RADIUS_M:
-					cross_t = t_star2
-					cross_pt = Vector3(
-							from.x + pvx * t_star2, 0.0, from.z + pvz * t_star2)
-	var mid: Vector3 = from.lerp(to, 0.5)
-	if cross_t < arrival_time * 0.5:
-		return cross_pt   # met and swept before the mid sample
-	var c_mid: float = reach_clearance(mid, arrival_time * 0.5, opponents,
-			opponent_vels, opponent_caps, -1.0, carry_dir, carry_speed)
-	if c_mid < 0.0:
-		return mid   # covered mid-route — stripped there, before the destination
-	if cross_t < arrival_time:
-		return cross_pt   # met and swept between the mid and end samples
-	var c_end: float = reach_clearance(to, arrival_time, opponents, opponent_vels,
-			opponent_caps, minf(arrival_time, CARRY_LUNGE_WINDOW_S),
-			carry_dir, carry_speed)
-	if c_end < 0.0:
-		return to    # clear mid-route, covered at the destination
-	# Neither covered (a low strip probability anyway): the tighter of the two.
-	return mid if c_mid <= c_end else to
-
-
-
-# How far along `bearing` this body can actually get within `horizon_s`.
-#
-# From the double-integrator reachable set: with bounded acceleration, the
-# positions reachable at time T form a disc centred on the MOMENTUM-PROJECTED
-# point (pos + v*T) with radius 0.5*a*T^2 — the deviation the thrust can buy
-# off the ballistic path. Intersecting the bearing ray with that disc gives the
-# farthest point in that direction which is a real destination rather than a
-# wish.
-#
-# Returns a NEGATIVE value when the ray misses the disc entirely: at that speed
-# the direction is simply not available. That is the formal statement of
-# "travelling quickly forward, the only place you can go is forward", and it
-# falls out of the geometry rather than being asserted — at a standstill the
-# disc is centred on the body and every bearing reaches 0.5*a*T^2, while at
-# pace the centre slides downrange until the rearward and then the lateral
-# bearings fall outside it altogether.
-static func beat_reach_along(velocity: Vector3, bearing_x: float,
-		bearing_z: float, accel_m_s2: float, horizon_s: float) -> float:
-	var cx: float = velocity.x * horizon_s
-	var cz: float = velocity.z * horizon_s
-	var r: float = 0.5 * accel_m_s2 * horizon_s * horizon_s
-	# Split the momentum offset into along-bearing and perpendicular parts; the
-	# perpendicular part is what can push the ray clear of the disc.
-	var along: float = bearing_x * cx + bearing_z * cz
-	var perp_sq: float = maxf(0.0, cx * cx + cz * cz - along * along)
-	var disc: float = r * r - perp_sq
-	if disc <= 0.0:
-		return -1.0
-	return along + sqrt(disc)
-
-# ── Controlled space: how much room a carrier has to OPERATE ─────────────────
-# "How much space do I have" as a measured quantity rather than a corridor test.
-#
-# THE MODEL. Space is the fraction of the ice ahead that this carrier can
-# actually reach WITH THE PUCK. Not "is anyone standing in my lane" — that is a
-# geometry question and it has no clock in it — but "of the destinations in
-# front of me, how many survive the race?" A fan of carry paths is sampled
-# across the forward cone, each priced by the SAME carry_safety the real carry
-# candidates use (crossing band + transit mid + arrival lunge, escape gate on),
-# reached at the SAME momentum-honest time_to_arrive. The result is the
-# area-weighted mean of those keep probabilities, in [0, 1]: 1 = every forward
-# destination is mine, 0 = none of them are.
-#
-# WHY A FAN AND NOT A RAY. A single netward ray is a corridor-occupancy test:
-# it cannot tell a defender you will skate past from a wall, it answers the
-# same for a man 3 m ahead and one 8 m ahead (no clock), and it has a hard cliff
-# at the reach boundary — one measured at 0.556 for a defender 1.0 m off the
-# ray and 1.000 at 2.0 m, a 45 cm difference deciding the puck. Sampling an
-# AREA cannot cliff: a defender leaving one path still covers its neighbours in
-# proportion to how much ice he actually takes away.
-#
-# WHY PATHS AND NOT POINTS. Each sample is a carry FROM the carrier TO the
-# destination, so a defender sitting between two rays is not a blind spot — he
-# is met en route by both, and carry_safety's crossing band prices exactly that
-# meeting. This is what lets the fan stay coarse (SPACE_SAMPLE_ANGLES) without
-# leaking coverage between samples.
-#
-# WHAT MOMENTUM BUYS, FOR FREE. time_to_arrive is momentum-honest, so a carrier
-# in stride reaches the far ring sooner, gives the defenders less window, and
-# reads more space than the same carrier standing still — while one skating the
-# other way pays the reversal. Nothing here is a momentum term; it falls out of
-# using the honest arrival time. The escape gate (apply_escape) is what keeps a
-# man the carrier is out-skating from reading as a wall.
-#
-# WEIGHTING. Each sample carries the area it stands for (polar element ∝ r)
-# projected onto the objective direction (max(0, cos θ) — the same
-# foreshortening projection position_potential uses, so lateral ice counts for
-# what it advances). Samples off the playing surface are DROPPED from both
-# sums, not zeroed: a wall does not strip the puck, it removes options, and
-# pricing the boards as pressure here would discount a clean wall carry as if
-# it were covered. (Boards-as-defender is a real read, but it belongs to the
-# option model, not the pressure one.)
-#
-# FAN DENSITY. Measured against a 5×9 reference fan: ANGULAR resolution buys
-# accuracy and radial resolution does not. Three angles alias badly enough to
-# miss a defender 3 m off the ray entirely (reads a clean 1.000); dropping the
-# middle ring costs almost nothing. So the budget goes to angles: 2×7 is one
-# sample CHEAPER than the 3×5 first shipped here and materially closer to the
-# reference (worst-case error 0.076 → 0.043 at rest, and the defender-dead-
-# ahead-at-speed case −0.079 → +0.015).
-#
-# Known residual: a two-man wall met at speed reads ~0.2 high on any fan this
-# coarse — the samples thread between the pair. That is the asymmetric model's
-# structural blind spot (a min over defenders cannot count bodies), not a
-# density problem: the dense reference is only 0.04 better there.
-#
-# Allocation-free: value-type math over two const tables.
-const SPACE_SAMPLE_RINGS: Array[float] = [0.5, 1.0]
-# ±70° in 23° steps. Coarse by design — see "why paths and not points".
-const SPACE_SAMPLE_ANGLES: Array[float] = [
-		-1.2217, -0.8145, -0.4072, 0.0, 0.4072, 0.8145, 1.2217]
-# Rings are STAGGERED by half an angular step, so the two rings sample 14
-# distinct bearings instead of the same 7 twice. Free anti-aliasing: a defender
-# between two rays used to degrade both of them on both rings, which made the
-# sweep wobble ±0.07 and could read a man 1.5 m off the ray as taking MORE space
-# than one dead centre (dead centre blocks one bearing; off-centre blocks two).
-# Half-step offset halves that beat frequency at identical cost.
-const SPACE_RING_STAGGER_RAD: float = 0.2036
-
-
-# One sample: the keep probability of carrying from `from` to `sample`, reached
-# at this build's honest momentum-aware arrival time. The per-point control
-# read — exported because the carry candidate scoring and the off-puck roles
-# want the same number for a single spot.
-static func control_at(sample: Vector3, from: Vector3, from_vel: Vector3,
-		from_caps: AISkaterCaps, opponents: Array[Vector3],
-		opponent_vels: Array[Vector3], opponent_caps: Array = []) -> float:
-	var speed: float = SKATER_REF_SPEED_M_S
-	var accel: float = MANEUVER_ACCEL_M_S2
-	var grip: float = 1.0
-	if from_caps != null:
-		speed = from_caps.max_speed
-		accel = from_caps.max_accel
-		grip = from_caps.lateral_grip
-	var t: float = time_to_arrive(from, sample, from_vel, speed, accel, grip)
-	return carry_safety(from, sample, t, opponents, opponent_vels,
-			opponent_caps, true)
-
-
-# The area-weighted controlled fraction of the forward cone (see the block
-# doc). `toward` is the objective the cone points at (the attacking net for the
-# carrier's forward-pressure read); `horizon_m` how far ahead space is felt.
-# Returns 1.0 when the objective is degenerate or every sample is off-ice.
-# `out_bearing_control`, when sized to SPACE_SAMPLE_ANGLES, is filled with the
-# mean control along each BEARING of the fan (averaged over the rings, off-ice
-# samples skipped, 1.0 where a bearing has no legal sample). That per-bearing
-# profile is the fan's directional shape — which way out of here is open — and
-# it is a free by-product of a read the carrier already pays for every re-eval.
-# AIRoleCarrier generates its forward carry candidates from it instead of from
-# a fixed ring of cardinals; every other caller passes nothing and it costs one
-# untaken branch per sample.
-static func controlled_space(from: Vector3, from_vel: Vector3,
-		from_caps: AISkaterCaps, toward: Vector3, horizon_m: float,
-		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		opponent_caps: Array = [],
-		out_bearing_control: Array[float] = []) -> float:
-	var want_bearings: bool = out_bearing_control.size() == SPACE_SAMPLE_ANGLES.size()
-	if want_bearings:
-		out_bearing_control.fill(1.0)
-	var fx: float = toward.x - from.x
-	var fz: float = toward.z - from.z
-	var flen: float = sqrt(fx * fx + fz * fz)
-	if flen < 0.001 or horizon_m <= 0.0 or opponents.is_empty():
-		return 1.0
-	fx /= flen
-	fz /= flen
-	# The cone never reaches past the objective itself — closing on the net, the
-	# space that matters is the ice up to it, not behind it.
-	var reach: float = minf(horizon_m, flen)
-	var weighted: float = 0.0
-	var total: float = 0.0
-	for bi: int in SPACE_SAMPLE_ANGLES.size():
-		var bearing_sum: float = 0.0
-		var bearing_n: int = 0
-		# PREFIX IMPLICATION. Rings are walked OUTERMOST FIRST, and when the
-		# outer path along a bearing comes back fully controlled, the inner
-		# samples on that same bearing are credited 1.0 without being priced.
-		# They are a strict PREFIX of a path already proven clean: the inner
-		# destination lies on the outer route, reached sooner, so every defender
-		# has strictly less time to get to it, and the outer read's own mid
-		# sample and crossing band already swept the ice between. This is where
-		# the fan's cost actually lives — open ice is the expensive case, because
-		# nothing there trips carry_safety's zero early-outs — so skipping it is
-		# worth more than trimming traffic, where the early-outs already fire.
-		# (The one approximation: the outer read's END sample uses the arrival
-		# lunge window while a priced inner sample would use its own. It can only
-		# make the skip more conservative than the real inner value, never less.)
-		var outer_full: bool = false
-		for k: int in SPACE_SAMPLE_RINGS.size():
-			var ri: int = SPACE_SAMPLE_RINGS.size() - 1 - k
-			var r: float = reach * SPACE_SAMPLE_RINGS[ri]
-			# Alternate rings ride half an angular step over (see the stagger doc).
-			var stagger: float = SPACE_RING_STAGGER_RAD if ri % 2 == 1 else 0.0
-			var angle: float = SPACE_SAMPLE_ANGLES[bi] + stagger
-			var ca: float = cos(angle)
-			# Forward projection: the same cos foreshortening position_potential
-			# uses. Straight ahead counts fully, ±70° counts about a third.
-			if ca <= 0.0:
-				continue
-			var sa: float = sin(angle)
-			var dir_x: float = fx * ca - fz * sa
-			var dir_z: float = fx * sa + fz * ca
-			var sample := Vector3(
-					from.x + dir_x * r, 0.0, from.z + dir_z * r)
-			if absf(sample.x) > GameRules.INNER_HALF_WIDTH \
-					or absf(sample.z) > GameRules.INNER_HALF_LENGTH:
-				continue   # off the playing surface — see the WEIGHTING note
-			# A sample whose straight path runs through a cage is not ice this
-			# carrier can take, so it leaves both sums exactly like an off-surface
-			# one. Dropping it also keeps the fan off time_to_arrive's around-the-
-			# net routing, which prices four waypoints on two legs each — an 8x
-			# per-sample cost that fired on the whole fan whenever the carrier
-			# worked near a goal line, and was the fan's worst-tick spike.
-			if carry_path_blocked_by_net(from, sample):
-				continue
-			var c: float = 1.0
-			if not outer_full:
-				c = control_at(sample, from, from_vel, from_caps,
-						opponents, opponent_vels, opponent_caps)
-				if k == 0 and c >= 1.0:
-					outer_full = true   # prefix implication — see the block above
-			# Polar area element ∝ r, so the outer ring stands for more ice.
-			var w: float = r * ca
-			total += w
-			weighted += w * c
-			bearing_sum += c
-			bearing_n += 1
-		if want_bearings and bearing_n > 0:
-			out_bearing_control[bi] = bearing_sum / float(bearing_n)
-	if total <= 0.0:
-		return 1.0
-	return weighted / total
-
-
-# The carrier's best evasion target — the point in his handling envelope (where he
-# can put/protect the puck over EVADE_HORIZON_S) with the most clearance from
-# every defender: the SEAM. `handle_reach` is how far he holds the puck off his
-# body (Hands-scaled), so a better handler threads a tighter seam. Returned as a
-# world point (y = 0); this max-clearance seam is the carrier's honest
-# evadability read (reach_clearance at this point = "can I keep the puck at
-# all"). Value-type math; allocation-free.
-static func best_evade_point(
-		carrier_pos: Vector3, carrier_vel: Vector3,
-		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		handle_reach: float, opponent_caps: Array = []) -> Vector3:
-	var env: float = 0.5 * MANEUVER_ACCEL_M_S2 * EVADE_HORIZON_S * EVADE_HORIZON_S \
-			+ handle_reach
-	return _best_clear_point(
-			carrier_pos.x + carrier_vel.x * EVADE_HORIZON_S,
-			carrier_pos.z + carrier_vel.z * EVADE_HORIZON_S,
-			env, opponents, opponent_vels, opponent_caps)
-
-
-# The OBJECTIVE-DIRECTED seam: where to put the puck to get PAST the pressure
-# toward the spot the carrier actually wants (`objective` — the live carry
-# anchor). The pure max-clearance seam above answers "where is the puck safest,"
-# which is survival, not playmaking — steered by it alone, a carrier is herded
-# wherever the ice happens to be emptiest (usually sideways or backwards) and
-# never tries to beat his man. This variant is lexicographic in the same
-# grounded currencies: among envelope samples that are genuinely SAFE (outside
-# every defender's momentum-reach by EVADE_SAFE_CLEAR_MIN_M — see that const),
-# take the one with the most PROGRESS toward the objective; only when no safe
-# sample exists does it fall back to pure max clearance (nothing to attack —
-# survive first). A defender overplaying one side thus gets beaten to the other
-# side ON THE WAY FORWARD, and a committed charger's vacated lane is taken as a
-# cut PAST him, not a retreat into open ice.
-static func best_evade_point_toward(
-		carrier_pos: Vector3, carrier_vel: Vector3, objective: Vector3,
-		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		handle_reach: float, opponent_caps: Array = []) -> Vector3:
-	var env: float = 0.5 * MANEUVER_ACCEL_M_S2 * EVADE_HORIZON_S * EVADE_HORIZON_S \
-			+ handle_reach
-	return _best_clear_point(
-			carrier_pos.x + carrier_vel.x * EVADE_HORIZON_S,
-			carrier_pos.z + carrier_vel.z * EVADE_HORIZON_S,
-			env, opponents, opponent_vels, opponent_caps, objective)
-
-
-# WHERE ON THE BLADE to hold the puck under pressure: a point in the carrier's
-# handling envelope ALONE (no body-maneuver term — the body keeps doing whatever
-# steering wants; this is pure stick work), safe from every defender's
-# momentum-reach. Returned as an OFFSET from the body (y = 0), so the consumer
-# re-applies it to the live body position every tick — pull the puck off the
-# presented forward spot when that spot is covered, and the body becomes the
-# shield. The envelope is intersected with the playing surface, so the protected
-# side is never through a wall (the escape runs along the boards).
-#
-# Called TWICE by the carrier, for two different questions, and the distinction
-# is the point of the `objective` parameter:
-#
-#   HOW MUCH to shield reads the MAX-clearance seam (no objective) — the safety
-#     the best available shield buys, which is what the consumer's blend weight
-#     needs. Unchanged.
-#   WHERE to put the puck reads the DIRECTED seam (objective = the presented
-#     forward spot), exactly like best_evade_point_toward: among samples with a
-#     blade of real air (EVADE_SAFE_CLEAR_MIN_M) take the one CLOSEST to that
-#     spot, falling back to max clearance only when nothing in the envelope is
-#     safe.
-#
-# Aiming with the max-clearance point was the bug. It is the point diametrically
-# opposite the checker, and a checker only makes shielding necessary by being in
-# FRONT — so the puck went to the BACK hip every time the shield engaged, and
-# stayed there for as long as the man was live. Measured: against any defender
-# the carrier was skating toward, the seam came back 120-180 deg off the carry
-# line at full gain. That is the "slips through traffic, then keeps carrying it
-# behind him" look, and a puck on the back hip is not on a shot or a pass.
-# Directed, the seam grades with the checker's bearing (180 -> 90 -> 0 deg as he
-# steps off the line), so the shield goes exactly as deep as it must — and under
-# a real jam, where nothing is safe, the fallback restores the full far-hip
-# shield.
-static func best_handle_protect_point(
-		carrier_pos: Vector3, carrier_vel: Vector3,
-		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		handle_reach: float, opponent_caps: Array = [],
-		objective: Vector3 = Vector3.INF) -> Vector3:
-	var proj_x: float = carrier_pos.x + carrier_vel.x * EVADE_HORIZON_S
-	var proj_z: float = carrier_pos.z + carrier_vel.z * EVADE_HORIZON_S
-	var best: Vector3 = _best_clear_point(
-			proj_x, proj_z, handle_reach, opponents, opponent_vels, opponent_caps,
-			objective)
-	return Vector3(best.x - proj_x, 0.0, best.z - proj_z)
-
-
-# Shared seam sampler: the max-clearance point over the disk of radius `env`
-# around the (already projected) center, evaluated at the evasion horizon.
-# Coarse rings × angles are fine — the seam is a broad region, not a point.
-# The disk is intersected with the playing surface (off-surface samples are
-# rejected — the puck can't be handled through a wall), which is what makes a
-# wall-pinned carrier's best seam run ALONG the boards and read honestly tight;
-# the projected center stays as the fallback even off-surface (the containment
-# backstop owns that degenerate case, not the seam search).
-#
-# With a finite `objective`, the sweep is objective-directed (see
-# best_evade_point_toward): among samples clearing EVADE_SAFE_CLEAR_MIN_M the
-# one closest to the objective wins; the max-clearance point remains the
-# fallback when no sample is safe.
-static func _best_clear_point(proj_x: float, proj_z: float, env: float,
-		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		opponent_caps: Array = [], objective: Vector3 = Vector3.INF) -> Vector3:
-	var directed: bool = objective.is_finite()
-	var best: Vector3 = Vector3(proj_x, 0.0, proj_z)
-	var best_clear: float = reach_clearance(best, EVADE_HORIZON_S, opponents, opponent_vels, opponent_caps)
-	var best_safe: Vector3 = Vector3.INF
-	var best_safe_progress: float = INF   # distance to objective; smaller = more progress
-	if directed and best_clear >= EVADE_SAFE_CLEAR_MIN_M:
-		best_safe = best
-		best_safe_progress = Vector2(objective.x - best.x, objective.z - best.z).length()
-	for ring: float in EVADE_SAMPLE_RINGS:
-		var radius: float = env * ring
-		for k: int in EVADE_SAMPLE_ANGLES:
-			var ang: float = TAU * float(k) / float(EVADE_SAMPLE_ANGLES)
-			var p := Vector3(proj_x + cos(ang) * radius, 0.0, proj_z + sin(ang) * radius)
-			if board_gap_m(p) < 0.0:
-				continue
-			# Exact argmax pruning, two layers. (1) Directed with a safe sample
-			# in hand: the fallback argmax is moot (the safe winner returns),
-			# so a sample that can't beat the best PROGRESS never needs its
-			# clearance at all — skip the defender scan wholesale. (2) A
-			# sample only matters if it beats the best clearance so far, or
-			# (directed) clears the safe floor — once its running worst drops
-			# below both, the exact value is irrelevant and the defender scan
-			# aborts early (abort_below).
-			var progress: float = 0.0
-			if directed:
-				progress = Vector2(objective.x - p.x, objective.z - p.z).length()
-				if best_safe.is_finite() and progress >= best_safe_progress:
-					continue
-			var abort: float = best_clear
-			if directed:
-				abort = minf(abort, EVADE_SAFE_CLEAR_MIN_M)
-			var c: float = reach_clearance(p, EVADE_HORIZON_S, opponents,
-					opponent_vels, opponent_caps, -1.0, Vector2.ZERO, 0.0, abort)
-			if c > best_clear:
-				best_clear = c
-				best = p
-			if directed and c >= EVADE_SAFE_CLEAR_MIN_M \
-					and progress < best_safe_progress:
-				best_safe_progress = progress
-				best_safe = p
-	if directed and best_safe.is_finite():
-		return best_safe
-	return best
-
-
-# ── Brake check (the committed stop that lets the checker fly by) ────────────
-# A brake check is the third answer to pressure, next to the cut and the
-# shield: kill all speed so the defender's momentum carries his reach PAST the
-# puck, then re-accelerate into the lane he vacated. It is exactly the
-# reachable-set model run against a DIFFERENT own-body plan: braked, the puck
-# ends at the physical stop point instead of riding downrange to where his poke
-# is timed. Worth it only when that braked hold reads meaningfully clearer than
-# the cut (killing momentum is a real cost the cut doesn't pay), which is the
-# compare `prefers_brake_check` runs.
-
-# How hard the real brake key decelerates the body — same value as
-# AISteering.ARRIVAL_BRAKE_DECEL_M_S2 (kept as a local const so the dependency
-# between the two domain classes stays one-directional: steering reads the
-# evasion consts here, never the reverse).
-const BRAKE_DECEL_M_S2: float = 10.0
-
-# The braked-hold read must itself be genuinely safe — the same blade-of-air
-# standard the directed seam applies — AND beat the cut by a real margin.
-# The margin is tactical, not evaluated: braking surrenders all momentum
-# (re-acceleration to top speed takes ~a second), so a marginally clearer stop
-# isn't worth planting your feet for. Roughly one more blade of air.
-const BRAKE_CHECK_MARGIN_M: float = GameRules.DEFAULT_BLADE_LENGTH_M
-
-
-# Where the puck comes to rest if the carrier slams the brake NOW: the current
-# spot plus the physical stopping distance v²/(2·decel) along the velocity.
-static func brake_stop_point(puck_pos: Vector3, carrier_vel: Vector3) -> Vector3:
-	var v_xz := Vector2(carrier_vel.x, carrier_vel.z)
-	var speed: float = v_xz.length()
-	if speed < 0.001:
-		return puck_pos
-	var stop_dist: float = speed * speed / (2.0 * BRAKE_DECEL_M_S2)
-	var inv: float = stop_dist / speed
-	return Vector3(puck_pos.x + v_xz.x * inv, 0.0, puck_pos.z + v_xz.y * inv)
-
-
-# Should the carrier answer this pressure with a brake check instead of the cut
-# toward `cut_seam`? Both maneuvers are priced by the same reachable
-# carry_clearance over the evasion horizon — the brake as the short braking
-# path to the physical stop point (a defender sweeping through it mid-stop is
-# caught by the mid-route sample), the cut as the carry to the seam. TRUE iff
-# the braked hold is genuinely safe (≥ the blade-of-air floor) and clears the
-# cut by BRAKE_CHECK_MARGIN_M. A jockeying defender pacing the carrier stays on
-# him through a brake (his projected reach never leaves), so this self-selects
-# for genuinely committed pressure — the only kind a brake check beats.
-static func prefers_brake_check(
-		puck_pos: Vector3, carrier_vel: Vector3, cut_seam: Vector3,
-		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		opponent_caps: Array = []) -> bool:
-	var stop: Vector3 = brake_stop_point(puck_pos, carrier_vel)
-	var brake_clear: float = carry_clearance(
-			puck_pos, stop, EVADE_HORIZON_S, opponents, opponent_vels, opponent_caps)
-	if brake_clear < EVADE_SAFE_CLEAR_MIN_M:
-		return false
-	var cut_clear: float = carry_clearance(
-			puck_pos, cut_seam, EVADE_HORIZON_S, opponents, opponent_vels, opponent_caps)
-	return brake_clear > cut_clear + BRAKE_CHECK_MARGIN_M
-
-
-# ── Fake-then-cut deke (manufacturing the opening) ───────────────────────────
-# The seam cut and the brake check only EXPLOIT commitment a defender makes on
-# his own — a patient jockey who never commits leaves no clearance to cut into
-# and the duel stalemates. A real deke MANUFACTURES the commitment: sell one
-# side, the defender must match it (gap control), and matching loads him with
-# lateral momentum + displacement his reaction then can't unwind before the
-# cut passes his plane on the other side.
-#
-# The whole read is the existing reachable-set model run against the
-# defender's POST-BITE state: during the fake he reads for EVADE_REACTION_S,
-# then accelerates toward the fake at his real max_accel (per-build caps); at
-# the cut his reach starts from that shifted, wrong-way-moving state and is
-# reaction-gated AGAIN before he can redirect. GO iff the cut-side point is
-# covered NOW (nothing to cut into — otherwise the plain seam owns it) but
-# clear of everyone AFTER the bite by the blade-of-air standard. Grounded and
-# self-calibrating: an agile defender bites harder — you CAN deke the good
-# defender — while a sluggish one barely moves (but him you simply beat).
-#
-# Durations are the shared contract between this eval and the state machine's
-# committed execution (gesture geometry, like the wind-up spans): the fake
-# must comfortably exceed the defender's read time or there is nothing to
-# bite on; the cut is a single explosive redirect.
-const DEKE_FAKE_S: float = 0.3
-const DEKE_CUT_S: float = 0.2
-
-
-# Which side to cut past `deked_idx` after faking the other way: +1 / -1 as
-# the sign on `perp` (caller supplies the axis frame: `axis` = unit puck →
-# defender-projected line, `perp` = its left-hand perpendicular — the caller
-# re-derives the fake/cut directions from the same frame, so eval and
-# execution agree by construction). 0 = no manufactured opening (already
-# beatable, or the bite doesn't buy enough). Pure float math, no allocation.
-static func deke_cut_side(
-		puck_pos: Vector3, carrier_vel: Vector3, handle_reach: float,
-		axis: Vector3, perp: Vector3, deked_idx: int,
-		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		opponent_caps: Array = []) -> int:
-	var t_total: float = DEKE_FAKE_S + DEKE_CUT_S
-	# The deked man's real build (league defaults when caps are absent).
-	var d_pos: Vector3 = opponents[deked_idx]
-	var d_vel: Vector3 = opponent_vels[deked_idx]
-	var d_accel: float = MANEUVER_ACCEL_M_S2
-	var d_span: float = EVADE_STICK_REACH_M
-	var d_grip: float = 1.0
-	if opponent_caps.size() == opponents.size():
-		var caps: AISkaterCaps = opponent_caps[deked_idx]
-		if caps != null:
-			d_accel = caps.max_accel
-			d_span = caps.blade_span
-			d_grip = caps.lateral_grip
-	# The fake/cut exchange is fought entirely in the defender's LATERAL
-	# authority (the bite displaces him perpendicular to his line, the unwind
-	# fights that momentum back) — thrust × grip, like the movement core. A
-	# power-profile defender bites less but also unwinds less; the rockered
-	# one bites hard and recovers hard. Self-calibrating either way.
-	var d_accel_lat: float = d_accel * d_grip
-	# Where the cut can put the puck: the ballistic ride plus the CUT phase's
-	# own handling envelope (the fake spends the earlier effort selling the
-	# other way, so only the cut leg's maneuver counts — conservative).
-	var cut_env: float = 0.5 * MANEUVER_ACCEL_M_S2 * DEKE_CUT_S * DEKE_CUT_S + handle_reach
-	var ride: Vector3 = carrier_vel * t_total
-	# Post-fake bite: he reads for EVADE_REACTION_S, then matches the fake.
-	var t_bite: float = maxf(0.0, DEKE_FAKE_S - EVADE_REACTION_S)
-	var bite_v: float = d_accel_lat * t_bite
-	var bite_disp: float = 0.5 * d_accel_lat * t_bite * t_bite
-	# His redirect budget during the cut, reaction-gated afresh (he must read
-	# the cut before unwinding the bite).
-	var cut_maneuver: float = 0.5 * d_accel_lat \
-			* pow(maxf(0.0, DEKE_CUT_S - EVADE_REACTION_S), 2.0)
-	var best_side: int = 0
-	var best_post: float = -INF
-	for side_i: int in [-1, 1]:
-		var s: float = float(side_i)
-		var cut_dir: Vector3 = axis + perp * s
-		var cut_len: float = cut_dir.length()
-		if cut_len < 0.001:
-			continue
-		var p: Vector3 = puck_pos + ride + cut_dir * (cut_env / cut_len)
-		if board_gap_m(p) < 0.0:
-			continue
-		# NOW: everyone as-is over the whole window — is the cut side already
-		# takeable? Then there is nothing to manufacture (the seam owns it).
-		var clear_now: float = reach_clearance(
-				p, t_total, opponents, opponent_vels, opponent_caps)
-		if clear_now >= EVADE_SAFE_CLEAR_MIN_M:
-			continue
-		# POST-BITE: the deked man starts the cut displaced toward the fake
-		# (−perp·s) and moving that way; everyone else unchanged.
-		var fake_dir: Vector3 = perp * (-s)
-		var pos1: Vector3 = d_pos + d_vel * DEKE_FAKE_S + fake_dir * bite_disp
-		var vel1: Vector3 = d_vel + fake_dir * bite_v
-		var proj: Vector3 = pos1 + vel1 * DEKE_CUT_S
-		var clear_deked: float = Vector2(p.x - proj.x, p.z - proj.z).length() \
-				- (cut_maneuver + d_span)
-		var clear_post: float = clear_deked
-		# The rest of the defense still plays over the whole window.
-		for i: int in opponents.size():
-			if i == deked_idx:
-				continue
-			var other_pos: Vector3 = opponents[i]
-			var other_vel: Vector3 = opponent_vels[i]
-			var reach: float = 0.5 * MANEUVER_ACCEL_M_S2 \
-					* pow(maxf(0.0, t_total - EVADE_REACTION_S), 2.0) + EVADE_STICK_REACH_M
-			if opponent_caps.size() == opponents.size():
-				var ocaps: AISkaterCaps = opponent_caps[i]
-				if ocaps != null:
-					reach = 0.5 * ocaps.max_accel \
-							* pow(maxf(0.0, t_total - EVADE_REACTION_S), 2.0) + ocaps.blade_span
-			var ox: float = p.x - (other_pos.x + other_vel.x * t_total)
-			var oz: float = p.z - (other_pos.z + other_vel.z * t_total)
-			clear_post = minf(clear_post, sqrt(ox * ox + oz * oz) - reach)
-		if clear_post >= EVADE_SAFE_CLEAR_MIN_M and clear_post > best_post:
-			best_post = clear_post
-			best_side = side_i
-	return best_side
-
-
-# Defender reach for the CARRY-path check below — stick-blade reach plus
-# a margin for the defender stepping in as the bot skates past. Distinct
-# from the fired-puck lane model (which derives reach from closing time);
-# a carry is a slow physical traverse, so it uses a flat poke radius.
-const CARRY_PATH_CLEAR_RADIUS_M: float = 1.8
-
-# carry_lane_clearance's "beaten trailer" gate. A defender is dropped from the lane
-# only if it's BEHIND the carrier along the drive by more than LANE_BEATEN_BEHIND_M
-# AND slower along it by more than LANE_BEATEN_PACE_M_S — i.e. the carrier is
-# genuinely pulling away. Both are physical slacks (a body's depth behind; a real
-# pace edge), not shape knobs: a man even/ahead or matching pace is never shed, so
-# only a beaten trailer is dropped.
-const LANE_BEATEN_BEHIND_M: float = 0.1
-const LANE_BEATEN_PACE_M_S: float = 0.5
-
-# Public lane-clearance check for CARRY candidates — the bot is
-# physically traveling along this segment, not firing a puck through
-# it, so the reaction-window math from `lane_clear` doesn't apply.
-# A defender anywhere on the path is in the way regardless of flight
-# time. Returns 1.0 if no opponent is within CARRY_PATH_CLEAR_RADIUS_M of
-# the segment, ramps linearly to 0.0 as defender approaches the line.
-# Caller should project opponents forward by the candidate's expected
-# arrival time so the check reflects where defenders WILL BE when
-# the bot gets there.
-static func path_clearance(from: Vector3, to: Vector3,
-		projected_opponents: Array[Vector3]) -> float:
-	var dx: float = to.x - from.x
-	var dz: float = to.z - from.z
-	var line_len_sq: float = dx * dx + dz * dz
-	if line_len_sq < 0.01:
-		return 1.0
-	var min_perp_sq: float = INF
-	for p: Vector3 in projected_opponents:
-		var pdx: float = p.x - from.x
-		var pdz: float = p.z - from.z
-		var t: float = (pdx * dx + pdz * dz) / line_len_sq
-		if t <= 0.0 or t >= 1.0:
-			continue
-		var closest_x: float = from.x + t * dx
-		var closest_z: float = from.z + t * dz
-		var perp_x: float = p.x - closest_x
-		var perp_z: float = p.z - closest_z
-		var perp_sq: float = perp_x * perp_x + perp_z * perp_z
-		if perp_sq < min_perp_sq:
-			min_perp_sq = perp_sq
-	if min_perp_sq == INF:
-		return 1.0
-	var perp: float = sqrt(min_perp_sq)
-	return clampf(perp / CARRY_PATH_CLEAR_RADIUS_M, 0.0, 1.0)
-
-static func carry_lane_clearance(from: Vector3, to: Vector3, arrival_time: float,
-		opponents: Array[Vector3], opponent_vels: Array[Vector3],
-		max_speed: float = 0.0) -> float:
-	var dx: float = to.x - from.x
-	var dz: float = to.z - from.z
-	var seg_sq: float = dx * dx + dz * dz
-	if seg_sq < 0.01 or arrival_time <= 0.0:
-		return 1.0
-	var dist: float = sqrt(seg_sq)
-	var drive_speed: float = dist / arrival_time
-	if max_speed > 0.0:
-		drive_speed = minf(drive_speed, max_speed)
-	var dir_x: float = dx / dist
-	var dir_z: float = dz / dist
-	# Same proximity read as path_clearance (project each defender to arrival and
-	# take the tightest perp to the straight segment) — EXCEPT we first drop a
-	# defender the carrier has genuinely BEATEN: one currently behind the carrier
-	# along the drive AND slower along it, so the carrier is pulling away and it
-	# can't strip a puck driving off. A man AHEAD (a wall, a head-on rush) or one
-	# MATCHING the drive pace is never dropped, so path_clearance's coverage of real
-	# obstacles — the container duel — is untouched; only the beaten trailer is shed.
-	var min_perp_sq: float = INF
-	var n: int = opponents.size()
-	var has_vels: bool = opponent_vels.size() == n
-	for i: int in n:
-		var op: Vector3 = opponents[i]
-		var ovx: float = opponent_vels[i].x if has_vels else 0.0
-		var ovz: float = opponent_vels[i].z if has_vels else 0.0
-		var along_now: float = (op.x - from.x) * dir_x + (op.z - from.z) * dir_z
-		var opp_drive_speed: float = ovx * dir_x + ovz * dir_z
-		if along_now < -LANE_BEATEN_BEHIND_M and drive_speed > opp_drive_speed + LANE_BEATEN_PACE_M_S:
-			continue   # behind and out-skated — beaten, shed
-		var px: float = op.x + ovx * arrival_time
-		var pz: float = op.z + ovz * arrival_time
-		var pdx: float = px - from.x
-		var pdz: float = pz - from.z
-		var t: float = (pdx * dir_x + pdz * dir_z) / dist
-		if t <= 0.0 or t >= 1.0:
-			continue
-		var perp_x: float = px - (from.x + dir_x * t * dist)
-		var perp_z: float = pz - (from.z + dir_z * t * dist)
-		var perp_sq: float = perp_x * perp_x + perp_z * perp_z
-		if perp_sq < min_perp_sq:
-			min_perp_sq = perp_sq
-	if min_perp_sq == INF:
-		return 1.0
-	return clampf(sqrt(min_perp_sq) / CARRY_PATH_CLEAR_RADIUS_M, 0.0, 1.0)
-
-
-# Momentum-aware time to arrive at `dest` from `from_pos` carrying
-# `from_velocity`. Two components:
-#   1. TRAVEL: dist / (SKATER_REF_SPEED + component of velocity along from→dest) —
-#      a skater already moving toward dest closes faster, one moving away slower.
-#      Clamped at MIN_TRAVEL_SPEED_M_S so reverse candidates stay finite.
-#   2. CROSS-MOMENTUM SHED: |v_perp| / accel — the velocity NOT pointed at dest is
-#      wasted speed the skater must first shed (re-accelerate back into line)
-#      before it truly closes. Controls are facing-agnostic (no turn arc; the
-#      crossover/backward thrust penalties are small), so this is a straight
-#      re-acceleration against the thrust budget, not a curve. Without it the old
-#      1-D projection priced a lateral fly-by's cut as a fast arrival it can't
-#      actually settle into — the phantom that let a carrier orbit the slot
-#      instead of shooting (see MOMENTUM_SHED / test_real_rush_sim).
-#
-# Used by AIRoleCarrier._best_carry to price carry candidates (a cut against the
-# grain of momentum costs real time, so the goalie reads square and the honest shot
-# wins), by AIController chase-intercept lookahead for opponent ETA, and by off-puck
-# role behaviors needing a momentum-aware ETA without inventing constants (e.g.,
-# SUPPORT's foot-race-home exposure check uses this for the threat opp's ETA home).
-#
-# `ref_speed_m_s` is the actor's flat skating speed; `accel_m_s2` its all-direction
-# thrust (Acceleration-scaled) — both default to league references so cross-player
-# callers (opponent / teammate ETA, the loose-puck election that must stay
-# consistent across all bots) keep the shared baseline. A bot estimating ITS OWN
-# arrival passes its attribute-scaled top speed AND max_accel (a high-Acceleration
-# build sheds sideways momentum faster, so it reaches an off-axis cut sooner).
 # ── Calibrated phase model ─────────────────────────────────────────────────────
 # The measured controller (SkaterMovementRules at 120 Hz driven by the real
 # steering — the velocity-matched seek plus the pivot brake, see
@@ -5297,13 +3898,14 @@ static func carry_lane_clearance(from: Vector3, to: Vector3, arrival_time: float
 #     speeds).
 #   PURSUIT — a capped ramp at the NET accel the movement model delivers
 #     (thrust minus friction/drag losses — RAMP_EFFICIENCY) up to top speed,
-#     then cruise. A standing start genuinely pays ~0.5 s over the old
+#     then cruise. A standing start genuinely pays ~0.5 s over a plain
 #     dist/speed read; a full-speed head-on drive pays nothing.
 #
-# The old heuristic (effective = ref + v_along, shed-as-pure-delay) credited a
-# full-speed closer with up to DOUBLE top speed and gave standing starts top
-# speed for free — every race in the AI was distorted at the extremes. Errors
-# vs the measured table are within ~±20% on the clean families; the one known
+# Never collapse this to `effective = ref + v_along` with the shed as a pure
+# delay: that credits a full-speed closer with up to DOUBLE top speed and hands
+# standing starts top speed for free, distorting every race in the AI at the
+# extremes. Errors vs the measured table are within ~±20% on the clean
+# families; the one known
 # soft spot is short diagonal cuts at high speed (the controller's lateral
 # miss-loop — it can overfly the catch window and circle once), where reality
 # runs up to ~2× the estimate. The calibration suite fails loudly if the
@@ -5332,10 +3934,9 @@ const RAMP_EFFICIENCY: float = 0.84
 #
 # NET-AWARE: a route whose straight line crosses a cage prices the real
 # around-the-cage detour (see _time_to_arrive_routed) — a skater cannot skate
-# through the net frame, and the straight-line time was a fiction exactly in
-# the races that decide behind-net play (retrieval races, chase elections,
-# station races near the nets — the harness caught the retrieval read
-# predicting behind-net race wins the skater physically could not deliver).
+# through the net frame, and a straight-line time is a fiction exactly in the
+# races that decide behind-net play (retrieval races, chase elections, station
+# races near the nets), where it predicts race wins the skater cannot deliver.
 # The common open-ice case pays only the cheap z-gate below (a cage sits at
 # |z| ≥ the goal line; a segment that never reaches it cannot cross one).
 static func time_to_arrive(from_pos: Vector3, dest: Vector3,
@@ -5374,8 +3975,8 @@ static func _point_in_cage_box(p: Vector3) -> bool:
 # either post at mid-cage depth, the behind-net alley, and the front lip.
 # The four cover every crossing geometry with its honest small detour (a
 # behind-net traverse routes through the alley, a crease-front graze dips in
-# front, a front-to-behind trip rounds the nearer post) — picking only post
-# waypoints routed a 2 m behind-net skate the long way around. Each leg runs
+# front, a front-to-behind trip rounds the nearer post); post waypoints alone
+# route a 2 m behind-net skate the long way around. Each leg runs
 # the calibrated direct model, carrying pace through the corner exactly like
 # the wheel's two-leg pricing. Legs are not re-checked for blockage: the
 # waypoints sit a body's clearance outside the inflated frame, which clears
@@ -5465,10 +4066,10 @@ static func _time_to_arrive_direct(from_pos: Vector3, dest: Vector3,
 # widest — the back-frame trapezoid half-width (NET_BACK_HALF_WIDTH, wider than
 # the goal mouth's post span) — inflated by the puck's own radius on every side,
 # since the puck is a disc whose EDGE clanks the frame, not a point. Matching
-# GameRules.is_over_net_footprint's widest-span reading. This was previously the
-# post half-width with no inflation, which is why feeds from below the goal line
-# aimed across the slot read "clear" and rang off the OUTSIDE of the cage: the
-# lane threaded the 0.915 post line but not the 1.02 (+ puck radius) back frame.
+# GameRules.is_over_net_footprint's widest-span reading. Narrowed to the post
+# half-width with no inflation, feeds from below the goal line aimed across the
+# slot read "clear" and ring off the OUTSIDE of the cage: the lane threads the
+# 0.915 post line but not the 1.02 (+ puck radius) back frame.
 # Used by score_pass / the carrier pass EV / the live fired aim to treat the net
 # as a hard pass-lane obstruction.
 static func pass_lane_blocked_by_net(from: Vector3, to: Vector3) -> bool:
@@ -5587,8 +4188,8 @@ static func net_safe_blade_target(from: Vector3, target: Vector3) -> Vector3:
 # a stick outside the posts, a lead point past the crease top) is the cardinal
 # giveaway — it deserves the same hard veto as a dead-centre one. Half-width
 # ~3× NET_HALF_WIDTH (0.915) covers the posts plus a stick either side; depth
-# reaches out toward the hash marks. Widened from 2.0×5.0, which let side-of-
-# crease centering feeds slip the veto and become goals-against.
+# reaches out toward the hash marks. At 2.0×5.0 side-of-crease centring feeds
+# slip the veto and become goals-against.
 const OWN_DZ_SLOT_HALF_WIDTH_M: float = 2.75
 const OWN_DZ_SLOT_DEPTH_M: float = 6.0
 static func pass_crosses_own_slot(from: Vector3, to: Vector3, own_goal_z: float) -> bool:
@@ -5687,12 +4288,12 @@ const DUMP_SEARCH_BEARINGS_RAD: Array = [
 # pass pace) out-slides the rink several times over, so WHERE it stops is set by
 # how much speed the boards take out of it — and the only deliveries that die
 # in the offensive zone at a fixed hot pace are the ones banked steeply enough
-# to shed 40-60% on contact. That is why an unpaced search read a centre chip
-# as a puck returning to the neutral zone (square off the end boards and back
-# out) and had to reach for a wall to kill anything: depth was not on its axis
-# list. With pace searched, a soft chip simply dies where it is aimed, and a
-# rim is chosen because it wins the race rather than because it was the only
-# way to stop the puck.
+# to shed 40-60% on contact. Unpaced, the search reads a centre chip as a puck
+# returning to the neutral zone (square off the end boards and back out) and has
+# to reach for a wall to kill anything, because depth is not on its axis list.
+# With pace searched a soft chip dies where it is aimed, and a rim is chosen
+# because it wins the race rather than because it was the only way to stop the
+# puck.
 #
 # Spaced toward the SOFT end, because that is where the answer changes. Runout
 # goes as v², so the top of the band is a wall of deliveries that all rattle
@@ -5715,10 +4316,10 @@ const GOALIE_PUCK_PLAY_REACH_M: float = 1.0
 
 # Does the KEEPER get to a puck resting at `spot` before our nearest chaser?
 #
-# The missing body in the dump's race. `chase_recovery` sees skaters only, so a
-# dump dying on the doorstep — the spot `position_potential` rates highest on
-# the whole rink — read as a free recovery, and the delivery search aimed there.
-# It is the keeper's puck, and he is standing on it.
+# `chase_recovery` sees skaters only, so without this a dump dying on the
+# doorstep — the spot `position_potential` rates highest on the whole rink —
+# reads as a free recovery and the delivery search aims there. It is the
+# keeper's puck, and he is standing on it.
 #
 # A straight race at both sides' real builds, with no margin term: he leaves the
 # paint at a keeper's pace (GOALIE_PUCK_PLAY_*, ramped from rest) and collects
@@ -5767,21 +4368,18 @@ static func dump_loft_hang_s(loft_level: int) -> float:
 #   DOESN'T CLEAR — a launch that comes to rest still inside our own zone did not
 #     clear anything, however certainly we would win it back.
 #
-# What it deliberately no longer does is CHOOSE. It used to take the landing
-# nearest their blue line, which ranks candidates in METRES OF DEPTH while
-# `_best_dump` prices the winner in CONCESSION — so the search could hand over a
-# spot we have no chance at while a spot we would win outright sat one bearing
-# away, and the compete never saw the second one. Depth cannot separate them:
-# fired at the fixed quick-pass pace from a pinned corner, EVERY legal landing is
-# deep (the softest release the bot can make out-slides the rink twice over), and
-# which deep spot is right is entirely a question of who gets there first.
+# It deliberately does not CHOOSE among the survivors — `_best_dump` does, in
+# CONCESSION. Ranking here by depth (nearest their blue line) ranks in METRES
+# while the caller prices in concession, so the search can hand over a spot we
+# have no chance at while a spot we would win outright sits one bearing away.
+# Depth cannot separate them anyway: fired at the fixed quick-pass pace from a
+# pinned corner EVERY legal landing is deep (the softest release the bot can make
+# out-slides the rink twice over), so which deep spot is right is entirely a
+# question of who gets there first.
 #
-# This is not the EV read that was rejected when the searched release landed. That
-# was paying the clear a positive GAIN term for the race it wins, which made a
-# clear score above zero and beat CARRYING where a clean regroup existed. The
-# clear is still a pure concession with no gain term and a value that cannot
-# exceed zero; all that changed is that the search now ranks its own candidates by
-# the number the caller is going to report, instead of by a different one.
+# The clear stays a pure concession with NO gain term, so its value can never
+# exceed zero. Paying it a positive gain for the race it wins makes a clear score
+# above zero and beat CARRYING where a clean regroup exists.
 #
 # `out_vels` / `out_spots` are caller-owned and index-matched (the caller-owned
 # out-param pattern — the search allocates nothing on the compete path). Returns

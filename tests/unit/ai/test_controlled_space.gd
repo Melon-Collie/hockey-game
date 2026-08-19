@@ -1,7 +1,7 @@
 extends GutTest
 
 # ── Controlled space: the "how much room do I have to operate" read ──────────
-# Calibration for AIActionScoring.controlled_space / control_at (see the block
+# Calibration for AICarrySpace.controlled_space / control_at (see the block
 # doc there). These pin the properties the model exists to have — the ones the
 # single-ray corridor test it replaced did NOT have — rather than exact values,
 # which are free to move with the underlying carry_safety calibration.
@@ -19,7 +19,7 @@ func before_each() -> void:
 
 
 func _space(from: Vector3, vel: Vector3 = Vector3.ZERO) -> float:
-	return AIActionScoring.controlled_space(
+	return AICarrySpace.controlled_space(
 			from, vel, null, GOAL, HORIZON, _opps, _vels)
 
 
@@ -118,11 +118,11 @@ func test_lateral_space_is_lost_at_speed_forward_space_is_not() -> void:
 	for speed: float in [0.0, 9.0]:
 		var v := Vector3(dir.x * speed, 0.0, dir.z * speed)
 		gut.p("at %.0f m/s: straight-ahead %.3f  70-deg-across %.3f" % [speed,
-				AIActionScoring.control_at(ahead, from, v, null, _opps, _vels),
-				AIActionScoring.control_at(across, from, v, null, _opps, _vels)])
-	var still: float = AIActionScoring.control_at(
+				AICarrySpace.control_at(ahead, from, v, null, _opps, _vels),
+				AICarrySpace.control_at(across, from, v, null, _opps, _vels)])
+	var still: float = AICarrySpace.control_at(
 			ahead, from, Vector3.ZERO, null, _opps, _vels)
-	var flying: float = AIActionScoring.control_at(
+	var flying: float = AICarrySpace.control_at(
 			ahead, from, dir * 9.0, null, _opps, _vels)
 	assert_gte(flying, still,
 			"driving at the objective never reads LESS control of the ice ahead")
@@ -140,6 +140,6 @@ func test_samples_off_the_playing_surface_are_dropped_not_zeroed() -> void:
 
 func test_degenerate_inputs_are_safe() -> void:
 	assert_eq(_space(GOAL), 1.0, "standing on the objective returns full space")
-	assert_eq(AIActionScoring.controlled_space(
+	assert_eq(AICarrySpace.controlled_space(
 			Vector3(0.0, 0.0, 2.0), Vector3.ZERO, null, GOAL, 0.0, _opps, _vels),
 			1.0, "a zero horizon returns full space")

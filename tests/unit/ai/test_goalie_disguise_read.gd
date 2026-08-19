@@ -359,12 +359,14 @@ func _swept(sweep_ticks: int) -> Dictionary:
 
 
 func test_report_swept_look_off() -> void:
-	# Both lags: HARD's (the sharpest goalie, shortest lag) and the controller's
-	# authored default, which the easier profiles sit at or above. If the stale
-	# pre-lean were going to matter anywhere it would be at the LONGER lag, where
-	# a live read and a stale one are furthest apart.
+	# The ends of the tier ladder: HARD (the sharpest goalie, shortest lag) and
+	# EASY (the longest). If the stale pre-lean were going to matter anywhere it
+	# would be at the LONGER lag, where a live read and a stale one are furthest
+	# apart. Previously the second arm read GoalieController.new().read_lag — now
+	# that the export default IS Hard (test_goalie_profile_mirrors pins it), that
+	# would have swept the same value twice.
 	for lag: float in [GoalieSkillProfile.hard().read_lag_s,
-			GoalieController.new().read_lag]:
+			GoalieSkillProfile.easy().read_lag_s]:
 		_ctrl.read_lag = lag
 		var tele: Dictionary = _sweep(false)
 		var step: Dictionary = _sweep(true)

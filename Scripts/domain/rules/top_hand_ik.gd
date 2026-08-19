@@ -18,7 +18,7 @@ class_name TopHandIK
 # Two regimes (continuous at the boundary r = stick_horiz_at_rest):
 #   FAR  (r ≥ stick_horiz_at_rest): hand.y = hand_rest_y; hand displaces in
 #         XZ toward target up to ROM; blade sits stick_horiz from clamped
-#         hand along the aim line (Phase 1 behavior).
+#         hand along the aim line.
 #   CLOSE (r < stick_horiz_at_rest): hand.xz stays at shoulder; hand.y rises
 #         so stick_horiz shrinks to exactly r and the blade lands on target.
 #         Clamped by hand_y_max — if the hand can't rise far enough, the

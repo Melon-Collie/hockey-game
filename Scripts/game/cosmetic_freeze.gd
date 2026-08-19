@@ -10,10 +10,7 @@ extends Object
 # their own clock, and the world HUD's ring and name plate move with the camera.
 # Freezing both makes a capture reproducible.
 #
-# These outlived a much larger PerfProbe class that ran an interleaved
-# cosmetic-freeze A/B against the frame timer. That sweep answered its question
-# — the results are in docs/performance-findings.md — and was removed with it.
-# What survives is only what the capture tool needs; do not grow it back into a
+# Scope is exactly what the capture tool needs — do not grow this into a
 # measurement harness.
 #
 # Read directly on hot paths, so they are plain static bools rather than an

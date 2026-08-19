@@ -73,14 +73,13 @@ var _local_carrier_skater: Skater = null  # client-side: local skater while carr
 # carrier events — pickup grant / carrier-changed / steal / drop, arriving via
 # reliable RPC or the snapshot event block — never by world state (unreliable
 # ordering vs locally-predicted transitions). This is what LocalController's
-# claim gate branches on: puck.carrier is HOST-only (never set on clients), so
-# gating on it left the poke/stick-lift claim path unreachable and re-fired
-# pickup claims against a carried puck for entire carries.
+# claim gate branches on. Never substitute puck.carrier: it is HOST-only and
+# reads loose forever on a client.
 var _client_carrier_peer_id: int = -1
 # Client-side: the remote skater currently carrying, when it's NOT the local
 # player. While set, the puck is pinned to this skater's interpolated blade
-# rather than interpolating from its own buffer — the two used to run on
-# independent adaptive delays, drifting the puck off the carrier's stick.
+# rather than interpolating from its own buffer, so it shares the carrier's
+# render timeline instead of drifting off the stick on an independent delay.
 var _remote_carrier_skater: Skater = null
 # Client-side optimistic pickup (visual only). When the local blade enters an
 # uncontested loose puck, the puck pins to it immediately so the grab looks
@@ -180,8 +179,6 @@ const _SMOOTH_SNAP_DIST: float = 2.0  # pathological gap → snap rather than sl
 func get_buffer_depth() -> int:
 	return _state_buffer.size()
 
-func get_local_carrier() -> Skater:
-	return _local_carrier_skater
 
 func get_carrier_peer_id() -> int:
 	return _carrier_peer_id
@@ -554,13 +551,12 @@ func _check_interactions() -> void:
 	var puck_curr: Vector3 = puck.get_puck_position()
 	var skaters: Array = _skater_getter.call()
 	# One clock sample serves every cooldown gate this tick — is_on_cooldown()
-	# re-called the injected time provider per skater per loop.
+	# would otherwise call the injected time provider per skater per loop.
 	var now: float = NetworkManager.local_time()
 
 	if puck.carrier != null:
 		if not puck.pickup_locked:
-			# Hoist the carrier team out of the loop — it's invariant
-			# across all checkers and the lookup was being repeated.
+			# Hoisted out of the loop — invariant across all checkers.
 			var carrier_team: int = _team_id_by_skater.get(puck.carrier, -1)
 			var carrier_skater: Skater = puck.carrier
 			# Carrier pose is likewise invariant across checkers this tick (a
@@ -694,12 +690,11 @@ func _check_interactions() -> void:
 
 
 # Analytic body-block: a loose puck driven into a player's body CYLINDER is absorbed/dampened.
-# The analytic replacement for the per-skater body-block Area3D — a swept segment-vs-vertical-
-# cylinder test (so a fast puck can't tunnel through the torso), reading the skater's body
-# cylinder (torso-band passive, ice-sealing shot-block crouch). Ghost skaters never block
-# (matching the old Area mask); the body_block_cooldown de-dups the level-triggered test the
-# way the Area's edge trigger did. Knocked-down players still block, as before. Returns true
-# on the first block so the caller skips the pickup pass this tick.
+# A swept segment-vs-vertical-cylinder test (so a fast puck can't tunnel through the torso),
+# reading the skater's body cylinder (torso-band passive, ice-sealing shot-block crouch).
+# Ghost skaters never block; knocked-down ones do. body_block_cooldown de-dups the
+# level-triggered test. Returns true on the first block so the caller skips the pickup pass
+# this tick.
 func _check_body_blocks(skaters: Array, puck_curr: Vector3, now: float) -> bool:
 	for skater: Skater in skaters:
 		if skater.is_ghost or puck.is_on_cooldown_at(skater, now):
@@ -1058,8 +1053,8 @@ func apply_state(state: PuckNetworkState, host_ts: float) -> void:
 
 # Coulomb ice friction: a puck on ice loses a fixed amount of speed per second
 # (mu*g = GameRules.PUCK_ICE_DECEL_M_S2), independent of speed — matching the host's
-# analytic ice friction. The previous viscous model (speed × factor) decelerated
-# ~100x too hard at game speeds, so extrapolated / latency-corrected pucks lagged
+# analytic ice friction. Never model this as viscous drag (speed × factor) — that
+# decelerates ~100x too hard at game speeds and leaves extrapolated pucks behind
 # the host. Horizontal in practice (a grounded puck's velocity is planar).
 func _ice_friction_velocity(vel: Vector3, dt: float) -> Vector3:
 	var speed: float = vel.length()
@@ -1069,7 +1064,7 @@ func _ice_friction_velocity(vel: Vector3, dt: float) -> Vector3:
 	return vel * (new_speed / speed)
 
 
-# ── Phase-3/4b: client-side loose-puck prediction (the RL-family payoff) ─────
+# ── Phase-3/4b: client-side loose-puck prediction ────────────────────────────
 # Run the SAME analytic sim the host drives the puck with
 # (PuckAuthorityRules.step_frame_substep — integration, friction, gravity,
 # boards, goal frame) forward to this client's estimate of host present, every
@@ -1078,15 +1073,9 @@ func _ice_friction_velocity(vel: Vector3, dt: float) -> Vector3:
 # shots) are incorporated the moment their snapshot lands — the "reconcile" is
 # implicit and the residual is absorbed by the shared SmoothDamp tail.
 #
-# The source is normally the newest authoritative snapshot. The one exception
-# is the shooter's own release (Phase 4b): for the ~one-way trip until the
-# host's snapshots reflect it, the source is the LOCAL RELEASE SEED — the
-# client-fired origin + velocity at the release instant — because every
-# buffered snapshot still shows the puck carried. The host fires the
-# authoritative shot from this same client-sent origin, so the seed and the
-# incoming authority are the same flight; the handover to snapshot prediction
-# is an ordinary along-track seam the snap-guarded smoother absorbs, measured
-# by the shot-launch divergence probe.
+# The source is normally the newest authoritative snapshot; the one exception is
+# the shooter's own release, which runs from the local release seed instead (see
+# the _release_seed_* fields).
 #
 # Static geometry agrees with the host by construction (shared step); the
 # GOALIE is a prediction STOP — hold at the detected contact, velocity zeroed,
@@ -1205,8 +1194,8 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 	if not _goalie_provider.is_null():
 		goalies = _reachable_goalies_for(_goalie_provider.call(), start_pos, start_vel, age)
 	# Gather the goalie boxes ONCE per re-predict for the native fast path —
-	# the rendered goalie pose is fixed for this frame, and the legacy path
-	# re-read the engine properties per predicted tick.
+	# the rendered goalie pose is fixed for this frame, so a per-predicted-tick
+	# gather would re-read the same engine properties.
 	var goalie_box_count: int = 0
 	if not goalies.is_empty() and GoalieContactDetector.native_available():
 		goalie_box_count = GoalieContactDetector.gather_boxes(
@@ -1320,11 +1309,11 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 	_pred_cue_goalie_prev = span_goalie
 	if not stopped and frac > 0.0:
 		# The sub-tick remainder runs through the SAME solver as the whole ticks,
-		# sub-stepped the same way — it is just a partial tick. It used to be a raw
-		# `pos += vel * frac` lead with an after-the-fact rink clamp, which bypassed
-		# every collision the step resolves: at 33 m/s the remainder is ~0.28 m, so
-		# an approach frame could render the puck through a board (clamped back, but
-		# only for the boards) or inside a post / the net panels.
+		# sub-stepped the same way — it is just a partial tick. Never shortcut it to
+		# a raw `pos += vel * frac` lead with an after-the-fact rink clamp: that
+		# bypasses every collision the step resolves, and at 33 m/s the remainder is
+		# ~0.28 m — enough for an approach frame to render the puck through a board
+		# or inside a post / the net panels.
 		var rem_prev: Vector3 = pos
 		if _native_step != null:
 			_native_step.step_tick(pos, vel, frac, radius,
@@ -1351,14 +1340,10 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 	# goal horn is a host decision, like the save).
 	#
 	# Gated on the predicted center actually being INSIDE THE NET (_inside_net — the
-	# shared GoalDetectionRules cavity definition), not merely "past the goal line
-	# within the post width". That laxer test also matched the whole band BEHIND the
-	# net (the back frame sits only NET_DEPTH past the line; there is ~2.2 m of ice
-	# from there to the end boards, at every x), so a puck rimmed, dumped or carried
-	# behind the cage with any outbound z-component got teleported forward onto the
-	# goal line INSIDE the mouth: on clients only, the rendered puck jumped into the
-	# net — past _SMOOTH_SNAP_DIST it hard-snapped there — and sat in it while the
-	# host had it behind the net and awarded nothing.
+	# shared GoalDetectionRules cavity definition), never merely "past the goal line
+	# within the post width": the back frame sits only NET_DEPTH past the line, so
+	# that laxer test also matches the ~2.2 m band of ice BEHIND the net and
+	# teleports a rimmed or carried puck forward into the mouth on clients only.
 	if pos.z * vel.z > 0.0 and _inside_net(pos):
 		pos.z = GameRules.GOAL_LINE_Z * signf(pos.z)
 		vel = Vector3.ZERO
@@ -1371,9 +1356,8 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 # absorb. Steady-state ~0 when the shared sim agrees with the authority;
 # spikes measure host-side events folding in (deflects, saves, releases) and
 # the release-seed → snapshot handover seam. Teleport-scale distances
-# (faceoff/goal resets — anything the snap guard hard-snaps) are excluded:
-# they are legitimate repositions, and recording them buried the real signal
-# under ~30 m rink-length "errors" (seen in the first playtest's session rows).
+# (faceoff/goal resets — anything the snap guard hard-snaps) are excluded: they
+# are legitimate repositions, and at ~30 m they bury the real signal.
 func _record_predict_residual(target_pos: Vector3) -> void:
 	if not _smooth_initialized:
 		return
@@ -1386,10 +1370,10 @@ func _interpolate(delta: float) -> void:
 	# Shared delay keeps this fallback on the same timeline every interpolator
 	# uses (render == the legacy lag-comp rewind instant).
 	var interp_delay: float = NetworkManager.get_interpolation_delay()
-	# Interpolate a full interp_delay in the past — since Phase 3 this path is
-	# the stale-data FALLBACK; the normal loose puck renders through
-	# _predict_loose at ~host present, so entering here means the newest
-	# snapshot is already older than the prediction cap.
+	# Interpolate a full interp_delay in the past. This path is the stale-data
+	# FALLBACK — the normal loose puck renders through _predict_loose at ~host
+	# present, so entering here means the newest snapshot is already older than
+	# the prediction cap.
 	var render_time: float = NetworkManager.estimated_host_time() - interp_delay
 	var bracket: BufferedStateInterpolator.BracketResult = BufferedStateInterpolator.find_bracket(
 			_state_buffer, render_time, _scratch_bracket)
@@ -1470,10 +1454,9 @@ func _smooth_apply_and_prune(target_pos: Vector3, vel: Vector3, delta: float,
 		_smooth_initialized = true
 	if PuckHandoffRules.needs_hard_snap(target_pos - _smooth_pos, vel,
 			_SMOOTH_SNAP_DIST, _ALONG_SNAP_TIME_S, _HANDOFF_MIN_SPEED):
-		# A moving-target hard snap is genuine trajectory divergence (a bounce
-		# that differed, a missed deflect) — the canary the old zone-2 counter
-		# tracked. At-rest snaps are legitimate teleports (faceoff/goal resets)
-		# and aren't counted.
+		# A moving-target hard snap is genuine trajectory divergence (a bounce that
+		# differed, a missed deflect) — the canary. At-rest snaps are legitimate
+		# teleports (faceoff/goal resets) and aren't counted.
 		if vel.length() >= _HANDOFF_MIN_SPEED:
 			NetworkTelemetry.record_puck_hard_snap()
 		_smooth_pos = target_pos

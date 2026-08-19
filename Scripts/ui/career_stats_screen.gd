@@ -5,12 +5,9 @@ class_name CareerStatsScreen extends Control
 #     and gated on share_gameplay_stats, sliceable by roster size (All/5v5/3v3).
 #   Games — one chronological list merging backend game history with the
 #     .mreplay files on THIS machine, joined on game_id (a replay file is named
-#     `<game_id>.mreplay`). Replays were a separate tab because they are ungated
-#     while history needed stat sharing, and because bot games never reached the
-#     backend; the latter stopped being true when offline matches started
-#     uploading, and the former is a per-ENTRY difference rather than a
-#     per-tab one — so a game shows whatever it has: full box score, a watchable
-#     local file, or both. Local replays render before the network answers.
+#     `<game_id>.mreplay`). A game shows whatever it has: full box score, a
+#     watchable local file, or both. Local replays render before the network
+#     answers.
 # Both tabs refresh on open() and surface their own loading / empty / gated states.
 
 var _reporter := CareerStatsReporter.new()
@@ -43,9 +40,8 @@ const _MODE_LABELS: Array[String] = ["All modes", "5v5", "3v3"]
 # re-renders from memory instead of re-querying.
 var _heat_rows: Array = []
 
-# The Games tab's cards were designed for the old narrow column and read fine;
-# the shell is now full-bleed for the Career tab's sake, so that tab keeps its
-# original measure instead of stretching across the screen.
+# The shell is full-bleed for the Career tab's sake; the Games tab's cards read
+# better at their own narrower measure than stretched across the screen.
 const _NARROW_TAB_WIDTH: float = 660.0
 
 # Fallback palette for a game whose colours can't be recovered (a backend row
@@ -67,9 +63,9 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
 	# Full-bleed reading surface rather than a narrow centred card: the career
-	# page carries a shot map and wide stat groups, and the old 640 px column
-	# forced everything into a single cramped list. Same broadcast language as
-	# the post-game analytics screen.
+	# page carries a shot map and wide stat groups, which a ~640 px column would
+	# force into one cramped list. Same broadcast language as the post-game
+	# analytics screen.
 	var overlay := ColorRect.new()
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	overlay.color = Color(0.024, 0.039, 0.071, 0.96)
@@ -260,9 +256,7 @@ func _unhandled_input(event: InputEvent) -> void:
 # ── Totals tab ───────────────────────────────────────────────────────────────
 
 # Layout: a hero row of headline figures across the top, then two columns —
-# grouped stat cards on the left, the career shot map on the right. The old
-# version was a single flat list of ~20 label/value rows, which buried the
-# numbers that matter and had nowhere to put the shot data.
+# grouped stat cards on the left, the career shot map on the right.
 func _build_totals_tab() -> Control:
 	var tab := VBoxContainer.new()
 	tab.add_theme_constant_override("separation", 12)
@@ -551,26 +545,6 @@ func _clear_children(node: Node) -> void:
 		child.queue_free()
 
 
-func _add_totals_row(label_text: String, value_text: String) -> void:
-	var row := HBoxContainer.new()
-	_totals_content.add_child(row)
-	var lbl := Label.new()
-	lbl.text = label_text
-	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
-	row.add_child(lbl)
-	var val := Label.new()
-	val.text = value_text
-	val.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	row.add_child(val)
-
-
-func _add_totals_separator() -> void:
-	var sep := HSeparator.new()
-	sep.add_theme_color_override("color", MenuStyle.TEXT_SEP)
-	_totals_content.add_child(sep)
-
-
 func _clear_totals_content() -> void:
 	for child: Node in _totals_content.get_children():
 		child.queue_free()
@@ -579,21 +553,17 @@ func _clear_totals_content() -> void:
 # ── Recent Games tab ─────────────────────────────────────────────────────────
 
 # ── Games tab (backend history + local replays, merged) ──────────────────────
-# One chronological list of games rather than two tabs. They split originally
-# because replays are ungated while history needed stat sharing, AND because
-# bot-lobby games never reached the backend — the second reason disappeared when
-# offline matches started uploading. What is left is a per-entry difference, not
-# a per-tab one: a game may have backend stats, a local replay file, or both.
-#
-# The join key is free: replay files are named `<game_id>.mreplay`, the same id
-# the backend rows carry.
+# One chronological list: a game may have backend stats, a local replay file, or
+# both, which is a per-entry difference rather than a reason for two tabs. The
+# join key is free — replay files are named `<game_id>.mreplay`, the same id the
+# backend rows carry.
 
 func _build_games_tab() -> Control:
 	var tab := VBoxContainer.new()
 	tab.add_theme_constant_override("separation", 6)
-	# No fixed minimum height: the tab fills whatever the switcher gives it, so a
-	# floor here would only ever fight that (it was what pinned the list to a
-	# 520 px band that clipped instead of scrolling).
+	# No fixed minimum height: the tab fills whatever the switcher gives it, and a
+	# floor here fights that — pinning the list to a fixed band that clips instead
+	# of scrolling.
 	tab.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 	_recent_status = Label.new()
@@ -701,10 +671,10 @@ func _clear_recent_content() -> void:
 # its data came from the backend, a local .mreplay, or both — only the badges and
 # the enabled actions differ.
 #
-# Deliberately AT A GLANCE: date, mode, result, score, period line, actions. The
-# old cards embedded full per-team box-score tables, which made the list
-# something you read rather than scanned — and the deep numbers already live on
-# the Career tab and the analytics screen.
+# Deliberately AT A GLANCE: date, mode, result, score, period line, actions. Full
+# per-team box-score tables would make the list something you read rather than
+# scanned, and the deep numbers already live on the Career tab and the analytics
+# screen.
 
 func _build_game_card(summary: Dictionary) -> Control:
 	var card := _broadcast_panel()
@@ -724,8 +694,8 @@ func _build_game_card(summary: Dictionary) -> Control:
 	var team_size: int = int(summary.get("team_size", 0))
 	if team_size > 0:
 		top.add_child(_badge("%dv%d" % [team_size, team_size], MenuStyle.TEXT_DIM))
-	# Result and origin are independent — a local game can also be a win, and
-	# showing only one of the two made the badge row look like it was picking.
+	# Result and origin are independent — a local game can also be a win, so
+	# showing only one of the two would read as the badge row picking between them.
 	var outcome: String = String(summary.get("outcome", ""))
 	if not outcome.is_empty():
 		top.add_child(_badge(outcome.to_upper(), _outcome_color(outcome)))
@@ -735,9 +705,9 @@ func _build_game_card(summary: Dictionary) -> Control:
 
 	# Score line: the headline, and the only thing in a large size. Treated like
 	# the in-game scorebug and the box score's period summary — the team's colour
-	# is a BAND beside white lettering, never the lettering itself. Colouring the
-	# digits made the score hard to read (a dark primary on the dark card) and
-	# made two different-coloured numbers look like two different kinds of thing.
+	# is a BAND beside white lettering, never the lettering itself. Coloured digits
+	# read badly (a dark primary on the dark card) and make two different-coloured
+	# numbers look like two different kinds of thing.
 	var colors: Array = summary.get("colors", []) as Array
 	var home_col: Color = colors[0] if colors.size() == 2 else _NEUTRAL_HOME
 	var away_col: Color = colors[1] if colors.size() == 2 else _NEUTRAL_AWAY
@@ -761,8 +731,7 @@ func _build_game_card(summary: Dictionary) -> Control:
 		vbox.add_child(periods)
 
 	# Who played — the strongest recognition cue on the card, which is what this
-	# list is for. Names only; the per-player stat tables that used to live here
-	# made the list something you read rather than scanned.
+	# list is for. Names only — see the card's own doc-block on staying scannable.
 	var roster: Dictionary = summary.get("roster", {}) as Dictionary
 	for team_id: int in 2:
 		var names: Array = roster.get(team_id, []) as Array
@@ -877,8 +846,7 @@ func _colors_from_meta(meta: Dictionary) -> Array[Color]:
 # entry. Empty when the roster can't answer (a spectator recording, say).
 # The .mreplay header calls its player list `roster`; the FOOTER calls its box
 # score `players`. Two different keys for two different payloads — reading
-# `players` off the header silently yields an empty list (which is exactly how
-# the names, the local win/loss badge, and the YOU line all went missing), so
+# `players` off the header silently yields an empty list rather than failing, so
 # every header read goes through here.
 func _header_roster(meta: Dictionary) -> Array:
 	var header: Dictionary = meta.get("header", {})
@@ -905,9 +873,9 @@ func _outcome_from_meta(meta: Dictionary) -> String:
 
 
 # team_id -> display names, from the .mreplay header's full registry (bots
-# included). Names only — the local player is NOT marked: you know your own
-# name, and the tag made one side's line longer than the other's for no gain.
-# The YOU line below the roster is what actually points you out.
+# included). Names only — the local player is NOT marked: you know your own name,
+# and a tag lengthens one side's line for no gain. The YOU line below the roster
+# is what points you out.
 func _roster_from_meta(meta: Dictionary) -> Dictionary:
 	var out: Dictionary = {0: [], 1: []}
 	for entry: Variant in _header_roster(meta):
@@ -969,9 +937,7 @@ func _sum_periods(row: Variant) -> int:
 
 # Period scoring as a real grid — a header row of period numbers over one row
 # per team — matching how period scores are laid out everywhere else in the game.
-# The previous run-together string ("1-1 · 2-1 · 1-1") gave no column alignment
-# and no way to see which side a number belonged to. Null when there is nothing
-# to show.
+# Null when there is nothing to show.
 func _period_grid(periods: Array, home_col: Color, away_col: Color) -> Control:
 	if periods.size() < 2 or not (periods[0] is Array) or not (periods[1] is Array):
 		return null

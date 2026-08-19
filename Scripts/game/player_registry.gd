@@ -1,11 +1,10 @@
 class_name PlayerRegistry
 extends RefCounted
 
-# Owns `players: Dictionary[int, PlayerRecord]` — the runtime roster. Pulled
-# out of GameManager so spawning / removal / lookups live in one place.
+# Owns `players: Dictionary[int, PlayerRecord]` — the runtime roster.
 #
 # What's here:
-#   - unified spawn() for local + remote (previously two 90%-duplicate methods)
+#   - unified spawn() for local + remote
 #   - skater↔peer↔team resolvers used by puck + puck controller
 #   - stats reset, color generation, disconnect cleanup
 #
@@ -30,8 +29,8 @@ var _players: Dictionary[int, PlayerRecord] = {}
 # (slot swap mutates team_id_by_* and position_by_peer; peer_id_by_skater
 # is stable for the lifetime of the skater).
 # AI dispatch and PuckController.poke_check both iterate skaters and
-# need O(1) team lookups; the original Callable-resolver pattern paid
-# Callable.call overhead in tight loops. Read live by reference —
+# need O(1) team lookups; resolving through a Callable pays call
+# overhead in those loops. Read live by reference —
 # consumers receive these once at setup and observe mutations directly.
 var team_id_by_peer: Dictionary[int, int] = {}
 var team_id_by_skater: Dictionary = {}    # Skater object -> team_id
@@ -41,7 +40,7 @@ var peer_id_by_skater: Dictionary = {}    # Skater object -> peer_id
 # only on spawn / remove / attribute re-apply (never per tick, since attributes
 # change only at spawn or an offline picker change), read live by reference. A
 # bot's decision layer looks up caps_by_peer[pid]; a missing entry means the
-# league default (unwired / mid-spawn), which reproduces the prior behaviour.
+# league default (unwired / mid-spawn).
 var caps_by_peer: Dictionary[int, AISkaterCaps] = {}
 # Live peer_id → lobby team_slot (0–4). team_slot doubles as the position
 # identity (C/LW/RW/LD/RD — see PlayerRules.POSITION_NAMES); the 5v5
@@ -57,7 +56,7 @@ var bot_peers: Dictionary[int, bool] = {}
 # Flat skater list for the per-tick scan loops (puck interactions, goalie
 # crease-jam checks). Rebuilt on spawn/remove; consumers read the live
 # reference through their skater-getter Callable and must not mutate it.
-# Rebuilding per call allocated two arrays per invocation at the physics rate.
+# Rebuilding per call would allocate two arrays per invocation at the physics rate.
 var _skaters_cache: Array[Skater] = []
 # Flat bot-controller list for the centralized AI dispatch loop (AICoordinator
 # path). Rebuilt on spawn/remove alongside _skaters_cache; the host iterates it
@@ -200,8 +199,8 @@ func spawn(
 # Spawns an AI bot into a team slot. Host-only. Bots get a synthetic peer_id
 # in the BOT_ID_BASE range (10000+) so dictionary keying stays int and the
 # id is unambiguously non-routable for ENet. Any RPC dispatch must gate on
-# NetworkManager.is_real_peer / record.is_bot — peer_id sign is no longer
-# a reliable bot indicator (real peers and bots are both positive).
+# NetworkManager.is_real_peer / record.is_bot — peer_id sign is not a bot
+# indicator, since real peers and bots are both positive.
 #
 # Mirrors spawn() above but skips the human-player surface (handedness pref,
 # jersey number from preferences, ready state). When `identity` is non-empty,
@@ -430,15 +429,6 @@ func ring_relation_for_peer(peer_id: int) -> int:
 			else SkaterHUDCoordinator.RingRelation.ENEMY
 
 
-# Returns the live players dict as positions for icing/ghost computation.
-func positions_by_peer_id() -> Dictionary:
-	var positions: Dictionary = {}
-	fill_positions_by_peer_id(positions)
-	return positions
-
-
-# Caller-owned-dictionary variant for per-tick callers (ghost state, icing
-# check) so the per-tick host loop doesn't allocate a Dictionary per call.
 func fill_positions_by_peer_id(out: Dictionary) -> void:
 	out.clear()
 	for peer_id: int in _players:
@@ -454,12 +444,7 @@ func reset_all_stats() -> void:
 
 # ── Roster + colors ──────────────────────────────────────────────────────────
 
-static func generate_colors(team_id: int) -> Dictionary:
-	var slot: int = NetworkManager.pending_home_color_slot if team_id == 0 else NetworkManager.pending_away_color_slot
-	return TeamColorRegistry.get_colors(slot, team_id)
 
-
-# Returns the domain roster enriched with live player names from PlayerRecord.
 func get_slot_roster() -> Array[Dictionary]:
 	if _state_machine == null:
 		return []

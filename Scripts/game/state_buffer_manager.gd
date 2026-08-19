@@ -4,7 +4,7 @@ extends RefCounted
 # Host-only rolling snapshot buffer for all actors.
 # Pre-allocated ring buffers avoid per-tick GC pressure at the physics rate.
 # Owned by GameManager; WorldStateCodec reads latest_*() for broadcasts.
-# Phase 7 lag compensation queries get_state_at() for historical rewind.
+# Lag compensation queries get_state_at() for historical rewind.
 
 const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
 const BUFFER_SIZE: int = _PhysicsConstants.PHYSICS_TICK * 3  # 3 seconds of history
@@ -92,9 +92,9 @@ func capture(registry: PlayerRegistry, puck_controller: PuckController, goalie_c
 	var now: float = NetworkManager.local_time()
 	_newest_ts = now
 
-	# fill_* writes each controller's state directly into the pre-allocated
-	# ring slot — the previous get_*() calls allocated a throwaway state per
-	# actor per tick, defeating the rings' purpose (the header's whole point).
+	# fill_* writes each controller's state directly into the pre-allocated ring
+	# slot. Going through a get_*() that returns a fresh state would allocate one
+	# per actor per tick, defeating the rings.
 	for peer_id: int in registry.all():
 		if not _skater_buffers.has(peer_id):
 			_alloc_skater(peer_id)
@@ -145,7 +145,7 @@ func latest_goalie_state(team_id: int) -> GoalieNetworkState:
 	return _goalie_buffers[team_id][ptr]
 
 
-# ── Historical query (used by Phase 7 lag compensation) ──────────────────────
+# ── Historical query (used by lag compensation) ──────────────────────────────
 
 # `out` lets a per-tick caller supply a snapshot to refill instead of allocating
 # one (a WorldSnapshot is a RefCounted plus five Dictionaries — ~6 heap objects
@@ -223,15 +223,15 @@ func _interpolate_skater(peer_id: int, ts: float) -> SkaterNetworkState:
 	# endpoint like is_ghost. The pickup claim resolver reads it to reject a
 	# claimant who was shot-blocking / mid follow-through at their view-time
 	# (the self-rebound re-attach guard); without copying it here every
-	# interpolated rewind reported SKATING_WITHOUT_PUCK (0) and that gate was dead
+	# interpolated rewind reports SKATING_WITHOUT_PUCK (0) and that gate is dead
 	# on any link where the blade rewind interpolates (one-way > INPUT_LEAD).
 	result.shot_state = to_s.shot_state
-	# Movement intent (discrete like shot_state — newer endpoint). The stage-3
-	# claim rewind (HitClaimResolver) forward-integrates the victim from this
-	# snapshot with SkaterMovementRules.integrate_forward; without these three
-	# fields every interpolated rewind carried zero intent and the host
-	# integrated a friction coast while the client rendered the real thrust —
-	# breaking render == rewind by the whole thrust contribution.
+	# Movement intent (discrete like shot_state — newer endpoint). The claim
+	# rewind (HitClaimResolver) forward-integrates the victim from this snapshot
+	# with SkaterMovementRules.integrate_forward; without these three fields an
+	# interpolated rewind carries zero intent and the host integrates a friction
+	# coast while the client renders the real thrust — breaking render == rewind
+	# by the whole thrust contribution.
 	result.move_intent = to_s.move_intent
 	result.brake_intent = to_s.brake_intent
 	result.sprint_active = to_s.sprint_active

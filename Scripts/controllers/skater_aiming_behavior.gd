@@ -29,8 +29,8 @@ var prev_intent_pos: Vector3 = Vector3.ZERO
 var prev_swing_bearing: Vector3 = Vector3.ZERO
 var prev_blade_dir: Vector3 = Vector3.ZERO
 # EMA of the raw SCREEN-space cursor speed (px/s) — THE wrister power signal.
-# Unfiltered hand motion (unlike the old ROM-clamped, speed-capped blade
-# speed): flick fast = hard, sweep slow = soft. Saved/restored across reconcile
+# Unfiltered hand motion, NOT the ROM-clamped, speed-capped blade speed: flick
+# fast = hard, sweep slow = soft. Saved/restored across reconcile
 # like the rest of the charge state.
 var cursor_speed_ema: float = 0.0
 # XZ path length (meters) of the shot-line bearing accumulated over the current

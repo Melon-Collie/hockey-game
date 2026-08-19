@@ -21,8 +21,8 @@ var max_reaction_duration: float = 1.5
 var reaction_clear_delay: float = 0.25
 # Faster clear used when the puck actually CONTACTS this goalie (a save). The
 # read is over the instant the goalie feels the save, so the freeze lifts quickly
-# and the goalie can play the rebound — a slow full `reaction_clear_delay` left
-# the goalie frozen in the crease while a rebound sat in the slot. Non-save
+# and the goalie can play the rebound — a full `reaction_clear_delay` would leave
+# him frozen in the crease while a rebound sat in the slot. Non-save
 # resolutions (boards / post / net / pickup) keep the deliberate longer beat.
 var save_clear_delay: float = 0.08
 

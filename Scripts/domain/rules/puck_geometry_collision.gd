@@ -59,10 +59,10 @@ static func resolve_posts(pos: Vector3, vel: Vector3, puck_radius: float, result
 		return false
 	# The straight pipe ends where the mouth-corner bend begins; above that the
 	# frame curves inward and resolve_crossbar_bends owns it. Modelling the post
-	# all the way to the crossbar stood a straight pipe where the real frame has
-	# already swept in — over-blocking below the crown and, because the circle at
-	# NET_HALF_WIDTH cannot reach the crossbar's end at NET_CROWN_HALF_WIDTH, still
-	# leaving a seam a top-corner shot flew through (issue #598).
+	# all the way to the crossbar would stand a straight pipe where the real frame
+	# has already swept in — over-blocking below the crown and, because the circle
+	# at NET_HALF_WIDTH cannot reach the crossbar's end at NET_CROWN_HALF_WIDTH,
+	# still leaving a seam a top-corner shot flies through (issue #598).
 	if pos.y > NetGeometry.post_top_y() + puck_radius:
 		return false
 	# Nearer post first (per-tick path: two explicit checks, no per-call array).
@@ -168,11 +168,11 @@ static func resolve_crossbar_bends(
 #
 # SWEPT, not a thin-band snapshot: the face is chosen from the side the segment START (`prev`)
 # was on, and a puck approaching from below is caught the instant its disc top reaches the
-# twine, however far it overshot the plane centre this sub-step. The old point-sampled test
-# read the contact side from the CURRENT position and only fired inside a ±half_height band,
-# so a fast riser that cleared the ~3.5 cm band in one sub-step — or landed a hair ABOVE the
-# plane while still moving up — was mistaken for a puck resting on top (normal up, upward
-# velocity "separating") and sailed straight through to the ceiling. This is that fix.
+# twine, however far it overshot the plane centre this sub-step. A point-sampled test
+# reading the contact side from the CURRENT position inside a ±half_height band cannot
+# do this: a fast riser that clears the ~3.5 cm band in one sub-step — or lands a hair
+# ABOVE the plane while still moving up — reads as a puck resting on top (normal up,
+# upward velocity "separating") and sails straight through to the ceiling.
 static func resolve_top_net(prev: Vector3, pos: Vector3, vel: Vector3, result: Result) -> bool:
 	result.hit = false
 	result.position = pos

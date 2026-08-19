@@ -50,21 +50,19 @@ class_name GoalieSaveSelection
 # does. That stays an explicit input because it is a different question.
 #
 # ── Time-to-contest, not "is there a carrier" ────────────────────────────────
-# Possession does not make a play readable. A controlled puck in traffic is
-# still unpredictable, which is exactly when blocking is correct — and a slow
-# loose rebound at his feet is no more answerable for having no carrier. So the
-# input is TIME-TO-CONTEST: how soon can any stick that is not his reach the
-# puck and change it. One quantity covers a loose rebound, a teammate corralling
-# under pressure, and a 5v5 net-front crowd, on the same clock as everything
-# else. Gating on carrier proximity instead stands him up into scrambles.
+# Possession does not make a play readable: a controlled puck in traffic is
+# still unpredictable (exactly when blocking is correct), and a slow loose
+# rebound at his feet is no more answerable for having no carrier. So the input
+# is TIME-TO-CONTEST — how soon any stick that is not his can reach the puck and
+# change it — which covers a loose rebound, a teammate corralling under pressure
+# and a 5v5 net-front crowd on the same clock as everything else. Gating on
+# carrier proximity instead stands him up into scrambles.
 #
 # ── Scope: in front of the net only ──────────────────────────────────────────
-# A puck BEHIND the goal line is not a block-or-react question, it is a STANCE
-# question — RVH seals at/below the goal line, VH takes the in-front sharp
-# angle. That stays in `_is_puck_in_defensive_zone` → VH/RVH and is deliberately
-# not folded in here. One model per question: this one answers "can I still
-# answer this puck from my feet", post integration answers "which post stance
-# covers this angle".
+# A puck BEHIND the goal line is a STANCE question, not a block-or-react one —
+# RVH seals at/below the goal line, VH takes the in-front sharp angle — and stays
+# in `_is_puck_in_defensive_zone` → VH/RVH. One model per question: this one
+# answers "can I still answer this puck from my feet".
 #
 # Pure/static and engine-free. Callers own the Situation (rebuilt in place each
 # tick) so the hot path allocates nothing.
@@ -119,9 +117,9 @@ static func answer_fraction(s: Situation) -> float:
 # impossible" is a statement about the WHOLE play; it says nothing about whether
 # NOW is the moment to go, and standing is not free to give up — a goalie on his
 # feet can still push, track and cut angles, and a sealed one cannot. Without
-# this, a puck sitting in his lap with an opponent FOUR SECONDS away read as a
-# block: perfectly true that he could never react to the eventual whack, and
-# absurd as an instruction to lie down for four seconds.
+# this, a puck sitting in his lap with an opponent FOUR SECONDS away reads as a
+# block: true that he could never react to the eventual whack, absurd as an
+# instruction to lie down for four seconds.
 #
 # The drop must START by `time_to_arrival - drop_time` or the pads are still
 # rotating when the puck lands. So there are two ways it can be time to go:
@@ -154,9 +152,9 @@ static func must_commit_now(s: Situation) -> bool:
 # so the decision's input depends on the decision's output: at challenge depth
 # the gap is inside the block threshold, he drops, recovering retreats him toward
 # his goal line, the longer gap says he can react after all, he stands, the climb
-# back out shortens the gap, and he drops again. Measured in play against a
-# completely stationary puck — the gap cycling 4.87 / 4.92 / 5.62 / 4.86 m across
-# a threshold at 4.884 m while the puck sat at one spot the entire time.
+# back out shortens the gap, and he drops again — measured against a completely
+# stationary puck as a gap cycling 4.87 / 4.92 / 5.62 / 4.86 m across a threshold
+# at 4.884 m.
 #
 # So he abandons the seal only when the react response is FULLY available again
 # (a whole drop's worth of time on top of the read), never on the hair's breadth

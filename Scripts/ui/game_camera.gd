@@ -41,7 +41,7 @@ const _ON_RINK_MARGIN: float = 5.0
 # Carrying collapses the player+puck fit set to a point, which pins the dynamic
 # zoom at min height — a close-up exactly when the carrier most needs to read
 # the ice (the ozone goal fit rescues the attacking zone; neutral and defensive
-# zones had nothing). Extend the fit extent with a vision point ahead of the
+# zones have no equivalent). Extend the fit extent with a vision point ahead of the
 # carrier: `carry_vision_min_distance` m up-ice (attacking direction) when
 # slow, easing toward `carry_vision_distance` m along the skating direction at
 # `carry_lookahead_full_speed`. The velocity lean never tilts behind the play —
@@ -64,8 +64,7 @@ const _ON_RINK_MARGIN: float = 5.0
 # Zoom ceiling. Sized to the arena, not the rink: the ozone fit (own blue line
 # → attacking goal line + padding) needs ~29.3 m at the default 50° FOV, and at
 # ~32 m the default framing still lands every frame edge on stands/shell rather
-# than the void past the bowl. Was 40 before the arena had an upper deck/shell
-# — the old ceiling zoomed out far enough to see the whole bowl end.
+# than the void past the bowl.
 @export var max_height: float = 32.0
 @export var zoom_speed: float = 3.0
 @export var zoom_padding: float = 4.0  # extra visible space beyond player+puck span
@@ -83,7 +82,7 @@ var _goal_1: HockeyGoal = null  # Team 1's defended goal
 var _carrier_team_getter: Callable  # () -> int team_id, or -1 if no carrier
 # () -> Skater carrier as this peer sees it, or null while loose. Injected rather
 # than read off the puck because `puck.carrier` is host-only (never written on
-# clients), which left carrier framing dead for every non-host player.
+# clients), which would leave carrier framing dead for every non-host player.
 var _carrier_getter: Callable
 var _local_team_id: int = -1
 
@@ -125,8 +124,7 @@ const _KICK_DAMPING: float = 17.0             # < 2·sqrt(stiffness) ≈ 28.3 �
 # the net, height pushed in), reusing the existing tilt / look-at math, so shake
 # and the impact kick still layer on top for the pop. Runs on every peer
 # (goal_scored is emitted locally everywhere) and is superseded when the replay
-# camera goes current. Applied through render-only locals, so when the blend
-# returns to 0 the live framing is exactly where it would have been.
+# camera goes current.
 const _GOAL_CINE_DURATION: float = 1.4     # < GOAL_CELEBRATION_DURATION (1.5) so it's easing out as the replay cuts
 const _GOAL_CINE_RISE: float = 0.4         # ease in/out time for the push (seconds)
 const _GOAL_CINE_SCORER_BIAS: float = 0.8  # how hard to center on the scorer (they're the subject)
@@ -236,14 +234,13 @@ func _get_attacking_direction() -> int:
 # the predicted Z does chatter: prediction leads position by
 # `velocity.z * ozone_predict_time`, so a skater stopping or reversing at the line
 # swings `predicted_z` by that much while standing still, toggling the fit on
-# every direction change. Skating hard back and forth at the line pumped the zoom
-# once per reversal.
+# every direction change.
 #
-# The fix needs no margin constant. Engage on the predicted Z, because arriving
-# before the crossing is the whole point of the prediction; release on the true
-# Z. Since the two differ by exactly the prediction lead, testing the release
-# against real position cancels that term precisely: once engaged, only actually
-# retreating past the line releases it, and no change in velocity alone can.
+# So: engage on the predicted Z, because arriving before the crossing is the whole
+# point of the prediction; release on the true Z. Since the two differ by exactly
+# the prediction lead, testing the release against real position cancels that term
+# precisely: once engaged, only actually retreating past the line releases it, and
+# no change in velocity alone can. No margin constant is needed.
 func _update_in_ozone(player_z: float, predicted_z: float, attack_dir: int) -> bool:
 	if attack_dir == 0:
 		_in_ozone = false
@@ -311,16 +308,12 @@ func _arm_goal_cinematic(scoring_team: Team, scorer_name: String) -> void:
 		return  # nothing to frame — the shake carries the moment alone
 	_goal_cine_left = _GOAL_CINE_DURATION
 
-# Frame-rate-independent factor for an exponential smoother, replacing a raw
-# `speed * delta`. The raw form converges at a rate that depends on how often it
-# is stepped: harmless while this ran on the fixed 120 Hz tick, but once framing
-# moved to the render rate it would have made the camera feel measurably
-# different at 60 fps than at 144. This form depends only on elapsed time, so the
-# two match. It also can't overshoot — `speed * delta` exceeds 1 on a long frame
-# hitch, which made lerpf jump PAST the target.
-#
-# Matches the old 120 Hz behaviour to within ~1% at the smoothing speeds here
-# (speed*delta ≈ 0.03, where 1-exp(-x) ≈ x), so this is not a retune.
+# Frame-rate-independent factor for an exponential smoother. Never use a raw
+# `speed * delta` in its place: that form converges at a rate depending on how
+# often it is stepped, so framing at the render rate would feel measurably
+# different at 60 fps than at 144, and on a long frame hitch `speed * delta`
+# exceeds 1 and lerpf jumps PAST the target. This form depends only on elapsed
+# time and cannot overshoot.
 static func _smooth_t(speed: float, delta: float) -> float:
 	return 1.0 - exp(-speed * delta)
 
@@ -329,8 +322,7 @@ func _ready() -> void:
 	make_current()
 	# Framing is computed fresh every rendered frame below, so this transform is
 	# already continuous — handing it to the interpolator would lerp it toward a
-	# tick-old pose and give the camera a frame of lag it does not need. Every
-	# player-perspective cam opts out for the same reason.
+	# tick-old pose and give the camera a frame of lag it does not need.
 	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	_framing_position = global_position
 	# Framing runs in _process (render rate), and LocalInputGatherer's
@@ -376,18 +368,11 @@ func impact_kick(direction: Vector3, intensity: float) -> void:
 
 # Render rate, NOT the physics tick: every line below is framing (zoom fit, zone
 # bias, shake, impact kick, goal push-in, intro sweep) and nothing gameplay-side
-# reads it per tick. At 120 Hz this also CAPPED camera motion on higher-refresh
-# displays.
-#
-# Uncapping framing came with a cost that had to be paid elsewhere before it was
-# a win. Actors move only on the physics tick, so a camera sliding between ticks
-# past a held skater sawtoothed the skater's SCREEN position by one tick of
-# travel, growing with speed — invisible at or below 120 fps (every frame
-# advances the same whole number of ticks), visible on every second frame at 240.
-# Running framing back on the tick would only have moved the stutter onto the
-# rink; the fix was interpolating the actors, which is now on project-wide
-# (physics/common/physics_interpolation). The F3 perf page still measures the
-# sawtooth directly (NetworkDebugOverlay._render_sim_phase).
+# reads it per tick. This is only sound because the actors are interpolated up to
+# render time (project setting physics/common/physics_interpolation) — a camera
+# sliding between ticks past tick-rate actors sawtooths their SCREEN position by
+# one tick of travel, which the F3 perf page measures directly
+# (NetworkDebugOverlay._render_sim_phase).
 #
 # The framing target below is deliberately the RAW tick pose, not the rendered
 # one: it is the input to an exponential smoother that attenuates a one-tick
@@ -395,7 +380,7 @@ func impact_kick(direction: Vector3, intensity: float) -> void:
 # reads the rendered pose instead (see Skater.render_transform).
 #
 # Every time-evolving term here is delta-scaled, and the exponential smoothers go
-# through _smooth_t so the feel no longer depends on the frame rate (see there).
+# through _smooth_t so the feel does not depend on the frame rate (see there).
 func _process(delta: float) -> void:
 	if not skater:
 		return

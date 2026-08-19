@@ -32,9 +32,9 @@ var text_color: Color = Color(0.0, 0.220, 0.659)
 func _draw() -> void:
 	var center: Vector2 = img_size * 0.5
 
-	# Rotate the logo to match the text orientation (which now arches on
-	# the -X and +X sides of the circle for broadcast view). The texture's
-	# native "up" rotates to point in the -X direction (image left).
+	# Rotate the logo to match the text orientation (the arches sit on the -X and
+	# +X sides of the circle for broadcast view). The texture's native "up"
+	# rotates to point in the -X direction (image left).
 	var logo_px: float = LOGO_DIAMETER_M * px_per_meter
 	draw_set_transform(center, -PI * 0.5, Vector2.ONE)
 	var logo_rect: Rect2 = Rect2(-Vector2(logo_px, logo_px) * 0.5,

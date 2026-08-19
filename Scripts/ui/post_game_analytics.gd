@@ -32,7 +32,6 @@ const _HALF_LEN: float = GameRules.RINK_HALF_LENGTH
 const _HALF_WID: float = GameRules.RINK_HALF_WIDTH
 const _GOAL_LINE: float = GameRules.GOAL_LINE_Z
 const _BLUE_LINE: float = GameRules.BLUE_LINE_Z
-const _CORNER_R: float = GameRules.CORNER_RADIUS
 
 var _root: Control = null
 var _map: RinkMap = null
@@ -598,17 +597,13 @@ class LegendDot extends Control:
 
 
 # ── Expected-goals share ─────────────────────────────────────────────────────
-# Replaces the old two-curve cumulative-xG flow. That chart plotted each team's
-# running xG total, which meant the thing you actually wanted — who is winning
-# the game on chances — was the GAP between two lines, and a gap is something you
-# measure rather than something you see. It also duplicated a number the tape
-# already states outright.
-#
-# This plots one quantity instead: the home team's running share of all the
-# chance quality created (XGShare). The midline is an even game, the band fills
-# toward whoever is ahead, and the curve's distance from centre IS how lopsided
-# the game has been — no arithmetic in the reader's head. Absolute xG totals
-# haven't gone anywhere; they're the tape's xG row.
+# One quantity, not two: the home team's running share of all the chance quality
+# created (XGShare). The midline is an even game, the band fills toward whoever
+# is ahead, and the curve's distance from centre IS how lopsided the game has
+# been — no arithmetic in the reader's head. Plotting each team's running xG
+# total instead would make that lopsidedness the GAP between two lines, which is
+# something you measure rather than see; the absolute totals are the tape's xG
+# row.
 
 class XGShareChart extends Control:
 	const _GRID := Color(0.165, 0.175, 0.22, 1.0)

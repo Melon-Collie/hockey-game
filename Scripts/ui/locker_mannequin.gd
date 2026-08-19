@@ -592,7 +592,7 @@ func _paint_body(colors: Dictionary, skin_tone: int) -> void:
 	var jersey: Dictionary = uniform.jersey
 	var socks: Dictionary = uniform.socks
 
-	_paint_texture(_torso, 0, SkaterUniformCoordinator.make_h_stripes_texture(
+	_paint_texture(_torso, 0, UniformPaint.h_stripes(
 			jersey.base, jersey.stripes, jersey.yoke), _CLOTH_ROUGH)
 	_paint(_helmet, SkaterMeshBuilder.HELMET_SURF_SHELL, uniform.helmet, _HELMET_ROUGH)
 	_paint(_helmet, SkaterMeshBuilder.HELMET_SURF_SKIN,
@@ -600,7 +600,7 @@ func _paint_body(colors: Dictionary, skin_tone: int) -> void:
 
 	var sock_tex: ImageTexture = null
 	if not socks.stripes.is_empty():
-		sock_tex = SkaterUniformCoordinator.make_h_stripes_texture(
+		sock_tex = UniformPaint.h_stripes(
 				socks.base, socks.stripes)
 	var sleeve: Color = uniform.arms.upper.base
 	for i: int in 2:

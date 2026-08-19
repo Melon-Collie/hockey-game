@@ -25,15 +25,15 @@ extends RefCounted
 
 
 # Volume curve mirrors GameManager._puck_speed_volume so the host's live
-# sound matches the replay's sound exactly. Kept in sync if the live formula
-# changes.
+# sound matches the replay's sound exactly. test_replay_audio_mirrors fails
+# when the two drift.
 const _PUCK_SPEED_VOL_MIN_DB: float = -10.0
 const _PUCK_SPEED_VOL_MAX_DB: float = 0.0
 const _PUCK_SPEED_MIN: float = 1.0
 const _PUCK_SPEED_RANGE: float = 20.0
 
 # Save-cue base bumps and post pitch, mirrored from GameManager so replayed
-# saves sound like the live ones. Kept in sync if the live values change.
+# saves sound like the live ones (test_replay_audio_mirrors holds them equal).
 const _POST_SAVE_VOLUME_BUMP_DB: float = 4.0
 const _PAD_SAVE_VOLUME_BUMP_DB: float = 2.0
 

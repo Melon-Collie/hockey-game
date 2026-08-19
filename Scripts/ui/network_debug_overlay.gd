@@ -4,15 +4,11 @@ extends CanvasLayer
 # F3 network debug overlay. Reads NetworkTelemetry + NetworkManager and renders a
 # role-aware, color-coded health readout. Design notes:
 #   • Each metric is colored green / yellow / red by comparing the live value to
-#     the healthy ranges documented in network_telemetry.gd. The colored dot is
-#     the at-a-glance "expected vs unexpected" signal the raw numbers never gave.
+#     the healthy ranges documented in network_telemetry.gd — the at-a-glance
+#     "expected vs unexpected" signal the raw numbers do not carry.
 #   • The header verdict (OK / WATCH / PROBLEM) must mean "something is actually
-#     WRONG" — so only ACTUAL-PROBLEM metrics drive it (via _metric). Connection
-#     FACTS (ping, jitter, delay spread) are colored for context but verdict-
-#     neutral (via _context): a far/jittery link is expected and compensated, so
-#     it shows red on its own line while the header stays green. The real damage a
-#     bad link does surfaces through its own driving metrics (loss, Guessing
-#     ahead, Corrections). Glance at the header to know if anything's wrong.
+#     WRONG", so only ACTUAL-PROBLEM metrics drive it (via _metric); connection
+#     FACTS are colored for context but verdict-neutral (via _context, see there).
 #   • Every line carries an inline plain-English hint (what it means + the target
 #     range) so the overlay is self-explanatory without a separate cheat sheet.
 #   • Sections are gated by role (SOLO / HOST / CLIENT): a client never sees
@@ -22,8 +18,9 @@ extends CanvasLayer
 #     overlay stays calm until something actually needs attention. They are
 #     calibrated to NOT fire on normal play (e.g. fast stickhandling is not a
 #     "stick jump") — a visible flag means a real anomaly, not a false alarm.
-# Thresholds below are derived from the "Expected ranges" comments in
-# network_telemetry.gd — keep the two in sync if either moves.
+# Health bands come from NetworkTelemetry (RECONCILE_*, EXTRAPOLATION_*, STALL_*,
+# STARVATION_*, PUCK_SNAP_*), which is also what the auto-marker tripwires fire
+# on — so a red metric here and a recorded marker cannot disagree.
 
 enum Health { OK, WARN, BAD }
 
@@ -35,11 +32,9 @@ const COL_DIM := "8a93a0"
 const COL_VAL := "ececec"
 const DOT := "●"
 
-# Two pages behind one key. The netcode readout is the reason this overlay
-# exists and it has to stay glanceable; the frame-cost breakdown grew to rival it
-# in length while answering an unrelated question, and stacking them made neither
-# readable. P swaps between them. The COPIED DIGEST always carries both, so which
-# page happens to be up never decides what a bug report contains.
+# Two pages behind one key: the netcode readout has to stay glanceable, and the
+# frame-cost breakdown answers an unrelated question at a comparable length, so
+# stacking them makes neither readable. P swaps between them.
 enum Page { NET, PERF }
 
 var _rt: RichTextLabel
@@ -67,9 +62,9 @@ var _dot: Label
 var _fps_label: Label
 var _dot_timer: float = 0.0
 const DOT_REFRESH_SECONDS: float = 0.5
-# Panel text rebuild rate. Rebuilding ~40 BBCode lines every frame cost ~1.25 ms
-# on a 5v5 frame — the overlay was a measurable slice of the very frame it exists
-# to measure, and it inflated the main-thread residual by its own cost. Nothing
+# Panel text rebuild rate. Rebuilding ~40 BBCode lines every frame costs ~1.25 ms
+# on a 5v5 frame — the overlay would be a measurable slice of the very frame it
+# exists to measure, inflating the main-thread residual by its own cost. Nothing
 # on the panel needs frame cadence: telemetry refreshes at 1 Hz, the frame-cost
 # EMAs are smoothed over ~0.3 s, and the peak monitors publish at 1 Hz. Sampling
 # still runs every frame — only the string building is throttled.
@@ -111,12 +106,13 @@ var _peak_process_ms: float = 0.0
 var _peak_physics_ms: float = 0.0
 
 # ── Sim / render phase ───────────────────────────────────────────────────────
-# The sim integrates at a fixed Constants.PHYSICS_TICK and nothing interpolates
-# the result to the render rate, so an actor's RENDERED position is quantized to
-# the tick — while GameCamera, which smooths in _process, moves continuously at
-# the render rate. Within one tick the camera slides a full step and the skater
-# does not, then the skater jumps the whole step at once: a sawtooth in the
-# skater's SCREEN position, one tick of travel from end to end.
+# The sim integrates at a fixed Constants.PHYSICS_TICK while GameCamera, which
+# smooths in _process, moves continuously at the render rate. Without physics
+# interpolation an actor's RENDERED position is quantized to the tick: within one
+# tick the camera slides a full step and the skater does not, then the skater
+# jumps the whole step at once — a sawtooth in the skater's SCREEN position, one
+# tick of travel from end to end. The panel reports the interpolation state
+# alongside the pattern, since that is what decides whether it matters.
 #
 # Whether that sawtooth is visible is purely a sampling question. Rendered motion
 # is smooth only when every frame advances the sim by the same whole number of
@@ -553,13 +549,15 @@ func _render_client(t: NetworkTelemetry) -> void:
 			"render age of the authoritative world (remote skaters, loose puck, goalie) — the live smoothing delay; decomposition shows its target terms")
 		_info("Round trip you → you", "%.0f ms" % (lead_ms + interp_ms),
 			"your action reaching the host + its authoritative result reaching your screen. Your own skater feels instant (prediction) — this is the staleness of the world you're reacting to")
-	var rec := _worse(_band(t.reconcile_per_sec, 1.0, 5.0), _band(t.reconcile_magnitude_avg, 0.05, 0.2))
+	var rec := _worse(_band(t.reconcile_per_sec, NetworkTelemetry.RECONCILE_WARN_PER_SEC,
+			NetworkTelemetry.RECONCILE_BAD_PER_SEC), _band(t.reconcile_magnitude_avg, 0.05, 0.2))
 	_metric(rec, "Corrections", "%.1f/s, %.3f m avg" % [t.reconcile_per_sec, t.reconcile_magnitude_avg],
 		"server snapping your prediction back; want <1/s and <5 cm")
 	if t.reconcile_per_sec > 0.5:
 		_info("Reconcile cause", "pos %.0f · vel %.0f · rot %.0f /s · off %+.1ft · resid %.0fcm" % [t.recon_pos_per_sec, t.recon_vel_per_sec, t.recon_ubody_per_sec, t.pos_offset_ticks_avg, t.post_replay_residual_avg * 100.0],
 			"resid = distance from server AFTER the snap+replay. At rest it should be ~0; if resid stays ~9cm the replay isn't converging (offset rebuilds), vs ~0 = rebuild is in normal physics")
-	_metric(_band(t.extrapolation_pct, 25.0, 60.0), "Guessing ahead", "%.0f%% of frames (%.0f fps)" % [t.extrapolation_pct, t.client_fps],
+	_metric(_band(t.extrapolation_pct, NetworkTelemetry.EXTRAPOLATION_WARN_PCT,
+			NetworkTelemetry.EXTRAPOLATION_BAD_PCT), "Guessing ahead", "%.0f%% of frames (%.0f fps)" % [t.extrapolation_pct, t.client_fps],
 		"share of rendered frames dead-reckoning a remote past the buffer (framerate-independent). If high on a clumpy link, the jitter cushion is too thin — see Smoothing delay")
 	_info("Puck mode", t.puck_mode, "predicted = shared-sim to present, predicted_seed = own release pre-confirm, predicted_hold = held at goalie, interp = stale-data fallback, carried = on a stick")
 	_metric(_band(t.puck_predict_residual_avg_m * 100.0, 15.0, 50.0), "Puck predict err",
@@ -602,7 +600,8 @@ func _render_host(t: NetworkTelemetry) -> void:
 			"client inputs waiting to apply; ~1-3 healthy, 0 = starving, high = backed up")
 		_metric(_band(t.input_lead_avg_ms, 10.0, 30.0), "Input lead", "%.1f ms" % t.input_lead_avg_ms,
 			"how late inputs arrive vs schedule; want near 0")
-		_metric(_band(t.input_starvations_per_sec, 0.5, 5.0), "Starvations", "%.1f/s" % t.input_starvations_per_sec,
+		_metric(_band(t.input_starvations_per_sec, NetworkTelemetry.STARVATION_WARN_PER_SEC,
+			NetworkTelemetry.STARVATION_BAD_PER_SEC), "Starvations", "%.1f/s" % t.input_starvations_per_sec,
 			"ticks with no client input (reused last); want 0")
 		_metric(_band(t.input_drains_per_sec, 0.5, 5.0), "Backlog drains", "%.1f/s" % t.input_drains_per_sec,
 			"stale inputs dropped by the overdue drain; want 0, bursts after jitter are the fix working")
@@ -611,8 +610,7 @@ func _render_host(t: NetworkTelemetry) -> void:
 	_frame_health(t)
 	# Judge the gap against the live target interval (state_delta) rather than
 	# a hardcoded 120Hz, so a future runtime rate change (congestion response)
-	# doesn't read red by default. The per-phase dead-puck downshift is gone —
-	# the rate is constant across stoppages now.
+	# doesn't read red by default.
 	var bcast_target_ms := NetworkManager.state_delta * 1000.0
 	_metric(_band(t.broadcast_interval_p95_ms, bcast_target_ms * 1.4, bcast_target_ms * 2.0),
 		"Broadcast gap", "p95 %.1f ms (target ~%.0f)" % [t.broadcast_interval_p95_ms, bcast_target_ms],
@@ -647,7 +645,8 @@ func _frame_health(t: NetworkTelemetry) -> void:
 		sim_h = Health.WARN
 	_metric(sim_h, "Sim rate", "%.0f Hz (target %d)" % [t.host_effective_tick_hz, target_hz],
 		"physics keeping real-time; well below target = host overloaded, sim runs slow-motion. Says nothing about tick COST — see Frame cost → Script")
-	_metric(_band(t.host_physics_tick_max_ms, 33.0, 66.0), "Worst stall", "%.0f ms" % t.host_physics_tick_max_ms,
+	_metric(_band(t.host_physics_tick_max_ms, NetworkTelemetry.STALL_WARN_MS,
+			NetworkTelemetry.STALL_BAD_MS), "Worst stall", "%.0f ms" % t.host_physics_tick_max_ms,
 		"longest pause between ticks in the last second; ticks land on render frames so 1-2 frames' spacing is normal, but a big spike = a hitch everyone feels")
 
 # Local frame cost — the answer to "why is my FPS down?", which the network
@@ -750,14 +749,6 @@ func _render_host_ai_cost() -> void:
 		"share of ticks that could not kick a fresh AI batch because the previous one was still running; bots coast on their last decision through these, and the ticks that CAN kick are the expensive ones")
 
 
-# Main-thread cost, derived rather than measured: the part of the frame that
-# neither the GPU nor the render thread explains. The three run concurrently
-# (Godot's render thread and the GPU each trail the main thread by a frame), so
-# the frame length is set by the LARGEST of them, not their sum — which makes
-# `frame - max(render terms)` a sound lower bound on what the main thread cost.
-# It is a lower bound, not an exact figure: when the frame rate is capped, the
-# idle wait is charged here too, which is why the verdict rules the cap out
-# before naming this.
 # The fixed-timestep aliasing check (see the _PHASE_* field doc-block). Verdict-
 # neutral throughout: an uneven tick/frame pattern is a local display and pacing
 # fact, not a network problem.
@@ -804,6 +795,13 @@ func _phase_hist_dict() -> Dictionary:
 	return out
 
 
+# Derived rather than measured: the part of the frame that neither the GPU nor
+# the render thread explains. The three run concurrently (Godot's render thread
+# and the GPU each trail the main thread by a frame), so the frame length is set
+# by the LARGEST of them, not their sum — which makes `frame - max(render terms)`
+# a sound lower bound on what the main thread cost. A lower bound, not an exact
+# figure: on a capped frame rate the idle wait is charged here too, which is why
+# the verdict rules the cap out before naming this.
 func _main_thread_ms(frame_ms: float) -> float:
 	return maxf(frame_ms - maxf(_ema_gpu_ms, _ema_cpu_render_ms), 0.0)
 
@@ -864,7 +862,8 @@ func _render_watch(t: NetworkTelemetry) -> void:
 	var any := false
 	any = _watch(_when_positive(t.blade_jump_per_sec, 10.0), "Stick jumps", "%.1f/s (%.2f m avg)" % [t.blade_jump_per_sec, t.blade_jump_mag_avg],
 		"a reconcile teleported the blade >5 cm; want 0 (normal fast stickhandling no longer counts)") or any
-	any = _watch(_band(t.puck_hard_snap_per_sec, 2.0, 10.0), "Puck hard-snaps", "%.1f/s" % t.puck_hard_snap_per_sec,
+	any = _watch(_band(t.puck_hard_snap_per_sec, NetworkTelemetry.PUCK_SNAP_WARN_PER_SEC,
+			NetworkTelemetry.PUCK_SNAP_BAD_PER_SEC), "Puck hard-snaps", "%.1f/s" % t.puck_hard_snap_per_sec,
 		"a moving puck's render teleported; genuine prediction divergence only — want ~0") or any
 	any = _watch(_band(t.ooo_drops_per_sec, 2.0, 10.0), "Out-of-order drops", "%.1f/s" % t.ooo_drops_per_sec,
 		"packets arrived reordered and were discarded; occasional is normal UDP, a steady stream is a problem") or any

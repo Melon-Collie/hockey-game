@@ -8,11 +8,8 @@ extends RefCounted
 # the worker drains the queue on each wake.
 #
 # File format (.mreplay v1, magic "MREPLAY3"):
-#   [ MAGIC "MREPLAY3"  : 8 bytes      ]    -- bumped from MREPLAY2 when the
-#                                              goalie wire format expanded for
-#                                              full pose authoritative pose
-#                                              (12 B → 40 B per goalie block)
-#   [ FORMAT_VERSION    : u8           ]    -- currently 2; reader rejects others
+#   [ MAGIC "MREPLAY3"  : 8 bytes      ]
+#   [ FORMAT_VERSION    : u8           ]    -- reader rejects any other value
 #   [ HEADER LENGTH     : u32 LE       ]
 #   [ HEADER JSON       : N bytes      ]    -- game_id, build_version, roster, …
 #   ([ FRAME LENGTH     : u32 LE       ]
@@ -37,22 +34,9 @@ extends RefCounted
 # `static var` initialized once at class load. Same access pattern
 # (ReplayFileWriter.MAGIC) for callers.
 static var MAGIC: PackedByteArray = PackedByteArray([77, 82, 69, 80, 76, 65, 89, 51])  # "MREPLAY3"
-# v2: frame/world-state timestamps f32 seconds -> u32 0.1ms units (matches
-#     BuildInfo.PROTOCOL_VERSION 2's wire change; the embedded world-state
-#     packets carry the new header).
-# v3: puck wire Y widened s8 -> s16 (PROTOCOL_VERSION 4); embedded world-state
-#     puck block grew 12 -> 13 bytes.
-# v4: skater wire block grew 37->38 bytes (sprint stamina) — the embedded
-#     world-state packets carry the wider block (PROTOCOL_VERSION 5).
-# v5: embedded world-state blocks changed twice in one release cycle, one bump
-#     covers both (the reader is strict-equality): skater block 38 -> 39 B
-#     (stagger u8) + goalie 35 -> 41 B (s16 glove/blocker) from PROTOCOL_VERSION
-#     10, and the skater flags byte repacked (shot_state 4 -> 3 bits, 2-bit
-#     elevation_level at bits [3..4], ghost/blade_up/sprint_locked shifted)
-#     from PROTOCOL_VERSION 11.
-# v6: goalie block 41 -> 43 B (pad toe-out yaw on the wire) from
-#     PROTOCOL_VERSION 13.
-# v7: skater block 39 -> 40 B (movement-intent byte) from PROTOCOL_VERSION 15.
+# Bump on any change to the EMBEDDED world-state block layout as well as to the
+# framing here: the frames are raw broadcast packets, and the reader matches this
+# version by strict equality rather than decoding an older layout.
 const FORMAT_VERSION: int = 7
 const KIND_WORLD_STATE: int = 0
 const KIND_EVENT: int = 1
@@ -138,10 +122,6 @@ func close_async(footer: Dictionary) -> void:
 		_file.flush()
 	_file.close()
 	_file = null
-
-
-func is_open() -> bool:
-	return _file != null
 
 
 func _enqueue(host_ts: float, kind: int, payload: PackedByteArray) -> void:

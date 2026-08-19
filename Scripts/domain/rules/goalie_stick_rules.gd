@@ -1,21 +1,8 @@
 class_name GoalieStickRules
 
-# The goalie's STICK — geometry, aim, and what it covers.
-#
-# ── Why this exists ──────────────────────────────────────────────────────────
-# The stick was the one part of the goalie with no owner. Its geometry lived in
-# Goalie.tscn (collider boxes), its aim solve and per-stance tilts lived in
-# GoalieBodyConfigBuilder (application layer, next to pose transforms), and the
-# planning model did not know it existed AT ALL — every `stick` in
-# action_scoring.gd was LANE_DEFENDER_REACH_M, a SKATER's blade in a passing
-# lane. So the bots planned against a keeper with pads and hands and no stick.
-#
-# That cost a +1.00 shot-value error across the whole slot: the planner read the
-# low corners and the five-hole off pad geometry, found daylight, and rated a
-# flat corner near-certain, while the live keeper stick-saved 24/24 of them
-# (tests/unit/ai/test_slot_shot_value_truth.gd). It is the clearest case in the
-# goalie of a MISSING PERCEPTION rather than a mis-tuned number — no constant
-# was wrong, a body part was absent.
+# The goalie's STICK — geometry, aim, and what it covers. Pure/static and
+# engine-free: the pose builder (GoalieBodyConfigBuilder) and the bot planner
+# both read from here, so the stick they each believe in cannot diverge.
 #
 # ── What the stick actually does (measured, not assumed) ─────────────────────
 # tests/unit/ai/test_goalie_low_cover.gd sweeps flat shots for the point where
@@ -46,13 +33,10 @@ class_name GoalieStickRules
 # `standing_lateral_reach()` falls out of the blade's own geometry: where the
 # assembly can put the blade centre at the yaw cap, plus the blade's half-width.
 # Change the collider box, the assembly offset or the yaw cap and the planning
-# cover follows automatically — which is the point, since the drift between the
-# posed stick and the planned stick is exactly the bug this file closes.
-#
-# Pure/static and engine-free: the pose builder and the bot planner both read
-# from here, so the stick they each believe in cannot diverge again.
+# cover follows automatically.
 
-# ── Geometry (mirrors Goalie.tscn) ───────────────────────────────────────────
+# ── Geometry (mirrors Goalie.tscn; pinned by
+# tests/unit/rules/test_goalie_scene_mirrors.gd) ─────────────────────────────
 # StickBladeCollider is a 0.38 x 0.07 x 0.03 box. The width is what closes the
 # five-hole; the height is why a BLADE save is an ice-level event. Note the
 # paddle below, though: a lifted puck clears the blade but not necessarily the
@@ -98,16 +82,16 @@ const TILT_RVH_DEG: float = 65.0
 # inside Stick, essentially straight below the wrist and COLLINEAR with the
 # shaft, so the blade's face is whatever the shaft's tilt makes it.
 #
-# What that cost: the tilts above are solved to swing the blade down to the ice,
-# and with a collinear blade the only way to get there is to lay the whole stick
-# over (hence the butterfly's 72°). At 72° the blade's broad face ends up pointing
-# nearly straight DOWN — measured face normal (−0.15, −0.95, −0.27). The stick is
-# the one surface GoalieSaveRules never deadens, so every blade contact is a live
-# reflection off whichever face the sweep picks; face-down, the reachable surfaces
-# are the heel and the UNDERSIDE, and an underside normal reflects a shot down and
-# GOALWARD. Measured: (0, 0, −26) → (+1.4, −12.7, −20.8), the goalie's own blade
-# putting the puck in his net at 24 m/s, on 8 of 72 in-tight shots. The
-# upward-facing side wedged the rest skyward at 10–21 m/s.
+# Why it matters: the tilts above swing the blade down to the ice, and with a
+# collinear blade the only way there is to lay the whole stick over (hence the
+# butterfly's 72°), which points the blade's broad face nearly straight DOWN
+# (measured face normal (−0.15, −0.95, −0.27)). The stick is the one surface
+# GoalieSaveRules never deadens, so every blade contact is a live reflection off
+# whichever face the sweep picks; face-down, the reachable surfaces are the heel
+# and the UNDERSIDE, and an underside normal reflects a shot down and GOALWARD —
+# measured (0, 0, −26) → (+1.4, −12.7, −20.8), the goalie's own blade putting the
+# puck in his net at 24 m/s on 8 of 72 in-tight shots, the upward-facing side
+# wedging the rest skyward at 10–21 m/s.
 #
 # The value is the shaft angle at which the face comes vertical, so it is the same
 # quantity a stick's lie number encodes (~55° off vertical for a goalie stick).
@@ -159,8 +143,7 @@ static func yaw_to_target(wrist_x: float, wrist_z: float,
 	if b.length_squared() < 0.0004:
 		# Assembly offset degenerate — the blade sits ON the wrist, so there is no
 		# lever for yaw to swing. NOTE this is not the zero-tilt case: at zero tilt
-		# the blade still hangs ASSEMBLY_LATERAL_M to the side, so yaw still moves
-		# it. (The comment this replaced claimed otherwise and was never true.)
+		# the blade still hangs ASSEMBLY_LATERAL_M to the side, so yaw still moves it.
 		return 0.0
 	var desired: float = atan2(-tx, -tz)
 	var base: float = atan2(-b.x, -b.y)
@@ -184,8 +167,6 @@ static func blade_center_x(wrist_x: float, tilt_deg: float, yaw_deg: float) -> f
 # at 0.59-0.64 m; this returns ~0.64.
 static func standing_lateral_reach() -> float:
 	var best: float = -INF
-	# _REACH_PROBE_YAWS is a const, not an inline literal: an Array literal in a
-	# loop header is rebuilt on every call.
 	# The cap is the extreme, but which SIGN of yaw reaches furthest depends on
 	# the assembly offset's own lateral sign, so try both rather than assume.
 	for yaw: float in _REACH_PROBE_YAWS:
@@ -204,21 +185,13 @@ static func standing_lateral_reach() -> float:
 # two goals per save). So the lunge is a gamble, and a gamble is only worth
 # taking when the alternative is not reaching at all.
 #
-# It was gated on `lunge_trigger_distance` (1.2 m, goalie-to-puck) instead, and
-# the characterisation shows what that produced: the BLADE was already 0.15-0.24
-# m from the puck — inside the 0.25 m poke radius — in every case where the lunge
-# fired (tests/unit/ai/test_goalie_stick_engagement_curve.gd). He was spending
-# his most expensive action precisely where his cheapest one was already touching
-# the puck, and paying the unset-read penalty for nothing.
-#
 # Two physical quantities, no threshold: he jabs when the blade cannot reach from
 # where it is, and CAN reach if it commits. Beyond that the jab does not get
 # there either, so it is pure cost — a goalie flailing at a puck he was never
 # going to touch.
 #
 # Distances are BLADE-to-puck, which is also the boundary a shooter actually
-# feels. The old constant measured goalie-to-puck while he was challenging out,
-# so its effective range was roughly double and slid with his depth.
+# feels; a goalie-to-puck gate would instead slide with his challenge depth.
 static func lunge_is_the_only_reach(blade_to_puck_m: float, poke_radius_m: float,
 		lunge_extension_m: float) -> bool:
 	if blade_to_puck_m <= poke_radius_m:

@@ -18,8 +18,8 @@ func report(record: PlayerRecord, goals_for: int, goals_against: int, outcome: S
 		team_size: int, rule_set: int, period_seconds: int) -> void:
 	var body: Dictionary = record.stats.to_dict()
 	# steam_id is the career identity (cross-machine). Offline matches upload too,
-	# so this is no longer guaranteed by the session type — the caller drops the
-	# row when Steam isn't signed in, since an unattributed row is unreadable.
+	# so the session type does not guarantee one — the caller drops the row when
+	# Steam isn't signed in, since an unattributed row is unreadable.
 	body["steam_id"] = SteamManager.steam_id
 	body["player_name"] = record.display_name()
 	body["game_version"] = BuildInfo.VERSION
@@ -53,8 +53,8 @@ func report(record: PlayerRecord, goals_for: int, goals_against: int, outcome: S
 	# shots, and real blocks — so pooling them makes every rate stat meaningless.
 	# rule_set and period length confound the same way (offsides/icing change how
 	# play flows; a 3-minute period and a 10-minute one aren't comparable per-game),
-	# and num_periods was already stored without its duration, which is only half
-	# the clock. Recorded so any query can slice by format.
+	# and num_periods without its duration is only half the clock. Recorded so any
+	# query can slice by format.
 	body["team_size"] = team_size
 	body["rule_set"] = rule_set_key(rule_set)
 	body["period_seconds"] = period_seconds
@@ -197,33 +197,6 @@ func _fetch_array(url: String, callback: Callable) -> void:
 		callback.call([])
 
 
-func _fetch(url: String, callback: Callable) -> void:
-	var root: Window = (Engine.get_main_loop() as SceneTree).root
-	var req := HTTPRequest.new()
-	root.add_child(req)
-	req.request_completed.connect(func(_result: int, code: int, _headers: PackedStringArray, body_bytes: PackedByteArray) -> void:
-		if code == 200:
-			var parsed: Variant = JSON.parse_string(body_bytes.get_string_from_utf8())
-			if parsed is Array and not (parsed as Array).is_empty():
-				callback.call((parsed as Array)[0] as Dictionary)
-			else:
-				callback.call({})
-		else:
-			push_warning("CareerStatsReporter: GET returned HTTP %d%s" % [code, _body_detail(body_bytes)])
-			callback.call({})
-		req.queue_free()
-	)
-	var err: Error = req.request(url, _read_headers())
-	if err != OK:
-		push_warning("CareerStatsReporter: GET failed: %s" % error_string(err))
-		req.queue_free()
-		callback.call({})
-
-
-# Truncated, log-safe rendering of an error response body. PostgREST names the
-# offending column / constraint there (e.g. PGRST204 "column ... not found"),
-# so a bare HTTP code alone can't distinguish schema drift from a size-cap
-# rejection. Returns " — <detail>" (leading separator) or "" when empty.
 func _body_detail(bytes: PackedByteArray) -> String:
 	var detail: String = bytes.get_string_from_utf8().strip_edges()
 	if detail.is_empty():

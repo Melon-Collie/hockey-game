@@ -1,132 +1,80 @@
 extends Node
 
-# Engine-facing constants only. Game-rule constants (faceoff timings, rink
-# geometry, puck position, icing duration, faceoff positions, max players,
-# ice friction) live in Scripts/domain/config/game_rules.gd as a class_name
-# const class. RENDER layers are engine-facing but not here either — they live
-# in render_layers.gd, because @tool scripts set them while building geometry
-# in the editor, where autoloads don't exist.
+# Engine-facing constants only. Game-rule constants (rink geometry, faceoffs,
+# icing, ice friction) live in Scripts/domain/config/game_rules.gd. RENDER layers
+# are engine-facing but live in render_layers.gd, because @tool scripts set them
+# while building geometry in the editor, where autoloads don't exist.
 
 # ── Collision Layers ──────────────────────────────────────────────────────────
-# NOTHING IN THE GAME COLLIDES THROUGH THE PHYSICS SERVER. Every contact — puck
-# vs. geometry, skater vs. skater, skater vs. boards / net / goalie, blade vs.
-# puck — is solved analytically in GDScript, no code anywhere runs a ray, shape,
-# or overlap query, and every collision_mask in the project is 0. The rink, the
-# nets, and the actors carry no colliders at all; the goalie is the sole
-# exception, and only because his parts ARE the save geometry.
-#
-# So a layer here is not a collision filter. It is an IDENTITY TAG on the goalie's
-# StaticBody3D parts, whose shapes and transforms GoalieContactDetector reads
-# directly — and a NONZERO tag is what marks a part live, since the detector skips
-# any part whose collision_layer is 0 (that is how set_stick_collision_enabled
-# takes the stick out of play mid-sweep).
-#
-# Layer 3 (bit 2, value  4) — goalie stick
-# Layer 8 (bit 7, value 128) — goalie bodies (pads/body/head/glove/blocker)
-# Layers 1, 2, 4, 5, 6, 7 are free: they tagged the tutorial/drill obstacle
-# walls, the skater blade Area3Ds, the puck RigidBody3D, the skater
-# CharacterBody3Ds, the boards, and the net, none of which exist any more.
-# (The drill wall is now an analytic box — PuckObstacleCollision — with no body.)
+# Identity tags on the goalie's StaticBody3D parts, NOT collision filters —
+# nothing in the game collides through the physics server, and the goalie is the
+# only actor carrying colliders at all (ARCHITECTURE.md → Collision Layers).
+# GoalieContactDetector reads those shapes directly and skips any part whose
+# collision_layer is 0, which is how set_stick_collision_enabled takes the stick
+# out of play mid-sweep.
 const LAYER_GOALIE_STICK: int   = 4
 const LAYER_GOALIE_BODIES: int  = 128
 
 # ── Network (transport-level) ─────────────────────────────────────────────────
-const PORT: int = 7777
 # Client input batches are sent once per physics tick. Matching PHYSICS_TICK
-# minimizes the batch-send wait folded into ClockSync.INPUT_LEAD_SEC (which
-# derives BATCH_INTERVAL from this constant) — at 60 Hz the worst-case wait was
-# a full 16.7 ms of client→host latency on every input.
+# minimizes the batch-send wait folded into ClockSync.INPUT_LEAD_SEC, which
+# derives BATCH_INTERVAL from this constant.
 const INPUT_RATE: int = 120
-# World-state broadcast rate. 60, NOT the 120 that INPUT_RATE runs at — the
-# determinism work (shared analytic puck step + predict-to-host-present, and
-# render == rewind) decoupled how fresh a client FEELS from how often packets
-# arrive, so the extra 60 Hz was paying host cost and bandwidth for very little:
-#   • The loose puck re-predicts from the newest snapshot to host-present every
-#     frame on the shared solver, so a sparser snapshot stream costs only a
-#     slightly larger residual when a host-side event (bounce, save, deflect)
-#     lands between packets — not staleness.
-#   • The local player is predicted + reconciled on acks, so it is rate-free.
-#   • Remote skaters interpolate, and their cushion follows automatically:
-#     _compute_target_interpolation_delay includes one broadcast_interval, so
-#     the delay grows ~8.3 ms and render == rewind still holds (the claim
-#     rewinds read the same adapted delay).
-# What it buys: host per-tick encode/send cost and upload both halve (a 3-human
-# playtest measured ~140 KB/s at 2 peers, over the ~60 KB/s-per-peer guide), and
-# 5v5 stops needing ~5 Mbps of host upload. The host stalls that drive input
-# backlog → drains → client reconcile churn are exactly the per-tick cost this
-# relieves. PHYSICS_TICK must stay an integer multiple (_state_tick_divisor).
+# World-state broadcast rate — deliberately HALF INPUT_RATE. How fresh a client
+# feels does not ride this rate: the loose puck re-predicts from the newest
+# snapshot to host-present every frame on the shared solver (so a sparser stream
+# costs a slightly larger residual when a host-side bounce/save/deflect lands
+# between packets, not staleness), the local player is predicted and reconciled
+# on acks, and remote interpolation cushions include one broadcast_interval so
+# they widen automatically. Halving it halves host per-tick encode/send cost and
+# upload — a 3-human playtest measured ~140 KB/s at 2 peers against a
+# ~60 KB/s-per-peer guide, and 5v5 would otherwise need ~5 Mbps of host upload.
+# PHYSICS_TICK must stay an integer multiple (_state_tick_divisor).
 const STATE_RATE: int = 60
-# Rate at which world-state snapshots are written to the .mreplay file, well
-# below STATE_RATE: the replay viewer interpolates between snapshots (see
-# ReplayPlaybackEngine), so recording every 120 Hz broadcast is ~4x redundant on
-# disk. 30 Hz keeps playback smooth at roughly a quarter the file size. Only the
-# steady PLAYING stream is throttled — phase-transition keyframes and the goal
-# moment are always recorded (GameManager._record_world_state_to_file).
+# Rate at which world-state snapshots are written to the .mreplay file, below
+# STATE_RATE: the viewer interpolates between snapshots (ReplayPlaybackEngine),
+# so 30 Hz keeps playback smooth at a fraction of the file size. Only the steady
+# PLAYING stream is throttled — phase-transition keyframes and the goal moment
+# are always recorded (GameManager._record_world_state_to_file).
 const REPLAY_FILE_RATE: int = 30
 # Client-side render delay when interpolating buffered snapshots. Shared default
 # for RemoteController / PuckController / GoalieController; each controller
 # still exposes it as @export so individual actors can be tuned independently.
 const NETWORK_INTERPOLATION_DELAY: float = 0.075
-# Stage-3 remote forward-prediction (see docs/netcode-forward-prediction-plan.md).
 # How far a remote skater is intent-integrated from its interpolated-past base
-# toward the client's own render instant, as a fraction of (interp_delay + input
-# lead): 0.0 = legacy interpolate-in-the-past (exactly render == rewind, no
-# integration at all); 1.0 = the body lands on estimated_host_time() + lead, the
-# SAME instant this client's own predicted skater occupies. The lead is in the
-# depth because the local body cannot leave that instant (inputs are applied
-# immediately and stamped a lead ahead), so it is the only clock the whole
-# rendered scene can share — and sharing one is what lets the local collision
-# step resolve its own body against remotes without a lead-wide skew. READ BY BOTH the client
-# render (RemoteController) AND every carrier-anchored host claim rewind (hit, poke,
-# stick-lift — via LagCompRewind.forward_predict_skater / forward_predict_ticks), so
-# render stays == rewind at any value — all consumers MUST use the same fraction. Set to 1.0 (full ~interp_delay of forward
-# prediction, remote bodies at ~present) for the experimental Steam playtest build.
+# toward this client's render instant, as a fraction of (interp_delay + input
+# lead): 0.0 = pure interpolate-in-the-past, no integration at all; 1.0 = the
+# body lands on estimated_host_time() + lead, the same instant this client's own
+# predicted skater occupies (the one clock the whole rendered scene shares — see
+# Scripts/networking/CLAUDE.md). READ BY BOTH the client render
+# (RemoteController) AND every carrier-anchored host claim rewind (hit, poke,
+# stick-lift — LagCompRewind.forward_predict_skater / forward_predict_ticks):
+# all consumers MUST use the same fraction, or render stops equalling rewind.
 # Dial toward 0.5 / 0.0 if remote skaters overshoot on hard cuts (extrapolation
-# snap-back) or contested-hit feel regresses; 0.0 restores exact render == rewind.
+# snap-back) or contested-hit feel regresses.
 const REMOTE_FORWARD_PREDICT_FRACTION: float = 1.0
-# Rocket-League-style input decay for the forward prediction: over this many ticks
-# the assumed (held) move-intent fades linearly to 0, so the far end of the
-# prediction window coasts on friction instead of thrusting in a possibly-stale
-# direction. Measured, this is a SMALL lever, not the headline one: at skating
-# speed thrust is nearly balanced by friction, so momentum dominates the window
-# and the decay moves only ~2-6% of the predicted displacement (90-degree stale
-# intent at RTT 200: 68mm of lateral drift at decay 0 vs 24mm at 5, against
-# ~1.03 m of forward travel). The prediction's intrinsic error is bounded by
-# skater acceleration — a hard cut can only diverge ~5 cm over an RTT-100 window
-# — so REMOTE_FORWARD_PREDICT_FRACTION is the dominant lever, and reproduction
-# consistency across the three call sites matters far more than either. Read by BOTH the client
+# Ticks over which the forward prediction's assumed (held) move-intent fades
+# linearly to 0, so the far end of the window coasts on friction instead of
+# thrusting in a possibly-stale direction. A SMALL lever: at skating speed thrust
+# nearly balances friction, so momentum dominates and the decay moves only ~2-6%
+# of the predicted displacement (90-degree stale intent at RTT 200: 68 mm of
+# lateral drift at decay 0 vs 24 mm at 5, against ~1.03 m of forward travel) —
+# REMOTE_FORWARD_PREDICT_FRACTION is the dominant lever. Read by BOTH the client
 # render (RemoteController) and the host claim rewind (HitClaimResolver) via
-# SkaterMovementRules.integrate_forward, so the decay is identical and render ==
-# rewind holds. 0 = no decay (full intent every tick). ~5 fades over the near half
-# of a full-lead (~9-tick) window; lower = more conservative (less overshoot, less
-# catch-up), higher = more aggressive. Tune alongside REMOTE_FORWARD_PREDICT_FRACTION.
+# SkaterMovementRules.integrate_forward, so the decay is identical on both.
+# 0 = no decay (full intent every tick); ~5 fades over the near half of a
+# full-lead (~9-tick) window.
 const FORWARD_PREDICT_INTENT_DECAY_TICKS: int = 5
-# Phase-3/4b determinism migration (docs/netcode-determinism-migration.md):
-# every client runs the SAME analytic sim the host drives the loose puck with,
-# forward to its estimate of host present PLUS its input lead (the shared render
-# instant above, so the puck and the blade reaching for it are judged on one
-# clock) — real predict-and-reconcile; the
-# loose puck is never interpolated except as the stale-data fallback. The
-# source is the newest authoritative snapshot, or — for the shooter's own
-# release, until the host's snapshots reflect it — the local release seed
-# (PuckController._release_seed_*). Static geometry (boards, posts, crossbar,
-# net) is fully predicted via the shared PuckAuthorityRules step; goalie
-# contact is a prediction STOP (hold at the contact — the save outcome is a
-# host decision, never re-derived client-side). Host claim rewinds for the
-# LOOSE puck (pickup, one-timer range gate) read the claim stamp — see
-# LagCompRewind.puck_view_time — so render == rewind holds at present.
-# Prediction depth cap: a snapshot older than this (deep packet loss) is too
-# stale to predict from — the client falls back to the legacy interpolation
-# path, whose extrapolation cap + hold already handle starvation gracefully.
+# Depth cap on the client-side loose-puck prediction (Scripts/networking/
+# CLAUDE.md → puck modes): a snapshot older than this — deep packet loss, clock
+# warmup — is too stale to predict from, and the client falls back to the
+# interpolation path, whose extrapolation cap + hold handle starvation
+# gracefully.
 const PUCK_PREDICT_MAX_S: float = 0.35
-# Wire encoding for session-relative timestamps: u32 in 0.1 ms units
-# (seconds × this scale). Replaces f32 seconds, whose ULP degraded with host
-# uptime — ~1 ms error at 2.3 h (visible interpolation jitter), ~2 ms at
-# 4.6 h (per-tick input stamps quantize equal and get dropped as duplicates).
-# u32 @ 0.1 ms gives constant precision over a ~119-hour range. Encode with
-# roundi so round-trips through the grid are exact; bump
-# BuildInfo.PROTOCOL_VERSION and ReplayFileWriter.FORMAT_VERSION if this
-# representation ever changes again.
+# Wire encoding for session-relative timestamps: u32 in 0.1 ms units (seconds ×
+# this scale), constant-precision over a ~119-hour range. Encode with roundi so
+# round-trips through the grid are exact; bump BuildInfo.PROTOCOL_VERSION and
+# ReplayFileWriter.FORMAT_VERSION if this representation ever changes.
 const TIME_WIRE_SCALE: float = 10000.0
 
 # ── Physics ───────────────────────────────────────────────────────────────────
@@ -150,10 +98,6 @@ const SCENE_REPLAY_VIEWER: String = "res://Scenes/ReplayViewer.tscn"
 
 
 func _ready() -> void:
-	# Guard the two-knob coupling: the engine steps at project.godot's rate while
-	# all GDScript timing derives from PHYSICS_TICK. If they disagree the sim
-	# silently dilates against the wall clock that clock-sync and broadcast
-	# cadence depend on — catch it loudly at boot instead of in the field.
 	var engine_tick: int = int(ProjectSettings.get_setting(
 			"physics/common/physics_ticks_per_second", PHYSICS_TICK))
 	if engine_tick != PHYSICS_TICK:

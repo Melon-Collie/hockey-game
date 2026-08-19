@@ -95,13 +95,6 @@ func close() -> void:
 	closed.emit()
 
 
-func toggle() -> void:
-	if visible:
-		close()
-	else:
-		open()
-
-
 func apply_spectator_chrome(is_spec: bool) -> void:
 	if _spectate_btn != null:
 		_spectate_btn.visible = not is_spec

@@ -60,9 +60,9 @@ static func assign_team(team0_count: int, team1_count: int) -> int:
 # default-arg callers (tests, tutorial) without forcing them to know the dot.
 #
 # center_reach: the CENTER slot's distance from the dot, in metres. The static
-# FACEOFF_OFFSETS distance (1.5 m) predates attribute-scaled reach — a Size-1
-# center's maximum blade radius (~1.3 m) physically cannot touch the puck from
-# there. Callers that know the player pass their reach-derived distance
+# FACEOFF_OFFSETS distance (1.5 m) is build-blind, and the shortest build's
+# maximum blade radius (~1.3 m) physically cannot touch the puck from there.
+# Callers that know the player pass their reach-derived distance
 # (SkaterController.faceoff_center_distance: rest blade radius × fraction) so
 # every build can play the drop; ≤ 0 keeps the legacy offset (tests, tutorial,
 # callers without a controller). Wingers are unaffected.
@@ -73,7 +73,7 @@ static func faceoff_position(team_id: int, team_slot: int,
 	# positional (wall / goal-side stack / points — see the FACEOFF_END_*
 	# doc in GameRules), not dot-relative. The D pair (5v5-only slots)
 	# always repositions; the boards-side WINGER joins the defending stack
-	# only in 5v5 (`team_size` — 3v3's shipped alignment is untouched, and
+	# only in 5v5 (`team_size` — 3v3 keeps the one-table alignment, and
 	# default-arg callers like spawn/swap all pass center ice anyway). The
 	# C and the inside winger keep the table everywhere (the dot line-up
 	# and the hash-mark checking matchup ARE the real alignment).

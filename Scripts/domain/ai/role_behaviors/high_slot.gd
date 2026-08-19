@@ -36,17 +36,12 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	AIRoleHelpers.collect_opponents(ctx, opp_positions, opp_states)
 	var teammates: Array[Vector3] = ctx.scratch_teammates
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, teammates)
-	# First-man-back discipline is now the pinch read (plan §13): hold the float
-	# while we have control, back off only to the numbers layer when we don't, and
-	# never float outside feedable range of the puck. F3's job is to be the seam
-	# option AND the first man back — the old race-home bound made him only the
-	# second of those.
 
-	# Far from the band, skate at the CALCULATED float spot directly — the
-	# seam argmax refines a look that gets re-read from closer before arrival
-	# (see STATION_ARGMAX_LOD_M). The first-man-back race bound still applies
-	# to the direct spot (the channel fill above is memoized, so this is a
-	# handful of squared compares).
+	# Far from the band, skate at the CALCULATED float spot directly — the seam
+	# argmax refines a look that gets re-read from closer before arrival (see
+	# STATION_ARGMAX_LOD_M). The pinch read still bounds that direct spot: F3 has
+	# to be the seam option AND the first man back, and a bound that only sags him
+	# home leaves him just the second of those.
 	var band_center := Vector3(
 			0.0, 0.0, opp_net.z + own_dir * BAND_DEPTHS_M[1])
 	if not AIRoleHelpers.station_needs_refinement(ctx.self_pos, band_center):
@@ -70,9 +65,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 				continue
 			if AIRoleHelpers.too_close_to_teammate(c, teammates):
 				continue
-			# The seam look: can the carrier feed me here (lane_clear at a
-			# real pass speed), and can I shoot from here (lane to the net)?
-			# Each lane defender priced at his own reach/close (scratch caps).
+			# The seam look: can the carrier feed me here, and can I shoot from
+			# here? Each lane defender priced at his own reach and close.
 			var feed: float = AIActionScoring.lane_clear(
 					carrier_pos, c, opp_positions, pass_speed_ref,
 					AIActionScoring.EMPTY_VEC3, ctx.scratch_opp_caps)

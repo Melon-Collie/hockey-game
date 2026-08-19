@@ -14,8 +14,8 @@ extends Object
 #   • TeamBrain.tick is rate-limited to 6 Hz, so the full strategy computation
 #     lands on roughly one physics tick in twenty and costs nothing on the other
 #     nineteen — and force_retick() fires it off-cadence on every puck-carrier
-#     change, so the spikes CLUSTER in scrums. Those spikes are off-thread now
-#     (they ride the worker batch), which is exactly why they were moved.
+#     change, so the spikes CLUSTER in scrums. They ride the worker batch, so
+#     here they are context rather than main-thread cost.
 #   • AICoordinator only drains brain writes, preps agents and kicks a batch on
 #     ticks where the worker is idle. Ticks therefore alternate between a heavy
 #     harvest-and-kick and a run of nearly free ones.

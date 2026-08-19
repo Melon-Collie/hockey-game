@@ -3,13 +3,13 @@ extends RefCounted
 
 # Owned by GameManager. Created at world spawn, freed on scene exit.
 # Call sites use static methods so they're null-safe outside a game session.
+# What each published metric MEANS and its healthy band: docs/telemetry_dictionary.md.
 static var instance: NetworkTelemetry = null
 
 const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
 
 # Session-long aggregation of the per-second metrics below, folded once per 1 s
-# window in tick(). Read by NetworkSessionReporter at game-over. Fresh per
-# session (NetworkTelemetry itself is rebuilt each world spawn).
+# window in tick(). Read by NetworkSessionReporter at game-over.
 var session := NetworkSessionSummary.new()
 # Live connection facts the overlay reads from NetworkManager directly but that
 # aren't pushed through the static record_* path. GameManager refreshes these
@@ -18,33 +18,24 @@ var current_rtt_ms: float = 0.0
 var current_peer_count: int = 0
 # Host-stall attribution context, pushed by GameManager each frame: the live game
 # phase and actor count, plus a breadcrumb of the last notable game-event
-# transition (note_host_event) and when it fired. Captured into every auto-marker
-# so a host hitch says WHAT it coincided with — a stall in steady PLAYING points
-# at per-tick cost; one in GOAL_SCORED / FACEOFF_PREP (or moments after that
-# transition) points at that phase's handler (replay capture, faceoff reset).
+# transition (note_host_event) and when it fired. Captured into every auto-marker.
 var current_phase: String = "—"
 var current_actor_count: int = 0
 var _last_host_event: String = ""
 var _last_host_event_sec: float = -1.0
-# Host physics ticks whose inter-tick wall gap exceeded _HOST_STALL_MS this window
-# — a session total of noticeable hitches (worst_stall_ms is the single worst gap;
-# this is HOW MANY). Threshold is a feel/diagnostic cutoff (~2 dropped 60 Hz
-# frames), not an evaluator constant. Host only. Folded as a TOTAL_KEY.
+# Host physics ticks whose inter-tick wall gap exceeded _HOST_STALL_MS this
+# window. The threshold is a feel/diagnostic cutoff (~2 dropped 60 Hz frames),
+# not an evaluator constant. Host only; folded as a TOTAL_KEY.
 const _HOST_STALL_MS: float = 33.0
 var _host_stall_count: int = 0
-# Client-side: de-clumped path jitter (PDV) — read WITH jitter_p95: jitter high
-# but this low = benign relay clumping; both high = genuinely jittery path that
-# needs buffer depth. Also the term that sizes the interpolation cushion, so if
-# extrapolation_pct climbs while this stays low the cushion is under-sizing.
+# Client-side: de-clumped path jitter (PDV) — each packet timed against its own
+# host-capture stamp, so relay clumping barely moves it. Also the term that
+# sizes the interpolation cushion.
 var current_delay_spread_ms: float = 0.0
 # Client-side: last clock-sync offset correction magnitude (see ClockSync).
 var current_clock_correction_ms: float = 0.0
 # Client-side: the input-lead servo's live EXTRA above the static
-# INPUT_LEAD_SEC (ms). Post-C1 observability: the honest capture labels
-# changed what the servo measures as pop-overdue, and its equilibrium under
-# the new convention is an open question the session rows should answer —
-# pinned at MAX_LEAD_EXTRA (50) means runaway over-lead (a hidden input-latency
-# tax), ~0 with rising host drains means under-leading.
+# INPUT_LEAD_SEC (ms).
 var current_input_lead_extra_ms: float = 0.0
 # Host-side: worst per-peer link this instant, so the host row carries a real
 # link picture instead of degenerate zeros (its own RTT/loss are 0).
@@ -54,8 +45,7 @@ var current_worst_peer_loss_pct: float = 0.0
 # Pre-history ring: the last RECENT_SAMPLE_WINDOW folded 1 s samples, attached
 # to felt-lag / auto markers so a marker carries the run-up to the bad moment
 # (an F4 press lands AFTER the moment — the instantaneous snapshot may already
-# look recovered). Values are rounded at build time: history rides inside the
-# row's jsonb, which the table caps at 64 KiB.
+# look recovered).
 const RECENT_SAMPLE_WINDOW: int = 6
 var _recent_samples: Array[Dictionary] = []
 
@@ -66,20 +56,15 @@ var _reconcile_count: int = 0
 var _reconcile_on_replayed_count: int = 0  # subset: matched a replay-re-recorded entry
 var _extrapolation_count: int = 0
 # Frames observed this window (one per observe_actors call = one per rendered
-# frame). Denominator for the framerate-INDEPENDENT extrapolation fraction:
-# _extrapolation_count is sampled once per rendered frame, so its raw per-sec
-# rate scales with the client's fps (a 240fps client counts 4x a 60fps client
-# for the same buffer health). extrapolation_pct normalizes that out.
+# frame). Denominator for extrapolation_pct.
 var _frame_count: int = 0
 var _reconcile_mag_sum: float = 0.0
 var _reconcile_mag_n: int = 0
 var _reconcile_lookup_count: int = 0
 var _reconcile_match_count: int = 0
-# Reconcile-match MISS attribution (ReconciliationRules.MatchMiss buckets). A miss
-# forces the prediction-lead fallback that trips a spurious position snap, so a
-# high miss rate drives residual reconcile churn; these say WHERE the ack fell so
-# we can tell a benign post-clear transient (EMPTY/OLDER) from a real history hole
-# (GAP). Session totals; gap_ms tracks the worst ack-vs-history-bound distance.
+# Reconcile-match MISS attribution (ReconciliationRules.MatchMiss buckets):
+# WHERE the ack fell relative to the kept prediction history. Session totals;
+# gap_ms tracks the worst ack-vs-nearest-history-bound distance.
 var _reconcile_miss_empty: int = 0
 var _reconcile_miss_older: int = 0
 var _reconcile_miss_newer: int = 0
@@ -104,73 +89,54 @@ var _input_lead_sum: float = 0.0
 var _input_lead_n: int = 0
 var _starvation_count: int = 0
 var _input_drain_count: int = 0
-# Phase-3/4a prediction quality (client): the pre-damp residual between the
-# analytic prediction target and the rendered (smoothed) position — steady
-# state ~0 when the shared sim agrees with the authority; spikes on host-side
-# events the client couldn't know (deflects, saves). The single number that
-# answers "is predict-and-reconcile working?" in a session row.
+# Loose-puck prediction quality (client): the residual between the analytic
+# prediction target and the rendered position, measured BEFORE the SmoothDamp
+# tail absorbs it.
 var _puck_predict_residual_sum: float = 0.0
 var _puck_predict_residual_n: int = 0
 var _puck_predict_residual_max: float = 0.0
 var _puck_predict_fallback_count: int = 0
-# Remote-skater forward-prediction quality (client): same pre-damp residual on
-# remote bodies — fp error + correction pressure per tick.
+# Remote-skater forward-prediction quality (client): the same pre-damp residual
+# on remote bodies, once per tick.
 var _remote_correction_sum: float = 0.0
 var _remote_correction_n: int = 0
 var _remote_correction_max: float = 0.0
-# Host: claim-carried interp_delay_ms clamped by the P2 plausibility bound.
-# Legit players should never trip it — sustained non-zero means either the
-# jitter allowance is too tight (mis-rewinding honest high-jitter claims) or a
-# client is inflating its delay.
+# Host: claim-carried interp_delay_ms values bounded by the plausibility check
+# (LagCompRewind.plausible_interp_delay_ms), with the worst excess.
 var _delay_clamp_count: int = 0
 var _delay_clamp_excess_max_ms: float = 0.0
-# Host-side lag-comp pickup-claim outcomes (the host processes every client's
-# claim, so its row summarizes rewind health for the whole lobby). A claim that
-# reaches the rewound geometry test counts in _pickup_claim_count; if the rewound
-# blade/puck don't overlap it's a _pickup_claim_miss (client's view said in-range
-# but the host's rewind disagreed — the "reached for it, didn't get it" symptom),
-# and a geometry-hit-but-not-catchable verdict is a _pickup_claim_deflect. A high
-# miss FRACTION means the rewind isn't reproducing the client's view; near-zero
-# means the lag-comp pickup path is working. Folded as session totals (TOTAL_KEYS).
+# Host-side lag-comp pickup-claim outcomes. _pickup_claim_count is the
+# denominator: a claim that reached the rewound geometry test. Rewound blade and
+# puck failing to overlap is a miss; overlapping but not catchable (speed/angle)
+# is a deflect. Folded as session totals (TOTAL_KEYS).
 var _pickup_claim_count: int = 0
 var _pickup_claim_miss_count: int = 0
 var _pickup_claim_deflect_count: int = 0
-# Poke / stick-lift lag-comp claim outcomes — the same rewind-health signal as the
-# pickup claim counters, for the other two client-authoritative blade actions. A
-# claim that reaches the rewound geometry test counts in _*_claim_count; a
-# geometry fail (rewound blade/target don't overlap) is a _*_claim_miss — the
-# "reached for it, didn't get it" symptom. A high miss FRACTION on the host row
-# flags a rewind not reproducing the client's view. Folded as session totals.
+# Poke / stick-lift lag-comp claim outcomes: the same denominator-and-miss shape
+# as the pickup counters, for the other two client-authoritative blade actions.
+# Folded as session totals.
 var _poke_claim_count: int = 0
 var _poke_claim_miss_count: int = 0
 var _stick_lift_claim_count: int = 0
 var _stick_lift_claim_miss_count: int = 0
 # ── Why a claim missed ───────────────────────────────────────────────────────
-# The miss counters above give a RATE and nothing else, so a 45% miss fraction
-# is unreadable: it conflates the rewind genuinely failing to reproduce the
-# client's view, the two sides running different tests (the client's send gate
-# is point-in-sphere at one instant, the host's is a swept segment pair), and
-# the player legitimately grazing past a loose puck — blade-proximity pickup
-# claims on every near-miss. These three separate those, and each answers one
-# question:
+# A miss fraction on its own conflates three unrelated things: the rewind
+# failing to reproduce the client's view, the two sides running different tests
+# (the client's send gate is point-in-sphere at one instant, the host's is a
+# swept segment pair), and the player legitimately grazing past a loose puck,
+# since blade proximity claims on every near-miss. These three separate them.
+# How to read them: docs/telemetry_dictionary.md → "Why a claim missed".
 #
 #   claim_miss_sep_ratio   — swept separation at the rewind instant / the test
-#     radius, recorded on every miss. ~1.0-1.2 is a boundary graze (the send
-#     gate and the swept test disagreeing at the edge, expected and harmless);
-#     >2 means the rewind put blade and puck somewhere unrelated, which is the
-#     failure the miss counter is supposed to be reporting.
+#     radius, recorded on every miss.
 #   claim_miss_recovered   — a miss followed by the host's own present-time
-#     grab granting the same peer shortly after. Separates "the lag-comp fast
-#     path fell through, the normal path caught it a trip later" (a latency
-#     cost) from "the player lost the puck" (a gameplay loss). The miss rate
-#     alone cannot tell these apart and they are not comparably bad.
+#     grab granting the same peer shortly after: a latency cost rather than a
+#     lost puck. The miss count alone cannot tell those apart.
 #   claim_blade_divergence_m / claim_continuity_clamps — distance between the
 #     client-sent blade and the host's OWN reconstruction of it at the rewind
 #     instant, over every claim reaching the geometry test, plus how often
-#     continuity_clamp actually had to move the point. This measures rewind
-#     fidelity DIRECTLY, which is what the miss fraction only claims to measure:
-#     the clamp pulls the client's blade toward the host's reconstruction, so a
-#     noisy reconstruction converts into misses regardless of what the client saw.
+#     continuity_clamp actually had to move the point. Measures rewind fidelity
+#     directly, which the miss fraction only claims to measure.
 var _claim_miss_sep_ratio_sum: float = 0.0
 var _claim_miss_sep_ratio_n: int = 0
 var _claim_miss_sep_ratio_max: float = 0.0
@@ -181,17 +147,12 @@ var _claim_blade_divergence_max: float = 0.0
 var _claim_continuity_clamp_count: int = 0
 # Host: claims dropped at the RPC boundary by the stamp-plausibility gate
 # (LagCompRewind.is_claim_stamp_plausible) — BEFORE any resolver ran, so they
-# appear in no other claim counter. Expected ~0: a legit claim's stamp is
-# ~one-way old at arrival, well inside the bound. Sustained non-zero means
-# either an RTT spike outran the host's slow ping EMA (legit claims silently
-# eaten — the felt "reached the puck, nothing happened") or a client is
-# shopping timestamps. Folded as a session total (TOTAL_KEYS).
+# appear in no other claim counter. Folded as a session total (TOTAL_KEYS).
 var _claim_stamp_reject_count: int = 0
-# CLIENT-side optimistic-pickup outcomes (the felt "grab, then lose it"). A pin
-# is the visual attach; it resolves as confirmed (host granted), timeout (host
-# silently declined → rolled back = the felt bug), or stolen (a different carrier
-# legitimately won it). timeouts/pins is the felt-bug rate the pin predicate gate
-# is meant to drive toward zero. Session totals (TOTAL_KEYS); host rows fold 0s.
+# CLIENT-side optimistic-pickup outcomes. A pin is the visual attach; it
+# resolves as confirmed (host granted), timeout (host declined, so the pin rolls
+# back — the felt "grab, then lose it"), or stolen (a different carrier won it).
+# Session totals (TOTAL_KEYS); host rows fold 0s.
 var _provisional_pin_count: int = 0
 var _provisional_confirmed_count: int = 0
 var _provisional_timeout_count: int = 0
@@ -203,73 +164,46 @@ var _provisional_stolen_count: int = 0
 var _bytes_sent_window: int = 0
 var _bytes_received_window: int = 0
 # Loose-puck hard snaps: the render smoother's velocity-aware snap guard
-# (PuckHandoffRules.needs_hard_snap) fired on a MOVING target — genuine
-# trajectory divergence (a bounce that differed, a deflect the client missed),
-# never a faceoff/goal-reset teleport (those hit the at-rest branch and aren't
-# counted). Near-zero in healthy play; firing every shot is a prediction bug.
+# (PuckHandoffRules.needs_hard_snap) fired on a MOVING target. Faceoff and
+# goal-reset teleports hit the at-rest branch and are deliberately not counted,
+# so this is genuine trajectory divergence only.
 var _puck_hard_snap_count: int = 0
 # Shot-launch divergence: at the release-seed → snapshot handover after a LOCAL
 # release, the gap between the seed-predicted puck (advanced to the confirming
-# snapshot's own instant) and that authoritative snapshot. Both sides fire from
-# the same client-sent origin on the same solver, so this should be tiny —
-# a spike means real launch divergence (clock estimate error × puck speed, or a
-# host-side event inside the one-way window), and it attributes the shot-launch
-# share of puck_hard_snaps. Window MAX (peak) + a session shot count (TOTAL). Client only.
+# snapshot's own instant) and that authoritative snapshot. Window MAX (peak) per
+# component, plus a session shot count (TOTAL) as the denominator. Client only.
 var _shot_launch_pos_div_max: float = 0.0
 var _shot_launch_vel_div_max: float = 0.0
 var _shot_launch_count: int = 0
 var _window_timer: float = 0.0
 
 # ── Published metrics (read by overlay) ──────────────────────────────────────
-# Expected ranges below assume healthy network (RTT < 100ms, loss < 1%) and
-# steady-state gameplay (no phase transitions, no body checks in flight).
-# Spike-rate-during-normal-play is the universal latent-bug detector: anything
-# rate-based that's listed as "near-zero" but trends non-zero indicates a
-# structural problem (non-determinism, divergence channel, wire-format bug)
-# regardless of whether the symptom is visible on screen yet.
-var world_state_hz: float = 0.0          # ~120/s on host, matches send rate on clients
+var world_state_hz: float = 0.0          # world-state packets RECEIVED per second (clients; ~STATE_RATE)
 var input_hz: float = 0.0                # ~120/s — input batch send rate (Constants.INPUT_RATE)
-# reconcile_per_sec: how often the threshold check actually snapped the skater.
-# Expected: <1/s during normal play. Sustained higher rate means either real
-# non-determinism in _process_input or a divergence channel the threshold
-# check is structurally blind to (the class of bug that motivated trajectory-
-# based reconciliation in the first place).
 var reconcile_per_sec: float = 0.0
-# Subset of reconcile_per_sec whose matched prediction was replay-re-recorded
-# (correction echo through replay approximations vs fresh live divergence).
+# Subset of reconcile_per_sec whose matched prediction was replay-re-recorded.
 var recon_replayed_entry_per_sec: float = 0.0
-# reconcile_magnitude_avg: average distance snapped per reconcile, in meters.
-# Expected: <0.05m on healthy network. Larger values mean threshold check is
-# letting big divergences accumulate before firing — or, if rate is high too,
-# the predicted-vs-server lookup is missing and falling back to live position.
-var reconcile_magnitude_avg: float = 0.0
-# Fraction of reconcile lookups that found the client's own prediction for the
-# server's ack timestamp. <100% = find_at missing, so reconcile falls back to
-# live-vs-server (which includes prediction lead) and fires false corrections —
-# the single most diagnostic number for "why am I reconciling on a clean LAN."
+var reconcile_magnitude_avg: float = 0.0  # average distance snapped per reconcile (m)
+# Share of reconcile lookups that found the client's own prediction for the
+# server's ack timestamp. Below 100 means reconcile is falling back to
+# live-vs-server, which still carries the prediction lead.
 var reconcile_match_pct: float = 100.0
-# Per-channel reconcile trip rates (Hz): which threshold fired the snap. At rest,
-# pos/vel are ~0, so a non-zero rot rate isolates pose/aim (upper-body)
-# divergence as the reconcile trigger rather than a position desync.
+# Per-channel reconcile trip rates (Hz): which threshold fired the snap.
 var recon_pos_per_sec: float = 0.0
 var recon_vel_per_sec: float = 0.0
 var recon_ubody_per_sec: float = 0.0
 # Same-timestamp position offset in units of one tick of travel, signed by
-# lead(+)/lag(-) along velocity. ~+/-1.0 = a clean one-tick capture/integration
-# phase mismatch; near 0 or noisy = something else.
+# lead(+)/lag(-) along velocity.
 var pos_offset_ticks_avg: float = 0.0
-# Distance from the server AFTER snap+replay (m). ~0 = the snap converged; a
-# persistent value = the replay leaves the body off-server (offset rebuilds).
-var post_replay_residual_avg: float = 0.0
-var extrapolation_per_sec: float = 0.0   # bracket extrapolation count; expect <1/s. RAW rate — scales with fps.
-# Framerate-independent version of the above: what SHARE of rendered frames were
-# dead-reckoning a remote entity past its buffer. Comparable across machines with
-# different render rates (extrapolation_per_sec is not — see _frame_count). This
-# is the honest "how dry is the remote buffer" signal.
+var post_replay_residual_avg: float = 0.0  # distance from the server AFTER snap+replay (m)
+var extrapolation_per_sec: float = 0.0   # bracket extrapolation count. RAW rate — scales with fps.
+# The SHARE of rendered frames that dead-reckoned a remote entity past its
+# buffer. The raw rate above scales with the client's render rate (a 240 fps
+# client counts 4× a 60 fps one for identical buffer health), so only this
+# fraction is comparable across machines.
 var extrapolation_pct: float = 0.0       # 0..100
-# Effective client render rate (frames observed / window). Surfaces the framerate
-# that otherwise silently confounds every per-frame-sampled rate here
-# (extrapolation, reconcile). Lower is worse for felt smoothness.
+# Effective client render rate (frames observed / window) — the framerate that
+# otherwise silently confounds every per-frame-sampled rate here.
 var client_fps: float = 0.0
 var buffer_depth_skater: int = 0
 var buffer_depth_puck: int = 0
@@ -279,25 +213,15 @@ var blade_jump_mag_avg: float = 0.0
 var blade_reconcile_mag_avg: float = 0.0
 var prediction_divergence_avg: float = 0.0
 var ooo_drops_per_sec: float = 0.0       # expect 0; non-zero means UDP reordering
-# Bandwidth (KB/s). Host sees bytes_sent_per_sec as sum across all peers (1×
-# snapshot bytes per recipient per broadcast); clients see only their own
-# receive volume. Payload bytes only — Steam transport + UDP/IP framing (plus
-# SDR relay overhead when not directly connected) add to this on the wire beyond
-# what we count here. Goalie overhaul target: snapshot stays under 500 B/tick at
-# 120Hz, so per-recipient bytes_sent_per_sec should stay under ~60 KB/s.
+# Bandwidth (B/s). The host's sent figure sums across all peers (one snapshot's
+# bytes per recipient per broadcast); clients see only their own receive volume.
 var bytes_sent_per_sec: float = 0.0
 var bytes_received_per_sec: float = 0.0
-# Loose-puck hard-snap rate (Hz): moving-target smoother snaps only (see
-# _puck_hard_snap_count). Near-zero in healthy play.
 var puck_hard_snap_per_sec: float = 0.0
 var input_queue_depth_median: int = 0
 # HOST-side: the deepest remote input queue seen this window (the host's own view
 # of its pending client inputs — input_queue_depth above is the client's echo and
-# folds 0 on host rows). This is the discriminator for drain-driven reconcile
-# churn: drains firing while the queue is DEEP means the drain is eating a
-# cushion the lead servo deliberately built (raise the drain trigger); drains
-# while it is SHALLOW (0-1) means inputs genuinely arrive late and the lead /
-# clock is the problem. Without it the two are indistinguishable in a session row.
+# folds 0 on host rows).
 var host_input_queue_depth_max: int = 0
 var input_lead_avg_ms: float = 0.0
 var input_starvations_per_sec: float = 0.0
@@ -313,30 +237,28 @@ var jitter_p95_ms: float = 0.0
 var puck_mode: String = "—"
 # World-state inter-arrival gap histogram (client-only; empty on host). Buckets
 # in ms by upper edge; the published string is percentages per bucket over the
-# 1s window. Bimodal (mass in <4ms AND >12ms, little at 8ms) = Steam Nagle
-# clumping → no_nagle should flatten it. A spread centred on ~8ms = path/relay
-# jitter that only a deeper interpolation buffer can absorb.
+# 1 s window. The SHAPE is the signal: a bimodal spread (mass in the shortest
+# AND the longest buckets, little at the broadcast interval) is relay clumping,
+# which no_nagle flattens; a spread centred on the broadcast interval is path
+# jitter that only a deeper interpolation buffer absorbs.
 const WS_GAP_EDGES_MS: Array[float] = [4.0, 8.0, 12.0, 16.0, 24.0]
 const WS_GAP_LABELS: Array[String] = ["<4", "4-8", "8-12", "12-16", "16-24", "24+"]
 var _ws_gap_counts: Array[int] = [0, 0, 0, 0, 0, 0]
 var ws_gap_histogram: String = "—"
 
 # ── Host-frame health (host only; clients leave these at 0) ──────────────────
-# Inter-tick gap. The MEAN gap gives the effective tick rate (`host_effective_tick_hz`):
-# ≈ the target tick rate means physics is keeping real-time; well below means the host
-# is overloaded and the sim is dilating (slow-motion). The MAX gap is the worst stall
-# (CPU steal, GC pause, OS hitch). Note the gap does NOT sit at a clean 1/tick_rate:
-# physics steps run inside the main loop, so consecutive ticks are quantized to whole
-# render frames — at a render FPS above the tick rate the per-tick gap alternates 1-2
-# frames, which is exactly why we report the mean (rate) and max (stall), not raw
-# percentiles of the gap. Broadcast interval is wall-clock between `_broadcast_state()`.
+# The inter-tick gap does NOT sit at a clean 1/tick_rate: physics steps run
+# inside the main loop, so consecutive ticks quantize to whole render frames and
+# at a render FPS above the tick rate the gap alternates between one and two
+# frames. Mean (→ effective rate) and max (→ worst stall) survive that
+# quantization; a percentile of the raw gap does not.
 var host_effective_tick_hz: float = 0.0    # mean inter-tick rate; ≈ target = real-time, below = dilating
 var host_physics_tick_max_ms: float = 0.0  # worst inter-tick gap in the window = worst stall
 var broadcast_interval_p95_ms: float = 0.0
 var _phys_tick_samples_us: Array[int] = []
 var _bcast_interval_samples_us: Array[int] = []
 const PHYS_TICK_WINDOW: int = _PhysicsConstants.PHYSICS_TICK   # 1 s of samples
-const BCAST_INTERVAL_WINDOW: int = 120  # 1s at 120Hz
+const BCAST_INTERVAL_WINDOW: int = 120  # 2 s at the 60 Hz broadcast rate
 
 # ── Static call sites (no-op when not in a game session) ─────────────────────
 static func record_world_state() -> void:
@@ -345,11 +267,9 @@ static func record_world_state() -> void:
 static func record_input_sent() -> void:
 	if instance: instance._input_count += 1
 
-# Bandwidth: bytes ferried over the wire for this session. Recorded at
-# NetworkManager send/receive boundaries. Host calls record_bytes_sent once
-# per recipient per broadcast (so host upload load = bytes_sent_per_sec
-# reflects total upstream); clients call record_bytes_received once per
-# incoming snapshot.
+# The host calls record_bytes_sent once per recipient per broadcast, so its
+# figure is total upstream; clients call record_bytes_received once per incoming
+# snapshot.
 static func record_bytes_sent(n: int) -> void:
 	if instance: instance._bytes_sent_window += n
 
@@ -366,8 +286,8 @@ static func record_queue_depth(depth: int) -> void:
 		instance._queue_depth_window.pop_front()
 
 # Host-side per-peer pending input depth, sampled once per broadcast per remote
-# skater (see host_input_queue_depth_max). Keeps the window maximum — a median
-# would hide the burst depth that precedes a drain, which is the whole signal.
+# skater. Keeps the window MAXIMUM — a median would hide the burst depth that
+# precedes a drain, which is the whole signal.
 static func record_host_queue_depth(depth: int) -> void:
 	if instance == null:
 		return
@@ -392,21 +312,17 @@ static func record_ws_arrival_gap(gap_ms: float) -> void:
 			break
 	instance._ws_gap_counts[idx] += 1
 
-# reconcile: count + trajectory divergence magnitude (predicted-vs-server at the
-# confirmed host_timestamp). Prediction lead is subtracted out by the timestamp
-# match, so the magnitude reflects true non-determinism (body-check mis-replay,
-# contested collisions). Falls back to post-replay residual when the prediction
-# snapshot isn't available (history capped, post-teleport, session warmup).
 # A reconcile whose MATCHED prediction was a replay-re-recorded entry (see
-# PredictedState.was_replay_rerecorded): the correction is echoing through the
-# replay's approximations rather than fresh live divergence. Read as a share of
-# reconcile_per_sec — a high fraction during storms points at replay fidelity
-# (goalie-body sliding, body-check re-resolution), a low one at genuine live
-# prediction misses (the contact-prediction Known Issue).
+# PredictedState.was_replay_rerecorded).
 static func record_reconcile_on_replayed_entry() -> void:
 	if instance: instance._reconcile_on_replayed_count += 1
 
 
+# delta_m is the trajectory divergence: predicted-vs-server at the confirmed
+# host_timestamp, so the timestamp match subtracts the prediction lead out and
+# what remains is true non-determinism. Callers fall back to the post-replay
+# residual when no prediction snapshot exists for that ack (history capped,
+# post-teleport, session warmup).
 static func record_reconcile(delta_m: float) -> void:
 	if instance == null:
 		return
@@ -415,9 +331,9 @@ static func record_reconcile(delta_m: float) -> void:
 	instance._reconcile_mag_n += 1
 
 # blade_jump: a reconcile teleported the blade > 5 cm (a real visible pop).
-# Recorded ONLY from the reconcile path now — the old per-tick live check also
-# fired here, but normal fast stickhandling legitimately moves the blade > 5 cm
-# in a 8.3ms tick (= 6 m/s), so it flagged "stick jumps" during ordinary play.
+# Recorded only from the reconcile path — a per-tick live check does NOT belong
+# here, because ordinary fast stickhandling legitimately moves the blade > 5 cm
+# in one 8.3 ms tick (= 6 m/s).
 static func record_blade_jump(magnitude: float) -> void:
 	if instance == null:
 		return
@@ -433,10 +349,9 @@ static func record_blade_reconcile(magnitude: float) -> void:
 	instance._blade_reconcile_n += 1
 
 # prediction_divergence: distance from the server's last known position measured
-# before the input replay, each time a reconcile fires. NOTE this is the natural
-# prediction LEAD (grows with RTT × speed) — NOT a non-determinism signal — so it
-# is no longer surfaced as a health flag on F3 (it cried wolf at speed). Kept as a
-# raw diagnostic; the real divergence signal is reconcile_per_sec + magnitude.
+# before the input replay, each time a reconcile fires. This is the natural
+# prediction LEAD (it grows with RTT × speed), NOT a non-determinism signal — do
+# not surface it as a health flag; reconcile_per_sec + magnitude is that signal.
 static func record_prediction_divergence(meters: float) -> void:
 	if instance == null:
 		return
@@ -493,15 +408,14 @@ static func record_post_replay_residual(meters: float) -> void:
 static func record_ooo_drop() -> void:
 	if instance: instance._ooo_drop_count += 1
 
-# puck_hard_snap: the loose-puck render smoother teleported a MOVING puck —
-# genuine trajectory divergence (see PuckController._smooth_apply_and_prune).
+# puck_hard_snap: the loose-puck render smoother teleported a MOVING puck (see
+# PuckController._smooth_apply_and_prune).
 static func record_puck_hard_snap() -> void:
 	if instance: instance._puck_hard_snap_count += 1
 
 # Divergence between the client's seed-predicted puck and the host's
 # authoritative launch at the release-seed → snapshot handover after a local
-# release (see PuckController._predict_loose). Keeps the window peak of each;
-# count is the shot denominator.
+# release (see PuckController._predict_loose). Keeps the window peak of each.
 static func record_shot_launch_divergence(pos_div_m: float, vel_div: float) -> void:
 	if instance == null:
 		return
@@ -512,8 +426,7 @@ static func record_shot_launch_divergence(pos_div_m: float, vel_div: float) -> v
 		instance._shot_launch_vel_div_max = vel_div
 
 # input_lead: estimated_host_time() - input.host_timestamp at the moment an
-# input is popped from the host queue. Near-zero means inputs are processed
-# right on schedule; consistently high means the queue is backing up.
+# input is popped from the host queue, in SECONDS (published as ms).
 static func record_input_lead(lead_sec: float) -> void:
 	if instance == null:
 		return
@@ -527,12 +440,11 @@ static func record_input_starvation() -> void:
 
 # input_drain: a stale queued input was acked-without-applying by the backlog
 # drain (RemoteController._drain_backlog) — the counterpart of starvation on
-# the recovery side. Sustained non-zero here means upstream jitter bursts are
-# routinely overrunning the input lead's 2-tick cushion.
+# the recovery side.
 static func record_input_drain() -> void:
 	if instance: instance._input_drain_count += 1
 
-# puck_predict_residual: per-frame pre-damp error between the Phase-3 analytic
+# puck_predict_residual: per-frame pre-damp error between the analytic
 # prediction target and the rendered puck (predicted mode only).
 static func record_puck_predict_residual(meters: float) -> void:
 	if not instance: return
@@ -545,24 +457,19 @@ static func record_puck_predict_residual(meters: float) -> void:
 static func record_puck_predict_fallback() -> void:
 	if instance: instance._puck_predict_fallback_count += 1
 
-# remote_correction: per-tick pre-damp error on a remote skater body (stage-3
-# forward-prediction quality + correction pressure).
+# remote_correction: per-tick pre-damp error on a remote skater body.
 static func record_remote_correction(meters: float) -> void:
 	if not instance: return
 	instance._remote_correction_sum += meters
 	instance._remote_correction_n += 1
 	instance._remote_correction_max = maxf(instance._remote_correction_max, meters)
 
-# delay_clamped: the host bounded a claim-carried interp_delay_ms (P2).
+# delay_clamped: the host bounded a claim-carried interp_delay_ms.
 static func record_delay_clamped(excess_ms: float) -> void:
 	if not instance: return
 	instance._delay_clamp_count += 1
 	instance._delay_clamp_excess_max_ms = maxf(instance._delay_clamp_excess_max_ms, excess_ms)
 
-# Host-side lag-comp pickup-claim outcomes (see the window-counter comment).
-# record_pickup_claim() is the denominator — a claim that reached the rewound
-# geometry test; miss / deflect are the two non-grant verdicts. Host-only in
-# practice (clients never run the claim resolver); no-op outside a session.
 static func record_pickup_claim() -> void:
 	if instance: instance._pickup_claim_count += 1
 
@@ -572,10 +479,9 @@ static func record_pickup_claim_miss() -> void:
 static func record_pickup_claim_deflect() -> void:
 	if instance: instance._pickup_claim_deflect_count += 1
 
-# Miss diagnostics (see the field block). `separation` and `radius` are the
-# swept-test distance and the threshold it failed against — passed as the pair so
-# the ratio is computed here rather than at four call sites with four chances to
-# use the wrong radius.
+# `separation` and `radius` are the swept-test distance and the threshold it
+# failed against — passed as the pair so the ratio is computed here rather than
+# at four call sites with four chances to use the wrong radius.
 static func record_claim_miss_separation(separation: float, radius: float) -> void:
 	if instance == null or radius <= 0.0 or not is_finite(separation):
 		return
@@ -598,9 +504,6 @@ static func record_claim_blade_divergence(divergence: float, clamped: bool) -> v
 	if clamped:
 		instance._claim_continuity_clamp_count += 1
 
-# Poke / stick-lift lag-comp claim outcomes (see the counter comment). record_*_claim
-# is the denominator (reached the rewound geometry test); record_*_claim_miss is the
-# geometry-fail verdict. Host-only in practice; no-op outside a session.
 static func record_poke_claim() -> void:
 	if instance: instance._poke_claim_count += 1
 
@@ -613,13 +516,10 @@ static func record_stick_lift_claim() -> void:
 static func record_stick_lift_claim_miss() -> void:
 	if instance: instance._stick_lift_claim_miss_count += 1
 
-# Host: a claim rejected by the stamp-plausibility gate (see the counter
-# comment) — one counter across all four claim types; no-op outside a session.
+# One counter across all four claim types.
 static func record_claim_stamp_reject() -> void:
 	if instance: instance._claim_stamp_reject_count += 1
 
-# Client-side optimistic-pickup outcomes (see the counter comment). pin is the
-# denominator; timeout is the felt "grab, then lose it".
 static func record_provisional_pin() -> void:
 	if instance: instance._provisional_pin_count += 1
 
@@ -632,9 +532,9 @@ static func record_provisional_timeout() -> void:
 static func record_provisional_stolen() -> void:
 	if instance: instance._provisional_stolen_count += 1
 
-# Wall-clock microseconds between consecutive host physics ticks. Steady state
-# ≈ 4170us; a stall produces one large sample followed by near-zero catch-up
-# samples. Host-only.
+# Wall-clock microseconds between consecutive host physics ticks (steady state
+# ≈ 8333 µs at the 120 Hz tick). A stall produces one large sample followed by
+# near-zero catch-up samples. Host-only.
 static func record_host_physics_tick_us(us: int) -> void:
 	if instance == null:
 		return
@@ -646,8 +546,8 @@ static func record_host_physics_tick_us(us: int) -> void:
 
 # Breadcrumb of the last notable host game-event transition, for stall
 # attribution — called from PhaseCoordinator.handle_phase_entered with the phase
-# name. Records the name and the session-second it fired so a marker can report
-# how long before the hitch it happened. No-op outside a session.
+# name. The session-second is stored so a marker can report how long before the
+# hitch it happened.
 static func note_host_event(name: String) -> void:
 	if instance == null:
 		return
@@ -655,7 +555,7 @@ static func note_host_event(name: String) -> void:
 	instance._last_host_event_sec = float(instance.session.seconds)
 
 # Wall-clock microseconds between consecutive `_broadcast_state()` calls on the
-# host. Should track the ~8.3ms (120Hz) physics-driven cadence.
+# host. Tracks the physics-driven broadcast cadence (~16.7 ms at STATE_RATE 60).
 static func record_broadcast_interval_us(us: int) -> void:
 	if instance == null:
 		return
@@ -730,8 +630,6 @@ func tick(delta: float) -> void:
 	for i: int in _ws_gap_counts.size():
 		_ws_gap_counts[i] = 0
 	if not _phys_tick_samples_us.is_empty():
-		# Mean → effective rate (the real "are we keeping real-time?" signal);
-		# max → worst stall. Single pass, no sort needed.
 		var sum_us: int = 0
 		var max_us: int = 0
 		for s: int in _phys_tick_samples_us:
@@ -829,12 +727,12 @@ func tick(delta: float) -> void:
 
 # Fold this window's published metrics into the session summary. Keys here are
 # the column prefixes the network_sessions table expects (see
-# network_session_summary.gd). Role-degenerate metrics (e.g. loss/jitter on a
-# host, reconciles on a host) fold as their natural 0/100 — the row's `role`
+# network_session_summary.gd). Role-degenerate metrics (loss/jitter on a host,
+# reconciles on a host) fold as their natural 0/100 — the row's `role`
 # disambiguates them at query time. sim_rate and broadcast interval are the
 # exceptions: they're only meaningful when their samples were recorded
-# (host/solo), so a client's structural 0 is omitted to keep the session
-# min/max honest.
+# (host/solo), so a client's structural 0 is omitted rather than folded, to keep
+# the session min/max honest.
 func _fold_session_sample() -> void:
 	var sample: Dictionary = {
 		"rtt_ms": current_rtt_ms,
@@ -842,24 +740,15 @@ func _fold_session_sample() -> void:
 		"jitter_p95_ms": jitter_p95_ms,
 		"delay_spread_ms": current_delay_spread_ms,
 		"clock_correction_ms": current_clock_correction_ms,
-		# Servo's live extra lead (client only; hosts fold 0s). See the
-		# current_input_lead_extra_ms doc — the post-C1 equilibrium check.
+		# Client only; hosts fold 0s.
 		"input_lead_extra_ms": current_input_lead_extra_ms,
 		"worst_peer_rtt_ms": current_worst_peer_rtt_ms,
 		"worst_peer_loss_pct": current_worst_peer_loss_pct,
 		"reconcile_per_sec": reconcile_per_sec,
-		# Subset of reconcile_per_sec that fired against a replay-re-recorded
-		# prediction — the storm-attribution split (replay-echo vs fresh live
-		# divergence). Client only; hosts fold 0s.
+		# Client only; hosts fold 0s.
 		"recon_replayed_per_sec": recon_replayed_entry_per_sec,
 		"reconcile_mag_m": reconcile_magnitude_avg,
 		"reconcile_match_pct": reconcile_match_pct,
-		# Which channel tripped the snap — the attribution for diagnosing residual
-		# reconcile churn on a clean link (pos vs velocity vs upper-body pose). Plus
-		# the phase-mismatch shape: pos_offset_ticks ≈ ±1 = a clean one-tick
-		# capture/integration offset (benign), noisy/large = real non-determinism;
-		# post_replay_residual ≈ 0 = the snap converged, persistent = replay leaves
-		# the body off-server so the offset rebuilds every cycle.
 		"recon_pos_per_sec": recon_pos_per_sec,
 		"recon_vel_per_sec": recon_vel_per_sec,
 		"recon_ubody_per_sec": recon_ubody_per_sec,
@@ -873,21 +762,17 @@ func _fold_session_sample() -> void:
 		"bytes_sent_per_sec": bytes_sent_per_sec,
 		"input_starvations_per_sec": input_starvations_per_sec,
 		"input_drains_per_sec": input_drains_per_sec,
-		# Phase-3/4a prediction quality (regular keys → view takes avg/max):
-		# residual ~0 = the shared sim agrees; spikes = host events folding in.
+		# Regular keys → the view takes avg/max.
 		"puck_predict_residual_m": puck_predict_residual_avg_m,
 		"puck_predict_residual_peak_m": puck_predict_residual_max_m,
 		"remote_correction_m": remote_correction_avg_m,
 		"remote_correction_peak_m": remote_correction_max_m,
-		# TOTAL_KEYS event counters: interp fallbacks (deep loss) and the host's
-		# P2 delay-bound clamps (legit players should never trip it).
+		# TOTAL_KEYS event counters.
 		"puck_predict_fallbacks": float(_puck_predict_fallback_count),
 		"delay_clamps": float(_delay_clamp_count),
 		"delay_clamp_excess_ms": _delay_clamp_excess_max_ms,
 		"input_queue_depth": float(input_queue_depth_median),
-		# Host-only (clients fold 0): deepest pending remote input queue this
-		# window. Read WITH input_drains_per_sec — deep+draining = the drain is
-		# eating the servo's cushion; shallow+draining = inputs really are late.
+		# Host-only; clients fold 0.
 		"host_input_queue_depth": float(host_input_queue_depth_max),
 		"input_lead_ms": input_lead_avg_ms,
 		"worst_stall_ms": host_physics_tick_max_ms,
@@ -898,33 +783,26 @@ func _fold_session_sample() -> void:
 		# that smears 3 hard snaps in a 10-minute game to ~0.
 		"puck_hard_snaps": float(_puck_hard_snap_count),
 		"blade_jumps": float(_blade_jump_count),
-		# Reconcile-match miss attribution (TOTAL_KEYS). A miss → prediction-lead
-		# fallback → spurious position snap, so these split the residual reconcile
-		# churn by cause. gap_ms is a regular key (the view takes its _max).
+		# TOTAL_KEYS, except gap_ms, which is a regular key (the view takes _max).
 		"reconcile_miss_empty": float(_reconcile_miss_empty),
 		"reconcile_miss_older": float(_reconcile_miss_older),
 		"reconcile_miss_newer": float(_reconcile_miss_newer),
 		"reconcile_miss_gap": float(_reconcile_miss_gap),
 		"reconcile_miss_gap_ms": _reconcile_miss_gap_ms_max,
-		# Shot-launch divergence (client only): window-peak client-vs-host launch gap
-		# (regular keys → view takes _max), plus the session shot count (TOTAL).
+		# Client only: window peaks (regular keys → view takes _max), plus the
+		# session shot count (TOTAL) as their denominator.
 		"shot_launch_div_m": _shot_launch_pos_div_max,
 		"shot_launch_vel_div": _shot_launch_vel_div_max,
 		"shot_launches": float(_shot_launch_count),
-		# Host-side lag-comp pickup-claim outcomes (also TOTAL_KEYS session sums).
-		# On the host row, misses/claims ≈ rewind health (near-zero = working);
-		# deflects are the reached-but-not-catchable verdicts. Clients fold 0s.
+		# TOTAL_KEYS session sums; clients fold 0s.
 		"pickup_claims": float(_pickup_claim_count),
 		"pickup_claim_misses": float(_pickup_claim_miss_count),
 		"pickup_claim_deflects": float(_pickup_claim_deflect_count),
-		# WHY a claim missed (see the field block). sep_ratio and blade_divergence
-		# are levels (the view takes _max/_avg); recovered and continuity_clamps are
-		# TOTAL_KEYS. Read sep_ratio FIRST — it decides whether the miss rate is
-		# boundary grazes (~1.0-1.2, harmless) or rewind failure (>2), and the other
-		# two are only worth reading in the second case.
-		# Mean/peak pair per the puck_predict_residual convention: the session view
-		# takes _max of a window MEAN as "typically how bad", and the _peak key
-		# carries the genuine worst single claim, which a mean-of-means buries.
+		# sep_ratio and blade_divergence are levels (the view takes _max/_avg);
+		# recovered and continuity_clamps are TOTAL_KEYS. Each level ships as a
+		# mean/peak pair, per the puck_predict_residual convention: the view takes
+		# _max of the window MEAN as "typically how bad", and the _peak key carries
+		# the genuine worst single claim, which a mean-of-means buries.
 		"claim_miss_sep_ratio": (_claim_miss_sep_ratio_sum / float(_claim_miss_sep_ratio_n)
 				if _claim_miss_sep_ratio_n > 0 else 0.0),
 		"claim_miss_sep_ratio_peak": _claim_miss_sep_ratio_max,
@@ -933,26 +811,20 @@ func _fold_session_sample() -> void:
 				if _claim_blade_divergence_n > 0 else 0.0),
 		"claim_blade_divergence_peak_m": _claim_blade_divergence_max,
 		"claim_continuity_clamps": float(_claim_continuity_clamp_count),
-		# Poke / stick-lift claim outcomes (also TOTAL_KEYS session sums). Same
-		# rewind-health read as pickup: misses/claims ≈ how often the host's rewind
-		# disagreed with the client's in-range view. Clients fold 0s.
+		# TOTAL_KEYS session sums; clients fold 0s.
 		"poke_claims": float(_poke_claim_count),
 		"poke_claim_misses": float(_poke_claim_miss_count),
 		"stick_lift_claims": float(_stick_lift_claim_count),
 		"stick_lift_claim_misses": float(_stick_lift_claim_miss_count),
-		# Claims dropped at the RPC boundary by the stamp-plausibility gate
-		# (TOTAL_KEYS) — pre-resolver, so counted nowhere else. Expect 0;
-		# sustained non-zero = legit claims eaten by an RTT spike the ping EMA
-		# hadn't caught (or a client shopping timestamps). Clients fold 0s.
+		# TOTAL_KEY; clients fold 0s.
 		"claim_stamp_rejects": float(_claim_stamp_reject_count),
-		# Client-side optimistic-pickup outcomes (TOTAL_KEYS). timeouts/pins is the
-		# felt grab-then-lose rate; the pin predicate gate should drive it to ~0.
+		# TOTAL_KEYS; host rows fold 0s.
 		"provisional_pins": float(_provisional_pin_count),
 		"provisional_confirmed": float(_provisional_confirmed_count),
 		"provisional_timeouts": float(_provisional_timeout_count),
 		"provisional_stolen": float(_provisional_stolen_count),
-		# Interp buffer depths (MIN_KEYS — running dry is the bad direction).
-		# Host rows fold structural 0s; `role` disambiguates at query time.
+		# MIN_KEYS — running dry is the bad direction. Host rows fold structural
+		# 0s; `role` disambiguates at query time.
 		"buffer_depth_skater": float(buffer_depth_skater),
 		"buffer_depth_puck": float(buffer_depth_puck),
 	}
@@ -989,36 +861,53 @@ func recent_samples() -> Array[Dictionary]:
 # OS suspend, a load hitch) does NOT register as a physics stall — the tick loop
 # isn't running to measure its own gap — so worst_stall_ms stays tiny while
 # broadcasts halt and the client-input queue backs up with stale inputs. These
-# two catch that class of freeze and, read together, localize it: broadcast_gap
-# fires when THIS host stopped sending, so both firing in a window ⇒ a host-side
-# freeze; input_backlog firing alone (broadcasts on-time, host draining stale
-# inputs) ⇒ the freeze was on the CLIENT's send side. Thresholds are physical,
-# not the F3 live BAND: 500 ms is half a second of no snapshots / half-a-second-
-# stale inputs — a visibly frozen world, well clear of the ~17 ms / ~240 ms
-# window ceilings a clean session ever reaches. Both metrics fold 0 on clients,
-# so these are naturally host-only.
+# two catch that class of freeze. The thresholds are physical rather than the F3
+# live BAND: 500 ms is half a second of no snapshots / half-a-second-stale
+# inputs, a visibly frozen world and well clear of the ~17 ms / ~240 ms window
+# ceilings a clean session ever reaches. Both metrics fold 0 on clients, so
+# these are naturally host-only.
 const _BROADCAST_GAP_MARKER_MS: float = 500.0
 const _INPUT_BACKLOG_MARKER_MS: float = 500.0
+
+# ── Health bands ─────────────────────────────────────────────────────────────
+# The F3 overlay colours these metrics and the tripwires below fire on them, so
+# both sides read the same numbers from here rather than open-coding literals.
+# Also tabulated in docs/telemetry_dictionary.md, held there by
+# test_telemetry_marker_doc_contract.gd.
+const RECONCILE_WARN_PER_SEC: float = 1.0
+const RECONCILE_BAD_PER_SEC: float = 5.0
+const EXTRAPOLATION_WARN_PCT: float = 25.0
+const EXTRAPOLATION_BAD_PCT: float = 60.0
+const STALL_WARN_MS: float = 33.0
+const STALL_BAD_MS: float = 66.0
+const STARVATION_WARN_PER_SEC: float = 0.5
+const STARVATION_BAD_PER_SEC: float = 5.0
+const PUCK_SNAP_WARN_PER_SEC: float = 2.0
+const PUCK_SNAP_BAD_PER_SEC: float = 10.0
+# The one tripwire that deliberately fires at WARN rather than BAD: a hard snap
+# on a moving puck is rare enough that the trace is worth capturing before the
+# rate goes red. Counted per window rather than per second — at the one-second
+# window this is PUCK_SNAP_WARN_PER_SEC, and shorter windows fire sooner.
+const PUCK_SNAP_MARKER_COUNT: int = 2
 
 
 # Objective anomaly markers — the same mechanism as a tester's F4 press, fired
 # automatically when a window crosses a tripwire, so rare bugs land with a
-# timestamp and a pre-history trace even when nobody reacted. Most thresholds
-# mirror the F3 overlay's BAD bands (keep in sync with network_debug_overlay.gd
-# and docs/telemetry_dictionary.md); the freeze tripwires (broadcast_gap /
-# input_backlog) instead use the suspension-scale thresholds above. Rarity is
-# enforced by the summary's per-trigger cooldown + session cap, so a broken
-# session records the onset, not spam.
+# timestamp and a pre-history trace even when nobody reacted. Most fire on the
+# shared BAD band above, so the overlay's red and a marker mean the same thing;
+# the freeze tripwires use the suspension-scale thresholds instead, and
+# puck_hard_snaps fires at WARN. Rarity is enforced by the summary's per-trigger
+# cooldown + session cap, so a broken session records the onset, not spam.
 func _check_auto_markers() -> void:
-	if _puck_hard_snap_count >= 2:
+	if _puck_hard_snap_count >= PUCK_SNAP_MARKER_COUNT:
 		_auto_marker("puck_hard_snaps")
-	if reconcile_per_sec >= 5.0:
+	if reconcile_per_sec >= RECONCILE_BAD_PER_SEC:
 		_auto_marker("reconcile_storm")
-	if extrapolation_pct >= 60.0:
+	if extrapolation_pct >= EXTRAPOLATION_BAD_PCT:
 		_auto_marker("extrapolation")
-	if host_physics_tick_max_ms >= 66.0:
+	if host_physics_tick_max_ms >= STALL_BAD_MS:
 		_auto_marker("host_stall")
-	if input_starvations_per_sec >= 5.0:
+	if input_starvations_per_sec >= STARVATION_BAD_PER_SEC:
 		_auto_marker("input_starvation")
 	if broadcast_interval_p95_ms >= _BROADCAST_GAP_MARKER_MS:
 		_auto_marker("broadcast_gap")
@@ -1027,10 +916,10 @@ func _check_auto_markers() -> void:
 
 
 func _auto_marker(trigger: String) -> void:
-	# The pre-history's last entry IS the offending window; the snapshot carries the
-	# context the numeric samples can't — the puck's replication mode, the live game
-	# phase + actor count, and the last game-event transition (with its age), so a
-	# host_stall can be pinned to a goal / faceoff / period handler vs steady play.
+	# The pre-history's last entry IS the offending window; this snapshot carries
+	# the context the numeric samples can't — the puck's replication mode, the
+	# live game phase + actor count, and the last game-event transition with its
+	# age, so a host_stall can be pinned to a phase handler vs steady play.
 	var snapshot: Dictionary = {
 		"puck_mode": puck_mode,
 		"phase": current_phase,

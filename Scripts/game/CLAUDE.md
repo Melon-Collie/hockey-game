@@ -9,11 +9,49 @@ All start paths go through `Boot.tscn` (title card): `boot.gd` threaded-loads `H
 
 NetworkManager → GameManager communication is signal-based: every RPC / ENet callback emits a typed signal, and GameManager wires all connections once in `_ready()` via `_wire_network_signals()`. The only downward data flow is `NetworkManager.set_world_state_provider(Callable)`.
 
+## The period break is a skate-off, not a cut
+
+`END_OF_PERIOD` glides every skater from where play stopped to their bench door
+(`PhaseCoordinator.on_period_break_entered`, hiding them through the door on
+arrival) under the wide period-break camera hold; the next prep runs the bench
+intro back onto the ice with the period card. The worst trip — far corner to
+bench, ≈44 m at `FACEOFF_SKATE_IN_SPEED` — takes ≈4.9 s and fits well inside the
+20 s break, which is what lets the break length stay a constant instead of a
+measured window.
+
 ## Distribution
 
 Playtester builds ship via GitHub Releases (`latest` tag). `deploy.yml` computes `VERSION=0.1.<git rev-list --count HEAD>`, rewrites the placeholder `"dev"` in `Scripts/game/build_info.gd` to that string before export, and publishes with the version as the release name (plus an immutable `v0.1.N` prerelease per build for rollback). Steam (SteamPipe) handles distribution and auto-updates for the closed beta (`steam/` holds the upload scripts), so there is no in-game update notifier, patcher, or downloader.
 
 **Supabase backend:** `Scripts/game/supabase_config.gd` holds the project URL and publishable (anon) key — safe to commit, RLS restricts it to INSERT/SELECT (there is deliberately no UPDATE grant — the key ships in every client). `CareerStatsReporter` (`Scripts/game/career_stats_reporter.gd`) POSTs one row to `career_stats` at game-over and GETs from the `career_totals` view for the career screen. `BugReporter` (`Scripts/game/bug_reporter.gd`) POSTs to `bug_reports` with a telemetry snapshot. `NetworkSessionReporter` (`Scripts/game/network_session_reporter.gd`) POSTs one connection-quality row per online game to `network_sessions` at game-over — the playtesting telemetry pipeline (see `ARCHITECTURE.md` → **Playtesting telemetry**; schema + analysis views in `supabase/migrations/*_network_sessions.sql`). All use fire-and-forget `HTTPRequest` nodes added to the scene tree root and fail silently. The secret key must never be committed — use only the publishable key in `SupabaseConfig`. **Table/view/RPC schemas are version-controlled as migrations in `supabase/migrations/`**, applied to the hosted project by `.github/workflows/supabase.yml` on merge to `main` — a schema change ships with the code that needs it rather than being pasted into the SQL editor. Migrations are idempotent DDL and CI pins that (it replays them onto a populated DB); every view needs `with (security_invoker = true)` or it bypasses RLS. `supabase/README.md` is the full workflow, including the one repo secret the pipeline stays inert without. All backend rows key on `steam_id` — there is no per-player `uuid` (`game_id` is still a UUID, minted by `PlayerPrefs.generate_uuid`).
+
+## Bot AI decides on a worker thread
+
+`AICoordinator` runs `TeamBrain.tick` → `build_view` → `decide()` on a persistent
+worker while the main thread finishes the physics tick, and never blocks on it: a
+frame either harvests a finished batch or reuses last frame's decision, so bots
+coast on retained intent rather than stalling the tick.
+
+Two structural rules replace locks. Every host-raised brain mutation — pings,
+carrier-flip re-ticks, tutorial spawn and despawn — is queued and applied *by the
+main thread* in the idle window before the next kick. And the two brain fields
+main reads every frame (the ping-elected chaser, and the possession / coverage
+flag) are published into plain mirrors at kick time.
+
+The one blocking call is `await_idle`, on the despawn path only: an
+`AIController` the worker holds must outlive the batch. The threaded path is not
+exercised by the headless suite, which bypasses the coordinator — so a change
+here is a playtest-verified change.
+
+## Settings storage
+
+`PlayerPrefs` mirrors `user://preferences.cfg` into Steam Cloud (`_push_to_cloud`
+/ `_sync_from_cloud`). Steam's own client sync resolves the remote copy into its
+local cache before launch, so `cloud_read` returns already-reconciled bytes and
+the game only bridges that namespace to its `user://` file; a genuine conflict is
+newer-write-wins. The cloud file name mirrors the local basename, so
+`--config-suffix` dev instances stay separate in Cloud too. Dynamic Cloud Sync
+(`cloud_files_changed`) re-runs the reconcile on a Deck suspend → resume.
 
 ## Lag-compensated claim resolvers
 
@@ -22,11 +60,27 @@ Playtester builds ship via GitHub Releases (`latest` tag). `deploy.yml` computes
 documents its own geometry and reject list in its header; this is the contract
 they all share. **A new claim resolver must follow all of it.**
 
+The parts that are identical on every resolver are single seams, not a list to
+re-implement — `test_claim_resolver_contract.gd` fails a resolver that goes
+around one:
+
+- **`LagCompRewind.claim_is_fresh(host_ts)`** is the absolute age fence, sourced
+  from `ShotReleaseRules.MAX_CLAIM_AGE_S`. Don't hold a local copy of the number.
+- **`ClaimantView`** is the claimant's own body and blade at the instant they
+  reached: `resolve()` catches the body up to the self-view instant, then
+  `reach_clamp` / `continuity_clamp` (or `clamp_blade` for both) bound the
+  client-sent point against it. All three steps, in that order, or the claim
+  quietly misses — see the class header for why the failure is silent.
+
+The rest is judgement the seams can't make for you:
+
 - **Bound the client's self-reported `interp_delay_ms` against the measured link
   before any rewind or forward-predict reads it**
   (`LagCompRewind.plausible_interp_delay_ms`). It is an anti-cheat bound, not a
   sanity check — an unbounded delay lets a modified client pick its own rewind
-  depth.
+  depth. Only a resolver that *reads* the delay needs it: pickup rewinds
+  self-view and puck-view and consults it nowhere, so it takes the parameter as
+  `_interp_delay_ms` and skips the bound.
 - **Rewind the two sides to different instants.** The claimant's own body goes to
   `LagCompRewind.self_view_time(host_ts)`; anything they were *watching* goes to
   `remote_view_time(host_ts, interp_delay)`. Never reach into raw timestamps —
@@ -44,26 +98,19 @@ they all share. **A new claim resolver must follow all of it.**
   RELEASE, not arrival** — write resolvers accordingly, and don't cache anything
   at the signal boundary. The queue is dropped on rematch reset; a claim parked
   across a faceoff is otherwise caught by the resolvers' own `pickup_locked` /
-  ghost / carrier-changed gates.
-- **Still add `LagCompRewind.self_view_catch_up(...)` to body-anchored
-  quantities** read from the self-view snapshot (position, `blade_contact_world`,
-  `top_hand_world` — the blade rides the body, so it rigid-translates with it).
-  With the queue in front it normally returns `Vector3.ZERO`; it remains the
-  backstop for the queue's `MAX_HOLD_S` clamp and for any future path that
-  reaches a resolver without being deferred. Without one of the two, the
-  claimant's own body is rewound short and the reach/continuity clamps fence an
-  honest full-extension claim against a stale body — measured at the lead servo's
-  50 ms cap on a 20 ms link, ~0.59 m against a 0.7 m contact diameter.
-- **Reach-clamp the client-sent blade to the rewound body — never `rtt/2`.** The
-  blade is client-authoritative aim, so the clamp is what bounds it. The host
-  independently reconstructs the blade from replicated inputs; the clamp is the
-  second, tighter bound on top of that.
+  ghost / carrier-changed gates. With the queue in front, `ClaimantView`'s
+  catch-up normally returns `Vector3.ZERO`; it stays the backstop for the queue's
+  `MAX_HOLD_S` clamp and for any future path reaching a resolver undeferred.
+- **Never bound the blade by `rtt/2`.** The blade is client-authoritative aim, so
+  `ClaimantView`'s two clamps are what bound it: reach against the
+  server-authoritative body, then continuity against the host's own
+  independently-reconstructed blade.
 - **Apply idempotently.** A concurrent host-side detection may already have
   resolved the same event, so re-check the carrier on the apply path or the
   effect lands twice.
 - **Reject early and completely**: puck locked, no carrier, carrier changed since
-  the claim, claim staler than `MAX_CLAIM_AGE_S`, skater missing or ghosted, or
-  the claim targets self or a teammate.
+  the claim, claim not fresh, skater missing or ghosted, or the claim targets
+  self or a teammate.
 
 There is no contest window on poke / stick-lift / hit — first valid claim wins,
 and simultaneous claims are arbitrated by RPC arrival order (the loser sees

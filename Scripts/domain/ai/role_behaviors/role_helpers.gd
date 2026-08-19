@@ -108,36 +108,22 @@ static func too_close_to_teammate(c: Vector3,
 
 # ── Target switch-hysteresis ─────────────────────────────────────────────────
 #
-# Every off-puck positional role picks its spot by a candidate-set argmax. Along
-# the argmax's tie ridge two spots trade the lead dispatch-to-dispatch on
-# noise-level score differences, so the chosen target HOPS between them — and
-# because the off-puck ready-stance cursor SNAPS to the role target (the FACE aim
-# turns the body under facing_drag, but the blade IK chases the cursor with no
-# slew), a per-dispatch hop whips the cosmetic blade ("blade jitter while just
-# skating around").
+# Along a candidate argmax's tie ridge two spots trade the lead dispatch-to-
+# dispatch on noise-level score differences, and the off-puck ready-stance cursor
+# SNAPS to the role target (the blade IK chases it with no slew), so a per-
+# dispatch hop whips the cosmetic blade. The incumbent spot (ctx.prev_role_target,
+# INF'd across a slot change so no role inherits another's) therefore earns a
+# stickiness bonus in the argmax: the bot holds its spot and switches only when a
+# fresh candidate is meaningfully better.
 #
-# The fix is to steady the INTENT, not filter the symptom: give the incumbent
-# spot (ctx.prev_role_target — last dispatch's chosen target, INF'd across a slot
-# change so no role inherits another's) a stickiness bonus in the argmax, so a
-# bot HOLDS its chosen spot and only switches when a fresh candidate is
-# meaningfully — not marginally — better. That's how a real player commits to
-# where they've decided to be. With a stable target the ready-stance cursor snaps
-# to a fixed point and the downstream max_blade_speed clamp is the only smoother
-# the blade needs.
-#
-# Mechanically the incumbent is injected as one extra candidate (append_incumbent)
-# and scored by the role's OWN scoring — no separate re-score path — with
-# incumbent_bonus() added to its score. It runs through the role's same legality
-# / anti-crowd / role-specific filters, so a now-illegal or now-crowded incumbent
-# is dropped outright rather than camped, and because it's re-scored live its edge
-# decays as the play moves: the switch fires exactly when the geometry really
-# changed, not on argmax noise.
+# The incumbent is injected as one extra candidate (append_incumbent) and scored
+# by the role's OWN scoring, through its own legality / anti-crowd filters — so a
+# now-illegal or now-crowded incumbent is dropped rather than camped, and its edge
+# decays live as the play moves.
 #
 # TARGET_SWITCH_MARGIN is in threat-surface units — the shared 0..1 currency of
-# score_shoot / score_pass and the threat surfaces every off-puck role argmaxes
-# over. Tuned on PRESSURE first; raise toward 0.08 if a role still wobbles
-# between spots, lower toward 0.02 if it visibly camps a stale one. Feel tunable,
-# hand-set.
+# score_shoot / score_pass. Feel tunable, hand-set: raise toward 0.08 if a role
+# wobbles between spots, lower toward 0.02 if it camps a stale one.
 const TARGET_SWITCH_MARGIN: float = 0.04
 
 
@@ -150,12 +136,10 @@ static func append_incumbent(ctx: RoleContext, candidates: Array[Vector3]) -> vo
 		candidates.append(ctx.prev_role_target)
 
 
-# The stickiness bonus a candidate earns for BEING the incumbent role target:
-# TARGET_SWITCH_MARGIN when `c` is ctx.prev_role_target, else 0. Add it to the
-# role's own score inside its argmax so the held spot only yields to a clearly-
-# better fresh candidate. Exact-equality is safe: the incumbent is the same
-# Vector3 append_incumbent injected (a coincidental fresh-candidate match just
-# earns the same benefit-of-the-doubt at that identical spot).
+# The stickiness bonus a candidate earns for BEING the incumbent role target.
+# Add it to the role's own score inside its argmax. Exact-equality is safe: the
+# incumbent is the same Vector3 append_incumbent injected (a coincidental
+# fresh-candidate match earns the same benefit of the doubt at that same spot).
 static func incumbent_bonus(ctx: RoleContext, c: Vector3) -> float:
 	if ctx.prev_role_target.is_finite() and c == ctx.prev_role_target:
 		return TARGET_SWITCH_MARGIN
@@ -194,39 +178,33 @@ static func lead_threat(pos: Vector3, vel: Vector3, scale: float = 1.0) -> Vecto
 
 # ── Man-on-threat coverage ───────────────────────────────────────────────────
 
-# Slack on cover_man_target's goal-side filter: candidates may sit up to
-# this far toward the play from the man (roughly even with him) but no
-# further. Tight coverage must never trade the defensive side for lane
-# denial — a defender ahead of his man is one burst from being beaten to
-# the net. Goal-side is measured along the man→our-net LINE (the same
-# projection the cover anchor and the threat partition use), not the Z
-# axis: for a man wide of the net or near the goal-line-extended, "behind
-# him in Z" and "between him and the net" point different ways, and the
-# Z reading let the marker legally park BESIDE his man, off the sealing
-# lane.
+# Slack on cover_man_target's goal-side filter: candidates may sit up to this far
+# toward the play from the man (roughly even with him) but no further. Tight
+# coverage must never trade the defensive side for lane denial — a defender ahead
+# of his man is one burst from being beaten to the net.
+#
+# Goal-side is measured along the man→our-net LINE (the projection the cover
+# anchor and the threat partition use), never the Z axis: for a man wide of the
+# net or near the goal-line-extended, "behind him in Z" and "between him and the
+# net" point different ways, and the Z reading admits a spot BESIDE the man, off
+# the sealing lane.
 const COVER_GOAL_SIDE_TOLERANCE_M: float = 0.5
 
-# Shared "cover this assigned man" target for the backline defenders
-# (MARK) when TeamBrain's threat partition hands them a specific
-# opponent. Picks the position that most deflates the carrier→man pass-threat
-# surface (lane interception × the man's resulting shot), searching a candidate
-# set centered on the threat partition's own cover anchor — a stick into the
-# man→net lane (AIThreatAssignment.cover_anchor, COVER_DEPTH_M goal-side of
-# him) — i.e. set up ON the man, in the feed lane, to kill the one-timer.
+# The spot that most deflates the carrier→`man_pos` pass-threat surface (lane
+# interception × the man's resulting shot), searched around the threat
+# partition's own cover anchor — a stick into the man→net lane
+# (AIThreatAssignment.cover_anchor, COVER_DEPTH_M goal-side of him).
 #
-# The anchor must track the man 1:1. Centering the search anywhere that moves
+# The anchor must track the man 1:1. Centering the search on anything that moves
 # SLOWER than he does — a man/net midpoint being the tempting one — lets a
-# cutting man walk away from his check every time, and sags the whole candidate
-# set besides (a man 12 m out gets "covered" from 6 m away). cover_anchor is
-# also the anchor the threat partition already scored reachability against, so
-# the pairing and the coverage agree. The ±3 m candidate ring still lets the
-# argmax shade off the body into the carrier→man lane when that deflates the
-# threat more.
+# cutting man walk away from his check, and sags the whole candidate set besides
+# (a man 12 m out gets "covered" from 6 m away). It is also the anchor the threat
+# partition scored reachability against, so the pairing and the coverage agree.
+# The ±3 m ring still lets the argmax shade off the body into the carrier→man
+# lane when that deflates the threat more.
 #
-# Scoring the ASSIGNED man (rather than minimizing the max threat over ALL
-# opponents) is what stops two defenders collapsing onto the single most
-# dangerous opponent, since each gets a distinct man. Roles fall back to their
-# all-opponents behavior when unassigned (man_pid -1).
+# Scoring the ASSIGNED man rather than the max threat over ALL opponents is what
+# stops two defenders collapsing onto the single most dangerous one.
 static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 		carrier_pos: Vector3) -> Vector3:
 	var our_net: Vector3 = ctx.defending_goal_pos
@@ -265,12 +243,11 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 			continue
 		if too_close_to_teammate(c, teammates):
 			continue
-		# Carrier's view of defenders: our team + us hypothetically at c. Append
-		# c to the shared teammates scratch in place and pop it after scoring —
-		# a duplicate() per candidate (10×/decide) was pure hot-path churn. The
-		# array is restored exactly, and too_close_to_teammate above already read
-		# it candidate-free this iteration. The hypothetical body carries OUR
-		# real caps so the threat prices this defender's actual blade.
+		# Carrier's view of defenders: our team + us hypothetically at c. Push/pop
+		# the shared scratch in place rather than duplicating it per candidate —
+		# the array is left exactly as passed, and too_close_to_teammate above
+		# already read it candidate-free this iteration. The hypothetical body
+		# carries OUR real caps so the threat prices this defender's blade.
 		teammates.push_back(c)
 		ctx.scratch_teammate_caps.push_back(ctx.caps_by_peer.get(ctx.peer_id))
 		# Minimize the carrier's threat of feeding THIS man (lane × his shot).
@@ -297,29 +274,20 @@ static func cover_man_target(ctx: RoleContext, man_pos: Vector3,
 	return best_pos
 
 
-# THE stand for a defender who has been given somebody to cover — and the only
-# one. Every off-puck defensive role in the game does this one job and differs
-# only in WHO hands it the man: MARK gets him from the threat partition, the
-# zone soft-lock from whoever is most dangerous in its area, TRACK_MID from
-# whoever entered its lane, RUSH_D2 from whoever is driving the middle. Man
-# defense and zone defense are the same behavior under different assigners.
+# The stand for a defender who has been given somebody to cover: on the man, in
+# the feed lane, riding him. Callers differ only in WHO hands them the man.
 #
-# Returns false when there is no man to cover, or no play to cover him from,
-# which is the caller's cue to fall back to its own post. A cover stand with
-# nobody in it is not a stand — see the ride-velocity note below.
+# Returns false when there is no man to cover, or no play to cover him from —
+# the caller's cue to fall back to its own post rather than publish a ride
+# velocity for a stand it did not earn.
 #
-# The man's POSITION and his VELOCITY are read from one snapshot entry, so the
-# point and the frame it rides cannot name different bodies. Three of the four
-# call sites sourced them separately and each carried a comment worrying about
-# exactly that; the worry is now structural.
+# The man's POSITION and his VELOCITY come from one snapshot entry, so the point
+# and the frame it rides cannot name different bodies.
 #
 # NO ANTICIPATION LEAD. The stand rides him (RoleDecision.target_velocity), so
-# the route already carries his motion as a feed-forward, and aiming the anchor
-# downrange as well double-counts it — the same defect the gap ladder and the
-# backchecker's hip were fixed for, surviving in the four roles nobody revisited.
-# Leading and riding together inflate the frame-relative gap by pace x lookahead:
-# a defender covering from up to DEFENSIVE_ANTICIPATION_MAX_M further off his man
-# the faster that man skates, which is backwards.
+# the route already carries his motion as a feed-forward; leading the anchor as
+# well double-counts it and inflates the frame-relative gap by pace × lookahead
+# — a defender covering from further off his man the faster that man skates.
 static func cover_threat(ctx: RoleContext, d: RoleDecision, man_pid: int,
 		play_ref: Vector3) -> bool:
 	if man_pid == -1 or ctx.snapshot == null \
@@ -371,10 +339,8 @@ static func inside_dir(carrier_pos: Vector3, dir_net: Vector3) -> Vector3:
 
 
 # The stand for a defender who owns the carrier: `gap` metres up the carrier→our
-# -net line, shaded to the inside. Shared by every role that closes a puck
-# carrier — the rush gap (AIRoleRushD) and the in-zone pressurer
-# (AIRolePressure) — so both defend him the same way and the TRANS_DEFENSE → DZONE
-# handoff is not a change of doctrine. Falls back to the unshaded stand when the
+# -net line, shaded to the inside. Shared by the rush gap (AIRoleRushD) and the
+# in-zone pressurer (AIRolePressure). Falls back to the unshaded stand when the
 # shade would put the body somewhere illegal.
 static func carrier_stand(ap: AICarrierApproach, gap: float) -> Vector3:
 	# Never project the stand past the net — the gap is a cushion in front of
@@ -408,12 +374,10 @@ static func read_carrier_approach(ctx: RoleContext,
 	return true
 
 
-# The same read against an EXPLICIT subject rather than the play reference. A
-# loose puck running toward our end is approaching us exactly as a carrier is,
-# and the stand you hold against it is the same stand — see AIRoleChase's
-# pre-contain, which is this read on the puck itself. Split out because "go get
-# the puck" is always about the PUCK, while resolve_defensive_play_ref answers
-# with the carrier whenever one exists.
+# The same read against an EXPLICIT subject rather than the play reference —
+# a loose puck running toward our end approaches us exactly as a carrier does.
+# Split out because "go get the puck" is always about the PUCK, while
+# resolve_defensive_play_ref answers with the carrier whenever one exists.
 static func fill_approach(ctx: RoleContext, subject_pos: Vector3,
 		subject_vel: Vector3, out: AICarrierApproach) -> void:
 	out.carrier_pos = subject_pos
@@ -432,26 +396,19 @@ static func fill_approach(ctx: RoleContext, subject_pos: Vector3,
 
 # ── Going to get the puck ────────────────────────────────────────────────────
 
-# The third defensive verb: nobody has it, so do I go?
+# Do I go get it?
 #
-# Returns TRUE when we are running the race — `d` gets the puck itself, and the
-# state machine's CHASE_PUCK does the real retrieval (lead intercept, blade gate,
-# contest drive-through) from there. This target is the hint it steers on until
-# then.
+# TRUE when we are running the race — `d` gets the puck itself, a hint the state
+# machine's CHASE_PUCK steers on until it takes over the real retrieval (lead
+# intercept, blade gate, contest drive-through).
 #
-# Returns FALSE when an opponent has already won it (loose_puck_race_lost, which
-# also asks whether declining buys anything — a lost race is only worth declining
-# when there isn't already a body home). `d` then gets the PRE-CONTAIN stand, and
-# that stand is the closing verb applied to the puck: the gap ladder's distance
-# goal-side of it, angled off the middle, with the puck's own closing speed
-# toward our net standing in for a rush's pace. A puck still running at our end
-# keeps the cushion; a dead settle is met tight.
-#
-# The angle is what makes the handoff exact rather than merely similar. This
-# stand exists so the chaser who declines plants where RUSH_D1 will want to be
-# the instant somebody collects and the state flips to TRANS_DEFENSE — and RUSH_D1's
-# stand is angled, so an unangled pre-contain was a spot the gap defender then
-# had to correct off, in the direction that concedes the middle.
+# FALSE when an opponent has already won it. `d` then gets the PRE-CONTAIN stand:
+# the closing verb applied to the puck — the gap ladder's distance goal-side of
+# it, angled off the middle, with the puck's own closing speed toward our net
+# standing in for a rush's pace. A puck still running at our end keeps the
+# cushion; a dead settle is met tight. The angle is what makes the handoff exact:
+# an unangled pre-contain is a spot RUSH_D1 must then correct off, in the
+# direction that concedes the middle.
 static func chase_puck(ctx: RoleContext, d: RoleDecision) -> bool:
 	if ctx.snapshot == null or ctx.snapshot.puck_state == null:
 		d.target_position = ctx.self_pos
@@ -475,33 +432,27 @@ static func chase_puck(ctx: RoleContext, d: RoleDecision) -> bool:
 
 # ── Carrier-best-option (inverse scoring) ────────────────────────────────────
 
-# Computes the opposing carrier's best option — shoot at our net, or pass to
-# any of `opp_teammates` — with our hypothetical defender position `candidate`
-# appended to the carrier's view of the defenders. The on-puck / rush
-# defensive roles (PRESSURE's cut-off argmax, RUSH_D1's odd-man lane fan)
-# argmax the NEGATION of this over their candidate sets: the spot that most
-# deflates the carrier's best option wins.
+# The opposing carrier's best option — shoot at our net, or pass to any of
+# `opp_teammates` — with our hypothetical defender position `candidate` appended
+# to his view of the defenders. PRESSURE's cut-off argmax and RUSH_D1's lane fan
+# argmax the NEGATION of it: the spot that most deflates his best option wins.
 #
-# Uses the threat-surface helpers so the gradient survives when score_shoot /
-# score_pass collapse to 0 (carrier far from net or all receivers far from
-# net). The position_potential floor pulls the defender tight to the carrier
-# in TRANS_DEFENSE scenarios where there's no immediate scoring threat to defend —
-# without it the score is flat across goal-side candidates and the argmax
-# picks arbitrarily.
+# Scored on the threat SURFACES so the gradient survives where score_shoot /
+# score_pass collapse to 0 (carrier or every receiver far from the net). The
+# surfaces' position_potential floor is what pulls the defender tight to the
+# carrier in TRANS_DEFENSE, where there is no immediate scoring threat and the
+# raw score is flat across every goal-side candidate.
 #
-# Coverage is CONTINUOUS by construction: `our_team_excluding_self` rides
-# into both surfaces, so a teammate already on a receiver suppresses that
-# pass threat and an uncovered receiver's threat stands — "who is really
-# open" needs no separate boolean read.
-# Per-decide upper bounds for carrier_best_option's early-out. Every threat
-# surface is monotone NON-INCREASING in the defender set (an extra body can
-# only block lanes, add pressure, shrink openness), so the option values with
-# the CURRENT defenders only — no hypothetical candidate appended — bound the
-# candidate-adjusted values from above. carrier_best_option evaluates terms
-# in descending-bound order and stops the moment the running max meets the
-# next bound: identical result, most pass surfaces never computed. Fill once
-# per decide (out_bases[0] = shoot, [1..] = opp_teammates in order) and pass
-# to every candidate's carrier_best_option call.
+# Coverage is CONTINUOUS by construction: `our_team_excluding_self` rides into
+# both surfaces, so a teammate already on a receiver suppresses that pass threat
+# and an uncovered receiver's stands — no separate "who is open" boolean.
+# Per-decide upper bounds for the early-out. Every threat surface is monotone
+# NON-INCREASING in the defender set (an extra body can only block lanes, add
+# pressure, shrink openness), so the option values with the CURRENT defenders
+# only bound the candidate-adjusted values from above. carrier_best_option then
+# evaluates terms in descending-bound order and stops once the running max meets
+# the next bound — identical result, most pass surfaces never computed. Fill once
+# per decide (out_bases[0] = shoot, [1..] = opp_teammates in order).
 static func carrier_option_bases(
 		carrier_pos: Vector3,
 		our_net: Vector3,
@@ -530,15 +481,10 @@ static func carrier_best_option(
 		bases: Array[float] = [],
 		our_team_caps: Array = [],
 		self_caps: AISkaterCaps = null) -> float:
-	# Carrier's view of defenders = our team + me at the candidate. This helper
-	# is called once per candidate in PRESSURE's argmax (up to ~19×/decide), so
-	# duplicating the array every call was pure hot-path churn. Append the
-	# candidate to the caller's array in place and pop it before returning — the
-	# array is left exactly as passed, and after the first call the backing
-	# store keeps its capacity so the push/pop allocates nothing. The caps ride
-	# alongside only when the caller supplied a matched array (the hypothetical
-	# body carries OUR caps) — a mismatched/empty caps array stays untouched and
-	# the surfaces fall back to league.
+	# Defenders = our team + me at the candidate, push/popped into the caller's
+	# array in place (~19 calls/decide in PRESSURE's argmax). Caps ride alongside
+	# only when the caller supplied a matched array; a mismatched or empty one
+	# stays untouched and the surfaces fall back to league.
 	var caps_matched: bool = our_team_caps.size() == our_team_excluding_self.size()
 	our_team_excluding_self.push_back(candidate)
 	if caps_matched:
@@ -603,25 +549,22 @@ static func carrier_best_option(
 
 # Rush variant of carrier_best_option, for RUSH_D1's odd-man lane fan: RAW xG
 # threats (no position_potential floor) with each pass modeled as a ONE-TIMER
-# feed — the goalie must traverse to the receiver's line over the pass flight
-# and reads the release late (predict_goalie_pos + goalie_unsettled), which is
-# exactly what makes the cross-crease feed the threat the 2-on-1 doctrine
-# plays ("the goalie takes the shooter, I take the pass"). The carrier's
-# direct shot is scored against the goalie where he IS — squared to the known
-# shooter, the doctrine's other half.
+# feed — the goalie must traverse to the receiver's line over the pass flight and
+# reads the release late (predict_goalie_pos + goalie_unsettled). The carrier's
+# direct shot is scored against the goalie where he IS, squared to the known
+# shooter. Those are the two halves of the 2-on-1 doctrine, "the goalie takes the
+# shooter, I take the pass".
 #
-# Why not the surfaced variant above: its position_potential floor exists to
-# give PRESSURE close-in gradients, but across RUSH_D1's gap-distance fan the
-# floor flattens (every candidate sits outside the pressure cone) and masks
-# the reducible-threat comparison entirely; and a set-goalie pass read scores
-# the one-timer feed near zero, hiding the very threat the fan exists to
-# take away. Raw xG also ties at ~0 far from the net, so the fan's hold
-# margin keeps the classic retreat line out there — the correct far-out read.
-# `abort_above`: exact argmin pruning for RUSH_D1's lane fan — the caller
-# MINIMIZES this value across candidates, so once the running best exceeds the
-# incumbent's, the exact value cannot matter and the remaining (expensive,
-# score_pass-heavy) receiver evaluations are skipped. Default INF evaluates
-# everything.
+# Why not the surfaced variant: its position_potential floor flattens across the
+# fan's gap distances (every candidate sits outside the pressure cone) and masks
+# the reducible-threat comparison entirely, and a set-goalie pass read scores the
+# one-timer feed near zero — hiding the threat the fan exists to take away. Raw
+# xG also ties at ~0 far from the net, so the fan's hold margin keeps the classic
+# retreat line out there.
+#
+# `abort_above` is exact argmin pruning: the caller MINIMIZES across candidates,
+# so once the running best exceeds the incumbent's the remaining (score_pass-
+# heavy) receiver evaluations cannot matter. Default INF evaluates everything.
 static func carrier_live_option(
 		candidate: Vector3,
 		carrier_pos: Vector3,
@@ -632,13 +575,9 @@ static func carrier_live_option(
 		abort_above: float = INF,
 		our_team_caps: Array = [],
 		self_caps: AISkaterCaps = null) -> float:
-	# Defenders = our team + me at the candidate. Append-and-restore the caller's
-	# array in place instead of duplicating it — called once per candidate in
-	# RUSH_D1's lane fan (up to ~13×/decide), so a fresh Array per call was pure
-	# churn. The array is left exactly as passed; capacity is retained across the
-	# push/pop so steady-state calls allocate nothing. Caps ride alongside only
-	# when the caller supplied a matched array (the hypothetical body carries OUR
-	# caps); otherwise the reads fall back to league.
+	# Defenders = our team + me at the candidate, push/popped into the caller's
+	# array in place (~13 calls/decide in RUSH_D1's lane fan). Caps ride alongside
+	# only when the caller supplied a matched array; otherwise league.
 	var caps_matched: bool = our_team_caps.size() == our_team_excluding_self.size()
 	our_team_excluding_self.push_back(candidate)
 	if caps_matched:
@@ -801,17 +740,12 @@ static func resolve_any_carrier_pos(ctx: RoleContext) -> Vector3:
 
 
 # ── Play reference (anti-freeze) ─────────────────────────────────────────────
-# Off-puck roles orient their candidate search around the carrier. But
-# there's no live carrier for most of every transition — a loose puck,
-# a breakout pass in flight, the beat after a won battle. The old
-# fallback was to freeze at self_pos, which is the "stuck on the heels"
-# bug: standing still is almost never the right call mid-transition.
-#
-# These resolvers fall back to the PUCK itself when no carrier holds it,
-# so the role keeps flowing toward the developing play (the elected
-# chaser contests it; the others set up as the next option / recover
-# into shape). Returns INF only when there's no puck state at all
-# (degenerate first frame) — callers still self_pos that case.
+# Off-puck roles orient their candidate search around the carrier, and there is
+# no live carrier for most of every transition — a loose puck, a breakout pass in
+# flight, the beat after a won battle. These resolvers fall back to the PUCK
+# itself so the role keeps flowing toward the developing play; standing still is
+# almost never the right call mid-transition. INF only when there is no puck
+# state at all (degenerate first frame) — callers self_pos that case.
 
 # Offensive roles (SUPPORT, OUTLET, FINISHER): prefer a live teammate
 # carrier; else, when the puck is genuinely LOOSE, orient off the puck.
@@ -940,48 +874,17 @@ static func collect_opponents(ctx: RoleContext,
 
 # ── Offensive stations: the pinch read (plan §13) ────────────────────────────
 #
-# Replaces the counter-channel race for every station that holds forward ice
-# while WE have the puck (the O-zone points, the forecheck line pair, F3 / the
-# high slot, the trailing valve). The race model is not how the decision is
-# actually made, and it is systematically more pessimistic than the real read —
-# which is what stranded these bodies 30 m from the play.
+# The three facts a station holding forward ice reads, and what each maps onto:
+# CONTROL (AIRushRead.pressure_eta_s) — published but deliberately unread here,
+# see may_hold_forward_stand; SUPPORT (has_support_behind) — is there a layer
+# behind me; NUMBERS (_attacker_behind) — has anybody got past my stand.
 #
-# The doctrine's read is three coarse, categorical facts:
-#
-#   1. CONTROL   — "the only time a defenseman should be standing on the
-#                  offensive blue line is when his team has complete control of
-#                  the puck."          → AIRushRead.pressure_eta_s
-#                  In practice this drives NEITHER the hold decision nor the
-#                  station leash. Contested control with nobody behind you gives
-#                  a retreat nothing to cover, so it must not send bodies home;
-#                  and shrinking the leash under pressure turns an outer bound
-#                  into an attractor that drags a POINT into the corner. The
-#                  pressure-dependent "give close support under heavy pressure"
-#                  belongs to the SUPPORT role's own positioning, which already
-#                  prices pressure — not to the stations. Left published and
-#                  unread here rather than mis-wired.
-#   2. SUPPORT   — "a defenceman can only pinch when they have a supporting
-#                  player in position to back them up should the puck/player get
-#                  past them."                       → has_support_behind
-#
-#                  Which body that IS falls out of the geometry, and it is not
-#                  the one the phrase "F3 high" suggests. During an O-zone cycle
-#                  the POINTS are the rearmost bodies (~9 m from our blue line);
-#                  F3's high-slot float sits ~8 m further UP-ice. So:
-#                    · the points read no support and therefore respect any man
-#                      who gets behind them — correct, they ARE the last layer;
-#                    · F3 reads the points as support and holds his float —
-#                      correct, the layer behind him is home.
-#                  The D-vs-forward asymmetry the doctrine describes therefore
-#                  emerges from who is physically rearmost, which is why no
-#                  per-position appetite scalar is needed.
-#   3. NUMBERS   — "the first rule defensemen are taught is to count numbers —
-#                  how many opponents are in front of them and if any are
-#                  behind them."                     → an attacker behind my stand
-#
-# And when the read says back off, the target is NOT home. "It's better to stay
-# safe with a 3 on 2, rather than pinch and end up with a 3 on 1, 2 on 0 or
-# breakaway": backing off restores a NUMBERS LAYER and then stops.
+# The D-vs-forward asymmetry the doctrine describes needs no per-position
+# appetite scalar: it emerges from who is physically rearmost. In an O-zone
+# cycle the POINTS are the rearmost bodies (~9 m from our blue line) and read no
+# support, so they respect any man who gets behind them — they ARE the last
+# layer; F3's high-slot float sits ~8 m further up-ice, reads the points as
+# support, and holds.
 
 # While HOLDING, a station demands this much extra separation before it accepts
 # that a man has got behind it — anti-flicker on the numbers read, in the physical
@@ -1002,12 +905,10 @@ const PLAY_CONNECTION_FLIGHT_S: float = 1.1
 #   · they have it and it is coming at us (their breakout is under way), or
 #   · somebody is behind us and nobody is covering for us.
 #
-# Contested control deliberately does NOT send a station home on its own. Backing
-# off with nobody behind you is precisely the "out of the play" failure this
-# replaces — there is nothing to restore, so the retreat buys no coverage and
-# costs the attack a body. What contested control legitimately changes is how
-# CLOSE the support plays (pull_into_play, "give close support to a teammate under
-# heavy pressure"), which is the job the research actually assigns it.
+# Contested control must not send a station home on its own: backing off with
+# nobody behind you has nothing to restore, so the retreat buys no coverage and
+# costs the attack a body. What it legitimately changes is how CLOSE the support
+# plays, which is pull_into_play's job.
 static func may_hold_forward_stand(ctx: RoleContext, was_holding: bool,
 		stand: Vector3) -> bool:
 	var read: AIRushRead = ctx.rush_read
@@ -1115,19 +1016,15 @@ static func offensive_station_target(ctx: RoleContext, stand: Vector3,
 # The last-man bound for the two NEUTRAL shapes — 3v3's FLANK pair and 5v5's
 # DBACK pair, the only stations that hold ice in front of a puck NOBODY owns.
 #
-# Same three-fact read as offensive_station_target, with one difference that
-# falls out of the possession state rather than a per-caller flag: NEUTRAL has
-# no carrier, so there is no attack to leave and no structure to hurry back to.
-# A slow loose puck is not a rush, and collapsing to a defensive post for one
-# concedes the whole neutral zone to whoever picks it up — so losing the forward
-# stand restores a NUMBERS LAYER (numbers_floor) and stops there. That keeps the
-# concession GRADED, which is what the puck-relative flank shape needs: the bound
+# Same three-fact read as offensive_station_target, with the concession graded
+# rather than absolute: a slow loose puck is not a rush, and collapsing to a
+# defensive post for one concedes the whole neutral zone to whoever picks it up,
+# so losing the forward stand restores a NUMBERS LAYER and stops there. The bound
 # exists to refuse the guaranteed-breakaway geometry, not to replace the shape.
 #
-# The house gate is the floor, as it is for every field skater — deeper than the
-# top of the circles a station only duplicates the goalie and fights its own
-# crease repel. Both candidates lie on the net → `stand` ray, so the clamp is a
-# distance compare rather than a second projection.
+# The house gate is the floor, as it is for every field skater. Both candidates
+# lie on the net → `stand` ray, so the clamp is a distance compare rather than a
+# second projection.
 static func neutral_station_target(ctx: RoleContext, stand: Vector3,
 		was_holding: bool, layer_stand: Vector3 = Vector3.INF) -> Vector3:
 	if may_hold_forward_stand(ctx, was_holding, stand) \
@@ -1149,35 +1046,18 @@ static func neutral_station_target(ctx: RoleContext, stand: Vector3,
 
 # ── "If I go, is anybody home?" ──────────────────────────────────────────────
 #
-# The clause the neutral shape was missing, and it is one character of logic:
-# `may_hold_forward_stand` is `has_support_behind OR not _attacker_behind`, so a
-# station holds its forward stand whenever nobody has ALREADY got behind it —
-# the genuine last man included. That is right where it is used (an offensive
-# station with the puck ours has something to be forward FOR), and wrong in the
-# one state where the puck belongs to nobody: both teams converge on a loose
-# puck, so nobody is behind anybody yet, every station reads clear, the whole
-# shape steps up together, and the man gets behind them BECAUSE they did.
+# The clause NEUTRAL demands on top of `may_hold_forward_stand`'s OR: somebody
+# home behind me, and not merely nobody already past me. Same positional depth
+# read as `has_support_behind`, with two differences that matter for a whole
+# shape rather than one body:
 #
-# Measured on the real stack: a 3v3 whose two flanks both held their puck-side
-# stand spent 66% of the following threat window with nobody between the opposing
-# carrier and our own net — a coast-to-coast — with the elected RUSH_D1 already
-# up-ice of the puck when the state flipped, and therefore unable to be a gap
-# defender at all.
-#
-# So NEUTRAL demands both clauses: somebody home behind me AND nobody already
-# past me. The depth read is `has_support_behind`'s (the risk priced is "beaten
-# wide, nobody home", which is positional), with two differences that matter for
-# a whole shape rather than one body:
-#
-#   · THE ELECTED CHASER DOES NOT COUNT. He is committed to the puck and is not
-#     holding anything. Counting him is how a three-man team convinces itself it
-#     has a defender while all three are on the same puck.
-#   · A COVER ENVELOPE OF MARGIN, so "behind me" means meaningfully behind rather
-#     than a metre nearer the net — the same quantity and the same reasoning as
-#     `_attacker_behind`'s margin. Two flanks level with each other cover nothing
-#     for one another, so both stay home; over-covering the house on a coin flip
-#     is the safe direction, and the band is what stops the pair trading the job
-#     back and forth every dispatch.
+#   · THE ELECTED CHASER DOES NOT COUNT. He is committed to the puck and holds
+#     nothing. Counting him is how a three-man team convinces itself it has a
+#     defender while all three are on the same puck.
+#   · A COVER ENVELOPE OF MARGIN, so "behind me" means meaningfully behind — the
+#     same quantity and reasoning as `_attacker_behind`'s margin. Two flanks
+#     level with each other cover nothing for one another, so both stay home, and
+#     the band is what stops the pair trading the job back and forth.
 #
 # Antisymmetric by construction — the deepest man cannot have anyone behind him —
 # so exactly one body draws the layer and no two can each appoint the other.
@@ -1297,18 +1177,12 @@ static func has_support_behind(ctx: RoleContext) -> bool:
 # only has to place its trigger.
 #
 # WHY A LIMIT AND NOT A PLAN. The cap is a function of the ICE (spare depth and
-# the rush's pace) and not of the defender's own speed, so it is state feedback
-# and cannot wind itself up. Its predecessor asked the other question — "what is
-# the largest step-up I could still arrive set at?" — and answered it afresh at
-# 6 Hz with no memory of the plan it was revising, which is a structure that
-# ratchets: every grant builds speed and the next grant is computed as though
-# the body were parked. That version had to price its trip FROM REST to stay
-# stable at all, and pricing it honestly instead (from the body's real speed)
-# measured worse than having no bound whatsoever — meeting-point up-ice speed
-# 2.4 -> 6.5-9.2 m/s, wander off our own net 4.2 m mean -> 13-25 m, on the sweep
-# in tests/unit/ai/test_rush_gap_discipline.gd. A speed limit has no such
-# failure mode to be conservative about: closing on the rush shrinks the spare
-# depth, which lowers the cap, which is negative feedback by construction.
+# the rush's pace) and not of the defender's own speed, so it is state feedback:
+# closing on the rush shrinks the spare depth, which lowers the cap. Never
+# re-derive it as a per-dispatch step-up plan ("the largest step-up I could still
+# arrive set at") — recomputed at 6 Hz with no memory of the plan it revises,
+# that shape ratchets, because every grant builds speed and the next is computed
+# as though the body were parked.
 #
 # The shape falls out at both ends: a stalled or regrouping carrier makes
 # `closing` nil, so there is no rendezvous to lose, the cap goes to the body's
@@ -1359,13 +1233,12 @@ const HOME_FLOOR_BIND_MARGIN_M: float = 1.0
 # The deepest a station may sag — offensive_station_target's retreat target when
 # the puck is no longer ours.
 #
-# The principle: an OFF-PUCK STATION's retreat is about repositioning for a
-# possible turnover, not about defending an actual rush. Defending an actual
-# rush is transition defense's job — a different possession state with different
-# roles. So when a station gives up its forward stand, the answer is "get back to
-# your post", not "keep skating to the crease" — retreating toward the net-front
-# stand is how a defenseman ended up parked on his own goal line while the play
-# was still in the offensive zone (docs/transition-defense-plan.md §2.1).
+# An OFF-PUCK STATION's retreat is about repositioning for a possible turnover,
+# not about defending an actual rush; that is transition defense's job, a
+# different possession state with different roles. So giving up a forward stand
+# means "get back to your post", never "keep skating to the crease" — a
+# net-front retreat target parks a defenseman on his own goal line while the play
+# is still in the offensive zone (docs/transition-defense-plan.md §2.1).
 #
 # Two tiers, and which applies falls out of the geometry rather than a per-caller
 # decision:
@@ -1393,10 +1266,7 @@ static func station_retreat_floor(ctx: RoleContext, fwd: Vector3,
 
 # The other side of the same line: hold `pos` OUT at the top of the circles when
 # it has been placed deeper than that. Where house_gate_floor bounds how far a
-# retreating station may sag, this bounds how far a defender may be PUSHED, and
-# the reason is the same one AIRoleRushD has always given for it — past the gate a
-# field skater duplicates the goalie, fights his own crease repel, and gets beaten
-# to the outside of a net he is standing on top of.
+# retreating station may sag, this bounds how far a defender may be PUSHED.
 #
 # Returns `pos` untouched when it is already outside the gate, and projects it out
 # along the net → pos ray otherwise (degenerate at the net itself: straight out
@@ -1415,7 +1285,7 @@ static func hold_out_to_house_gate(our_net: Vector3, pos: Vector3) -> Vector3:
 
 
 # The point on the net → `fwd` ray at the top of the circles: the deepest a field
-# skater should ever be pushed by a last-man bound. Below it he duplicates the
+# skater should ever be pushed by a last-man bound. Inside it he duplicates the
 # goalie, fights his own crease repel, and overshoots behind the goal line.
 static func house_gate_floor(our_net: Vector3, fwd: Vector3) -> Vector3:
 	var dx: float = fwd.x - our_net.x
@@ -1434,19 +1304,15 @@ static func xz_distance(a: Vector3, b: Vector3) -> float:
 
 
 # Is the race to a loose puck already LOST — an opponent reaches it a clear
-# contest-band ahead of me? Momentum-aware ETAs at each skater's real Speed
-# cap, with the same physical contest margin the dump-chase race uses
-# (CHASE_CONTEST_MARGIN_M, a stride's head-start): arriving inside that band
-# still creates a live 50/50 (worth racing, the drive-through commits it);
-# arriving clearly behind it means the collector has gathered and I'm just
-# skating myself out of the play. A chaser that reads LOST should transition
-# to defending the pickup instead of pushing (the missed-pass "third man keeps
-# chasing while the counter develops" failure). False when no opponent
-# threatens the puck.
+# contest-band ahead of me? Momentum-aware ETAs at each skater's real Speed cap,
+# with the same physical contest margin the dump-chase race uses
+# (CHASE_CONTEST_MARGIN_M, a stride's head start): arriving inside that band
+# still creates a live 50/50 worth racing, and the drive-through commits it;
+# arriving clearly behind it means the collector has gathered and I am skating
+# myself out of the play. False when no opponent threatens the puck.
 #
-# `own_goal_dir` (+1 = our net at +Z) enables the CONTAINMENT read below, which
-# is what keeps the decline from becoming "the bots stopped trying". Pass 0.0
-# only where the geometry genuinely isn't available (unit tests) — both
+# `own_goal_dir` (+1 = our net at +Z) enables the containment read below. Pass
+# 0.0 only where the geometry genuinely isn't available (unit tests) — both
 # production call sites pass the real value.
 static func loose_puck_race_lost(
 		snapshot: WorldSnapshot, self_pos: Vector3, self_vel: Vector3,
@@ -1456,12 +1322,11 @@ static func loose_puck_race_lost(
 	if snapshot == null or snapshot.puck_state == null:
 		return false
 	var puck_pos: Vector3 = snapshot.puck_state.position
-	# The puck races on its predicted path, not its current position — ETAs to
-	# where it IS misread both sides of the race (the tail-chaser a metre behind
-	# it "wins" a race the puck itself outruns; the skater whose real intercept
-	# is where the puck comes to him reads as hopeless, declines, and it rides
-	# the zone untouched). Same walk as the chase election, so the decline can
-	# never contradict it.
+	# The puck races on its predicted path, never its current position: an ETA to
+	# where it IS misreads both sides of the race — the tail-chaser a metre behind
+	# it "wins" a race the puck outruns, and the skater whose real intercept is
+	# where the puck comes to him reads as hopeless. Same walk as the chase
+	# election, so the decline can never contradict it.
 	var puck_vel: Vector3 = snapshot.puck_state.velocity
 	var traj: Array[Vector3] = AILoosePuckChase.race_trajectory(puck_pos, puck_vel)
 	var step_dt: float = AILoosePuckChase.RACE_LOOKAHEAD_S \
@@ -1486,21 +1351,14 @@ static func loose_puck_race_lost(
 		if team_id_by_peer.get(pid, -1) == team_id:
 			continue
 		var s: SkaterNetworkState = snapshot.skater_states[pid]
-		# The race is only lost to an opponent actually RUNNING it — on the
-		# intercept point already (standing there is the play, no motion
-		# needed), or genuinely closing on it. The ETA model prices his
-		# hypothetical sprint-from-now; declining on a body that is not going
-		# for the puck left it sitting between two staring teams, both sides
-		# having declined on hypothetical winners.
+		# The race is only lost to an opponent actually RUNNING it — standing on
+		# the intercept point already, or genuinely closing on it. The ETA model
+		# only prices a hypothetical sprint-from-now, so without this test a
+		# flat-footed body well off the puck's line vetoes the chase.
 		#
 		# The question is per-path, not per-position: a rim's downstream
-		# interceptor legitimately waits still, and he reads as committed
-		# because the puck's own line runs through his contest band — he makes
-		# the play without moving. What no longer counts is the body
-		# 15 m off that line, or drifting away from it, whose "win" is a sprint
-		# he was never running: that phantom veto is what talked our chaser off
-		# a rim and sent him retreating to the pre-contain point while the puck
-		# rode the whole zone untouched.
+		# interceptor legitimately waits still and reads as committed because the
+		# puck's own line runs through his contest band.
 		var speed: float = AILoosePuckChase.race_vmax(
 				s, caps_by_peer.get(pid), puck_pos)
 		var t: float = AILoosePuckChase.path_intercept_time(
@@ -1522,21 +1380,13 @@ static func loose_puck_race_lost(
 	if my_eta <= best_opp_eta + contest_window:
 		return false
 	# Losing the race is only a reason to STOP if stopping buys something. The
-	# decline exists to pre-contain the collector so the counter meets a body —
-	# which is worth a chaser only when there is not already one behind the
-	# play. With a teammate goal-side of the pickup the counter is contained
-	# without me and the honest read on a lost puck is to keep skating: that is
-	# the forecheck, and refusing it is why a dumped-in puck got collected with
-	# nobody within 20 m of it (measured: our team had NOBODY chasing for 53% of
-	# the loose window on a routine dump-in).
+	# decline exists to pre-contain the collector so the counter meets a body,
+	# which is worth a chaser only when there is not already one behind the play.
 	#
 	# Naturally zone-aware, so no zone gate is needed: a puck dumped into the
 	# attacking corner has our whole team goal-side of it and gets forechecked,
-	# while a puck lost behind our own D — the last man with nobody home, the
-	# geometry the decline was actually built for — still declines and
-	# pre-contains. Goal-side is the plain support read ("is anyone behind the
-	# puck") rather than a full can-he-hold model: cheap, and it errs toward
-	# racing, which is the side of this trade-off that reads as hockey.
+	# while one lost behind our own D — the genuine last man with nobody home —
+	# still declines and pre-contains.
 	return not _has_containment_behind(snapshot, team_id, team_id_by_peer,
 			self_pid, best_opp_meet, own_goal_dir)
 
@@ -1549,34 +1399,15 @@ static func loose_puck_race_lost(
 #     far from our net (a dump into their corner puts our whole team goal-side
 #     of it), and what makes the forecheck work.
 #   HOLDING THE HOUSE — able to reach the top of the circles in front of our own
-#     net inside the window an arrival there still matters. Right when the
-#     pickup is at our own net, where nothing can be goal-side of it.
+#     net inside the window an arrival there still matters. Right when the pickup
+#     is at our own net, where nothing CAN be goal-side of it (a puck rimmed
+#     behind our own goal line is the deepest object in our end).
 #
-# The goal-side test alone leaves a hole exactly where declining costs the most.
-# When the puck is the DEEPEST object in our own end — rimmed into our corner or
-# around behind our own goal line, past everybody — no teammate CAN be goal-side
-# of it. The valve read "nobody is covering" when the truth was "everybody is
-# covering, the puck is just behind us", every eligible bot declined, and the
-# puck sat in our own corner untouched: measured on the engagement harness at 93
-# of 98 idle ticks, puck loose 0.8 s at 8.1 m/s, nearest man 13.4 m and closing,
-# all three bots parked in OFF_PUCK. Only ONE bot per team is even eligible to
-# chase (the election), so a single unearned decline is a whole-team no-show.
-#
-# Re-phrasing it as a race — "can a teammate beat the collector home?" — does not
-# fix it, and the reason is worth keeping: the race runs to `best_opp_meet`, and
-# when the puck caroms behind our own goal line that point IS our net, so the
-# collector is already home and nobody can beat him there. Any guard that
-# measures against the pickup dies the same way. The house read measures against
-# OUR NET instead, which is why it survives.
-#
-# Doctrine (researched): "don't chase" in hockey means do not pursue a puck
-# CARRIER into a low-danger area and turn your back on the slot. A LOOSE puck in
-# our end is always pressured — "the nearest player pressures, and everyone else
-# adjusts their support so the house stays covered". So the question is never
-# "may I go?" but "if I go, is the house still covered?", which is a numbers
-# read. The case the decline was built for survives it: the genuine last man,
-# with his mates caught up-ice, has nobody who can hold the house, so he still
-# declines and covers the net front instead of chasing into the corner.
+# Never re-phrase this as a race — "can a teammate beat the collector home?" A
+# race runs to the pickup, and when the puck caroms behind our own goal line that
+# point IS our net, so the collector is already home and nobody beats him there.
+# Any guard measured against the PICKUP dies that way; the house read measures
+# against OUR NET, which is why it survives.
 #
 # own_goal_dir 0.0 means the caller has no rink geometry to give us, so no
 # containment can be claimed.

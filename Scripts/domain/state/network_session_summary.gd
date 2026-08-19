@@ -20,7 +20,7 @@ class_name NetworkSessionSummary extends RefCounted
 #   • No health classification here — it ships raw aggregates and lets the
 #     analysis (SQL / overlay) own thresholds, so the band cutoffs aren't
 #     duplicated out of network_telemetry.gd / the F3 overlay.
-#   • Felt-lag markers (Phase 2): record_felt_lag() appends a capped list of
+#   • Felt-lag markers: record_felt_lag() appends a capped list of
 #     {at_sec, ...snapshot} dicts so a tester's subjective "this felt bad"
 #     moments ride along in the same row, correlated with the numbers.
 #   • Auto markers: record_auto_marker() is the same mechanism fired by

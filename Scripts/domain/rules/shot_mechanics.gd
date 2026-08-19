@@ -23,14 +23,16 @@ class ShotResult:
 # input, no power coupling. Arrival height is emergent from angle × charge ×
 # range, and MISSING HIGH is the price of greed: the player is the calibrated
 # shooter, or isn't yet.
+# Each level names a goalie-posture landmark it clears at the blade's home
+# range (M88 / M92 / M28 angles in brackets):
 #   0 = FLAT — heel. The puck stays on the ice.
-#   1 = LOW  — mid-blade partial roll (7°/8°/8.5° by gear): the saucer at pass
-#              pace, the point snipe at full wrister charge.
-#   2 = MID  — toe-side (15.5°/17.5°/19°): the slot snipe (~3–4 m at full).
-#   3 = HIGH — the toe (21°/24°/28°): the in-tight roof; the flattest ladder
-#              (M88) cannot roof the doorstep but also can never sail — its
-#              worst outcome at any charge is a crossbar ping — while the M28
-#              roofs from the crease and pays for it everywhere else.
+#   1 = LOW  — mid-blade partial roll (5.0°/5.5°/6.4°): over the butterfly pad,
+#              under his hands.
+#   2 = MID  — toe-side (6.9°/8.2°/10.0°): the armpit, over committed hands.
+#   3 = HIGH — the toe (8.9°/11.0°/13.6°): upstairs. The flattest ladder (M88)
+#              cannot roof the doorstep but also can never sail — its worst
+#              outcome at any charge is a crossbar ping — while the M28 roofs
+#              from the crease and pays for it everywhere else.
 # The levels double as DEFLECT MODES (blade lift height + redirect sign follow
 # the level — see PuckCollisionRules.deflect_loft_speed).
 # QUICK PASSES keep the fixed vertical-speed table (loft_vy_low/high — LOW at
@@ -42,7 +44,7 @@ const ELEVATION_HIGH: int = 3
 
 # Universal cap on the pre-normalization Y/XZ ratio of a lofted direction:
 # 1.0 = 45°. Pure anti-forgery guard — the steepest authored ladder rung (M28
-# HIGH, 28°) sits well under it. Keeps every legit direction under
+# HIGH, 13.6°) sits well under it. Keeps every legit direction under
 # ShotReleaseRules.MAX_DIRECTION_Y (normalized y at 45° is ~0.707 vs the 0.75
 # clamp) so the host's forged-direction clamp never touches an honest shot.
 const MAX_LOFT_RATIO: float = 1.0
@@ -221,9 +223,9 @@ static func wrister_is_backhand(bot_aim_dir: Vector3, bot_backhand: bool,
 #     during the charge) toward the cursor — the same aim as the quick pass, so
 #     "the puck fires from where it sits toward where you point." (Bots commit the
 #     direction directly.) Falls back to player→cursor when zero.
-# The two live on separate buttons precisely so there's no tap-vs-hold guess: the
-# old hold-time classifier made an ordinary tap that lingered a few ticks fire a
-# wrister when the player expected a snap.
+# The two live on separate buttons precisely so there's no tap-vs-hold guess: a
+# hold-time classifier fires a wrister on an ordinary tap that lingers a few
+# ticks, when the player expected a snap.
 # Backhand is the caller's call: the controller passes is_backhand — for humans
 # the rotational sense of the CURSOR's bearing sweep over the stroke
 # (is_backhand_from_swing above; the blade is frozen so the cursor is the sweep),
@@ -245,10 +247,10 @@ static func release_wrister(
 
 	if is_quick_pass:
 		# QUICK PASS — aim from the blade (the puck's position) toward the cursor,
-		# so the pass goes where you point. The old player→blade aim inherited the
-		# blade's lateral carry-side offset (the puck sits off to the forehand
-		# side), which pulled the pass off the cursor line — this reads blade→cursor
-		# directly. Falls back to player→cursor only when the cursor sits on the
+		# so the pass goes where you point. Aiming player→blade instead inherits the
+		# blade's lateral carry-side offset (the puck sits off to the forehand side)
+		# and pulls the pass off the cursor line. Falls back to player→cursor only
+		# when the cursor sits on the
 		# blade (degenerate, no direction). Loft rides the fixed-vy pass table
 		# (NOT the shot ladder): LOW at pass power is the saucer, MID+ the flip.
 		var blade_xz := Vector3(blade_world_pos.x, 0.0, blade_world_pos.z)

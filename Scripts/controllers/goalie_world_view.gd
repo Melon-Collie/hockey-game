@@ -5,15 +5,13 @@ extends RefCounted
 # that needs one. First half of the perception/decision split (#519, plan doc §6.2).
 #
 # ── Why this exists ──────────────────────────────────────────────────────────
-# GoalieController was running SIX independent full skater scans per tick, each
-# re-walking the same array for a slightly different question: nearest opponent to
-# the puck, nearest teammate to the puck, opposing positions for the sweep-lane
-# model, "is any shooter near the puck", the backdoor depth cap, and the screen
-# occlusion set. At 120 Hz x 2 goalies that is 12 walks of the registry per frame
-# to answer questions that one walk answers. This is the "memoize at the seam"
-# pattern CLAUDE.md asks for, and it is also the shape the eventual
-# GoaliePerception takes: read the world ONCE into plain data, then decide against
-# the data rather than against live nodes.
+# Six reads need a skater scan every tick — nearest opponent to the puck, nearest
+# teammate to the puck, opposing positions for the sweep-lane model, "is any
+# shooter near the puck", the backdoor depth cap, and the screen occlusion set.
+# Run independently that is 12 walks of the registry per frame at 120 Hz x 2
+# goalies to answer questions one walk answers, so the world is read ONCE into
+# plain data here and every decision runs against the data rather than against
+# live nodes.
 #
 # Frame-stamped and rebuilt lazily, so it is correct both from the physics tick and
 # from the puck_released SIGNAL handler (which fires outside _physics_process and
