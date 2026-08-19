@@ -248,10 +248,6 @@ func get_start_ts() -> float:
 	return _start_ts
 
 
-func get_end_ts() -> float:
-	return _end_ts
-
-
 func get_duration() -> float:
 	return _end_ts - _start_ts
 

@@ -70,13 +70,6 @@ func is_gamepad_active() -> bool:
 	return _active == Device.GAMEPAD and not PlayerPrefs.disable_gamepad
 
 
-func active_device() -> int:
-	return _active
-
-
-# The shared, device-aware focus ring (see _focus_ring). MenuStyle hands this same
-# instance to every controller-focusable control; the tracker restyles it on a
-# handoff, so all rings appear/vanish together with the active device.
 func focus_ring() -> StyleBoxFlat:
 	return _focus_ring
 

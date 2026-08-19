@@ -496,14 +496,6 @@ static func weight_for_frame_t(inches: int, t: float) -> int:
 	return int(roundf(lerpf(mid, float(weight_max(inches)), (f - 0.5) / 0.5)))
 
 
-func height_inches() -> int:
-	return height
-
-
-func height_label() -> String:
-	return inches_label(height)
-
-
 func weight_label() -> String:
 	return "%d lbs" % weight
 

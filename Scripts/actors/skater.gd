@@ -2341,11 +2341,6 @@ func set_bottom_hand_position(pos: Vector3) -> void:
 	bottom_hand.position = pos
 
 
-func get_bottom_hand_position() -> Vector3:
-	return bottom_hand.position
-
-
-# ── Upper Body ────────────────────────────────────────────────────────────────
 func set_upper_body_rotation(angle: float) -> void:
 	_blade_contact_dirty = true
 	upper_body.rotation.y = angle
@@ -3205,28 +3200,12 @@ func set_slapper_zone(active: bool, radius: float = 0.0, offset_x: float = 0.0, 
 	_slapper_zone_active = active
 
 
-func is_slapper_zone_active() -> bool:
-	return _slapper_zone_active
-
-
-# Rotates the local offset onto the skater's current facing and drops it to the
-# ice plane — the Skater origin sits at body-center height, so a zone left at the
-# body's Y would float at chest height where the puck can never reach it.
 func get_slapper_zone_global_position() -> Vector3:
 	var world: Vector3 = to_global(_slapper_zone_offset)
 	world.y = 0.0
 	return world
 
 
-func get_slapper_zone_radius() -> float:
-	return _slapper_zone_radius
-
-
-# ── Uniform / Appearance (delegate to SkaterUniformCoordinator) ───────────────
-# Applies the full v2 colors dict (output of TeamColorRegistry.get_colors)
-# — base colors, stripe arrays, yoke, shoulder + jersey text colors, blade.
-# Call before or after set_jersey_info; both repaint the decals using cached
-# inputs from whichever side was called last.
 func set_uniform(colors: Dictionary) -> void:
 	_uniform.apply_uniform(colors)
 

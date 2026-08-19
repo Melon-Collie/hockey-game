@@ -763,13 +763,3 @@ func _make_beacon_material(color: Color, render_priority: int) -> StandardMateri
 	mat.render_priority = render_priority
 	mat.albedo_color = color
 	return mat
-
-
-func _make_hud_ice_material() -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.albedo_color = Color(MenuStyle.HUD_ICE.r, MenuStyle.HUD_ICE.g,
-			MenuStyle.HUD_ICE.b, MenuStyle.HUD_OPACITY)
-	return mat

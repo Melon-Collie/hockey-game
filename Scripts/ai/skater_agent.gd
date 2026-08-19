@@ -66,9 +66,6 @@ func get_state() -> SkaterAgentStateMachine.State:
 # ── Debug accessors ───────────────────────────────────────────────────────────
 # Read by AIController to populate the floating per-bot debug label.
 
-func debug_state_name() -> String:
-	return SkaterAgentStateMachine.State.keys()[_sm.get_state()]
-
 
 func debug_role() -> String:
 	return _sm.debug_role()

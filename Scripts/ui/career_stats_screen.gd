@@ -551,26 +551,6 @@ func _clear_children(node: Node) -> void:
 		child.queue_free()
 
 
-func _add_totals_row(label_text: String, value_text: String) -> void:
-	var row := HBoxContainer.new()
-	_totals_content.add_child(row)
-	var lbl := Label.new()
-	lbl.text = label_text
-	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
-	row.add_child(lbl)
-	var val := Label.new()
-	val.text = value_text
-	val.add_theme_color_override("font_color", MenuStyle.TEXT_BODY)
-	row.add_child(val)
-
-
-func _add_totals_separator() -> void:
-	var sep := HSeparator.new()
-	sep.add_theme_color_override("color", MenuStyle.TEXT_SEP)
-	_totals_content.add_child(sep)
-
-
 func _clear_totals_content() -> void:
 	for child: Node in _totals_content.get_children():
 		child.queue_free()

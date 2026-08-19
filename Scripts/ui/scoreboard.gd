@@ -450,13 +450,6 @@ func _team_badge(text: String, color: Color) -> Control:
 	hbox.set_meta(&"stripe_style", stripe_style)
 	return hbox
 
-func _hsep() -> HSeparator:
-	var sep := HSeparator.new()
-	var style := StyleBoxFlat.new()
-	style.bg_color = _SEP
-	style.set_content_margin_all(0)
-	sep.add_theme_stylebox_override("separator", style)
-	return sep
 
 func _lbl(text: String, size: int, color: Color) -> Label:
 	var l := Label.new()

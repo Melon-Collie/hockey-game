@@ -211,15 +211,6 @@ func close() -> void:
 	closed.emit()
 
 
-func toggle() -> void:
-	if visible:
-		close()
-	else:
-		open()
-
-
-# ── Build helpers ────────────────────────────────────────────────────────────
-
 func _build_panel() -> void:
 	_root = Control.new()
 	_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)

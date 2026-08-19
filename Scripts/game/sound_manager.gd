@@ -168,22 +168,6 @@ func play_ui(sound: Sound, volume_db: float = 0.0, pitch_variance: float = 0.0) 
 			return
 
 
-func play_sfx(sound: Sound, volume_db: float = 0.0, pitch_variance: float = 0.0) -> void:
-	var stream: AudioStream = _streams.get(sound)
-	if stream == null:
-		return
-	for p: AudioStreamPlayer in _pool_sfx_2d:
-		if not p.playing:
-			p.stream = stream
-			p.volume_db = volume_db
-			p.pitch_scale = randf_range(1.0 - pitch_variance, 1.0 + pitch_variance) if pitch_variance > 0.0 else 1.0
-			p.play()
-			return
-
-
-# Non-spatial arena venue one-shots (goal horn, period buzzer, faceoff whistle)
-# on the dedicated Arena bus, so the Arena volume slider controls all crowd/
-# arena atmosphere together rather than mixing these into gameplay SFX.
 func play_crowd(sound: Sound, volume_db: float = 0.0, pitch_variance: float = 0.0) -> void:
 	var stream: AudioStream = _streams.get(sound)
 	if stream == null:

@@ -140,10 +140,6 @@ func close_async(footer: Dictionary) -> void:
 	_file = null
 
 
-func is_open() -> bool:
-	return _file != null
-
-
 func _enqueue(host_ts: float, kind: int, payload: PackedByteArray) -> void:
 	if _file == null:
 		return

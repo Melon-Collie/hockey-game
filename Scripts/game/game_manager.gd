@@ -2338,10 +2338,6 @@ func is_local_spectator() -> bool:
 	return _is_local_spectator
 
 
-func get_camera_director() -> CameraDirector:
-	return _camera_director
-
-
 func get_game_id() -> String:
 	return _game_id
 
@@ -2467,13 +2463,6 @@ func _on_local_replay_stopped() -> void:
 	_in_replay_locally = false
 
 
-func is_in_replay_locally() -> bool:
-	return _in_replay_locally
-
-
-# HUD entry point. Called from _unhandled_input when the player presses
-# skip_replay during a skippable window: the goal cinematic, or any part of
-# the between-period break (whose band is up whether or not a reel plays).
 func request_local_skip_vote() -> void:
 	if not _in_replay_locally and not is_period_break():
 		return
@@ -5483,13 +5472,6 @@ func set_input_blocked(blocked: bool) -> void:
 	_input_blocked = blocked
 
 
-func get_skater_team(skater: Skater) -> Team:
-	return _registry.resolve_team(skater) if _registry != null else null
-
-
-# The scorer's live Skater, resolved by name (same lookup the celebration uses).
-# Null if the name doesn't match a record — callers fall back. Used by the goal
-# hero-cam to frame/follow the scorer.
 func get_scorer_skater(scorer_name: String) -> Skater:
 	if _registry == null or scorer_name.is_empty():
 		return null
@@ -5829,14 +5811,6 @@ func get_period_scores() -> Array:
 	return _state_machine.period_scores
 
 
-func apply_stats(data: Array) -> void:
-	_on_stats_received(data)
-
-
-# Gathers the release context for the shot log. The defending goalie is the one
-# whose net the shooter is attacking; an unresolved team or a goalie-less mode
-# (drills, tutorial) leaves the array empty, which keeps ShotEvent's neutral
-# defaults rather than logging a fabricated set keeper.
 func _note_shot_context(vel: Vector3, shooter_team: int) -> void:
 	if shooter_team != 0 and shooter_team != 1:
 		return

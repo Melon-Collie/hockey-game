@@ -1366,14 +1366,6 @@ func mark_tutorial_complete(id: String) -> void:
 	save()
 
 
-func reset_tutorial(id: String) -> void:
-	tutorial_completion.erase(id)
-	save()
-
-
-# Latches has_opened_player_settings the first time the player opens the
-# player-settings popup, so the SideMenu's first-run callout shows once and
-# never again. No-op (and no disk write) once already set.
 func mark_player_settings_opened() -> void:
 	if has_opened_player_settings:
 		return

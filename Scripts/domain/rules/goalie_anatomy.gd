@@ -56,14 +56,6 @@ const GLOVE_REST_X_M: float = 0.42
 const BLOCKER_REST_X_M: float = 0.44
 
 
-# Half-width the STANDING pad column covers along the ice, before any reaction:
-# a pad centred at PAD_LOCAL_OFFSET_M presenting half its box.
-static func standing_pad_column_half_width() -> float:
-	return PAD_LOCAL_OFFSET_M + PAD_BOX_WIDTH_M * 0.5
-
-
-# Half-width the pads cover once the BUTTERFLY has landed — the splayed edge.
-# This is the widest the legs ever get, and the LOW band's fully-deployed core.
 static func butterfly_pad_edge_half_width() -> float:
 	return PAD_LOCAL_OFFSET_M + BUTTERFLY_PAD_HALF_WIDTH_M
 
@@ -74,31 +66,6 @@ static func torso_half_width() -> float:
 	return TORSO_BOX_WIDTH_M * 0.5
 
 
-# Outer edge of a RESTING glove hand: the hand's stance offset plus half its
-# box. What the high band covers laterally with zero reaction, assuming the
-# shot arrives inside the hand's vertical extent.
-static func resting_hand_outer_half_width() -> float:
-	return maxf(GLOVE_REST_X_M, BLOCKER_REST_X_M) + GLOVE_BOX_WIDTH_M * 0.5
-
-
-# Furthest the high band can ever cover — a fully deployed glove.
-static func deployed_hand_half_width() -> float:
-	return GLOVE_MAX_X_OUTWARD_M
-
-
-# ── Vertical profile ─────────────────────────────────────────────────────────
-# Everything above answers "how wide", at an unstated height. That was enough
-# while the shot model had two bands (along the ice, and above the standing pad
-# seam) — but the elevation ladder now aims rungs at POSTURE landmarks between
-# those two (docs/elevation-rework-plan.md §1), and "how wide is he at 0.70 m
-# with the pads down" has no answer in a lateral-only model.
-#
-# The numbers below mirror GoalieBodyConfigBuilder's poses, the same way the
-# box constants above mirror Goalie.tscn. Centres are part origins; each part's
-# vertical extent is its box height about that centre, EXCEPT the butterfly
-# pads, which are rolled 90° (`*_pad_rot.z = ±90`) so the box's WIDTH becomes
-# its height and its HEIGHT becomes the lateral splay — the same roll that
-# makes BUTTERFLY_PAD_HALF_WIDTH_M half the long axis.
 const HEAD_BOX_M: float = 0.26
 
 const PAD_CENTER_Y_STANDING_M: float = 0.44

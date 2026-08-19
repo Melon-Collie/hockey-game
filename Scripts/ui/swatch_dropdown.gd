@@ -85,10 +85,6 @@ func set_selected(index: int) -> void:
 	_apply_closed_chip()
 
 
-func get_selected() -> int:
-	return _selected_index
-
-
 func set_disabled(b: bool) -> void:
 	_disabled = b
 	_closed_btn.disabled = b

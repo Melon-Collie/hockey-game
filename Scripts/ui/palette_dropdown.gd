@@ -102,10 +102,6 @@ func set_selected(slot: int) -> void:
 	_apply_closed_colors()
 
 
-func get_selected() -> int:
-	return _selected_slot
-
-
 func set_disabled(b: bool) -> void:
 	_disabled = b
 	if _closed_btn != null:

@@ -197,33 +197,6 @@ func _fetch_array(url: String, callback: Callable) -> void:
 		callback.call([])
 
 
-func _fetch(url: String, callback: Callable) -> void:
-	var root: Window = (Engine.get_main_loop() as SceneTree).root
-	var req := HTTPRequest.new()
-	root.add_child(req)
-	req.request_completed.connect(func(_result: int, code: int, _headers: PackedStringArray, body_bytes: PackedByteArray) -> void:
-		if code == 200:
-			var parsed: Variant = JSON.parse_string(body_bytes.get_string_from_utf8())
-			if parsed is Array and not (parsed as Array).is_empty():
-				callback.call((parsed as Array)[0] as Dictionary)
-			else:
-				callback.call({})
-		else:
-			push_warning("CareerStatsReporter: GET returned HTTP %d%s" % [code, _body_detail(body_bytes)])
-			callback.call({})
-		req.queue_free()
-	)
-	var err: Error = req.request(url, _read_headers())
-	if err != OK:
-		push_warning("CareerStatsReporter: GET failed: %s" % error_string(err))
-		req.queue_free()
-		callback.call({})
-
-
-# Truncated, log-safe rendering of an error response body. PostgREST names the
-# offending column / constraint there (e.g. PGRST204 "column ... not found"),
-# so a bare HTTP code alone can't distinguish schema drift from a size-cap
-# rejection. Returns " — <detail>" (leading separator) or "" when empty.
 func _body_detail(bytes: PackedByteArray) -> String:
 	var detail: String = bytes.get_string_from_utf8().strip_edges()
 	if detail.is_empty():

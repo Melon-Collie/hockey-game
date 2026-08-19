@@ -492,17 +492,6 @@ func _lead(pos: Vector3, vel: Vector3) -> Vector3:
 	return Vector3(pos.x + dx, 0.0, pos.z + dz)
 
 
-# True when `pid` is an opponent genuinely involved in the counter. The single
-# question a station's last-man bound should be asking about a body: is he
-# actually coming, or is he furniture?
-func is_attacker(pid: int) -> bool:
-	return pid in attackers
-
-
-# Refills this instance from `other` — the freeze seam for TeamBrainView (same
-# contract as the view's dict copies: main refills only after the worker has
-# finished reading last tick's copy, so no lock is needed). Arrays are cleared
-# and refilled, never reallocated.
 func copy_from(other: AIRushRead) -> void:
 	mode = other.mode
 	is_live = other.is_live

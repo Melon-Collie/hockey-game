@@ -2335,10 +2335,6 @@ func begin_approach(start: Vector3, target: Vector3, settle_facing: Vector2,
 	_approach_prev_pos = start
 
 
-func is_approaching() -> bool:
-	return _approach_active
-
-
 func clear_approach() -> void:
 	_approach_active = false
 
@@ -2584,24 +2580,7 @@ func _enter_slapper_charge(input: InputState) -> void:
 		skater.set_slapshot_arrow(true, slapper_zone_offset_x, slapper_zone_offset_z, slapper_zone_radius)
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
 
-# The slapper aim locked at press (XZ as Vector2). Persists from _enter_slapper_charge
-# until the next charge, so the host can read its OWN replayed value to fire a remote
-# player's one-timer authoritatively instead of trusting the client-sent direction.
-func get_locked_slapper_dir() -> Vector2:
-	return _sm.locked_slapper_dir
 
-# The wrister's aim DIRECTION (world XZ). Shared by the release (_release_wrister)
-# and the every-tick goalie-prediction path (_update_wrister_charge) so the
-# pre-lean predicts exactly the shot that fires.
-#   - BOTS commit the direction directly (bot_wrister_aim_dir): they have no real
-#     cursor, and their cosmetic near-body wind-up cursor would make origin→cursor
-#     a garbage vector. See InputState.bot_wrister_aim_dir.
-#   - HUMANS: POSITIONAL — from where the stroke STARTED (the frozen blade origin,
-#     SkaterAimingBehavior.wrister_origin_world captured at charge start) toward
-#     the cursor now: "the puck fires from where it sits toward where you point."
-#     Anchoring at the origin (not the live blade) is what keeps it stable at
-#     tight angles / a close cursor. release_wrister falls back to player→cursor
-#     if this is degenerate.
 func _wrister_aim_dir(input: InputState) -> Vector3:
 	return ShotMechanics.wrister_aim_dir(
 			input.bot_wrister_aim_dir, input.mouse_world_pos, _aiming.wrister_origin_world)
@@ -3042,11 +3021,7 @@ func one_timer_would_connect() -> bool:
 			puck.is_airborne(),
 			one_timer_contact_back_time(), one_timer_leniency_time)
 
-func _is_in_slapper_state() -> bool:
-	var s: SkaterStateMachine.State = _sm.get_state()
-	return s == State.SLAPPER_CHARGE_WITH_PUCK or s == State.SLAPPER_CHARGE_WITHOUT_PUCK
 
-# ── Movement ──────────────────────────────────────────────────────────────────
 func _apply_movement(input: InputState, delta: float) -> void:
 	# Brake held — drives hockey stop VFX (gated on speed in skater_vfx.gd).
 	skater.is_braking = input.brake

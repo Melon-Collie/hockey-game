@@ -180,8 +180,6 @@ const _SMOOTH_SNAP_DIST: float = 2.0  # pathological gap → snap rather than sl
 func get_buffer_depth() -> int:
 	return _state_buffer.size()
 
-func get_local_carrier() -> Skater:
-	return _local_carrier_skater
 
 func get_carrier_peer_id() -> int:
 	return _carrier_peer_id

@@ -3896,37 +3896,6 @@ func _state_shoot_pressed(input: InputState, snapshot: WorldSnapshot, self_pos: 
 		_set_state(State.CARRY)
 
 
-# Returns the normalised aim direction from self_pos toward the
-# shot's open-net aim point. Falls back to forward when degenerate.
-func _shoot_aim_dir(snapshot: WorldSnapshot, self_pos: Vector3) -> Vector3:
-	var clean_aim: Vector3 = _shot_aim_point(snapshot, self_pos)
-	var dir_xz: Vector3 = Vector3(clean_aim.x - self_pos.x, 0.0, clean_aim.z - self_pos.z)
-	if dir_xz.length_squared() > 0.0001:
-		return dir_xz.normalized()
-	return Vector3(0.0, 0.0, 1.0)
-
-
-# Computes wind-up endpoint OFFSETS (relative to self_pos) for a wrister
-# charge. Caller adds current self_pos when consuming each tick so the
-# endpoints move with the bot — critical because tick_wrister_charge
-# measures blade delta in the skater-translation-subtracted frame, so
-# world-fixed endpoints would have a forward-rushing bot's locomotion
-# CANCEL the lerp velocity in that frame (charge accumulation would
-# stall or invert direction on rushes).
-#
-# Inside the helper, aim_dir is pre-tilted to compensate for the lateral
-# release offset (see _aim_dir_compensated_for_side_offset). With the
-# compensation, the puck's trajectory from the release position passes
-# exactly through the aim point instead of flying parallel-offset to it.
-#
-# Endpoint offsets (in the compensated frame):
-#   start  = -aim_dir' * (span/2) + forehand_perp' * side_sign * SIDE_OFFSET
-#   target = +aim_dir' * (span/2) + forehand_perp' * side_sign * SIDE_OFFSET
-# Both lie inside ROM (span ≤ BOT_WRISTER_WIND_UP_SPAN_M ≈ 0.7 m,
-# half ≤ 0.35 m, side ≤ 0.15 m), so the blade IK chases the mouse 1:1
-# without clamping. Per-tick delta in rel-skater frame = +aim_dir' *
-# (span/ticks), so the gesture sweeps cleanly along aim_dir' and
-# prev_blade_dir at release = aim_dir' (the tilt-compensated direction).
 func _wind_up_endpoint_offsets(aim_dir: Vector3, aim_distance_m: float, wind_up_span_m: float, side_sign: float) -> Dictionary:
 	var half: float = wind_up_span_m * 0.5
 	var compensated: Vector3 = _aim_dir_compensated_for_side_offset(aim_dir, aim_distance_m, side_sign)
@@ -5254,7 +5223,6 @@ func _stickhandle_offset(snapshot: WorldSnapshot, self_pos: Vector3, forward_dir
 	return right_axis * magnitude
 
 
-
 # Poke-evade maneuver. Overrides the steering inputs for a brief committed
 # window when a poke is imminent: a CUT toward the carrier's directed
 # evasion seam on the protects_the_puck tiers (a real deke past the
@@ -5987,7 +5955,6 @@ func _face_threat_or_current(snapshot: WorldSnapshot, self_pos: Vector3) -> Vect
 	return to_puck / dist
 
 
-
 # Clamp an anchor to the playable rink with a small margin so steering
 # doesn't pull the bot into the boards or behind the goal line.
 # True iff any opponent is within `radius` of `self_pos` AND in the
@@ -6124,19 +6091,6 @@ func _lead_intercept(self_pos: Vector3, self_vel: Vector3, puck_pos: Vector3,
 	return AILoosePuckChase.path_intercept_point(traj, step_dt, puck_pos, t)
 
 
-# True iff a TEAMMATE (not me, not opp) currently has the puck. Used to
-# suppress CHASE_PUCK so non-carrier bots don't sprint at their own
-# teammate carrier with their blade out.
-func _teammate_has_puck(snapshot: WorldSnapshot) -> bool:
-	var carrier: int = snapshot.puck_state.carrier_peer_id
-	if carrier == -1 or carrier == _peer_id:
-		return false
-	return _team_id_by_peer.get(carrier, -1) == _team_id
-
-
-# Where to drop into when the puck is lost mid-on-puck-state. The
-# closest teammate to the puck chases; everyone else falls into
-# normal off-puck slot positioning.
 func _post_puck_lost_state(snapshot: WorldSnapshot) -> State:
 	if snapshot == null or snapshot.puck_state == null:
 		return State.OFF_PUCK

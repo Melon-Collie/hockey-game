@@ -430,15 +430,6 @@ func ring_relation_for_peer(peer_id: int) -> int:
 			else SkaterHUDCoordinator.RingRelation.ENEMY
 
 
-# Returns the live players dict as positions for icing/ghost computation.
-func positions_by_peer_id() -> Dictionary:
-	var positions: Dictionary = {}
-	fill_positions_by_peer_id(positions)
-	return positions
-
-
-# Caller-owned-dictionary variant for per-tick callers (ghost state, icing
-# check) so the per-tick host loop doesn't allocate a Dictionary per call.
 func fill_positions_by_peer_id(out: Dictionary) -> void:
 	out.clear()
 	for peer_id: int in _players:
@@ -454,12 +445,7 @@ func reset_all_stats() -> void:
 
 # ── Roster + colors ──────────────────────────────────────────────────────────
 
-static func generate_colors(team_id: int) -> Dictionary:
-	var slot: int = NetworkManager.pending_home_color_slot if team_id == 0 else NetworkManager.pending_away_color_slot
-	return TeamColorRegistry.get_colors(slot, team_id)
 
-
-# Returns the domain roster enriched with live player names from PlayerRecord.
 func get_slot_roster() -> Array[Dictionary]:
 	if _state_machine == null:
 		return []
