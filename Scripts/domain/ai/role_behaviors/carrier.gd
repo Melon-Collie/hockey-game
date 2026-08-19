@@ -337,7 +337,7 @@ const _REAR_ANGLES: Array[float] = [
 # with real clearance math behind it. Grounded in the stick rather than picked:
 # inside one stick length, "skate there" and "stand still and reach" are the
 # same play, and stand-still is always in the compete.
-const CARRY_REAR_MIN_STEP_M: float = AIActionScoring.EVADE_STICK_REACH_M
+const CARRY_REAR_MIN_STEP_M: float = AICarrySpace.EVADE_STICK_REACH_M
 
 # FIELD-DERIVED FORWARD CANDIDATES (see the generator in _best_carry).
 # BEARINGS: how many of the space fan's bearings become carry candidates. The
@@ -355,7 +355,7 @@ const CARRY_FIELD_BEARINGS: int = 3
 const CARRY_FIELD_RADII: Array[float] = [0.5, 1.0]
 const CARRY_PLAN_BEAT_S: float = 1.0
 # Deke engagement gates (the cheap pre-filters before the manufactured-opening
-# math runs — see AIActionScoring.deke_cut_side). ENGAGE_RANGE: the containing
+# math runs — see AICarrySpace.deke_cut_side). ENGAGE_RANGE: the containing
 # defender must be close enough that the duel is live but the fake still has
 # room to develop — a step beyond the poke trigger's reach. MAX_CLOSING: the
 # deke answers PATIENT containment; above this relative closing speed the
@@ -518,9 +518,9 @@ var protect_gain: float = 0.0
 # the read is a physical contest measurement with no protect logic in it.
 # EVADE_SAFE_MARGIN_M (what reach_clearance reports against nobody) until first
 # computed, so a fresh carrier squares up rather than hunching over the puck.
-var forward_puck_clearance: float = AIActionScoring.EVADE_SAFE_MARGIN_M
+var forward_puck_clearance: float = AICarrySpace.EVADE_SAFE_MARGIN_M
 # The body-scale evasion seam from the same re-eval (world point) — the
-# OBJECTIVE-DIRECTED seam (AIActionScoring.best_evade_point_toward): the safe
+# OBJECTIVE-DIRECTED seam (AICarrySpace.best_evade_point_toward): the safe
 # spot with the most progress toward the live carry anchor, so the poke-evade
 # deke cuts PAST the pressure toward where the carrier wants to go, falling
 # back to pure max clearance only when nothing safe exists. Vector3.INF until
@@ -528,10 +528,10 @@ var forward_puck_clearance: float = AIActionScoring.EVADE_SAFE_MARGIN_M
 var evade_seam_world: Vector3 = Vector3.INF
 # Whether a brake check (stop dead, let the committed checker's reach fly past)
 # currently beats the seam cut against the live pressure —
-# AIActionScoring.prefers_brake_check from the same re-eval. Latched by the
+# AICarrySpace.prefers_brake_check from the same re-eval. Latched by the
 # state machine's poke-evade trigger to pick the maneuver; protect-tier only.
 var brake_check_favored: bool = false
-# Fake-then-cut deke read (AIActionScoring.deke_cut_side): true when faking
+# Fake-then-cut deke read (AICarrySpace.deke_cut_side): true when faking
 # one way manufactures a safe cut past the containing defender that doesn't
 # exist right now — the answer to PATIENT containment (the seam cut needs
 # clearance to already exist; the brake check needs the defender committed).
@@ -851,7 +851,7 @@ func reset() -> void:
 	dump_launch_speed = AIActionScoring.PASS_SPEED_M_S
 	protect_offset = Vector3.ZERO
 	protect_gain = 0.0
-	forward_puck_clearance = AIActionScoring.EVADE_SAFE_MARGIN_M
+	forward_puck_clearance = AICarrySpace.EVADE_SAFE_MARGIN_M
 	evade_seam_world = Vector3.INF
 	brake_check_favored = false
 	deke_go = false
@@ -930,11 +930,11 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 	# while a stick actually on the puck does. Feeds the hold's keep-probability
 	# in the commit phase.
 	var cur_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
-	var evade_seam: Vector3 = AIActionScoring.best_evade_point(
+	var evade_seam: Vector3 = AICarrySpace.best_evade_point(
 			cur_puck_pos, ctx.self_velocity, _scratch_opponents, _scratch_opponent_vels,
 			ctx.self_handle_reach, _scratch_opponent_caps)
-	_phase_current_safety = AIActionScoring.clearance_to_safety(
-			AIActionScoring.reach_clearance(evade_seam, AIActionScoring.EVADE_HORIZON_S,
+	_phase_current_safety = AICarrySpace.clearance_to_safety(
+			AICarrySpace.reach_clearance(evade_seam, AICarrySpace.EVADE_HORIZON_S,
 					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps))
 	# The DIRECTED seam — where to put the puck to get PAST the pressure toward
 	# the spot this carrier actually wants (the live carry anchor; the attacking
@@ -946,18 +946,18 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 	var seam_objective: Vector3 = last_carry_anchor
 	if seam_objective == Vector3.ZERO:
 		seam_objective = attacking_goal
-	var directed_seam: Vector3 = AIActionScoring.best_evade_point_toward(
+	var directed_seam: Vector3 = AICarrySpace.best_evade_point_toward(
 			cur_puck_pos, ctx.self_velocity, seam_objective,
 			_scratch_opponents, _scratch_opponent_vels,
 			ctx.self_handle_reach, _scratch_opponent_caps)
 	evade_seam_world = directed_seam
-	# Brake-check read (AIActionScoring.prefers_brake_check): against this exact
+	# Brake-check read (AICarrySpace.prefers_brake_check): against this exact
 	# pressure, does planting the feet — letting the committed checker's reach
 	# fly past the physically-stopped puck — beat cutting to the seam? Mirrored
 	# for the state machine's poke-evade trigger to pick the maneuver. Gated
 	# with the other protect-tier reads: the brake check is taught puck skill.
 	brake_check_favored = ctx.protects_the_puck \
-			and AIActionScoring.prefers_brake_check(
+			and AICarrySpace.prefers_brake_check(
 					cur_puck_pos, ctx.self_velocity, directed_seam,
 					_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
 
@@ -996,13 +996,13 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 			if deked_idx != -1:
 				var d_proj: Vector3 = _scratch_opponents[deked_idx] \
 						+ _scratch_opponent_vels[deked_idx] \
-								* (AIActionScoring.DEKE_FAKE_S + AIActionScoring.DEKE_CUT_S)
+								* (AICarrySpace.DEKE_FAKE_S + AICarrySpace.DEKE_CUT_S)
 				var axis: Vector3 = d_proj - cur_puck_pos
 				axis.y = 0.0
 				if axis.length_squared() > 0.0001:
 					axis = axis.normalized()
 					var perp := Vector3(axis.z, 0.0, -axis.x)
-					var side: int = AIActionScoring.deke_cut_side(
+					var side: int = AICarrySpace.deke_cut_side(
 							cur_puck_pos, ctx.self_velocity, ctx.self_handle_reach,
 							axis, perp, deked_idx,
 							_scratch_opponents, _scratch_opponent_vels,
@@ -1030,19 +1030,19 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 	# facing read consumes it too (see forward_puck_clearance) and facing is not
 	# a protect skill. Only the seam work below is gated.
 	_fill_protect_opponents(ctx)
-	var horizon: float = AIActionScoring.EVADE_HORIZON_S
+	var horizon: float = AICarrySpace.EVADE_HORIZON_S
 	var fwd_spot: Vector3 = _puck_pos_at(
 			self_pos + ctx.self_velocity * horizon, attacking_goal)
-	forward_puck_clearance = AIActionScoring.reach_clearance(fwd_spot, horizon,
+	forward_puck_clearance = AICarrySpace.reach_clearance(fwd_spot, horizon,
 			_scratch_protect_opponents, _scratch_protect_vels,
 			_scratch_protect_caps)
 	if ctx.protects_the_puck:
-		var fwd_safety: float = AIActionScoring.clearance_to_safety(
+		var fwd_safety: float = AICarrySpace.clearance_to_safety(
 				forward_puck_clearance)
 		# HOW MUCH to shield and WHERE to put the puck are two questions answered
 		# by two seams (see best_handle_protect_point). The WEIGHT reads the
 		# MAX-clearance seam — the safety the best available shield buys.
-		var max_seam: Vector3 = AIActionScoring.best_handle_protect_point(
+		var max_seam: Vector3 = AICarrySpace.best_handle_protect_point(
 				self_pos, ctx.self_velocity, _scratch_protect_opponents,
 				_scratch_protect_vels, ctx.self_handle_reach, _scratch_protect_caps)
 		# Shield WEIGHT = the safety the shield actually buys. best_handle_protect_point
@@ -1055,8 +1055,8 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 		# read by a hand-picked number and shield pre-emptively against near
 		# defenders who aren't actually threatening the puck.
 		var seam_world: Vector3 = self_pos + ctx.self_velocity * horizon + max_seam
-		var seam_safety: float = AIActionScoring.clearance_to_safety(
-				AIActionScoring.reach_clearance(seam_world, horizon,
+		var seam_safety: float = AICarrySpace.clearance_to_safety(
+				AICarrySpace.reach_clearance(seam_world, horizon,
 						_scratch_protect_opponents, _scratch_protect_vels,
 						_scratch_protect_caps))
 		protect_gain = clampf(seam_safety - fwd_safety, 0.0, 1.0)
@@ -1064,7 +1064,7 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 		# directed at the presented-forward spot. Shield strength is unchanged
 		# (that is the weight above); this only stops the blade going further off
 		# the play line than the safety actually requires.
-		protect_offset = AIActionScoring.best_handle_protect_point(
+		protect_offset = AICarrySpace.best_handle_protect_point(
 				self_pos, ctx.self_velocity, _scratch_protect_opponents,
 				_scratch_protect_vels, ctx.self_handle_reach,
 				_scratch_protect_caps, fwd_spot)
@@ -1768,7 +1768,7 @@ func _fill_protect_opponents(ctx: RoleContext) -> void:
 	_scratch_protect_opponents.clear()
 	_scratch_protect_vels.clear()
 	_scratch_protect_caps.clear()
-	var horizon: float = AIActionScoring.EVADE_HORIZON_S
+	var horizon: float = AICarrySpace.EVADE_HORIZON_S
 	var to_goal: Vector3 = ctx.attacking_goal_pos - ctx.self_pos
 	var len_sq: float = to_goal.x * to_goal.x + to_goal.z * to_goal.z
 	var have_dir: bool = len_sq > 0.0001
@@ -2206,10 +2206,10 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	# — see reach_clearance). A feed to a blanketed man reads as the giveaway
 	# it is, and one to a man a defender is skating onto during the windup no
 	# longer reads clear.
-	var reception_safety: float = AIActionScoring.clearance_to_safety(
-			AIActionScoring.reach_clearance(receiver_spot, flight_t,
+	var reception_safety: float = AICarrySpace.clearance_to_safety(
+			AICarrySpace.reach_clearance(receiver_spot, flight_t,
 					_scratch_opponents_release, _scratch_opponent_vels,
-					_scratch_opponent_caps, AIActionScoring.EVADE_HORIZON_S))
+					_scratch_opponent_caps, AICarrySpace.EVADE_HORIZON_S))
 	# Four completion loss modes now, mutually exclusive and summing to 1 with
 	# the retained case: poked at the release (1 − release_clean), lane
 	# interception (release_clean × (1 − lane)), execution miss
@@ -2444,8 +2444,8 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 				self_pos, attacking_goal)
 		stand_score = maxf(stand_score, stand_potential * stand_realization)
 	var stand_puck_pos: Vector3 = _puck_pos_at(self_pos, attacking_goal)
-	var stand_safety: float = AIActionScoring.carry_safety(
-			stand_puck_pos, stand_puck_pos, AIActionScoring.EVADE_HORIZON_S,
+	var stand_safety: float = AICarrySpace.carry_safety(
+			stand_puck_pos, stand_puck_pos, AICarrySpace.EVADE_HORIZON_S,
 			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
 	var stand_cost: float = AIActionScoring.turnover_cost(
 			stand_puck_pos, 1.0 - stand_safety, ctx.defending_goal_pos,
@@ -2503,14 +2503,14 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 		var best_bi: int = -1
 		var best_w: float = -1.0
 		for bi: int in _scratch_bearing_control.size():
-			var ang: float = AIActionScoring.SPACE_SAMPLE_ANGLES[bi]
+			var ang: float = AICarrySpace.SPACE_SAMPLE_ANGLES[bi]
 			var wgt: float = _scratch_bearing_control[bi] * cos(ang)
 			if wgt > best_w:
 				best_w = wgt
 				best_bi = bi
 		if best_bi < 0:
 			break
-		var angle: float = AIActionScoring.SPACE_SAMPLE_ANGLES[best_bi]
+		var angle: float = AICarrySpace.SPACE_SAMPLE_ANGLES[best_bi]
 		# Consume it so the next rank picks a different bearing.
 		_scratch_bearing_control[best_bi] = -1.0
 		var c: float = cos(angle)
@@ -2546,7 +2546,7 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 		var s_a: float = sin(angle)
 		var dir_x: float = fwd_x * c - fwd_z * s_a
 		var dir_z: float = fwd_x * s_a + fwd_z * c
-		var reach: float = AIActionScoring.beat_reach_along(
+		var reach: float = AICarrySpace.beat_reach_along(
 				ctx.self_velocity, dir_x, dir_z, ctx.self_max_accel,
 				CARRY_PLAN_BEAT_S)
 		if reach < CARRY_REAR_MIN_STEP_M:
@@ -2982,7 +2982,7 @@ func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 	if decay <= best_so_far:
 		return -INF
 	_project_opponents_to(ctx, local_time, _scratch_opponents_path)
-	var lane: float = AIActionScoring.carry_lane_clearance(
+	var lane: float = AICarrySpace.carry_lane_clearance(
 			self_pos, candidate, local_time, _scratch_opponents, _scratch_opponent_vels,
 			ctx.self_max_speed)
 	if lane <= 0.0:
@@ -2994,7 +2994,7 @@ func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 	# apply_escape: a defender the carrier out-skates on this drive is being beaten
 	# and can't sustain the strip — so driving PAST a man reads as winnable, not as a
 	# wall (the "if I keep going I've beaten him" read).
-	var safety: float = AIActionScoring.carry_safety(
+	var safety: float = AICarrySpace.carry_safety(
 			cur_puck_pos, cand_puck_pos, local_time,
 			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
 			true)
@@ -3109,7 +3109,7 @@ func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 		# ends in open ice but threads a defender through our own slot must pay the
 		# slot's turnover cost, not the destination's. This is what keeps a doomed
 		# carry honestly negative.
-		var strip_point: Vector3 = AIActionScoring.carry_strip_point(
+		var strip_point: Vector3 = AICarrySpace.carry_strip_point(
 				cur_puck_pos, cand_puck_pos, local_time,
 				_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps, true)
 		cost = AIActionScoring.turnover_cost(
@@ -3212,7 +3212,7 @@ func _score_wheel_candidate(ctx: RoleContext, dest: Vector3,
 	var decay: float = AIActionScoring.delay_discount(t1 + t2)
 	if decay <= best_so_far:
 		return -INF
-	var lane1: float = AIActionScoring.carry_lane_clearance(
+	var lane1: float = AICarrySpace.carry_lane_clearance(
 			self_pos, apex, t1, _scratch_opponents, _scratch_opponent_vels,
 			ctx.self_max_speed)
 	if lane1 <= 0.0 or lane1 * decay <= best_so_far:
@@ -3220,19 +3220,19 @@ func _score_wheel_candidate(ctx: RoleContext, dest: Vector3,
 	var cur_puck: Vector3 = _puck_pos_at(self_pos, ctx.attacking_goal_pos)
 	var apex_puck: Vector3 = _puck_pos_at(apex, ctx.attacking_goal_pos)
 	var dest_puck: Vector3 = _puck_pos_at(dest, ctx.attacking_goal_pos)
-	var safety1: float = AIActionScoring.carry_safety(
+	var safety1: float = AICarrySpace.carry_safety(
 			cur_puck, apex_puck, t1, _scratch_opponents,
 			_scratch_opponent_vels, _scratch_opponent_caps, true)
 	if lane1 * decay * safety1 <= best_so_far:
 		return -INF
 	# Leg two starts where the defense has skated to during leg one.
 	_project_opponents_to(ctx, t1, _scratch_opponents_cont)
-	var lane2: float = AIActionScoring.carry_lane_clearance(
+	var lane2: float = AICarrySpace.carry_lane_clearance(
 			apex, dest, t2, _scratch_opponents_cont, _scratch_opponent_vels,
 			ctx.self_max_speed)
 	if lane2 <= 0.0:
 		return -INF
-	var safety2: float = AIActionScoring.carry_safety(
+	var safety2: float = AICarrySpace.carry_safety(
 			apex_puck, dest_puck, t2, _scratch_opponents_cont,
 			_scratch_opponent_vels, _scratch_opponent_caps, true)
 	var keep: float = safety1 * safety2
@@ -3249,12 +3249,12 @@ func _score_wheel_candidate(ctx: RoleContext, dest: Vector3,
 	# The strip is priced on whichever leg is the unsafe one.
 	var strip_point: Vector3
 	if safety1 <= safety2:
-		strip_point = AIActionScoring.carry_strip_point(
+		strip_point = AICarrySpace.carry_strip_point(
 				cur_puck, apex_puck, t1, _scratch_opponents,
 				_scratch_opponent_vels, _scratch_opponent_caps, true)
 	else:
 		_project_opponents_to(ctx, t1, _scratch_opponents_cont)
-		strip_point = AIActionScoring.carry_strip_point(
+		strip_point = AICarrySpace.carry_strip_point(
 				apex_puck, dest_puck, t2, _scratch_opponents_cont,
 				_scratch_opponent_vels, _scratch_opponent_caps, true)
 	var cost: float = AIActionScoring.turnover_cost(
@@ -3473,13 +3473,13 @@ func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
 	# apply_escape: driving in past a man you out-skate is winnable, not a wall —
 	# the same read the carrier's own carry candidates use (the drive-in credit that
 	# floors the carry is exactly "the shot I skate into by beating my man").
-	var keep: float = AIActionScoring.carry_safety(
+	var keep: float = AICarrySpace.carry_safety(
 			receiver_spot, target, reach_time,
 			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
 			true)
 	if keep <= 0.0:
 		return 0.0
-	var reached: Vector3 = AIActionScoring.carry_strip_point(
+	var reached: Vector3 = AICarrySpace.carry_strip_point(
 			receiver_spot, target, reach_time,
 			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps, true)
 	var t: float = reach_time if reached == target \
@@ -3508,10 +3508,10 @@ func _receiver_drive_in_value(ctx: RoleContext, receiver_spot: Vector3,
 # Feeds the carry's pass-first discount (see FORWARD_PRESSURE_*).
 func _carrier_forward_clearance(ctx: RoleContext) -> float:
 	# Size once, then reuse: controlled_space refills every entry each call.
-	if _scratch_bearing_control.size() != AIActionScoring.SPACE_SAMPLE_ANGLES.size():
+	if _scratch_bearing_control.size() != AICarrySpace.SPACE_SAMPLE_ANGLES.size():
 		_scratch_bearing_control.resize(
-				AIActionScoring.SPACE_SAMPLE_ANGLES.size())
-	return AIActionScoring.controlled_space(
+				AICarrySpace.SPACE_SAMPLE_ANGLES.size())
+	return AICarrySpace.controlled_space(
 			ctx.self_pos, ctx.self_velocity, ctx.caps_by_peer.get(ctx.peer_id),
 			ctx.attacking_goal_pos, FORWARD_PRESSURE_HORIZON_M,
 			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps,
@@ -3523,14 +3523,14 @@ func _carrier_forward_clearance(ctx: RoleContext) -> float:
 # discount and the pass receiver's (see _pass_ev) so both sides of a
 # carry-vs-pass compete pay the same toll for the same clogged ice.
 #
-# The read is AIActionScoring.controlled_space — a fan of carry paths across the
+# The read is AICarrySpace.controlled_space — a fan of carry paths across the
 # forward cone, each priced by the same carry_safety the real carry candidates
 # use, area-weighted; that block doc carries the model and why a single netward
 # ray cannot serve as this discount. The momentum credit is not a term here: it
 # falls out of pricing each sample at its honest time_to_arrive.
 func _forward_clearance_at(ctx: RoleContext, pos: Vector3, vel: Vector3,
 		caps: AISkaterCaps) -> float:
-	return AIActionScoring.controlled_space(
+	return AICarrySpace.controlled_space(
 			pos, vel, caps, ctx.attacking_goal_pos, FORWARD_PRESSURE_HORIZON_M,
 			_scratch_opponents, _scratch_opponent_vels, _scratch_opponent_caps)
 

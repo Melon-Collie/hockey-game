@@ -293,7 +293,7 @@ func test_lightly_impeded_carrier_moves_it_to_the_open_man() -> void:
 	# carrier's space at exactly 0.000 (one man 7 m ahead, the whole width of the
 	# ice free) while the mate, being outside that corridor, was credited a clean
 	# 1.000. Now both sides are read as controlled space
-	# (AIActionScoring.controlled_space) and the mate has to actually be clear —
+	# (AICarrySpace.controlled_space) and the mate has to actually be clear —
 	# see the tightly-covered contrast at the bottom, which is the same fixture
 	# geometry this test used to assert a pass on.
 	var net := Vector3(0.0, 0.0, -GameRules.GOAL_LINE_Z)

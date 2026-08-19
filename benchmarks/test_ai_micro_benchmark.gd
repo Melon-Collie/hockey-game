@@ -217,14 +217,14 @@ func test_evaluator_costs() -> void:
 			cx.self_max_accel, cx.self_lateral_grip)
 	var keeper: Vector3 = Vector3(0.0, 0.0, -(GameRules.GOAL_LINE_Z - 1.3))
 	_bench("  cand: carry_safety", func() -> void:
-		AIActionScoring.carry_safety(cur_puck, cand_puck, t_arr,
+		AICarrySpace.carry_safety(cur_puck, cand_puck, t_arr,
 				cinst._scratch_opponents, cinst._scratch_opponent_vels,
 				cinst._scratch_opponent_caps, true))
 	_bench("  cand: carry_lane_clearance", func() -> void:
-		AIActionScoring.carry_lane_clearance(cur_puck, cand_puck, t_arr,
+		AICarrySpace.carry_lane_clearance(cur_puck, cand_puck, t_arr,
 				cinst._scratch_opponents, cinst._scratch_opponent_vels))
 	_bench("  cand: carry_strip_point", func() -> void:
-		AIActionScoring.carry_strip_point(cur_puck, cand_puck, t_arr,
+		AICarrySpace.carry_strip_point(cur_puck, cand_puck, t_arr,
 				cinst._scratch_opponents, cinst._scratch_opponent_vels,
 				cinst._scratch_opponent_caps, true))
 	_bench("  cand: predict_goalie_pos", func() -> void:
@@ -252,9 +252,9 @@ func test_evaluator_costs() -> void:
 	# would want — just "how much room is there") and with it (the carrier's
 	# form, which also generates its forward candidates).
 	var bearing_out: Array[float] = []
-	bearing_out.resize(AIActionScoring.SPACE_SAMPLE_ANGLES.size())
+	bearing_out.resize(AICarrySpace.SPACE_SAMPLE_ANGLES.size())
 	_bench("controlled_space (fan only)", func() -> void:
-		AIActionScoring.controlled_space(
+		AICarrySpace.controlled_space(
 				cx.self_pos, cx.self_velocity, null, cx.attacking_goal_pos,
 				AIRoleCarrier.FORWARD_PRESSURE_HORIZON_M,
 				cinst._scratch_opponents, cinst._scratch_opponent_vels,
@@ -263,16 +263,16 @@ func test_evaluator_costs() -> void:
 	# one whole carry-safety sample (what the fan does 14 times), and the bare
 	# reachable-set read at a point (one defender loop instead of three).
 	_bench("control_at (one sample)", func() -> void:
-		AIActionScoring.control_at(
+		AICarrySpace.control_at(
 				one_cand, cx.self_pos, cx.self_velocity, null,
 				cinst._scratch_opponents, cinst._scratch_opponent_vels,
 				cinst._scratch_opponent_caps))
 	_bench("reach_clearance (one point)", func() -> void:
-		AIActionScoring.reach_clearance(
+		AICarrySpace.reach_clearance(
 				one_cand, 0.8, cinst._scratch_opponents,
 				cinst._scratch_opponent_vels, cinst._scratch_opponent_caps))
 	_bench("controlled_space (fan + bearing profile)", func() -> void:
-		AIActionScoring.controlled_space(
+		AICarrySpace.controlled_space(
 				cx.self_pos, cx.self_velocity, null, cx.attacking_goal_pos,
 				AIRoleCarrier.FORWARD_PRESSURE_HORIZON_M,
 				cinst._scratch_opponents, cinst._scratch_opponent_vels,
@@ -344,14 +344,14 @@ func test_evaluator_costs() -> void:
 				Vector3(0, 0, OUR_NET_Z - 0.8), GameRules.NET_HALF_WIDTH,
 				mates, from, 8.0, opps, opp_vels, opp_caps))
 	_bench("reach_clearance (5 def)", func() -> void:
-		AIActionScoring.reach_clearance(from, 0.4, opps, opp_vels, opp_caps))
+		AICarrySpace.reach_clearance(from, 0.4, opps, opp_vels, opp_caps))
 	_bench("carry_safety (5 def)", func() -> void:
-		AIActionScoring.carry_safety(from, from + Vector3(-3, 0, -3), 0.8,
+		AICarrySpace.carry_safety(from, from + Vector3(-3, 0, -3), 0.8,
 				opps, opp_vels, opp_caps, true))
 	_bench("best_evade_point (5 def)", func() -> void:
-		AIActionScoring.best_evade_point(from, Vector3(2, 0, -4), opps, opp_vels, 0.9))
+		AICarrySpace.best_evade_point(from, Vector3(2, 0, -4), opps, opp_vels, 0.9))
 	_bench("best_evade_point_toward (5 def)", func() -> void:
-		AIActionScoring.best_evade_point_toward(from, Vector3(2, 0, -4), net,
+		AICarrySpace.best_evade_point_toward(from, Vector3(2, 0, -4), net,
 				opps, opp_vels, 0.9))
 	_bench("release_contest_clean (5 def)", func() -> void:
 		AIActionScoring.release_contest_clean(from, opps, opp_caps))

@@ -381,18 +381,18 @@ static func _carrier_threat_repel(self_pos: Vector3, to_anchor: Vector3,
 		anchor_dist: float, opponent_positions: Array[Vector3],
 		opponent_velocities: Array[Vector3], repel_weight: float) -> Vector2:
 	# League-default reach off the momentum line — same double-integrator model
-	# as AIActionScoring.reach_clearance (reaction-gated maneuver + stick), the
+	# as AICarrySpace.reach_clearance (reaction-gated maneuver + stick), the
 	# single source for those measurements. Steering doesn't carry per-peer
 	# caps; the league reach is the right fidelity for a soft field force.
 	var t_over: float = maxf(
-			0.0, AIActionScoring.EVADE_HORIZON_S - AIActionScoring.EVADE_REACTION_S)
-	var reach: float = 0.5 * t_over * t_over * AIActionScoring.MANEUVER_ACCEL_M_S2 \
-			+ AIActionScoring.EVADE_STICK_REACH_M
+			0.0, AICarrySpace.EVADE_HORIZON_S - AICarrySpace.EVADE_REACTION_S)
+	var reach: float = 0.5 * t_over * t_over * AICarrySpace.MANEUVER_ACCEL_M_S2 \
+			+ AICarrySpace.EVADE_STICK_REACH_M
 	var force := Vector2.ZERO
 	for i: int in opponent_positions.size():
 		var op: Vector3 = opponent_positions[i]
-		var sweep_x: float = opponent_velocities[i].x * AIActionScoring.EVADE_HORIZON_S
-		var sweep_z: float = opponent_velocities[i].z * AIActionScoring.EVADE_HORIZON_S
+		var sweep_x: float = opponent_velocities[i].x * AICarrySpace.EVADE_HORIZON_S
+		var sweep_z: float = opponent_velocities[i].z * AICarrySpace.EVADE_HORIZON_S
 		# Closest point to the carrier on the swept segment [op, op + sweep].
 		var t: float = 0.0
 		var sweep_len_sq: float = sweep_x * sweep_x + sweep_z * sweep_z
@@ -404,9 +404,9 @@ static func _carrier_threat_repel(self_pos: Vector3, to_anchor: Vector3,
 		var d: float = sqrt(dx * dx + dz * dz)
 		# Full push inside his reach, fading to zero a stick-length outside it —
 		# the same "a stick of clear room reads as safe" ramp as
-		# AIActionScoring.clearance_to_safety.
+		# AICarrySpace.clearance_to_safety.
 		var threat: float = 1.0 - clampf(
-				(d - reach) / AIActionScoring.EVADE_SAFE_MARGIN_M, 0.0, 1.0)
+				(d - reach) / AICarrySpace.EVADE_SAFE_MARGIN_M, 0.0, 1.0)
 		if threat <= 0.0:
 			continue
 		if d > 0.001:

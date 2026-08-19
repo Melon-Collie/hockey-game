@@ -13,10 +13,10 @@ const HANDLE: float = 0.9   # base puck-protect reach (Hands scales this)
 # Carrier's evadability [0,1]: safety at the best seam in his handling envelope.
 func _evade(car: Vector3, car_v: Vector3, opps: Array[Vector3],
 		vels: Array[Vector3], handle: float = HANDLE) -> float:
-	var seam: Vector3 = AIActionScoring.best_evade_point(car, car_v, opps, vels, handle)
-	var clear: float = AIActionScoring.reach_clearance(
-			seam, AIActionScoring.EVADE_HORIZON_S, opps, vels)
-	return AIActionScoring.clearance_to_safety(clear)
+	var seam: Vector3 = AICarrySpace.best_evade_point(car, car_v, opps, vels, handle)
+	var clear: float = AICarrySpace.reach_clearance(
+			seam, AICarrySpace.EVADE_HORIZON_S, opps, vels)
+	return AICarrySpace.clearance_to_safety(clear)
 
 
 func test_no_defenders_is_fully_safe() -> void:
@@ -38,11 +38,11 @@ func test_bigger_more_agile_defender_covers_more() -> void:
 	# between them at the league default.
 	var opps: Array[Vector3] = [Vector3(2.0, 0, 0)]
 	var vels: Array[Vector3] = [Vector3.ZERO]
-	var t: float = AIActionScoring.EVADE_HORIZON_S
-	var league: float = AIActionScoring.reach_clearance(Vector3.ZERO, t, opps, vels)
-	var vs_big: float = AIActionScoring.reach_clearance(
+	var t: float = AICarrySpace.EVADE_HORIZON_S
+	var league: float = AICarrySpace.reach_clearance(Vector3.ZERO, t, opps, vels)
+	var vs_big: float = AICarrySpace.reach_clearance(
 			Vector3.ZERO, t, opps, vels, [_caps(16.0, 2.0)])
-	var vs_small: float = AIActionScoring.reach_clearance(
+	var vs_small: float = AICarrySpace.reach_clearance(
 			Vector3.ZERO, t, opps, vels, [_caps(6.0, 1.2)])
 	assert_lt(vs_big, league, "a bigger, more agile defender reaches further → less clearance")
 	assert_gt(vs_small, league, "a smaller, slower defender reaches less → more room")
@@ -107,7 +107,7 @@ func test_seam_points_into_open_space() -> void:
 	# to the right of the carrier's line.
 	var opps: Array[Vector3] = [Vector3(1.0, 0, 2.0)]
 	var vels: Array[Vector3] = [Vector3.ZERO]
-	var seam: Vector3 = AIActionScoring.best_evade_point(
+	var seam: Vector3 = AICarrySpace.best_evade_point(
 			Vector3.ZERO, Vector3(4, 0, 0), opps, vels, HANDLE)
 	assert_lt(seam.z, 0.5, "seam leans away from the defender on the +Z side")
 
@@ -122,7 +122,7 @@ func test_strip_point_is_the_tight_midroute_not_the_safe_destination() -> void:
 	var to := Vector3(0, 0, 10)
 	var opps: Array[Vector3] = [Vector3(0, 0, 5)]     # parked on the midpoint
 	var vels: Array[Vector3] = [Vector3.ZERO]
-	var strip: Vector3 = AIActionScoring.carry_strip_point(from, to, 1.4, opps, vels)
+	var strip: Vector3 = AICarrySpace.carry_strip_point(from, to, 1.4, opps, vels)
 	assert_almost_eq(strip.z, 5.0, 0.01, "strip localizes to the tight mid-route point")
 
 
@@ -132,7 +132,7 @@ func test_strip_point_is_destination_when_that_is_the_tight_end() -> void:
 	var to := Vector3(0, 0, 10)
 	var opps: Array[Vector3] = [Vector3(0, 0, 10)]    # waiting at the destination
 	var vels: Array[Vector3] = [Vector3.ZERO]
-	var strip: Vector3 = AIActionScoring.carry_strip_point(from, to, 1.4, opps, vels)
+	var strip: Vector3 = AICarrySpace.carry_strip_point(from, to, 1.4, opps, vels)
 	assert_almost_eq(strip.z, 10.0, 0.01, "strip localizes to the covered destination")
 
 
@@ -140,7 +140,7 @@ func test_strip_point_of_a_stand_is_the_spot_itself() -> void:
 	var spot := Vector3(3, 0, 7)
 	var opps: Array[Vector3] = [Vector3(4, 0, 7)]
 	var vels: Array[Vector3] = [Vector3.ZERO]
-	var strip: Vector3 = AIActionScoring.carry_strip_point(spot, spot, 0.4, opps, vels)
+	var strip: Vector3 = AICarrySpace.carry_strip_point(spot, spot, 0.4, opps, vels)
 	assert_eq(strip, spot, "a stand's strip is where it stands")
 
 
@@ -153,7 +153,7 @@ func test_evade_seam_never_leaves_the_playing_surface() -> void:
 	var carrier := Vector3(GameRules.INNER_HALF_WIDTH - 0.4, 0, 0)
 	var opps: Array[Vector3] = [carrier + Vector3(-2.0, 0, 0)]
 	var vels: Array[Vector3] = [Vector3.ZERO]
-	var seam: Vector3 = AIActionScoring.best_evade_point(
+	var seam: Vector3 = AICarrySpace.best_evade_point(
 			carrier, Vector3.ZERO, opps, vels, HANDLE)
 	assert_lte(seam.x, GameRules.INNER_HALF_WIDTH, "seam stays on the playing surface")
 	assert_gt(absf(seam.z), 0.5, "with the wall at the back, the escape runs along the boards")
@@ -194,9 +194,9 @@ func test_directed_seam_advances_past_an_overplaying_defender() -> void:
 	var objective := Vector3(0, 0, 10)
 	var opps: Array[Vector3] = [Vector3(-1.2, 0, 3.0)]
 	var vels: Array[Vector3] = [Vector3.ZERO]
-	var directed: Vector3 = AIActionScoring.best_evade_point_toward(
+	var directed: Vector3 = AICarrySpace.best_evade_point_toward(
 			Vector3.ZERO, Vector3(0, 0, 4), objective, opps, vels, HANDLE)
-	var undirected: Vector3 = AIActionScoring.best_evade_point(
+	var undirected: Vector3 = AICarrySpace.best_evade_point(
 			Vector3.ZERO, Vector3(0, 0, 4), opps, vels, HANDLE)
 	assert_gt(directed.x, 0.5, "cuts to the open (right) side of the overplayed lane")
 	assert_gt(directed.z, 1.6, "advances past the projected center, toward the objective")
@@ -210,11 +210,11 @@ func test_directed_seam_is_genuinely_safe() -> void:
 	var objective := Vector3(0, 0, 10)
 	var opps: Array[Vector3] = [Vector3(-1.2, 0, 3.0)]
 	var vels: Array[Vector3] = [Vector3.ZERO]
-	var directed: Vector3 = AIActionScoring.best_evade_point_toward(
+	var directed: Vector3 = AICarrySpace.best_evade_point_toward(
 			Vector3.ZERO, Vector3(0, 0, 4), objective, opps, vels, HANDLE)
-	var clear: float = AIActionScoring.reach_clearance(
-			directed, AIActionScoring.EVADE_HORIZON_S, opps, vels)
-	assert_gte(clear, AIActionScoring.EVADE_SAFE_CLEAR_MIN_M,
+	var clear: float = AICarrySpace.reach_clearance(
+			directed, AICarrySpace.EVADE_HORIZON_S, opps, vels)
+	assert_gte(clear, AICarrySpace.EVADE_SAFE_CLEAR_MIN_M,
 			"the directed seam keeps at least a blade of air off every reach")
 
 
@@ -225,9 +225,9 @@ func test_directed_seam_falls_back_to_max_clearance_when_surrounded() -> void:
 	var opps: Array[Vector3] = [
 			Vector3(1.2, 0, 0), Vector3(-0.85, 0, 0.85), Vector3(-0.85, 0, -0.85)]
 	var vels: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
-	var directed: Vector3 = AIActionScoring.best_evade_point_toward(
+	var directed: Vector3 = AICarrySpace.best_evade_point_toward(
 			Vector3.ZERO, Vector3.ZERO, objective, opps, vels, HANDLE)
-	var undirected: Vector3 = AIActionScoring.best_evade_point(
+	var undirected: Vector3 = AICarrySpace.best_evade_point(
 			Vector3.ZERO, Vector3.ZERO, opps, vels, HANDLE)
 	assert_eq(directed, undirected, "no safe sample → survive first, pure max clearance")
 
@@ -236,7 +236,7 @@ func test_directed_seam_leans_toward_objective_in_open_ice() -> void:
 	# Nobody around: every sample is safe, so the directed seam is simply the
 	# most-progress point of the envelope — it leans toward the objective.
 	var objective := Vector3(0, 0, 10)
-	var directed: Vector3 = AIActionScoring.best_evade_point_toward(
+	var directed: Vector3 = AICarrySpace.best_evade_point_toward(
 			Vector3.ZERO, Vector3.ZERO, objective, [], [], HANDLE)
 	assert_gt(directed.z, 0.5, "open ice: the seam leans toward the objective")
 
@@ -245,7 +245,7 @@ func test_directed_seam_leans_toward_objective_in_open_ice() -> void:
 
 func test_brake_stop_point_is_the_physical_stopping_distance() -> void:
 	# v²/(2·decel) along the velocity: 6 m/s into a 10 m/s² brake = 1.8 m.
-	var stop: Vector3 = AIActionScoring.brake_stop_point(
+	var stop: Vector3 = AICarrySpace.brake_stop_point(
 			Vector3.ZERO, Vector3(6, 0, 0))
 	assert_almost_eq(stop.x, 1.8, 0.01, "stop point is v²/(2·decel) downstream")
 	assert_almost_eq(stop.z, 0.0, 0.01)
@@ -261,7 +261,7 @@ func test_brake_check_beats_a_charger_crossing_the_forward_lane() -> void:
 	var forward_seam := Vector3(3.2, 0, 0.4)
 	var opps: Array[Vector3] = [Vector3(4.0, 0, 2.2)]
 	var vels: Array[Vector3] = [Vector3(0, 0, -8)]
-	assert_true(AIActionScoring.prefers_brake_check(
+	assert_true(AICarrySpace.prefers_brake_check(
 			Vector3.ZERO, carrier_vel, forward_seam, opps, vels),
 			"stopping short of the crossing beats cutting into it")
 
@@ -274,7 +274,7 @@ func test_brake_check_rejected_against_a_jockeying_pacer() -> void:
 	var away_seam := Vector3(1.2, 0, -1.2)
 	var opps: Array[Vector3] = [Vector3(1.4, 0, 1.0)]
 	var vels: Array[Vector3] = [Vector3(5, 0, 0)]
-	assert_false(AIActionScoring.prefers_brake_check(
+	assert_false(AICarrySpace.prefers_brake_check(
 			Vector3.ZERO, carrier_vel, away_seam, opps, vels),
 			"a pacer stays on the braked puck — the cut is the answer, not the stop")
 
@@ -286,7 +286,7 @@ func test_brake_check_rejected_when_the_braked_hold_is_not_safe() -> void:
 	var seam := Vector3(1.0, 0, 1.5)
 	var opps: Array[Vector3] = [Vector3(1.0, 0, 0.3)]
 	var vels: Array[Vector3] = [Vector3(4.5, 0, 0)]
-	assert_false(AIActionScoring.prefers_brake_check(
+	assert_false(AICarrySpace.prefers_brake_check(
 			Vector3.ZERO, carrier_vel, seam, opps, vels),
 			"an unsafe braked hold never prefers the brake")
 
@@ -299,7 +299,7 @@ func test_protect_point_pulls_the_puck_away_from_a_frontal_stick() -> void:
 	# shield. Offset is body-relative.
 	var opps: Array[Vector3] = [Vector3(0, 0, -1.2)]
 	var vels: Array[Vector3] = [Vector3.ZERO]
-	var offset: Vector3 = AIActionScoring.best_handle_protect_point(
+	var offset: Vector3 = AICarrySpace.best_handle_protect_point(
 			Vector3.ZERO, Vector3.ZERO, opps, vels, HANDLE)
 	assert_gt(offset.z, 0.5, "puck pulls to the protected side, away from the threat")
 
@@ -307,7 +307,7 @@ func test_protect_point_pulls_the_puck_away_from_a_frontal_stick() -> void:
 func test_protect_point_stays_inside_the_handling_envelope() -> void:
 	var opps: Array[Vector3] = [Vector3(0.9, 0, 0.7)]
 	var vels: Array[Vector3] = [Vector3.ZERO]
-	var offset: Vector3 = AIActionScoring.best_handle_protect_point(
+	var offset: Vector3 = AICarrySpace.best_handle_protect_point(
 			Vector3.ZERO, Vector3.ZERO, opps, vels, HANDLE)
 	assert_lte(offset.length(), HANDLE + 0.001,
 			"the blade can only hold the puck within its handling reach")
@@ -320,7 +320,7 @@ func test_protect_point_never_shields_into_the_wall() -> void:
 	var carrier := Vector3(GameRules.INNER_HALF_WIDTH - 0.4, 0, 0)
 	var opps: Array[Vector3] = [carrier + Vector3(-1.2, 0, 0)]
 	var vels: Array[Vector3] = [Vector3.ZERO]
-	var offset: Vector3 = AIActionScoring.best_handle_protect_point(
+	var offset: Vector3 = AICarrySpace.best_handle_protect_point(
 			carrier, Vector3.ZERO, opps, vels, HANDLE)
 	assert_lte(carrier.x + offset.x, GameRules.INNER_HALF_WIDTH,
 			"the protected spot stays on the playing surface")
@@ -333,7 +333,7 @@ func test_protect_point_never_shields_into_the_wall() -> void:
 
 func _deke_frame(puck: Vector3, d_pos: Vector3, d_vel: Vector3) -> Array:
 	# The caller-supplied axis frame, built exactly as the carrier builds it.
-	var d_proj: Vector3 = d_pos + d_vel * (AIActionScoring.DEKE_FAKE_S + AIActionScoring.DEKE_CUT_S)
+	var d_proj: Vector3 = d_pos + d_vel * (AICarrySpace.DEKE_FAKE_S + AICarrySpace.DEKE_CUT_S)
 	var axis: Vector3 = (d_proj - puck).normalized()
 	return [axis, Vector3(axis.z, 0.0, -axis.x)]
 
@@ -345,7 +345,7 @@ func test_deke_manufactures_an_opening_on_a_patient_container() -> void:
 	var opps: Array[Vector3] = [Vector3(0, 0, -2.3)]
 	var vels: Array[Vector3] = [Vector3.ZERO]
 	var frame: Array = _deke_frame(Vector3.ZERO, opps[0], vels[0])
-	var side: int = AIActionScoring.deke_cut_side(
+	var side: int = AICarrySpace.deke_cut_side(
 			Vector3.ZERO, Vector3.ZERO, 0.9, frame[0], frame[1], 0, opps, vels)
 	assert_ne(side, 0, "the fake buys a safe cut that doesn't exist today")
 
@@ -356,7 +356,7 @@ func test_deke_declines_an_already_beatable_defender() -> void:
 	var opps: Array[Vector3] = [Vector3(0, 0, -4.5)]
 	var vels: Array[Vector3] = [Vector3.ZERO]
 	var frame: Array = _deke_frame(Vector3.ZERO, opps[0], vels[0])
-	assert_eq(AIActionScoring.deke_cut_side(
+	assert_eq(AICarrySpace.deke_cut_side(
 			Vector3.ZERO, Vector3.ZERO, 0.9, frame[0], frame[1], 0, opps, vels), 0,
 			"an opening that already exists needs no fake")
 
@@ -371,7 +371,7 @@ func test_deke_cannot_fake_a_pylon() -> void:
 	var pylon := AISkaterCaps.new()
 	pylon.max_accel = 2.0
 	var frame: Array = _deke_frame(Vector3.ZERO, opps[0], vels[0])
-	assert_eq(AIActionScoring.deke_cut_side(
+	assert_eq(AICarrySpace.deke_cut_side(
 			Vector3.ZERO, Vector3.ZERO, 0.9, frame[0], frame[1], 0,
 			opps, vels, [pylon]), 0,
 			"no bite, no manufactured opening")
@@ -385,6 +385,6 @@ func test_deke_cuts_away_from_the_second_defender() -> void:
 	var opps: Array[Vector3] = [Vector3(0, 0, -2.3), Vector3(-2.6, 0, -1.2)]
 	var vels: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO]
 	var frame: Array = _deke_frame(Vector3.ZERO, opps[0], vels[0])
-	assert_eq(AIActionScoring.deke_cut_side(
+	assert_eq(AICarrySpace.deke_cut_side(
 			Vector3.ZERO, Vector3.ZERO, 0.9, frame[0], frame[1], 0, opps, vels), -1,
 			"the cut resolves to the unguarded side")

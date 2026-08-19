@@ -300,7 +300,7 @@ const CARRY_FACE_RETREAT_ADVANCE: float = -0.3
 # awkward angle — the reported "weird sideways shot" after a deke/protect move.
 #
 # A blade of real air, which is what EVERY other "is this puck safe" read in the
-# model calls clear (AIActionScoring.EVADE_SAFE_CLEAR_MIN_M, the seam search's
+# model calls clear (AICarrySpace.EVADE_SAFE_CLEAR_MIN_M, the seam search's
 # own bar). The measurement behind it is the reachable-set clearance the carrier
 # already publishes (AIRoleCarrier.forward_puck_clearance) — a defender's
 # momentum-projected stick against the presented-forward puck over the evasion
@@ -308,7 +308,7 @@ const CARRY_FACE_RETREAT_ADVANCE: float = -0.3
 # the two cannot disagree about whether a man is beaten.
 #
 # Tier-agnostic: it needs no protect read, so the naive-carry tiers get it too.
-const CARRY_MAN_TO_BEAT_CLEAR_M: float = AIActionScoring.EVADE_SAFE_CLEAR_MIN_M
+const CARRY_MAN_TO_BEAT_CLEAR_M: float = AICarrySpace.EVADE_SAFE_CLEAR_MIN_M
 # Hysteresis on that bar (see _has_man_to_beat). Once a man is engaged the bar
 # rises by this, so a defender riding the boundary doesn't flip the "square
 # to the net" decision — and with it the whole carry-aim forward direction —
@@ -377,24 +377,24 @@ const POKE_EVADE_COOLDOWN_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 2   # ~5
 # newcomer's poke-check genuinely beats.
 const POKE_EVADE_SEAM_MIN_DIST_M: float = 0.75
 # BRAKE-CHECK variant of the evade window: hold the real brake key for the full
-# evasion horizon (AIActionScoring.EVADE_HORIZON_S — the read the maneuver was
+# evasion horizon (AICarrySpace.EVADE_HORIZON_S — the read the maneuver was
 # priced over), so the committed checker's momentum genuinely carries his reach
 # past the stopped puck before steering resumes toward the anchor. The exit
 # (re-accelerate into the lane he vacated) needs no window of its own: a beaten
 # man no longer registers in the threat-gated repel, so normal anchor
 # attraction bursts straight past him the tick the brake releases.
 const POKE_EVADE_BRAKE_TICKS: int = int(
-		AIActionScoring.EVADE_HORIZON_S * _PhysicsConstants.PHYSICS_TICK)   # ~400 ms
+		AICarrySpace.EVADE_HORIZON_S * _PhysicsConstants.PHYSICS_TICK)   # ~400 ms
 
-# FAKE-THEN-CUT deke windows — tick mirrors of AIActionScoring.DEKE_FAKE_S /
+# FAKE-THEN-CUT deke windows — tick mirrors of AICarrySpace.DEKE_FAKE_S /
 # DEKE_CUT_S (the shared eval/execution contract: the manufactured-opening
 # math prices exactly the gesture these ticks perform). The cooldown is
 # longer than the plain cut's so dekes read as deliberate, occasional moves
 # — and a fake the defender didn't buy can't machine-gun.
 const DEKE_FAKE_TICKS: int = int(
-		AIActionScoring.DEKE_FAKE_S * _PhysicsConstants.PHYSICS_TICK)
+		AICarrySpace.DEKE_FAKE_S * _PhysicsConstants.PHYSICS_TICK)
 const DEKE_CUT_TICKS: int = int(
-		AIActionScoring.DEKE_CUT_S * _PhysicsConstants.PHYSICS_TICK)
+		AICarrySpace.DEKE_CUT_S * _PhysicsConstants.PHYSICS_TICK)
 const DEKE_COOLDOWN_TICKS: int = _PhysicsConstants.PHYSICS_TICK   # ~1 s
 
 # ── Defensive poke jab (active stick-check to strip the carrier) ──────────────
@@ -995,7 +995,7 @@ var _poke_evade_dir: Vector2 = Vector2.ZERO
 # Maneuver LATCHED at trigger: TRUE = this evade is a BRAKE CHECK (hold the
 # real brake key; the committed checker's reach flies past the stopped puck),
 # FALSE = the lateral cut. Chosen from the carrier's brake_check_favored mirror
-# (AIActionScoring.prefers_brake_check at the last ~30 Hz re-eval).
+# (AICarrySpace.prefers_brake_check at the last ~30 Hz re-eval).
 var _poke_evade_braking: bool = false
 # Maneuver LATCHED at trigger: the FAKE-THEN-CUT deke. Phase splits on the
 # remaining active ticks (fake while > DEKE_CUT_TICKS, then the cut); both

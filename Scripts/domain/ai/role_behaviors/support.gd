@@ -81,8 +81,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		_scratch_opp_stamina.append(0.0 if s.sprint_locked else s.stamina)
 	var turnover_prior: float = 0.0
 	if not opp_positions.is_empty():
-		turnover_prior = 1.0 - AIActionScoring.carry_safety(
-				carrier_pos, carrier_pos, AIActionScoring.EVADE_HORIZON_S,
+		turnover_prior = 1.0 - AICarrySpace.carry_safety(
+				carrier_pos, carrier_pos, AICarrySpace.EVADE_HORIZON_S,
 				opp_positions, _scratch_opp_vels, ctx.scratch_opp_caps)
 	AIActionScoring.fill_counter_cover_etas(
 			our_net, teammate_positions, _scratch_mate_etas)

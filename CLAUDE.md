@@ -236,7 +236,7 @@ that file can't tell you:
 | New practice drill | Append to `DrillRegistry` (id + `display_name_key` + manager path; add the matching `DRILL_*` row to `locale/translations.csv`) → manager node in `Scripts/game/` extending `DrillLoop` (which owns the stage machine, result hold, puck staging and retry/exit; the drill overrides `_begin_attempt` / `_tick_live`) → `DrillHUD` subclass for its strings. `test_drill_registry.gd` holds all four steps |
 | New controller behavior | Method on `SkaterController`; `GameManager` calls it, never pokes internals directly |
 | New reconcile logic | `domain/rules/reconciliation_rules.gd` + GUT test |
-| New bot AI evaluator | `domain/ai/action_scoring.gd` + GUT calibration test — build it as a grounded model (see `Scripts/domain/ai/CLAUDE.md`) |
+| New bot AI evaluator | `domain/ai/action_scoring.gd` (shot, pass, dump, and the shared clocks) or `domain/ai/carry_space.gd` (the carrier's room to operate: evasion, controlled space, deke, brake) + GUT calibration test — build it as a grounded model (see `Scripts/domain/ai/CLAUDE.md`) |
 | Port a hot kernel to C++ | `native/src/` + seeded parity fuzz test + micro-bench row; GDScript original stays as the reference (see `native/README.md`) |
 | New "body dial X scales Y" rule | `PlayerAttributes` (see `Scripts/domain/state/CLAUDE.md`) |
 | New user-facing UI string | `KEY,en,es` row in `locale/translations.csv`, then `tr("KEY")` at the display seam (see `Scripts/ui/CLAUDE.md`) |

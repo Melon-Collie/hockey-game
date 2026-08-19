@@ -376,6 +376,30 @@ goalie while the net in front of them is an Easy one.
 
 ---
 
+## Where an evaluator goes
+
+Two files, and the line between them is a dependency direction rather than a
+taste call.
+
+`action_scoring.gd` holds the shot and xG model, passing, dumping, the
+difficulty-synced goalie mirror, and the primitives everything shares — the
+momentum-honest arrival clock `time_to_arrive`, and the net-obstacle tests.
+
+`carry_space.gd` (`AICarrySpace`) holds the carrier's room to operate:
+reachable-set evasion, the safety maps, the crossing sample, controlled space,
+the brake check and the fake-then-cut deke.
+
+**`AICarrySpace` reads `AIActionScoring`; never the reverse.** It borrows the
+arrival clock, the net test, six reference speeds and the puck-protect handle,
+and that direction is load-bearing: a const read across a GDScript `class_name`
+cycle is a PARSE error, so closing the loop does not break one call — it takes
+the whole class down and every static call on it from every file at once.
+`test_scoring_split_stays_acyclic.gd` holds it.
+
+That is also why the split was drawn by dependency closure rather than by topic.
+Seven functions that read as carry-space work stayed with the scorer because the
+rest of the scorer calls them bare.
+
 ## The models in detail
 
 Every multiplier in the utility scoring is meant to be a piece of data the bot can physically **"see,"** and each evaluation is a model built from those quantities — not a hand-tuned curve shaped to feel right. The models do the work: a grounded model generalizes to situations no one tuned and stays honest when an upstream number changes. Concretely:
