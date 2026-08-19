@@ -32,7 +32,6 @@ const _HALF_LEN: float = GameRules.RINK_HALF_LENGTH
 const _HALF_WID: float = GameRules.RINK_HALF_WIDTH
 const _GOAL_LINE: float = GameRules.GOAL_LINE_Z
 const _BLUE_LINE: float = GameRules.BLUE_LINE_Z
-const _CORNER_R: float = GameRules.CORNER_RADIUS
 
 var _root: Control = null
 var _map: RinkMap = null

@@ -581,15 +581,6 @@ var _blade_reach: float = BLADE_REACH_M
 # still lets the charge tracker accumulate the forehand/backhand swing chirality.
 const BOT_WRISTER_CHARGE_TICKS: int = _PhysicsConstants.PHYSICS_TICK / 8   # ~125 ms
 
-# Shot target power fraction (0..1): shots aim for full power (the carry scorer
-# assumes WRISTER_SHOT_SPEED_M_S = DEFAULT_WRISTER_POWER_MAX_M_S, so the bot
-# should produce ~max). Fed to input.bot_wrister_power_t, which the controller
-# converts to the equivalent cursor speed (pure mouse-speed model). Charged
-# PASSES instead derive their power fraction per-pass from the distance-adaptive
-# _pass_target_speed (see _state_pass_pressed) rather than a fixed fraction.
-# Flat full power: the only response to pressure is the bail-on-close-opponent
-# path in _state_shoot_pressed.
-const BOT_WRISTER_SHOT_CHARGE_FRACTION: float = 1.0
 # Straight-line span (m) of the synthesized wind-up gesture — how far the bot's
 # fake cursor sweeps from wind-up start to release. Purely COSMETIC now that
 # power rides bot_wrister_power_t (not sweep distance): it sizes the visible

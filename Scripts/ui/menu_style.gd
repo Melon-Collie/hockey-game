@@ -93,7 +93,6 @@ const BROADCAST_SHADOW   := Color(0.0,   0.0,   0.0,   0.50)  # offset drop shad
 const BROADCAST_CREAM    := Color(1.000, 1.000, 1.000, 1.00)  # #FFFFFF primary text (was cream #F6EFE2)
 const BROADCAST_DIM      := Color(0.608, 0.627, 0.675, 1.00)  # #9BA0AC cool-neutral gray labels (was cream-dim #B8B0A0)
 const BROADCAST_SEP      := Color(0.165, 0.165, 0.220, 1.00)  # #2A2A38 column separator
-const BROADCAST_TITLE_BG := Color(0.102, 0.102, 0.149, 1.00)  # #1A1A26 scoreboard title strip
 
 
 # ── HUD ice-overlay (3D-on-ice elements: rings, glyphs, reticles) ─────────────

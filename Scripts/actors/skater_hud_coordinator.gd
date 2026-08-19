@@ -94,7 +94,6 @@ const _BEACON_CROWD_CHECK_INTERVAL: float = 0.2
 const _SLAPPER_RING_MIN_SCALE: float   = 0.15
 const RETICLE_HALF_LENGTH: float       = 0.06
 const _RING_SEGMENTS: int              = 48
-const _SLAPPER_HUD_Y: float            = 0.05
 
 # Slot-ring relationship to the LOCAL player, resolved live so a late-spawning
 # local player and mid-game slot swaps self-correct. UNKNOWN keeps the neutral

@@ -31,7 +31,6 @@ const LAYER_GOALIE_STICK: int   = 4
 const LAYER_GOALIE_BODIES: int  = 128
 
 # ── Network (transport-level) ─────────────────────────────────────────────────
-const PORT: int = 7777
 # Client input batches are sent once per physics tick. Matching PHYSICS_TICK
 # minimizes the batch-send wait folded into ClockSync.INPUT_LEAD_SEC (which
 # derives BATCH_INTERVAL from this constant) — at 60 Hz the worst-case wait was
