@@ -1,4 +1,4 @@
-extends Node
+extends DrillLoop
 
 # Offline passing drill: "how many can you complete out of 10". Spawned by
 # game_scene.gd via DrillRegistry when NetworkManager.drill_id selects it. Owns
@@ -14,14 +14,7 @@ extends Node
 # scenario catalogue and the no-repeat sequencing; this node owns the staging,
 # puppet motion, saucer wall, and completion detection.
 
-# Team 0 attacks -Z, so every lane runs toward -Z (passer up-ice of receiver).
-const _ICE_Y: float = 0.05
 const _TOTAL_PASSES: int = 10
-
-# How far in front of the player the handed-back puck is staged. Skating onto it
-# runs the NORMAL proximity-pickup path (a bare set_carrier bypasses
-# PuckController's bookkeeping — see the tutorial's _stage_puck_for_player).
-const _STAGE_PUCK_AHEAD: float = 1.2
 
 # Saucer board: a knee-high box across the lane, this far ahead of the passer —
 # INSIDE the LOW saucer's airborne span but with runway for it to have climbed
@@ -37,41 +30,22 @@ const _WALL_SIZE: Vector3 = Vector3(2.4, 0.12, 0.08)
 # so the flip reads as a smooth change of direction, not a stop).
 const _PATROL_FLIP_RADIUS: float = 1.2
 
-# In-flight pass resolution — the same clocks as the tutorial's passing drills.
-const _PASS_START_GRACE: float = 0.35  # s after release before the dead-pass rules arm
-const _PASS_REST_SPEED: float  = 0.5   # m/s below which a loose pass is stopped
-const _PASS_STALL_GRACE: float = 0.4   # s stopped before the pass is called dead
+# The two clocks that are this drill's own — the shared release/stall/rest ones
+# are DrillLoop's.
 const _PASS_MISS_MARGIN: float = 1.5   # m past the receiver, receding = missed
 const _MAX_PASS_TIME: float    = 4.0   # s safety cap — retire a wedged pass no matter what
-# Long per-skater pickup cooldown applied at release so the passer can't chase
-# their own pass down and re-collect it. Lifted at restage.
-const _PICKUP_LOCK_S: float = 999.0
 
-# How long the COMPLETE! / MISSED flash holds before the next scenario stages.
-const _RESULT_HOLD: float = 1.4
-
-enum Stage { LIVE, RESULT, DONE }
-
-var _local_record: PlayerRecord = null
-var _local_controller: LocalController = null
-var _skater: Skater = null
-var _puck: Puck = null
-var _hud: PassingDrillHUD = null
 var _wall_node: TutorialWall = null
 
 # The teammate puppet (team 0), spawned once and repositioned per attempt.
 var _puppet_record: PlayerRecord = null
 
-var _session: DrillSession = null
 # Untyped container (a typed array of an inner class isn't used anywhere in the
 # codebase); elements are cast to PassScenario at access, so typing stays strong
 # where it's read.
 var _scenarios: Array = []
 var _scenario_index: int = -1
 var _scenario: PassingDrillRules.PassScenario = null
-
-var _stage: Stage = Stage.LIVE
-var _result_timer: float = 0.0
 
 # Receiver patrol state (moving scenarios only).
 var _route_a: Vector2 = Vector2.ZERO
@@ -87,25 +61,15 @@ var _on_pass_callable: Callable = Callable()
 
 
 func _ready() -> void:
-	_local_record = GameManager.get_local_player()
-	if _local_record == null:
-		push_error("PassingDrillManager: no local player found")
+	if not bind_local_player(_TOTAL_PASSES):
 		return
-	_local_controller = _local_record.controller as LocalController
-	_skater = _local_record.skater
-	_puck = GameManager.get_puck()
-
-	_session = DrillSession.new(_TOTAL_PASSES)
 	_scenarios = PassingDrillRules.scenarios()
 
 	# A teammate puppet on team 0 — spawned once here, repositioned each attempt.
 	# Placed off-rink initially; _begin_attempt moves it to the scenario spot.
 	_puppet_record = GameManager.spawn_tutorial_bot(Vector3(0.0, 1.0, 0.0), 0, 0)
 
-	_hud = PassingDrillHUD.new()
-	add_child(_hud)
-	_hud.retry_pressed.connect(_on_retry)
-	_hud.exit_pressed.connect(_on_exit)
+	mount_hud(PassingDrillHUD.new())
 	_hud.skip_pressed.connect(_on_skip)
 	_hud.enable_skip()
 
@@ -148,52 +112,30 @@ func _begin_attempt() -> void:
 	_local_controller.teleport_to(_to_world(_scenario.passer), face)
 	_stage_puppet()
 	_stage_wall()
-	_stage_puck_for_player()
+	stage_puck_for_player()
 
-	_hud.set_progress(_session.current_attempt_number(), _session.total_attempts, _session.makes)
-	_hud.set_scenario(_scenario.title)
+	show_attempt_progress()
+	(_hud as PassingDrillHUD).set_scenario(_scenario.title)
 
 
 func _resolve_attempt(made: bool) -> void:
-	_session.record(made)
-	_stage = Stage.RESULT
 	_pass_live = false
-	_result_timer = _RESULT_HOLD
 	# Leave the puck where the attempt ended so the player SEES the result during
 	# the hold; pickup stays locked (from release) so a settling puck can't be
 	# re-collected before the next scenario stages.
-	_puck.set_skater_cooldown(_skater, _RESULT_HOLD + 1.0)
-	_hud.flash_result(made, _session.makes, _session.attempts_taken)
+	_puck.set_skater_cooldown(_skater, RESULT_HOLD + 1.0)
+	record_result(made)
 	if made:
 		SoundManager.play_ui(SoundManager.Sound.UI_CLICK)
 	else:
 		SoundManager.play_crowd(SoundManager.Sound.FACEOFF_WHISTLE)
 
 
-func _advance() -> void:
-	if _session.is_complete():
-		_stage = Stage.DONE
-		_clear_wall()
-		_hud.show_results(_session.makes, _session.total_attempts)
-	else:
-		_begin_attempt()
+func _on_drill_complete() -> void:
+	_clear_wall()
 
 
 # ── Per-tick detection ────────────────────────────────────────────────────────
-
-func _physics_process(delta: float) -> void:
-	if _local_record == null or _skater == null or not is_instance_valid(_puck):
-		return
-	match _stage:
-		Stage.RESULT:
-			_result_timer -= delta
-			if _result_timer <= 0.0:
-				_advance()
-		Stage.LIVE:
-			_tick_live(delta)
-		Stage.DONE:
-			pass
-
 
 func _tick_live(delta: float) -> void:
 	_drive_puppet()
@@ -218,7 +160,7 @@ func _tick_live(delta: float) -> void:
 
 	# Watch the loose pass for a dead / past / timed-out miss.
 	_pass_air_time += delta
-	if _pass_air_time < _PASS_START_GRACE:
+	if _pass_air_time < RELEASE_GRACE_S:
 		return
 	if _pass_air_time >= _MAX_PASS_TIME:
 		_resolve_attempt(false)
@@ -229,11 +171,11 @@ func _tick_live(delta: float) -> void:
 	var puck_pos: Vector3 = _puck.get_puck_position()
 	var puck_vel: Vector3 = _puck.get_puck_velocity()
 	# Dead slow: the pass has stopped making progress. Arm the stall clock.
-	if puck_vel.length() <= _PASS_REST_SPEED:
+	if puck_vel.length() <= REST_SPEED:
 		_pass_stall_time += delta
 	else:
 		_pass_stall_time = 0.0
-	if _pass_stall_time >= _PASS_STALL_GRACE:
+	if _pass_stall_time >= STALL_GRACE_S:
 		_resolve_attempt(false)
 		return
 	# Slid past the receiver and receding: an incoming pass always closes on him,
@@ -280,16 +222,10 @@ func _on_pass_released() -> void:
 	_pass_live = true
 	_pass_air_time = 0.0
 	_pass_stall_time = 0.0
-	_puck.set_skater_cooldown(_skater, _PICKUP_LOCK_S)
+	_puck.set_skater_cooldown(_skater, PICKUP_LOCK_S)
 
 
 # ── HUD handlers ──────────────────────────────────────────────────────────────
-
-func _on_retry() -> void:
-	_session.restart()
-	_hud.hide_results()
-	_begin_attempt()
-
 
 # Abandon the current rep and move on — the in-play escape hatch. Counts as an
 # attempt taken (keeps the "out of 10" denominator honest) and force-clears any
@@ -307,12 +243,6 @@ func _on_skip() -> void:
 		_puck.drop()
 	_session.record(false)
 	_advance()
-
-
-func _on_exit() -> void:
-	_stage = Stage.DONE
-	NetworkManager.drill_id = ""
-	GameManager.return_to_free_play()
 
 
 # ── Staging helpers ───────────────────────────────────────────────────────────
@@ -364,16 +294,3 @@ func _stage_wall() -> void:
 func _clear_wall() -> void:
 	if _wall_node != null and is_instance_valid(_wall_node):
 		_wall_node.clear()
-
-
-# Stages the puck a stride in front of the freshly-teleported player, lifting the
-# pickup lock left from the previous attempt so it can be collected normally.
-# Every lane faces -Z, so ahead = -Z. Never hand the puck to a stick from here (a
-# bare set_carrier bypasses PuckController's bookkeeping — see the tutorial).
-func _stage_puck_for_player() -> void:
-	_puck.remove_skater_cooldown(_skater)
-	# stage_at fully parks the puck (position + linear AND angular velocity + any
-	# queued elevation), so a missed pass left spinning/sliding can't carry its
-	# momentum into the next rep.
-	_puck.stage_at(Vector3(_skater.global_position.x, _ICE_Y,
-			_skater.global_position.z - _STAGE_PUCK_AHEAD))

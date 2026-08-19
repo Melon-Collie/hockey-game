@@ -181,7 +181,7 @@ that file can't tell you:
 | New RPC | `NetworkManager` (define) → emit a signal → `GameManager._wire_network_signals()` (connect) |
 | New phase-entry side effect | `PhaseCoordinator` |
 | New arena sponsor (boards and in-ice) | Append to `AdBrands.BRANDS` — a row, not an art file; the painters compose the panel. A new in-ice placement is a row in `AdBrands.ICE_SLOTS`, which `test_board_ad_layout.gd` holds against every painted marking |
-| New practice drill | Append to `DrillRegistry` (id + `display_name_key` + manager path; add the matching `DRILL_*` row to `locale/translations.csv`) → manager node in `Scripts/game/` owning the drill loop (`DrillSession` for the score tally) → `DrillHUD` subclass for its strings |
+| New practice drill | Append to `DrillRegistry` (id + `display_name_key` + manager path; add the matching `DRILL_*` row to `locale/translations.csv`) → manager node in `Scripts/game/` extending `DrillLoop` (which owns the stage machine, result hold, puck staging and retry/exit; the drill overrides `_begin_attempt` / `_tick_live`) → `DrillHUD` subclass for its strings. `test_drill_registry.gd` holds all four steps |
 | New controller behavior | Method on `SkaterController`; `GameManager` calls it, never pokes internals directly |
 | New reconcile logic | `domain/rules/reconciliation_rules.gd` + GUT test |
 | New bot AI evaluator | `domain/ai/action_scoring.gd` + GUT calibration test — build it as a grounded model (see `Scripts/domain/ai/CLAUDE.md`) |

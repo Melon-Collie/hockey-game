@@ -1,4 +1,4 @@
-extends Node
+extends DrillLoop
 
 # Offline penalty-shot drill: "how many can you score out of 10". Spawned by
 # game_scene.gd via DrillRegistry when NetworkManager.drill_id selects it. Owns
@@ -15,40 +15,19 @@ extends Node
 # Modelled on TutorialManager's lifecycle (single local player + puck, a manager
 # that owns staging and a code-built HUD), minus the multi-step machinery.
 
-# Team 0 shoots toward -Z, so it attacks the -Z net (where spawn_penalty_goalie
-# places the goalie). The goal line is at -GOAL_LINE_Z.
-const _ATTACK_DIR_Z: float = -1.0
+# Team 0 attacks the -Z net, where spawn_penalty_goalie places the goalie.
 const _GOAL_LINE_Z: float = -GameRules.GOAL_LINE_Z
 const _NET_HALF_WIDTH: float = GameRules.NET_HALF_WIDTH
-const _ICE_Y: float = 0.05
 const _TOTAL_SHOTS: int = 10
 
-# Centre-ice staging spot for the shooter. The puck is staged a stride ahead
-# (toward the net) so the shooter skates onto it — the normal proximity-pickup
-# path — rather than starting glued to the blade.
+# Centre-ice staging spot for the shooter.
 const _START: Vector3 = Vector3(0.0, 1.0, 0.0)
-const _FACE_NET: Vector2 = Vector2(0.0, -1.0)
-const _STAGE_PUCK_AHEAD: float = 1.2
 
-# How long the GOAL! / NO GOAL flash holds before the next shot is staged.
-const _RESULT_HOLD: float = 1.4
 # Safety net: an attempt that's been live this long (puck wedged, etc.) without
 # resolving is force-scored as a miss so the drill can't soft-lock.
 const _MAX_ATTEMPT_TIME: float = 20.0
 
-enum Stage { LIVE, RESULT, DONE }
-
-var _local_record: PlayerRecord = null
-var _local_controller: LocalController = null
-var _skater: Skater = null
-var _puck: Puck = null
-var _hud: PenaltyDrillHUD = null
-
-var _session: DrillSession = null
 var _cfg: PenaltyShotRules.Config = null
-
-var _stage: Stage = Stage.LIVE
-var _result_timer: float = 0.0
 
 # Per-attempt accumulators that PenaltyShotRules.classify reads.
 var _start_z: float = 0.0
@@ -73,24 +52,11 @@ var _released: bool = false
 
 
 func _ready() -> void:
-	_local_record = GameManager.get_local_player()
-	if _local_record == null:
-		push_error("PenaltyDrillManager: no local player found")
+	if not bind_local_player(_TOTAL_SHOTS):
 		return
-	_local_controller = _local_record.controller as LocalController
-	_skater = _local_record.skater
-	_puck = GameManager.get_puck()
-
-	_session = DrillSession.new(_TOTAL_SHOTS)
 	_cfg = PenaltyShotRules.Config.new()
-
 	GameManager.spawn_penalty_goalie()
-
-	_hud = PenaltyDrillHUD.new()
-	add_child(_hud)
-	_hud.retry_pressed.connect(_on_retry)
-	_hud.exit_pressed.connect(_on_exit)
-
+	mount_hud(PenaltyDrillHUD.new())
 	_begin_attempt()
 
 
@@ -117,8 +83,8 @@ func _begin_attempt() -> void:
 
 	# Stand the shooter at centre facing the net with the puck staged a stride
 	# ahead to skate onto, and reset the goalie into its crease.
-	_local_controller.teleport_to(_START, _FACE_NET)
-	_stage_puck_for_player()
+	_local_controller.teleport_to(_START, FACE_NET)
+	stage_puck_for_player()
 	GameManager.reset_penalty_goalie()
 
 	# Provisional baseline; re-based to the shooter's position once they actually
@@ -126,47 +92,21 @@ func _begin_attempt() -> void:
 	# Progress is the SHOOTER's, not the puck's — the keep-driving rules track the
 	# player skating in, so dangling/shooting the puck can't end the attempt.
 	_start_z = _skater.global_position.z
-	_hud.set_progress(_session.current_attempt_number(), _session.total_attempts, _session.makes)
+	show_attempt_progress()
 
 
 func _resolve_attempt(made: bool) -> void:
-	_session.record(made)
-	_stage = Stage.RESULT
-	_result_timer = _RESULT_HOLD
 	# Leave the puck where the attempt ended (in the net on a goal, out wide on a
 	# miss) so the shooter actually SEES the result during the hold, instead of it
 	# vanishing off-rink the instant it crosses. Detection is off now (_stage is
 	# RESULT, so _tick_live won't run) and re-pickup is locked, so a settling
 	# rebound can't re-trigger or be re-collected before the next attempt stages.
-	_puck.set_skater_cooldown(_skater, _RESULT_HOLD + 1.0)
-	_hud.flash_result(made, _session.makes, _session.attempts_taken)
+	_puck.set_skater_cooldown(_skater, RESULT_HOLD + 1.0)
+	record_result(made)
 	SoundManager.play_crowd(SoundManager.Sound.GOAL_HORN if made else SoundManager.Sound.FACEOFF_WHISTLE)
 
 
-func _advance() -> void:
-	if _session.is_complete():
-		_stage = Stage.DONE
-		_hud.show_results(_session.makes, _session.total_attempts)
-	else:
-		_begin_attempt()
-
-
 # ── Per-tick detection ────────────────────────────────────────────────────────
-
-func _physics_process(delta: float) -> void:
-	if _local_record == null or _skater == null or not is_instance_valid(_puck):
-		return
-
-	match _stage:
-		Stage.RESULT:
-			_result_timer -= delta
-			if _result_timer <= 0.0:
-				_advance()
-		Stage.LIVE:
-			_tick_live(delta)
-		Stage.DONE:
-			pass
-
 
 func _tick_live(delta: float) -> void:
 	# Hold all failure detection until the shooter picks up the puck. Before that
@@ -201,7 +141,7 @@ func _tick_live(delta: float) -> void:
 	var fwd_speed: float = 0.0
 	if not _released:
 		progress = PenaltyShotRules.forward_progress(
-				_skater.global_position.z, _start_z, _ATTACK_DIR_Z)
+				_skater.global_position.z, _start_z, ATTACK_DIR_Z)
 		# Forward speed from the change in the shooter's progress this tick.
 		fwd_speed = (progress - _last_progress) / delta if delta > 0.0 else 0.0
 		_last_progress = progress
@@ -224,38 +164,10 @@ func _tick_live(delta: float) -> void:
 	var outcome: PenaltyShotRules.Outcome = PenaltyShotRules.classify(
 			pos.x, pos.y, pos.z, fwd_speed, progress, _max_progress,
 			_started, _released, _stall_time, _attempt_time,
-			_ATTACK_DIR_Z, _GOAL_LINE_Z, _NET_HALF_WIDTH, _cfg)
+			ATTACK_DIR_Z, _GOAL_LINE_Z, _NET_HALF_WIDTH, _cfg)
 
 	if outcome == PenaltyShotRules.Outcome.LIVE:
 		if _live_time >= _MAX_ATTEMPT_TIME:
 			_resolve_attempt(false)
 		return
 	_resolve_attempt(outcome == PenaltyShotRules.Outcome.GOAL)
-
-
-# ── HUD handlers ──────────────────────────────────────────────────────────────
-
-func _on_retry() -> void:
-	_session.restart()
-	_hud.hide_results()
-	_begin_attempt()
-
-
-func _on_exit() -> void:
-	_stage = Stage.DONE
-	NetworkManager.drill_id = ""
-	GameManager.return_to_free_play()
-
-
-# ── Staging helpers ───────────────────────────────────────────────────────────
-
-# Stages the puck a stride ahead of the freshly-teleported shooter (toward the
-# net) so collecting it runs the NORMAL proximity-pickup path — a bare set_carrier
-# bypasses PuckController's bookkeeping (see the passing/accuracy drills). stage_at
-# fully parks it (position + linear AND angular velocity), so a rebound left
-# spinning from the previous attempt can't carry momentum into this one. The
-# per-attempt pickup lock from the result hold is lifted so it can be collected.
-func _stage_puck_for_player() -> void:
-	_puck.remove_skater_cooldown(_skater)
-	_puck.stage_at(Vector3(_skater.global_position.x, _ICE_Y,
-			_skater.global_position.z - _STAGE_PUCK_AHEAD))
