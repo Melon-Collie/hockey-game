@@ -1,19 +1,14 @@
 class_name SkaterMeshBuilder
 extends RefCounted
 
-# Low-poly faceted geometry for the skater: shaped torso, helmeted head, deltoid
-# shoulder caps, arm bone prisms, joint balls, glove fists and cuffs, hip/knee
-# balls, thighs, socks, skate collars, boots with a blade runner, and the stick
-# knob. Cosmetic only — gameplay reads the Marker3D anchors and collision
-# shapes, never these meshes.
+# Low-poly faceted geometry for the skater. Cosmetic only — gameplay reads the
+# Marker3D anchors and collision shapes, never these meshes.
 #
-# The skater renders as TWO skinned meshes, not as a tree of MeshInstance3Ds:
-# shared_upper_skin_mesh (UpperBone / UpperSurface) and shared_leg_skin_mesh
-# (LegBone / LegSurface). Both are cached and shared by every skater on the ice —
-# per-skater colour is a surface override and per-build sizing rides the scale in
-# each bone's pose, so nothing here is ever mutated per instance. The goalie and
-# the puck still hang meshes on nodes and subclass this builder for the geometry
-# helpers (see _swap_instance).
+# The two skinned meshes it assembles are shared_upper_skin_mesh (UpperBone /
+# UpperSurface) and shared_leg_skin_mesh (LegBone / LegSurface). Every mesh here
+# is cached and shared by the whole roster — per-skater colour is a surface
+# override, per-build sizing rides the scale in a bone's pose — so nothing is
+# ever mutated per instance.
 #
 # UV layouts replicate the Godot primitives they replace, because
 # SkaterUniformCoordinator paints against those exact conventions:
@@ -27,19 +22,6 @@ extends RefCounted
 #
 # Everything is flat-shaded (smooth_group(-1)) — the faceting IS the art
 # style; per-face normals are what make the shaped silhouettes read.
-#
-# NORMALS UNDER SKINNING: Godot transforms a skinned normal by the bone matrix
-# itself, not by its inverse transpose, so a bone whose pose carries non-uniform
-# scale renders with skewed normals. _radial_side_normals fixes that where the
-# anisotropy is extreme (the arm bones, ~4:1). Do not reach for it elsewhere —
-# on a part scaled near 1:1 it costs more than it buys (see the note there).
-#
-# Some parts contribute SEVERAL surfaces to one bone — the boot carries its blade
-# steel and laces, the skate collar its accent stripe, the helmet the head/neck
-# skin — because a part that never moves relative to another does not need its
-# own bone, only its own material. Nothing may ever set material_override on
-# either skinned mesh: it overrides every surface at once. Paint through
-# surface_override() / the Skater seams instead.
 
 # Profiles are (y, radius) stations top→bottom in the part's mesh-local frame,
 # spanning the same envelope as the primitive each replaces (heights and radii
@@ -72,8 +54,7 @@ const _SOCK_PROFILE: Array[Vector2] = [
 ]
 # The collar ENDS just below its node origin: the scene seats that origin at
 # the boot's heel-top line, so the cuff perches ON the boot with ~1 cm of
-# overlap seal instead of dropping past the heel as a column (the old -0.100
-# bottom reached blade-holder depth and swallowed the boot's silhouette).
+# overlap seal instead of dropping past the heel as a column.
 const _SKATE_PROFILE: Array[Vector2] = [
 	Vector2(0.100, 0.090),   # boot collar
 	Vector2(0.020, 0.082),
@@ -88,9 +69,9 @@ const _TORSO_Z_SCALE: float = 0.88
 const _TORSO_SIDES: int = 10   # back number spans ~3 facets — creased, still legible
 const _LEG_SIDES: int = 8
 
-# Head + helmet. The scene's Helmet node carries the helmet SHELL on surface 0
-# (painted the kit's helmet color, scaled by the appearance rig) and the
-# head/neck skin on surface 1 — one mesh, so both share its transform. The
+# Head + helmet. One mesh on the HELMET bone: the shell on surface 0 (painted
+# the kit's helmet color, scaled by the appearance rig) and the head/neck skin
+# on surface 1, so both share its transform. The
 # shell's lower edge varies with azimuth — flat at brow height around the
 # face and temples, dropping to the nape over the back arc — see the rim
 # profile constants below (latitudes are equirect fractions; θ = 0 is +Z,
@@ -142,9 +123,8 @@ const _SHOULDER_PROFILE: Array[Vector3] = [
 	Vector3(-0.137, 0.030, 1.0),   # arm-side taper
 ]
 
-# Hips fill the seat under the torso's rear sway: a touch bigger than the
-# 0.13 they shipped at, with the rearward seat bias carried by the HipL/R
-# nodes' scene position (z 0.035).
+# Hips fill the seat under the torso's rear sway. The rearward seat bias is
+# carried by the HipL/R nodes' scene position (z 0.035), not by this radius.
 const _HIP_RADIUS: float = 0.138
 const _KNEE_RADIUS: float = 0.095
 
@@ -186,13 +166,12 @@ const _KNOB_BOTTOM_RADIUS: float = 0.03
 # toe cap covers.
 const _BOOT_TOE_STATION: int = 3
 const _BOOT_STATIONS: Array[Vector4] = [
-	# Heel top rises toward the collar like a real boot's quarter (was -0.040,
-	# which left the cuff floating over a low heel), meeting the collar's
-	# bottom so ankle and boot read as one piece from the side. The rearmost
-	# station runs the quarter back UNDER the collar's footprint (the cuff
-	# seats 0.10 heel-ward of this frame's origin, so its underside otherwise
-	# hangs bare behind the heel) — sole tucked well up so the stride's
-	# heel-kick arc can't drag it through the ice.
+	# Heel top rises toward the collar like a real boot's quarter, meeting the
+	# collar's bottom so ankle and boot read as one piece from the side. The
+	# rearmost station runs the quarter back UNDER the collar's footprint (the
+	# cuff seats 0.10 heel-ward of this frame's origin, so its underside
+	# otherwise hangs bare behind the heel) — sole tucked well up so the
+	# stride's heel-kick arc can't drag it through the ice.
 	Vector4(0.155, 0.042, -0.062, 0.030),   # heel counter, under the cuff
 	Vector4(0.115, 0.052, -0.070, 0.045),   # heel
 	Vector4(0.045, 0.060, -0.072, 0.046),   # instep rise
@@ -206,12 +185,11 @@ const _BOOT_STATIONS: Array[Vector4] = [
 # between them; the thin runner spans the length and bottoms out at the
 # replaced sphere's ice-contact depth (z = 0.080).
 #
-# Steel is a MID gray, not the near-white it was: the holder is a paintable
-# zone now, and a white holder sitting on a near-white runner loses the
-# skate's bottom edge entirely. Dark enough to separate from GearModelRegistry
-# .WHITE, bright enough to still read against a black boot. Public because the
-# workbench preview and the capture tool dress their own runners with it —
-# three copies of this color is how it went stale in the first place.
+# A MID gray: the holder is a paintable zone, so a near-white runner under a
+# white holder would lose the skate's bottom edge entirely. Dark enough to
+# separate from GearModelRegistry.WHITE, bright enough to read against a black
+# boot. Public so the workbench preview and the capture tool dress their runners
+# from this one constant rather than a copy.
 const BLADE_STEEL_COLOR := Color(0.62, 0.66, 0.70)
 # On-skates stance lift: the scene's part layout is tuned as STANDING height,
 # so the skate stack raises both body roots (applied in Skater._ready before
@@ -244,8 +222,7 @@ const _LACE_HALF_W: float = 0.030
 const _LACE_HALF_T: float = 0.006   # rung thickness along the instep (local Y)
 # Rung depth is biased PROUD of the surface rather than centered on it: the
 # top line slopes ~0.46 across the heel→instep segment, so a surface-centered
-# box left barely 2 mm showing there — fine at rink distance, visible
-# clipping at the workbench close-up. Sink keeps the underside buried so no
+# box leaves barely 2 mm showing there. Sink keeps the underside buried so no
 # gap opens as the slope crosses the rung.
 const _LACE_PROUD: float = 0.008    # rise above the top surface
 const _LACE_SINK: float = 0.003     # burial below it
@@ -265,13 +242,9 @@ const _NECK_PROFILE: Array[Vector2] = [
 static var _cache: Dictionary = {}
 
 
-# Swaps every scene-primitive part mesh under the two body roots for its
-# cached low-poly build. Idempotent; safe before or after the coordinators
-# run (they touch material_override and node scale, never mesh identity).
-# Swaps a scene primitive for a generated build, in place. The skater no longer
-# uses this — every one of its parts is a surface of a skinned rig — but the
-# goalie and the puck still hang their meshes on nodes, and they subclass this
-# builder for the geometry helpers.
+# Swaps a scene primitive for a generated build, in place. Used by the goalie
+# and the puck, which hang meshes on nodes; every skater part is a surface of a
+# skinned rig and never comes through here.
 static func _swap(root: Node3D, path: String, key: String, builder: Callable) -> void:
 	_swap_instance(root.get_node_or_null(path) as MeshInstance3D, key, builder)
 
@@ -324,14 +297,11 @@ static func shared_arm_bone() -> ArrayMesh:
 # A normal with no axial component is immune: scaling it by (r, r, length)
 # multiplies it by r and normalizes back to itself.
 #
-# Baking the sides radial is not the art compromise it looks like. The proper
-# normal matrix divides the axial component by length while dividing the radial
-# one by r, so at an arm's r/length (~0.23) it was ALREADY flattening the 6.8°
-# taper to 1.6° off radial before this change — the node rig rendered these as
-# near-cylinders too. What baking it buys is that the shading no longer depends
-# on r/length at all, so an over-reach that stretches the forearm can no longer
-# change how it is lit. The pose diff holds this to the letter: every pose is
-# byte-identical to the node rig apart from one edge pixel.
+# Baking the sides radial is not the art compromise it looks like: the proper
+# normal matrix divides the axial component by length and the radial one by r,
+# so at an arm's r/length (~0.23) the 6.8° taper already flattens to 1.6° off
+# radial. What baking buys is that the shading stops depending on r/length at
+# all, so an over-reach that stretches the forearm cannot change how it is lit.
 static func _radial_side_normals(src: ArrayMesh) -> ArrayMesh:
 	var arrays: Array = src.surface_get_arrays(0)
 	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
@@ -349,16 +319,14 @@ static func _radial_side_normals(src: ArrayMesh) -> ArrayMesh:
 
 
 # ── The leg rig: one skinned mesh, sixteen bones ─────────────────────────────
-# Same conversion as the arms (see the ArmPart block), with one structural
-# difference: the legs are a CHAIN, not siblings. LegL/R carry hip pitch and
-# roll, ShinL/R hang off them and carry the knee, and the six meshes per leg ride
-# whichever of the two they belonged to. The bone parents below mirror that
-# exactly, so a pose write composes down the chain the way the node transforms
-# did — flattening it would mean re-deriving the shin's world frame by hand on
-# every gait tick.
+# Unlike the upper rig (UpperBone, flat), the legs are a CHAIN: LegL/R carry hip
+# pitch and roll, ShinL/R hang off them and carry the knee, and the six meshes
+# per leg ride whichever of the two they belong to. Keep the parents below
+# mirroring that — flattening the chain means re-deriving the shin's world frame
+# by hand on every gait tick.
 #
 # Bone order is L then R, pivot first. LEG_* and SHIN_* carry no vertices; they
-# exist to be rotated, which is what a bone is for.
+# exist to be rotated.
 enum LegBone {
 	LEG_L, HIP_L, THIGH_L, KNEE_L, SHIN_L, SOCK_L, SKATE_L, FOOT_L,
 	LEG_R, HIP_R, THIGH_R, KNEE_R, SHIN_R, SOCK_R, SKATE_R, FOOT_R,
@@ -437,15 +405,10 @@ static var _leg_skin: Skin = null
 
 
 # ── Merged assemblies ────────────────────────────────────────────────────────
-# Parts that never move relative to their parent do not need to be nodes. Each
-# one used to be a MeshInstance3D child purely because it needed its OWN
-# material — the steel is bright, the laces take a gear colour — and a child was
-# the only place to hang one. A multi-surface mesh with per-surface overrides
-# gives the same result with one node instead of three.
-#
-# The cost of a node here is not the draw call: these are children of a foot the
-# gait moves every frame, so each one is a transform to propagate and a global
-# to recompute, per skater, per frame.
+# A part that never moves relative to its parent is a SURFACE, not a node, even
+# when it needs its own material (the steel runner, the gear-coloured laces).
+# These hang under a foot the gait moves every frame, so a node would cost a
+# transform propagation and a global recompute, per skater, per frame.
 #
 # NON-NEGOTIABLE for any merged mesh: nothing may set material_override on it.
 # That property overrides EVERY surface at once, so it would erase the steel and
@@ -558,9 +521,9 @@ static func _build_boot_assembly() -> ArrayMesh:
 	return m
 
 
-# Appends `src`'s surface 0 to `target` as a new surface. The children this
-# replaces all sat at identity relative to their parent, so no transform is
-# baked — which is also why the merge cannot change the rendered geometry.
+# Appends one surface of `src` to `target` as a new surface. Callers that pass
+# no transform rely on the part already sitting at identity in its parent's
+# frame, which is what keeps the merge geometry-preserving.
 static func _append_surface(target: ArrayMesh, src: ArrayMesh,
 		xform: Transform3D = Transform3D.IDENTITY, src_surface: int = 0) -> void:
 	var st := SurfaceTool.new()
@@ -569,11 +532,10 @@ static func _append_surface(target: ArrayMesh, src: ArrayMesh,
 	st.commit(target)
 
 
-# The same prism with the old wrapper's 90°-about-X baked into the vertices, so
-# its long axis is local Z — the axis the arm rig's looking_at basis aims. The
-# mesh's long axis used to disagree with the aiming axis, which is the only
-# reason each bone needed a rotated child; baking the rotation let one transform
-# carry (radius, radius, length).
+# The same prism with 90°-about-X baked into the vertices, so its long axis is
+# local Z — the axis the arm rig's looking_at basis aims. That alignment is what
+# lets a single bone transform carry (radius, radius, length) with no rotated
+# child under it.
 static func shared_arm_bone_z() -> ArrayMesh:
 	return _shared("arm_bone_z", func() -> ArrayMesh:
 		var st := SurfaceTool.new()
@@ -584,26 +546,19 @@ static func shared_arm_bone_z() -> ArrayMesh:
 
 
 # ── The upper-body rig: one skinned mesh, one Skeleton3D ─────────────────────
-# Fourteen parts that used to be fourteen MeshInstance3D children of UpperBody —
-# both arms, the torso, the helmet/head unit and the two deltoid caps — each
-# carrying a shared mesh and its own per-frame transform. They are now fourteen
-# bones of one skeleton driving one mesh, which is how an articulated body is
-# supposed to be built, and it takes the per-frame cost from a Node3D transform
-# write each (dirtying a subtree and pushing a global to the RenderingServer)
-# down to entries in the skeleton's pose array.
+# Fourteen bones of one skeleton — both arms, the torso, the helmet/head unit,
+# the two deltoid caps — driving one mesh, so posing a part costs an entry in
+# the skeleton's pose array rather than a Node3D transform write (which dirties
+# a subtree and pushes a global to the RenderingServer).
 #
-# WHY IT IS EXACT, not merely close: every vertex is weighted 1.0 to a single
-# bone, the bone rests are identity, and the skin binds are identity. A skinned
-# vertex is then `bone_pose * v`, which is precisely what a child node with that
-# local transform produced. The parts' geometry is left in its own local space
-# (untransformed) for the same reason — it is already the space the shared
-# meshes were authored in. So `set_bone_pose(part, X)` takes the SAME X the old
-# `node.transform = X` took, and the pose diff can hold the renderer to it.
+# Four properties make a pose write mean a plain local transform, and all four
+# have to hold: every vertex is weighted 1.0 to a single bone, the bone rests
+# are identity, the skin binds are identity, and each part's geometry is left in
+# its own local space. A skinned vertex is then exactly `bone_pose * v`.
 #
-# The flat bone list (no parents) is deliberate and matches the old layout: all
-# fourteen were siblings under UpperBody, each posed independently in that space.
-# A hierarchy would compose transforms the old rig never composed. (The legs are
-# the opposite case — see LegBone.)
+# The bone list is FLAT (no parents): all fourteen are posed independently in
+# UpperBody's space, and a hierarchy would compose transforms these poses do not
+# expect. The legs are the opposite case — see LegBone.
 enum UpperBone {
 	TOP_UPPER_ARM,
 	TOP_FOREARM,
@@ -624,9 +579,7 @@ const UPPER_BONE_COUNT: int = 14
 
 # Surfaces. One per bone for the first thirteen; the helmet is the exception,
 # carrying the shell and the head/neck skin as two surfaces of one bone (they
-# never moved relative to each other, only needed separate materials). Merging
-# the arm parts that share a material would cut draw calls further, but that is a
-# different change with a different risk (crossed paint) — see skater_matrix.gd.
+# never move relative to each other, they only need separate materials).
 #
 # The two FINGERS surfaces ride the hand bones but are listed LAST, out of
 # anatomical order, on purpose: for the first ten entries a surface index and
@@ -711,11 +664,9 @@ static var _upper_skin: Skin = null
 # Copies a single-surface mesh into `target` verbatim, adding the bone/weight
 # attributes that make every one of its vertices rigid to `bone`.
 #
-# Goes through surface_get_arrays rather than SurfaceTool because SurfaceTool
-# re-processes what it is given — it would re-index and could re-derive normals,
-# and this mesh has to be vertex-for-vertex what the unskinned one was or the
-# pose diff is comparing two different models. Copying the arrays and adding two
-# more changes nothing else.
+# Goes through surface_get_arrays rather than SurfaceTool: SurfaceTool
+# re-processes what it is handed (re-indexing, possibly re-deriving normals),
+# and this mesh must stay vertex-for-vertex identical to the unskinned source.
 static func _append_skinned_surface(target: ArrayMesh, src: ArrayMesh, bone: int,
 		src_surface: int = 0) -> void:
 	var arrays: Array = src.surface_get_arrays(src_surface)
@@ -791,11 +742,7 @@ static func _build_torso() -> ArrayMesh:
 			_TORSO_REAR_SWAY)
 
 
-# Helmet shell: lat/long bands whose bottom latitude follows the per-azimuth
-# cut (see the constants' doc), closed by a fan from the rim to an interior
-# center — those closure faces hide inside the head ball, and closing keeps
-# the solid's winding testable. Same ring orientation as _build_ball, so the
-# shared quad ordering stays outward.
+# Head ball at HEAD_RADIUS, sitting _HEAD_FORWARD_M ahead of the helmet center.
 static func _build_head() -> ArrayMesh:
 	return _build_ball(HEAD_RADIUS, 10, 5, 1.0)
 
@@ -877,6 +824,11 @@ static func shared_skate_blade() -> ArrayMesh:
 	return _shared("skate_blade", _build_skate_blade)
 
 
+# Helmet shell: lat/long bands whose bottom latitude follows the per-azimuth cut
+# (see the _HELMET_* constants), closed by a fan from the rim to an interior
+# center — those closure faces hide inside the head ball, and closing keeps the
+# solid's winding testable. Same ring orientation as _build_ball, so the shared
+# quad ordering stays outward.
 static func _build_helmet() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -1109,8 +1061,8 @@ static func _build_skate() -> ArrayMesh:
 
 
 # Faceted solid of revolution over (y, radius) stations, with the cylinder UV
-# convention from the class doc block. Both end caps are emitted — the engine
-# cylinders had them, and the torso's top cap is where the yoke paints.
+# convention from the class doc block. Both end caps are emitted — the torso's
+# top cap is where the jersey yoke paints.
 static func _build_lathe(profile: Array[Vector2], sides: int,
 		x_scale: float, z_scale: float,
 		z_offsets: Array[float] = []) -> ArrayMesh:
@@ -1229,14 +1181,12 @@ static func _build_ball(radius: float, lon: int, lat: int, v_end: float,
 # ── Boot ──────────────────────────────────────────────────────────────────────
 
 
-# Skate boot + blade runner in the Foot node's rotated local frame (see
-# _BOOT_STATIONS). The boot is a 6-point chamfered cross-section swept
-# heel→toe; the runner is a thin box fin reaching the replaced sphere's ice
-# contact depth. Solid-painted part (skate dark), so UVs are nominal.
-# The boot as its two paintable pieces: the QUARTER (heel through instep) on
-# surface 0 and the TOE cap on surface 1. Both are closed solids — each caps
-# the ring they share, so the junction faces are interior and the winding
-# stays testable (same reasoning as the helmet's liner closure).
+# The boot in the Foot node's rotated local frame (see _BOOT_STATIONS): a
+# 6-point chamfered cross-section swept heel→toe, emitted as its two paintable
+# pieces — the QUARTER (heel through instep) on surface 0 and the TOE cap on
+# surface 1. Both are closed solids: each caps the ring they share, so the
+# junction faces are interior and the winding stays testable (same reasoning as
+# the helmet's liner closure). Solid-painted, so UVs are nominal.
 static func _build_boot() -> ArrayMesh:
 	var loops: Array[PackedVector3Array] = []
 	for s: Vector4 in _BOOT_STATIONS:

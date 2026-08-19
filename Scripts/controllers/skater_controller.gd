@@ -2,8 +2,7 @@ class_name SkaterController
 extends Node
 
 # ── State Machine ─────────────────────────────────────────────────────────────
-# Type alias so LocalController and RemoteController keep compiling without
-# changes when they reference State.X values or use State as a type annotation.
+# Type alias so the subclasses and their callers can write `State.X`.
 const State = SkaterStateMachine.State
 var _sm: SkaterStateMachine = SkaterStateMachine.new()
 
@@ -31,10 +30,10 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Sprint (Shift) burns a stamina pool for a top-speed burst. Boost is primarily
 # the speed cap; a smaller thrust bump lets you actually reach it. Stamina is a
 # 0..1 fraction; drain/regen are fractions-per-second.
-# sprint_max_speed_multiplier is now OVERWRITTEN per-build by apply_attributes
-# (PlayerAttributes.sprint_ceiling_mult) so the sprint CEILING is Speed-attributed
-# and grounded to the 20–25 mph NHL burst band — a burner opens a gear a plodder
-# doesn't have. This @export is just the pre-apply default (a neutral build).
+# sprint_max_speed_multiplier is OVERWRITTEN per-build by apply_attributes
+# (PlayerAttributes.sprint_ceiling_mult), which grounds the sprint CEILING to the
+# 20–25 mph NHL burst band so a burner opens a gear a plodder doesn't have. This
+# @export is only the pre-apply default (a neutral build).
 @export var sprint_max_speed_multiplier: float = 1.14
 # Fraction of the puck-carry speed penalty waived WHILE sprinting — heads-down,
 # straight-line, flat-out. Lets a fast carrier separate; the real carry cost is
@@ -64,10 +63,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var hit_stamina_drain_per_sec: float = 0.5    # drained while committing a check
 # Turn-rate scale while committing (< 1.0 = wider turns). Now 1.0 (no penalty): the
 # commitment cost moved entirely onto the withdrawn stick above, so you can steer
-# freely to line up the hit — the old penalty punished the ATTEMPT (tracking a
-# mover) rather than the miss, which is backwards. Full-speed homing is still
-# bounded because sprinting in for max closing pays sprint's own turn radius
-# (sprint_turn_multiplier). Dial below 1.0 if committed checks feel too sticky.
+# Turn-rate scale while committing (< 1.0 = wider turns). 1.0 — the commitment
+# cost sits entirely on the withdrawn stick above, so you can steer freely to line
+# up the hit; penalising the ATTEMPT (tracking a mover) rather than the miss is
+# backwards. Full-speed homing is still bounded because sprinting in for max
+# closing pays sprint's own turn radius (sprint_turn_multiplier). Dial below 1.0
+# if committed checks feel too sticky.
 @export var hit_turn_multiplier: float = 1.0
 # Commit stance (cosmetic): while the Hit button is held the skater visibly loads
 # up for the check — leans into it, drops the leading shoulder, sinks into a
@@ -100,22 +101,17 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # for every player in v1 (the hit strength already reflects the attacker's Size/
 # Physical/Speed and the victim's mass). Pure math in BodyCheckRules; deterministic
 # and replicated so it survives reconcile replay (same treatment as stamina).
+#
 # Grounded to the inelastic magnitudes: the delivered victim impulse is
 # closing_speed × transfer × m_a/(m_a+m_b), so at a MEDIUM build (transfer 0.65,
-# equal mass → ×0.5) it's ~0.325 × closing, and a heavier build (a touch more mass
-# ratio) is higher still. The ref point is deliberately the SAME as the puck-strip
-# threshold (Puck.body_check_strip_threshold, 1.35): a hit hard enough to count as
-# a full check is exactly a hit hard enough to knock the puck loose. At the 0.65
-# transfer that lands a full check + strip at ~4 m/s closing for a medium build
-# (~3.4 for a heavy one) — "square them up and skate into them with some pace,"
-# comfortably reachable. (The impulse breakpoints used to sit at closing speeds
-# that were partly unreachable — a full check needed ~6 m/s and a knockdown ~13 —
-# after the transfer and the attribute mass range drifted apart across reworks;
-# the 0.65 transfer + the retuned knockdown band below re-anchor the whole ladder
-# into the reachable 2–10 m/s closing range this fixes.)
-# Speed still buys MORE than a full check: closing past the ref keeps scaling the
-# impulse linearly into the knockdown band below, so a sprint / head-on collision
-# is a bigger hit — a ceiling, not a requirement. Still feel tunables.
+# equal mass → ×0.5) it is ~0.325 × closing. The ref point is deliberately the SAME
+# as the puck-strip threshold (Puck.body_check_strip_threshold, 1.35): a hit hard
+# enough to count as a full check is exactly a hit hard enough to knock the puck
+# loose. That lands a full check + strip at ~4 m/s closing for a medium build
+# (~3.4 for a heavy one) — "square them up and skate into them with some pace".
+# Closing past the ref keeps scaling the impulse linearly into the knockdown band
+# below, so a sprint / head-on collision is a bigger hit: a ceiling, not a
+# requirement. Still feel tunables.
 @export var stagger_min_impulse: float = 0.6       # m/s transfer delta below which a hit doesn't stagger
 @export var stagger_ref_impulse: float = 1.35      # m/s transfer delta treated as a full-strength check (== puck-strip threshold)
 @export var stagger_max_seconds: float = 1.0       # recovery window of a full-strength check
@@ -144,13 +140,11 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # stagger_timer. Deliberately kept ABOVE the full-check point (stagger_ref 1.35):
 # a full check staggers + strips; a KNOCKDOWN is the reward for a genuinely SOLID
 # hit — ~5.5 m/s closing at a medium build (~4.5 for a heavy one), the pace of a
-# committed skate-in on a carrier, up to a maximal ~9.5 m/s head-on/sprint
+# committed skate-in on a carrier, up to a maximal ~9.5 m/s head-on / sprint
 # collision. It sits just above the AI's commit bar (AIBodyCheck.COMMIT_IMPULSE_M_S
 # 1.6) so a committed bot check lands a hard stagger/strip and, at real closing,
-# tips into a knockdown. (Was 3.0/5.0 — a band that needed ~13–22 m/s closing,
-# above the top skater speed, so knockdowns were effectively unreachable; retuned
-# so solid hits knock down as intended.) Set knockdown_impulse very high (or 0) to
-# effectively disable knockdowns.
+# tips into a knockdown. Set knockdown_impulse very high (or 0) to effectively
+# disable knockdowns.
 @export var knockdown_impulse: float = 1.8         # m/s victim impulse above which a hit knocks down
 @export var knockdown_ref_impulse: float = 3.1     # m/s impulse of a maximal (longest) knockdown
 @export var knockdown_min_seconds: float = 0.7     # down time of a just-barely knockdown
@@ -243,25 +237,24 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # senior stick shaft (butt-to-heel). The blade mesh extends forward from the
 # heel; see Skater.blade_length. Total hand-to-toe is stick_length + blade_length.
 @export var stick_length: float = GameRules.DEFAULT_STICK_LENGTH_M
-# Hand Y in upper-body-local space. Baseline resting position (used in the
-# FAR regime). In the CLOSE regime the hand rises toward `hand_y_max` so the
-# stick tilts more vertical and the blade can tuck in close to the body.
-# This export is the MESH-NATIVE (Size L2, 5'10") value; apply_attributes
-# scales it by height_mult, matching the appearance pass scaling the whole
-# skeleton about the ice plane — so the hand sits at the same body point
-# (0.50 m × height below the shoulder) on every build instead of pinning to
-# one absolute height (which left Size-5 hands hanging visibly low).
-# The upper body rides at height_mult × 1.0 m world Y (FACEOFF_SPAWN_HEIGHT
-# is the physics origin for every build — only the mesh skeleton scales; the
-# cosmetic skating crouch lowers it up to ~7 cm at speed) and the blade at
-# blade_height (~ice), so -0.10 gives a hand world Y of 0.90 m × height (hip
-# height on each frame) and a rest stick angle of ~42° at L2 — approaching a
-# real lie-5 address (~45°), up from the ~38° reach-cheat this used to run
-# (hand_rest_y -0.17). The steeper stick pulls the rest carry circle in
-# ~6 cm (stick_horiz 1.03 → 0.97), but the shallower shoulder-to-hand drop
-# re-aims the arm budget sideways (derived backhand ROM 0.37 → 0.46 m of
-# hand displacement), so rim reach is roughly preserved and the directional
-# reach lean stays pure bonus on top.
+# Hand Y in upper-body-local space. Baseline resting position (used in the FAR
+# regime); in the CLOSE regime the hand rises toward `hand_y_max` so the stick
+# tilts more vertical and the blade can tuck in close to the body.
+#
+# This export is the MESH-NATIVE (Size L2, 5'10") value; apply_attributes scales it
+# by height_mult, matching the appearance pass scaling the whole skeleton about the
+# ice plane — so the hand sits at the same body point (0.50 m × height below the
+# shoulder) on every build instead of pinning to one absolute height.
+#
+# The upper body rides at height_mult × 1.0 m world Y (FACEOFF_SPAWN_HEIGHT is the
+# physics origin for every build — only the mesh skeleton scales; the cosmetic
+# skating crouch lowers it up to ~7 cm at speed) and the blade at blade_height
+# (~ice), so -0.10 gives a hand world Y of 0.90 m × height (hip height on each
+# frame) and a rest stick angle of ~42° at L2, approaching a real lie-5 address
+# (~45°). The steeper stick pulls the rest carry circle in ~6 cm (stick_horiz
+# 1.03 → 0.97), but the shallower shoulder-to-hand drop re-aims the arm budget
+# sideways (derived backhand ROM 0.37 → 0.46 m of hand displacement), so rim reach
+# is roughly preserved and the directional reach lean stays pure bonus on top.
 @export var hand_rest_y: float = -0.10
 # Ceiling for hand Y in the CLOSE regime. When aiming very close to the
 # skater, the hand rises to shorten the stick's horizontal projection; this
@@ -301,16 +294,13 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var board_shield_probe: float = 1.1
 @export var board_shield_max_deg: float = 55.0
 # Cap on how fast the aim target can move in world XZ per second. The IK consumes
-# the smoothed target, so the blade visibly inherits the cap. Originally a high
-# (60 m/s) smoothing cap that only bound on fast mouse wraps; now lowered into
-# the dangle-speed range (~8-14 m/s). Under attributes v4 the blade tracks every
-# build's cursor at the same fidelity (hands_blade_mult() is 1.0 by
-# constitution — no hands stat), so this cap is uniform; the lever-geometry
-# stage (stick length → tip speed vs inertia) will derive it from reach
-# instead. A medium player's full ROM span is ~1.18 m, so 10 m/s crosses it in
-# ~118 ms. Tune UP if deliberate aim feels laggy at
-# low Hands; tune DOWN if fast dangling feels the same at L1 and L5. (Live-feel
-# call — can't be measured headless.)
+# the smoothed target, so the blade visibly inherits the cap. Sits in the
+# dangle-speed range (~8-14 m/s): a medium player's full ROM span is ~1.18 m, so
+# 10 m/s crosses it in ~118 ms. Under attributes v4 the blade tracks every build's
+# cursor at the same fidelity (hands_blade_mult() is 1.0 by constitution — no hands
+# stat), so this cap is uniform. Tune UP if deliberate aim feels laggy, DOWN if
+# fast dangling feels the same at L1 and L5 — a live-feel call that cannot be
+# measured headless.
 @export var max_blade_speed: float = 10.0
 # Second-order blade: acceleration cap (m/s²) on the dangle velocity — the
 # stick's INERTIA. Direction REVERSALS pay the cost, traverse speed doesn't.
@@ -646,22 +636,20 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var wrister_mouse_speed_full: float = 2500.0
 @export var wrister_mouse_speed_smoothing: float = 14.0
 # ── Travel-gated ceiling (ShotMechanics.wrister_travel_cap_t) — CURRENTLY OFF ──
-# NOTE: the blade is FROZEN during the wrister charge (it holds at the shot origin
-# while the torso coils), so it sweeps no blade path and this gate has nothing to
-# read — it is permanently disabled in _wrister_stroke_travel (returns INF). The
-# fields + the domain mechanism are kept as the hook for a future cursor-sweep
-# anti-degeneracy gate. The doc below describes the (dormant) blade-path model.
-# The power CEILING must be earned with real blade travel: cursor speed alone
-# (a wiggle, a short jerk, a cranked Shot Power Sensitivity) caps at the floor
-# tier. Measured in WORLD meters of blade path over the stroke, so it can't be
-# bought with DPI or the sensitivity setting — pixels don't move the blade
-# past ROM. The full-travel reference is a baseline for the default build;
-# apply_attributes rescales it by the build's own blade sweep radius (stick +
-# arm ROM) so "a full stroke" means the same fraction of each build's
-# reachable arc — Size must not leak into the wrister ceiling.
+# The blade is FROZEN during the wrister charge, so it sweeps no blade path and
+# this gate has nothing to read: `_wrister_stroke_travel` returns INF and the
+# fields below are inert. They and the domain mechanism are kept as the hook for a
+# future cursor-sweep anti-degeneracy gate.
+#
+# The dormant model: the power CEILING must be earned with real blade travel, so
+# cursor speed alone (a wiggle, a short jerk, a cranked Shot Power Sensitivity)
+# caps at the floor tier. Measured in WORLD meters of blade path, so it cannot be
+# bought with DPI. apply_attributes rescales the full-travel reference by the
+# build's own blade sweep radius (stick + arm ROM) so "a full stroke" means the
+# same fraction of each build's reachable arc — Size must not leak into the
+# wrister ceiling.
 #   wrister_full_stroke_travel: blade path (m) that unlocks the full band.
-#     <= 0 disables the gate. Calibrate against the debug shot toast's stroke
-#     readout (an honest full sweep should land at/past it; a twitch far under).
+#     <= 0 disables the gate.
 #   wrister_travel_cap_floor: fraction of the power band reachable with zero
 #     travel — the instant flick-pass / snap tier (0.4 of the 10..33 base band
 #     ≈ 19 m/s, a crisp pass; %-based, so Shot scales it with the ceiling).
@@ -1273,49 +1261,41 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	if not _attr_base_captured:
 		_capture_attribute_bases()
 	var m_height:  float = attrs.height_mult()
-	# Skating splits into THREE height-routed sub-levers: Speed owns top-end
-	# velocity (max_speed; the sprint ceiling below scales off it), Acceleration
-	# owns thrust (forward burst — small-favored, floored above agility so a big
-	# weak-skater can still drive straight), and Agility owns the turn/brake/edge
-	# handling. Splitting burst off top speed lets a small player be explosive and
-	# shifty without owning the top gear, and a big weak-skater feel bad in the
-	# TURN rather than glued to the ice.
+	# Skating splits into THREE height-routed sub-levers: Speed owns top-end velocity
+	# (max_speed; the sprint ceiling below scales off it), Acceleration owns thrust
+	# (forward burst — small-favored, floored above agility so a big weak-skater can
+	# still drive straight), and Agility owns the turn/brake/edge handling.
 	var m_agility: float = attrs.agility_mult()
 	max_speed = _base_max_speed * attrs.speed_mult()
 	thrust    = _base_thrust    * attrs.accel_mult()
 	facing_drag_speed           = _base_facing_drag_speed           * m_agility
 	facing_drag_speed_braking   = _base_facing_drag_speed_braking   * m_agility
 	brake_multiplier            = _base_brake_multiplier            * m_agility
-	# Lateral grip is where agility's turn promise physically lands: it scales
-	# the perpendicular thrust authority in the movement core, so the emergent
-	# turn radius v²/(grip·a_perp) genuinely widens for a heavy/tall build and
-	# tightens for a lean/small one (the facing/brake terms above are the feel
-	# of quickness; this is the arc itself).
+	# Lateral grip is where agility's turn promise physically lands: it scales the
+	# perpendicular thrust authority in the movement core, so the emergent turn radius
+	# v²/(grip·a_perp) genuinely widens for a heavy/tall build and tightens for a
+	# lean/small one. The facing/brake terms above are the feel of quickness; this is
+	# the arc itself.
 	lateral_grip                = _base_lateral_grip                * m_agility
-	# The sprint CEILING is Speed-attributed (grounded to the 20–25 mph NHL burst
-	# band), replacing the old flat multiplier that handed every skater the same
-	# top gear. A real burner opens a gear a plodder simply doesn't have — that's
-	# where puck-carrier separation lives now that cruise speeds are near-uniform.
+	# The sprint CEILING is Speed-attributed and grounded to the 20–25 mph NHL burst
+	# band, so a real burner opens a gear a plodder does not have — that is where
+	# puck-carrier separation lives now that cruise speeds are near-uniform.
 	sprint_max_speed_multiplier = attrs.sprint_ceiling_mult()
-	# friction_drag is velocity-proportional drag — scaling it inversely
-	# with Agility gives agile players the "good edges" feel: less momentum
-	# leaks through the blades during a cut, so they carry more speed out
-	# of turns. Lateral / backward thrust multipliers are universal — every
-	# skater shares the same forward > lateral > backward shape; what makes
-	# Slick agile is how cleanly they transition between those directions.
+	# friction_drag is velocity-proportional drag — scaling it inversely with Agility
+	# gives agile players the "good edges" feel: less momentum leaks through the
+	# blades during a cut, so they carry more speed out of turns. The lateral /
+	# backward thrust multipliers stay universal; what makes an agile build agile is
+	# how cleanly it transitions between those directions.
 	friction_drag               = _base_friction_drag               * attrs.agility_glide_mult()
-	# Carry speed retention is a small, Speed-eased tax (attributes v4 folded the
-	# old Hands term into the base — no hands lever by constitution). The real
-	# cost of carrying at speed is the 1.6x sprint stamina drain (StaminaRules),
-	# not an intrinsic slowdown — so a fast carrier CAN separate, in a
-	# stamina-limited burst. This is a computed value, not a base×mult, so it's
-	# set directly.
+	# Carry speed retention is a small, Speed-eased tax. The real cost of carrying at
+	# speed is the 1.6x sprint stamina drain (StaminaRules), not an intrinsic
+	# slowdown, so a fast carrier CAN separate in a stamina-limited burst. A computed
+	# value, not a base × mult.
 	puck_carry_speed_multiplier = attrs.carry_speed_mult()
-	# Hands has no lever by constitution (attributes v4 — "your hands are you"):
-	# the blade caps derive from LEVER GEOMETRY below, after the reach/stick
-	# rescale computes this build's actual sweep radius. Backhand technique is
-	# the human; what leans the coefficient is the BLADE's shape — the curve
-	# gear slot (closed relaxes toward, never past, forehand parity; open
+	# Hands has no lever by constitution ("your hands are you"): the blade caps derive
+	# from LEVER GEOMETRY below, after the reach/stick rescale computes this build's
+	# actual sweep radius. What leans the backhand coefficient is the BLADE's shape —
+	# the curve gear slot (closed relaxes toward, never past, forehand parity; open
 	# deepens the penalty).
 	backhand_power_coefficient  = _base_backhand_power_coefficient * attrs.curve_backhand_mult()
 	# Curve elevation is the blade's ANGLE LADDER: the set launch angle per
@@ -1329,13 +1309,11 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# (PuckController contact scan + the lag-comp pickup resolver) scale the
 	# puck's league deflect thresholds by the RECEIVER's blade shape.
 	skater.reception_ceiling_mult = attrs.reception_ceiling_mult()
-	# Shot scales the CHARGED-shot ceiling (wrister max + both slapper pools) and
-	# the wrister charge EFFORT — but NOT the quick/uncharged snap. quick_pass
-	# doubles as pass speed, so it stays baseline for everyone (reliable passing);
-	# min_wrister is held at baseline too — it's the soft-touch floor (a slow
-	# sweep is a touch pass, deliberately BELOW the snap speed), and everyone's
-	# touch should be equally soft. So Shot = "what a charge buys you, and how
-	# fast you can charge it."
+	# Shot scales the CHARGED-shot ceiling (wrister max + both slapper pools) and the
+	# wrister charge EFFORT, but NOT the quick/uncharged snap. quick_pass doubles as
+	# pass speed so it stays baseline for everyone (reliable passing), and min_wrister
+	# is the soft-touch floor — a slow sweep is a touch pass, deliberately BELOW the
+	# snap speed, and everyone's touch should be equally soft.
 	var m_shot_ceil: float = attrs.shot_power_mult()
 	min_wrister_power = _base_min_wrister_power              # baseline floor (= snap)
 	max_wrister_power = _base_max_wrister_power * m_shot_ceil
@@ -1347,32 +1325,29 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# Slapper wind-up time keeps the gentler shot_charge curve. (Wrister power is
 	# pure mouse speed — no charge distance — so Shot only scales its ceiling.)
 	max_slapper_charge_time     = _base_max_slapper_charge_time     * attrs.shot_charge_mult()
-	# Physical battles are Checking-decided; height is only a MINOR mass edge, not a
-	# substitute. `weight` (mass, the weight_ratio — hard to MOVE) is a small
-	# height lever; Checking sets delivery (how hard you DELIVER a check, tall-
-	# favored) and brace (how hard to PUT DOWN, tier-dominant — a big weak-Checking
-	# build is genuinely hittable). Brace is inverse: lower = better resistance.
+	# Physical battles are Checking-decided; height is only a MINOR mass edge.
+	# `weight` (the weight_ratio — hard to MOVE) is a small height lever; Checking
+	# sets delivery (how hard you DELIVER a check, tall-favored) and brace (how hard
+	# to PUT DOWN, tier-dominant, so a big weak-Checking build is genuinely hittable).
+	# Brace is inverse: lower = better resistance.
 	skater.weight                      = _base_skater_weight                  * attrs.mass_mult()
 	skater.body_check_transfer         = _base_skater_body_check_transfer     * attrs.check_delivery_mult()
 	skater.body_check_brace_resistance = _base_skater_body_check_brace_resistance * attrs.brace_mult()
 	# Stamina is height-flavored metabolism (no attribute touches it): a small player
-	# has a SHALLOWER pool (drains faster) but recovers FAST, a big player has a
-	# DEEP pool (drains slow) but recovers SLOWLY. So small = short repeatable
-	# bursts, big = one long drive then a slow refill. Both scales ride height. The
-	# cached stamina config is dropped below so the next tick rebuilds from these rates.
+	# has a SHALLOWER pool that drains faster but recovers FAST, a big player a DEEP
+	# pool that drains slowly and recovers slowly. Small = short repeatable bursts,
+	# big = one long drive then a slow refill. The cached stamina config is dropped
+	# below so the next tick rebuilds from these rates.
 	sprint_drain_per_sec  = _base_sprint_drain_per_sec  * attrs.stamina_drain_mult()
 	stamina_regen_per_sec = _base_stamina_regen_per_sec * attrs.stamina_regen_mult()
-	# Arms scale with actual height (the dedicated height_mult,
-	# tighter than the gameplay size_mult) — keeps proportions realistic so
-	# a taller player has correspondingly longer arms (and ROM) rather than
-	# looking awkward with baseline-length limbs. The stick is equipment, not
-		# anatomy, so it rides a GENTLER curve (stick_len_mult, ~0.65x the height
-		# deviation): real played stick lengths track height only loosely, so a
-		# small player keeps a near-full-size stick. Total blade reach is still
-		# arm-driven ROM + stick (top_hand_ik FAR regime), so the eased stick is
-		# not a proportionally eased reach. update_stick_mesh() and
-	# the arm bone wrappers recompute visuals from these every frame, so no
-	# separate visual pass is needed.
+	# Arms scale with actual height (the dedicated height_mult, tighter than the
+	# gameplay size_mult) so proportions stay realistic. The stick is equipment, not
+	# anatomy, so it rides a GENTLER curve (stick_len_mult, ~0.65x the height
+	# deviation): real played stick lengths track height only loosely, so a small
+	# player keeps a near-full-size stick. Total blade reach is still arm-driven ROM +
+	# stick (top_hand_ik FAR regime), so the eased stick is not a proportionally eased
+	# reach. update_stick_mesh() and the arm bone wrappers recompute visuals from
+	# these every frame, so no separate visual pass is needed.
 	stick_length              = _base_stick_length              * attrs.stick_len_mult()
 	# The CURVE gear's visual half — regenerates the blade mesh to the picked
 	# pattern (gameplay half is PlayerAttributes' loft/backhand leans).
@@ -1387,14 +1362,13 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	skater.set_shoulder_anchor(
 			_base_skater_shoulder_offset * attrs.torso_bulk_mult(),
 			_base_skater_shoulder_height * m_height)
-	# Hand heights scale with the skeleton: the appearance pass scales the
-	# whole mesh rig about the ice plane (legs included — the upper body
-	# rides at height_mult × 1.0 m world), so the hand's LOCAL rest height
-	# scales by the same factor to keep the hand at the same point on every
-	# body (shoulder-to-hand drop = 0.50 m × height). Same for the CLOSE-
-	# regime ceiling. Near-zero gameplay cost: raising the hand shortens the
-	# stick's horizontal footprint but lengthens the derived backhand ROM
-	# below at almost exactly 1:1, so blade rim reach barely moves.
+	# Hand heights scale with the skeleton: the appearance pass scales the whole mesh
+	# rig about the ice plane (the upper body rides at height_mult × 1.0 m world), so
+	# the hand's LOCAL rest height scales by the same factor to keep the hand at the
+	# same point on every body (shoulder-to-hand drop = 0.50 m × height). Same for the
+	# CLOSE-regime ceiling. Near-zero gameplay cost: raising the hand shortens the
+	# stick's horizontal footprint but lengthens the derived backhand ROM below at
+	# almost exactly 1:1, so blade rim reach barely moves.
 	hand_rest_y = _base_hand_rest_y * m_height
 	hand_y_max  = _base_hand_y_max  * m_height
 	# The gait's crouch drop rides the same leg scale the appearance pass
@@ -1404,12 +1378,10 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# The native gait port caches its tunables like the configs below —
 	# attribute scaling just rewrote its sources (max_speed etc.), so reload.
 	_skating.native_reconfigure()
-	# Reach ROM is a derived property of arm length — forehand from the
-	# anatomical cross-body ratio, backhand from the chain geometry (see the
-	# _ROM_FOREHAND_OF_ARM doc block). Bigger arms naturally yield more reach
-	# without being an independent attribute axis: with the whole chain
-	# (arm and shoulder-to-hand drop) scaling by height, the derived reach
-	# scales by height too. Long arms matter most at full extension.
+	# Reach ROM is a derived property of arm length — forehand from the anatomical
+	# cross-body ratio, backhand from the chain geometry (see the _ROM_FOREHAND_OF_ARM
+	# doc block). With the whole chain scaling by height the derived reach scales by
+	# height too, and long arms matter most at full extension.
 	var arm_total: float = skater.upper_arm_length + skater.forearm_length
 	rom_forehand_reach_max    = arm_total * _ROM_FOREHAND_OF_ARM
 	var arm_eff: float = arm_total * rom_arm_extension
@@ -1508,20 +1480,17 @@ func _on_body_checked_player(victim: Skater, impact_force: float, hit_direction:
 		return
 	puck.on_body_check(skater, victim, impact_force, hit_direction)
 
-# This skater just absorbed a check (victim-only signal). Host sets the stagger
+# This skater just absorbed a check (victim-only signal). The host sets the stagger
 # window + stamina bite scaled by hit strength, then broadcasts stagger_timer /
-# stamina via fill_network_state; clients receive the resolved values and (for the
-# local player) re-derive the decay through reconcile replay. `max` so a weaker
-# follow-up never shortens an in-flight stagger.
+# stamina via fill_network_state. `max` so a weaker follow-up never shortens an
+# in-flight stagger.
 #
-# Client-side prediction (Lever C): the LOCAL victim also fires this (via the
-# Lever-D kept transfer branch), so predict its thrust stagger immediately off the
-# same transfer impulse instead of waiting a full round-trip for the host's
-# stagger_timer snapshot. Stamina stays host-only (predicting a pool drain that
-# might be refunded is more jarring than a brief thrust dip). Reconcile snaps
-# stagger_timer to the server value and re-derives decay, so a misprediction
-# self-heals in one reconcile — exactly how the host-set stagger is already
-# treated. Remote bodies on a client still defer to the snapshot (early return).
+# The LOCAL victim also fires this, so it predicts its own thrust stagger off the
+# same transfer impulse rather than waiting a round-trip for the host's snapshot.
+# Stamina stays host-only — predicting a pool drain that might be refunded is more
+# jarring than a brief thrust dip. Reconcile snaps stagger_timer to the server
+# value and re-derives the decay, so a misprediction self-heals in one reconcile.
+# Remote bodies on a client still defer to the snapshot (early return).
 func _on_body_check_received(impulse: Vector3) -> void:
 	var impulse_magnitude: float = impulse.length()
 	# Capture the recoil direction (body frame) so the torso reels the way the
@@ -2044,22 +2013,18 @@ var last_release_hand: String = ""
 # Debug/HUD only: the shot-speed toast surfaces it so the full-stroke-travel
 # tunable can be calibrated against real sweeps vs twitches.
 var last_release_stroke_travel: float = -1.0
-# Whether the most recent release was a deliberate SHOT ATTEMPT rather than a
-# pass or a forced knock-loose. Set just before puck_release_requested fires;
-# GameManager reads it at _start_pending_shot_from_carrier and hands it to
-# ShotOnGoalTracker, which cannot otherwise tell an errant pass from a missed
-# shot (a pass in Mitts IS a paced wrister, so both arrive on the same signal).
+# Whether the most recent release was a deliberate SHOT ATTEMPT rather than a pass
+# or a forced knock-loose. Set just before puck_release_requested fires; GameManager
+# reads it at _start_pending_shot_from_carrier and hands it to ShotOnGoalTracker,
+# which cannot otherwise tell an errant pass from a missed shot (a pass in Mitts IS
+# a paced wrister, so both arrive on the same signal).
 #
-# The read is the BUTTON, and deliberately only the button: quick-pass is a pass,
-# a charged wrister or a slapper is a shot. A bot's PASS_PRESSED state knows more
-# than that — it knows a charged wrister is a feed — but reading it would exempt
-# bot passes from the Corsi count while a human doing the identical thing paid
-# for it, and a comparative stat has to mean the same thing on every row. So the
-# charged pass counts as an attempt for everyone; closing that needs a human
-# pass-intent input, not a bot-only field (#579).
-#
-# Cost of trusting the control scheme, also symmetric: sniping with the pass
-# button loses an attempt when it misses the net entirely.
+# The read is the BUTTON, and deliberately only the button: quick-pass is a pass, a
+# charged wrister or a slapper is a shot. A bot's PASS_PRESSED state knows more —
+# it knows a charged wrister is a feed — but reading it would exempt bot passes
+# from the Corsi count while a human doing the identical thing paid for it, and a
+# comparative stat has to mean the same thing on every row (#579). The cost is
+# symmetric: sniping with the pass button loses an attempt when it misses the net.
 var last_release_was_shot: bool = false
 # Fired when the player releases slap while the puck is nearby but not yet
 # carried — the leniency one-timer. GameManager acquires + releases the puck;
@@ -2083,20 +2048,18 @@ func _do_release(direction: Vector3, power: float) -> void:
 # only place a net contact can cost you the puck; the blade's own collision
 # (SkaterIKCoordinator.resolve_blade_against_net) is pose-only.
 #
-# Two things this must do, and the goal bug came from doing only the first:
+# Two things this must do:
 #
-# 1. RESOLVE the pin, not merely test it. Puck._physics_process places the puck
-#    at get_carry_target_global() every tick, so a correction that is computed
-#    and discarded leaves the puck sitting wherever the blade put it — inside the
-#    mesh included.
+# 1. RESOLVE the pin, not merely test it. Puck._physics_process places the puck at
+#    get_carry_target_global() every tick, so a correction that is computed and
+#    discarded leaves the puck wherever the blade put it — inside the mesh included.
 # 2. Remember the RESOLVED pin as the next sweep's start. The twine is two-sided
 #    and NetGeometry.interior_or_mouth classifies from the segment start, so a
 #    `prev` that was allowed inside the cavity flips the next tick's faces from
-#    "push out" to "hold in". Feeding the raw pin back let one tick of
-#    penetration latch: a stick swiped laterally behind the goal line walked the
-#    puck through the side mesh and across the line. `prev` is therefore always a
-#    position the net has already vouched for — the same inductive contract the
-#    old clamp kept.
+#    "push out" to "hold in", and one tick of penetration latches: a stick swiped
+#    laterally behind the goal line walks the puck through the side mesh and across
+#    the line. `prev` is therefore always a position the net has already vouched
+#    for.
 #
 # There is no legality test here and none anywhere else. A puck ends up in the
 # cage only by going through the mouth, because the mouth is the only opening and
@@ -2145,13 +2108,11 @@ func _collide_pinned_puck_with_net() -> void:
 			_do_release(dir.normalized(), maxf(ring.length(), post_catch_release_speed))
 			return
 
-	# TWINE — solid, and it does NOT strip. Pressing the puck into the mesh holds
-	# it at the surface for as long as you like; the mesh is something you cannot
-	# reach through, not something that confiscates. (Losing the puck for brushing
-	# the back of the net was the single most irritating thing about the old
-	# clamp, and there is no physical reading of a net that justifies it. Reach is
-	# bounded before this instead — see SkaterIKCoordinator._board_reach_limit,
-	# which folds the net into the same cast that bounds reach at the boards.)
+	# TWINE — solid, and it does NOT strip. Pressing the puck into the mesh holds it
+	# at the surface for as long as you like; the mesh is something you cannot reach
+	# through, not something that confiscates. Reach is bounded before this instead —
+	# see SkaterIKCoordinator._board_reach_limit, which folds the net into the same
+	# cast that bounds reach at the boards.
 	var resolved: Vector3 = raw
 	if PuckGeometryCollision.resolve_net_panels(
 			prev, raw, skater.velocity, GameRules.PUCK_COLLISION_RADIUS, _net_pin_result):
@@ -2791,13 +2752,13 @@ func _update_wrister_charge(input: InputState) -> void:
 	# the body would re-introduce that parallax as swing the player never made.
 	#
 	# For a MOUSE the anchor additionally tracks the skater's translation since the
-	# pin (ChargeTracking.swing_anchor): the mouse's world point rides the skater-
-	# following camera, so about a world-pinned anchor mere skating read as swing —
-	# retreating dragged the cursor toward/past the origin, where the shrinking
-	# bearing radius amplified the drift into forehand→backhand misreads. The pad's
+	# pin (ChargeTracking.swing_anchor): the mouse's world point rides the
+	# skater-following camera, so about a world-pinned anchor mere skating reads as
+	# swing — retreating drags the cursor toward the origin, where the shrinking
+	# bearing radius amplifies the drift into forehand→backhand misreads. The pad's
 	# shot cursor is world-anchored on the pin itself and needs no compensation;
-	# commit_wrister_power (its wire-visible marker) picks the frame, so host
-	# replay of a remote shooter classifies identically.
+	# commit_wrister_power (its wire-visible marker) picks the frame, so host replay
+	# of a remote shooter classifies identically.
 	var swing_anchor: Vector3 = ChargeTracking.swing_anchor(
 			_aiming.wrister_origin_world, skater.global_position,
 			_aiming.wrister_origin_skater_pos, input.commit_wrister_power)
@@ -2813,20 +2774,16 @@ func _update_wrister_charge(input: InputState) -> void:
 			input.delta,
 			wrister_mouse_speed_smoothing,
 			wrister_on_axis_blade_speed * input.delta)
-	# Publish where this charge would go if released NOW, so the host-side goalie
-	# AI can pre-lean toward a charging shot's predicted impact. Mirrors the exact
-	# release math in _release_wrister (same inputs), and re-solves every tick — so
-	# a player who drags one way then flicks the other at release moves the real
-	# impact off the goalie's lean (a tricky release beats the read). Works for
-	# REMOTE shooters too: the host simulates their carry from replicated input
-	# (RemoteController._drive_from_input → this path), and both signals ride the
-	# wire — mouse_world_pos (the positional aim's cursor), plus mouse_screen_pos
-	# pre-aligned to world XZ by the gatherer's attack-direction negation (the
-	# cursor bearing the chirality sweep reads) — with the remote's Shot Power
+	# Publish where this charge would go if released NOW, so the host-side goalie AI
+	# can pre-lean toward a charging shot's predicted impact. Mirrors the release
+	# math in _release_wrister exactly — same inputs, same direction and backhand —
+	# and re-solves every tick, so a player who drags one way and flicks the other at
+	# release moves the real impact off the goalie's lean. Works for REMOTE shooters
+	# too: the host simulates their carry from replicated input, and both signals
+	# ride the wire — mouse_world_pos, plus mouse_screen_pos pre-aligned to world XZ
+	# by the gatherer's attack-direction negation — with the remote's Shot Power
 	# Sensitivity from the join payload feeding _wrister_sweep_speed. Host-only in
-	# that it runs on the authoritative sim, not that it's limited to host shooters.
-	# Predict the exact release this tick — direction and backhand both matched to
-	# the release path so the goalie pre-leans toward the shot that would fire.
+	# that it runs on the authoritative sim, not that it is limited to host shooters.
 	var charge_aim_dir: Vector3 = _wrister_aim_dir(input)
 	var is_backhand: bool = _wrister_is_backhand(input)
 	# Re-solves every tick while charging (+ per replayed input on reconcile), so
@@ -2848,19 +2805,16 @@ func _update_wrister_charge(input: InputState) -> void:
 func _update_slapper_charge(delta: float) -> void:
 	_aiming.tick_slapper(delta)
 	skater.shot_charge = minf(_aiming.slapper_charge_timer / max_slapper_charge_time, 1.0)
-	# Publish where this slapshot would go if released NOW, so the host-side goalie
-	# AI can pre-lean toward the aimed corner — the directional anticipation the
-	# wrister already gets (_update_wrister_charge). This was the "skate up and rip a
-	# slapper from the slot" cheese: the slapper path never published this, for ANY
-	# shooter (host player and bots included, not just remotes), so the goalie squared
-	# to the pinned puck but its glove rested centred and had to travel the full way
-	# to a corner on reaction. The distinguishing axis was slapper-vs-wrister, not
-	# local-vs-remote — the wrister already worked everywhere. Like the wrister, this
-	# runs on the host for remotes too (RemoteController._drive_from_input simulates
-	# their carry); the slapper direction is LOCKED at press (_sm.locked_slapper_dir,
-	# built in _enter_slapper_charge from the replicated mouse_world_pos), so no
-	# screen-space signal is even needed. Gated to the WITH-PUCK windup: a one-timer
-	# wind-up has no puck to lean toward, and the goalie reads only SLAPPER_CHARGE_WITH_PUCK.
+	# Publish where this slapshot would go if released NOW, so the host-side goalie AI
+	# can pre-lean toward the aimed corner — the directional anticipation the wrister
+	# gets in _update_wrister_charge. Without it the goalie squares to the pinned puck
+	# but rests its glove centred and has to travel the full way to a corner on
+	# reaction ("skate up and rip a slapper from the slot"). Runs on the host for
+	# remotes too (RemoteController._drive_from_input simulates their carry); the
+	# slapper direction is LOCKED at press (_sm.locked_slapper_dir, built in
+	# _enter_slapper_charge from the replicated mouse_world_pos), so no screen-space
+	# signal is needed. Gated to the WITH-PUCK windup: a one-timer wind-up has no puck
+	# to lean toward, and the goalie reads only SLAPPER_CHARGE_WITH_PUCK.
 	if has_puck:
 		var locked_dir_3d := Vector3(_sm.locked_slapper_dir.x, 0.0, _sm.locked_slapper_dir.y)
 		if locked_dir_3d.length_squared() > 0.0001:
@@ -2871,10 +2825,6 @@ func _update_slapper_charge(delta: float) -> void:
 			skater.predicted_shot_velocity = pred.direction * pred.power
 	if show_one_timer_indicator:
 		skater.update_slapshot_arrow_direction(skater.slapper_aim_dir)
-	# (The slapshot pin's own net exclusion lives in _collide_pinned_puck_with_net,
-	# which runs after _apply_state for every pin type — a carrier winding up
-	# while skating behind or across a net would otherwise drag the pinned puck
-	# straight through the mesh and over the goal line.)
 
 # Normalized wind-up progress (0..1) over the FULL charge time. With the charge
 # ring gone the wind-up pose is the charge gauge, so every pose consumer (blade
@@ -3322,12 +3272,11 @@ func _wrister_sweep_speed(input: InputState) -> float:
 # blade-path length of the live stroke (world meters, so the ceiling can't be
 # bought with DPI or Shot Power Sensitivity).
 func _wrister_stroke_travel() -> float:
-	# The blade is frozen during the wrister charge, so it sweeps no world-space
-	# path — the blade-travel gate has nothing to read and would pin every shot at
-	# the floor tier (the ~59% cap seen in playtest). Power is earned by the cursor
-	# sweep now, not blade travel, so the gate is permanently OFF (INF). The gate
-	# MECHANISM is kept (ShotMechanics.wrister_travel_cap_t + the config fields) as
-	# the hook for a future cursor-sweep-based anti-degeneracy pass.
+	# The blade is frozen during the wrister charge, so it sweeps no world-space path
+	# — the blade-travel gate has nothing to read and would pin every shot at the
+	# floor tier. Power is earned by the cursor sweep instead, so the gate is
+	# permanently OFF (INF); see the travel-gated-ceiling export block for the dormant
+	# mechanism it is kept as a hook for.
 	return INF
 
 # Cached like the wrister config: _update_slapper_charge now re-solves the release

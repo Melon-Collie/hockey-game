@@ -2,21 +2,14 @@ class_name BotSkillProfile
 extends RefCounted
 
 # Per-difficulty bundle of deterministic bot-skill knobs. Pure domain (no engine
-# APIs, no RNG in this file) so it stays unit-testable and replay-safe.
+# APIs, no RNG in this file) so it stays unit-testable and replay-safe. Every
+# knob rides one of the three difficulty axes — PRECISION / PACE / COGNITION;
+# the rules that keep them separate are in Scripts/domain/ai/CLAUDE.md.
 #
-# Three independent axes — see Scripts/domain/ai/CLAUDE.md for the rules that
-# keep them honest:
-#   PRECISION  how sharp the bot is        (reaction, cadence, execution error)
-#   PACE       how much time/space a human gets (standoff, anticipation, checking)
-#   COGNITION  which reads exist in its model at all (the bool gates)
-#
-# The only RNG is per-release execution sampling (hands, never decision dice),
-# seeded per bot. Aim slew is NOT a tier knob — a bot slews its aim cursor at its
+# Aim slew is deliberately NOT a tier knob: a bot slews its aim cursor at its
 # real Hands blade speed (AISkaterCaps.blade_speed), so execution difficulty
-# rides the bot's attribute build.
-#
-# The GOALIE is deliberately not represented here — it stays consistent across
-# difficulties.
+# rides the bot's attribute build instead. The goalie's tier knobs are their own
+# bundle (GoalieSkillProfile).
 #
 # Tick rate: seconds-denominated knobs are tick-independent. dispatch_period_ticks
 # is NOT — it is calibrated against the 120 Hz sim and must be rescaled linearly
@@ -51,23 +44,19 @@ var dispatch_period_ticks: int
 # falling smoothly and monotonically with it: 0.010 → 87%, 0.030 → 62%,
 # 0.040 → 53%, 0.050 → 47%, 0.075 → 34%.
 #
-# Two things make it the right dial rather than a way of making bots look drunk,
-# and both have edges worth knowing:
-#
 # The bot is SELF-HONEST — the same value feeds the score's required-window inset
 # (RoleContext.self_aim_spread_rad), so it aims a window it actually fits and its
 # misses land on the GOALIE. Posts+wides stay ~1% of shots up to ~0.05 and only
-# then climb (0.075 → 6%, 0.090 → 12%). Past that edge the tier stops looking
+# then climb (0.075 → 6%, 0.090 → 12%); past that edge the tier stops looking
 # beaten and starts looking incompetent. Feeding the score a SMALLER spread than
-# the hand executes was measured and is not the lever it sounds like: goals-per-
-# shot barely moves (62% → 64%) because the extra wobble only walks the aim onto
-# the pipe — 14% posts at believed 0.010 / executed 0.030.
+# the hand executes is not the lever it sounds like: goals-per-shot barely moves
+# (62% → 64%) because the extra wobble only walks the aim onto the pipe (14%
+# posts at believed 0.010 / executed 0.030).
 #
-# The selectivity feedback is REAL BUT WEAK. A wider believed spread demands a
-# wider window, so in principle the bot also shoots less; measured on the sim's
-# grid the shoot rate does not move at all from 0.010 to 0.050, because those
-# spots clear the fire bar either way. It only bites on shots already near the
-# bar. Selectivity is what settle_penalty_frac is for — this knob is conversion.
+# Its selectivity feedback is REAL BUT WEAK — measured on the sim's grid the
+# shoot rate does not move at all from 0.010 to 0.050, because those spots clear
+# the fire bar either way, so it bites only on shots already near the bar.
+# Selectivity is what settle_penalty_frac is for; this knob is conversion.
 var shot_aim_error_rad: float
 
 # Execution error on PASS releases and the dump, sampled the same way.
@@ -87,17 +76,9 @@ var shot_timing_error_s: float
 # worth giving the puck up for. A fraction in [0, 1): the option's value is
 # handicapped by this much against its giveaway bar, so at 0.5 the bar it must
 # clear is effectively doubled. Decays exp(-t / settle_penalty_tau_s) from the
-# moment possession is gained.
+# moment possession is gained. A selectivity dial, not a delay (see
+# Scripts/domain/ai/CLAUDE.md → hesitation is a raised bar).
 #
-# This is a SELECTIVITY dial, not a delay: an obvious play (a doorstep look, a
-# wide-open outlet) out-values any raised bar and fires on the first tick, while
-# a marginal one — the point shot, the feed threaded through traffic — is simply
-# not worth the puck yet and gets taken only once the doubt drains. The bot
-# visibly deliberates over close calls and is decisive on clear ones, which is
-# the shape of a human read; a flat "may not commit for N seconds" gate produced
-# the opposite (dithering on gimmes, then firing everything at once).
-#
-# The old flat gate is the frac → 1.0 limit of this, so nothing is lost by it.
 # Reception one-timers are not gated at all — the puck never settles on the tape.
 var settle_penalty_frac: float
 
@@ -121,9 +102,6 @@ var pursuit_standoff_m: float
 # scoring site solves its lane clearance and miss probability at this same
 # reduced pace, so a lower tier also stops ATTEMPTING the feeds its slower puck
 # can no longer thread, rather than throwing them and getting picked.
-#
-# It scaled the finished LAUNCH before, which is why it sat retired at 1.0 for
-# every tier — see the pass_launch_speed doc block for what that broke.
 var pass_speed_scale: float
 
 # PACE: how hard the on-puck pressurer hunts body checks. 1.0 = full hit-hunting;
@@ -138,9 +116,9 @@ var check_aggression: float
 # and FORECHECK's pass-lane set, the unassigned marker's recovery. Lower = the
 # bot scores the threats where they ARE, not where they're going.
 #
-# It no longer moves any defender's STAND. A cover point and a gap stand ride
-# their man (AIRoleHelpers.cover_threat), so leading the anchor as well would
-# double-count his motion; the on-puck space concession is pursuit_standoff_m.
+# It must never move a defender's STAND: a cover point and a gap stand already
+# ride their man (AIRoleHelpers.cover_threat), so leading the anchor as well
+# double-counts his motion. The on-puck space concession is pursuit_standoff_m.
 var defensive_anticipation_scale: float
 
 # COGNITION: exploit a MOVING goalie — aiming back across the grain of a slide
@@ -227,41 +205,22 @@ static func hard() -> BotSkillProfile:
 # Normal is the beatable tier, pushed firmly off the Hard ceiling: a ~220 ms
 # reaction (it recognises a pass a clear beat late and no longer matches
 # one-timers) at a third of Hard's re-decide rate. Shot error ±2.3° ≈ ±0.48 m at
-# the net from 12 m, so a well-picked corner becomes goals AND saves, and the
+# the net from 12 m, so a well-picked corner becomes goals AND saves and the
 # score's spread budget stops the from-range snipes entirely; pass error stays
-# near-Hard so the passing game keeps connecting. Measured on
-# the shot-outcome sim it buries 53% of what it takes against 87% for Hard, with
-# the misses landing on the keeper — posts ~1%, wides ~0%.
-#
-# Passes ARRIVE at 0.85 pace (17 m/s on the tape rather than 20), which is the
-# tier's readability dial: an extra ~0.1 s of flight on a routine feed is most of
-# a stride for the human reading it, and the bot prices its own lanes at that
-# same pace so it also stops trying the ones the slower puck can't thread.
+# near-Hard so the passing game keeps connecting. On the shot-outcome sim it
+# buries 53% of what it takes against 87% for Hard, with the misses landing on
+# the keeper (posts ~1%, wides ~0%).
 #
 # The 0.60 settle doubt is the tier's INDECISION dial: for the first beat of a
 # possession an option must be worth ~2.5× its giveaway bar to be worth the puck
-# — a slot look or a clean outlet still goes at once, while the point shot and
-# the feed threaded past two sticks wait for the doubt to drain (τ = 0.30 s, so
-# ~1.25× by 0.3 s and gone by ~0.9 s). This is most of what stops Normal reading
-# as "Hard with extra lag": it no longer finds EVERY pass on the first touch, and
-# pressuring a fresh carrier off a marginal outlet is a real play.
-#
-# Cognition gates are ALL open, same as Hard — the two tiers are deliberately the
-# same PLAYER separated only by continuous tuning, so the gap reads as "sharper"
-# rather than "knows moves the other doesn't". Easy is where the gates close.
+# (τ = 0.30 s, so ~1.25× by 0.3 s and gone by ~0.9 s). It is most of what stops
+# Normal reading as "Hard with extra lag" — it no longer finds EVERY pass on the
+# first touch, so pressuring a fresh carrier off a marginal outlet is a real play.
 #
 # pursuit_standoff_m must stay well under a stick length: at 1.5 m the pressurer
 # sits permanently outside blade reach and can never poke, which playtests read
 # as "bots never challenge". At 0.75 the carrier's own motion brings the puck
 # transiently into contest range while the human still gets his beat.
-#
-# Tuning order: shot error moves goals without making bots look drunk, so reach
-# for it first. If Normal plays like a pushover, raise the precision knobs back
-# toward Hard and let the pace knobs keep it beatable; if it still feels
-# superhuman, soften pace (standoff UP, anticipation / aggression DOWN) before
-# touching precision. If it makes plays a human wouldn't SEE (rather than plays
-# it executes too well), that is the settle doubt — raise the frac for a higher
-# bar, the τ for a longer one.
 static func normal() -> BotSkillProfile:
 	return BotSkillProfile.new(0.22, 6, 0.04, 0.015, 0.16, 0.60, 0.30,
 			0.75, 0.85, 0.65, 0.6,
@@ -272,21 +231,17 @@ static func normal() -> BotSkillProfile:
 # cadence, so it commits hard to a stale read and can be dragged out of position.
 # Still plays positionally and shoots / passes — a real but soft opponent, not a
 # stationary one. Shot error ±3.2° ≈ ±0.65 m from 12 m, so even good looks
-# routinely find the goalie or the glass and the spread budget keeps it from
-# pulling the trigger except in tight or on a gaping hole. The 0.85 settle doubt
-# (τ = 0.55 s) means nothing short of a gimme is worth the puck for the first
-# half-second and the bar is still noticeably up a second later — a newcomer
-# watches it receive, gather, and THEN decide, so closing on a fresh carrier
+# routinely find the goalie or the glass. The 0.85 settle doubt (τ = 0.55 s)
+# means nothing short of a gimme is worth the puck for the first half-second and
+# the bar is still noticeably up a second later, so closing on a fresh carrier
 # reliably forces the turnover.
 #
 # Pace is low-energy across the board — defenders sag ~3 m, barely lead the play,
 # never hunt body checks, and put the puck on a teammate's tape at 0.75 pace
-# (15 m/s), a floaty feed a newcomer has time to step in front of — which is most
-# of what makes Easy feel easy.
+# (15 m/s), a floaty feed a newcomer has time to step in front of.
 #
-# Cognition: all gates closed, beginner hockey IQ to match the beginner hands.
-# The cutback to the middle, the straight-line poke-check, and the cross-crease
-# 2-on-1 glory feed all genuinely work against it.
+# Cognition: all gates closed, so the cutback to the middle, the straight-line
+# poke-check, and the cross-crease 2-on-1 glory feed all genuinely work.
 static func easy() -> BotSkillProfile:
 	return BotSkillProfile.new(0.34, 9, 0.055, 0.0225, 0.24, 0.85, 0.55,
 			3.0, 0.75, 0.0, 0.2,

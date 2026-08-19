@@ -4,22 +4,20 @@ extends RefCounted
 # One skater's attribute-scaled physical capabilities, as the bot AI models them.
 # Built from the SAME scaled controller/skater values the physics body actually
 # uses (SkaterController.build_ai_caps), so the AI plans with what a body can
-# really do — top speed, acceleration, blade reach, shot speed, check delivery —
-# instead of league-default constants.
+# really do instead of league-default constants.
 #
 # Two uses, one class:
 #   - SELF: a bot's model of its OWN body, pushed into its state machine via
 #     apply_capabilities (AIController.apply_attributes → the RoleContext.self_*
-#     mirror). This is the long-standing self path.
+#     mirror).
 #   - PER-PEER: PlayerRegistry memoizes one of these per player in caps_by_peer
 #     (rebuilt only on spawn / picker — never per tick), so a bot can model every
 #     OTHER player — a teammate receiver's speed, an opponent's reach — with that
-#     player's ACTUAL build instead of the league average. Threaded to roles via
-#     RoleContext.caps_by_peer.
+#     player's ACTUAL build. Threaded to roles via RoleContext.caps_by_peer.
 #
 # Every field defaults to the league baseline, so an unset caps (unit tests, the
-# perfect-bot path before any attributes apply) reproduces the prior behaviour
-# exactly — the consumers seed their values from these defaults.
+# perfect-bot path before any attributes apply) plans like a league-average
+# body — the consumers seed their values from these defaults.
 
 # Top skating speed (height-derived, leaned by the skate profile). Drives
 # chase-intercept reach, momentum-aware ETA,
@@ -29,18 +27,16 @@ var max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 # Sprint ceiling multiplier over max_speed (Speed — the attribute's HEADLINE
 # lever: cruise is near-uniform by design, separation lives in this gear).
 # Race-class reads (loose-puck election, race-lost, retrieval margins) fold it
-# in via BotSprintRules.race_speed, stamina-gated per peer — without it every
-# AI race read was Speed-blind: the body sprints, the read priced cruise.
-# LEAGUE_* is the controller's league export default — also the capless
-# fallback, so an unset caps races like a league body (which sprints).
+# in via BotSprintRules.race_speed, stamina-gated per peer, so a race is priced
+# at the pace the body will actually skate it. LEAGUE_* is the controller's
+# league export default — also the capless fallback, so an unset caps races like
+# a league body (which sprints).
 const LEAGUE_SPRINT_SPEED_MULT: float = 1.14
 var sprint_speed_mult: float = LEAGUE_SPRINT_SPEED_MULT
 
 # All-direction acceleration / thrust (Acceleration). The reachable-set tests ask
 # "how far off its momentum line can this skater pull a stick?" — that ceiling is
-# this value. Default mirrors SkaterController.thrust's league default (it read
-# 12.0 for a while after the thrust retune to 10.5 — a silently stale baseline
-# for every caps-less ETA).
+# this value. Default mirrors SkaterController.thrust's league default.
 var max_accel: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 
 # Hand-to-toe blade span = stick + blade (Size, via stick length). The state
@@ -65,10 +61,10 @@ var stick_reach: float = GameRules.DEFAULT_STICK_LENGTH_M
 var max_blade_reach: float = GameRules.DEFAULT_STICK_LENGTH_M + GameRules.DEFAULT_BLADE_LENGTH_M + 0.46
 
 # Charged wrister release speed (height-derived, leaned by stick flex and blade
-# curve). Feeds shot-quality eval (score_shoot) — a
-# hard-shooting player's shot reaches the net faster, leaving defenders less reaction
-# time. Also the upper clamp on the player's distance-adaptive pass launch speed
-# (its hardest possible pass) — see AIActionScoring.pass_launch_speed.
+# curve). Feeds shot-quality eval (score_shoot) — a hard-shooting player's shot
+# reaches the net faster, leaving defenders less reaction time. Also the upper
+# clamp on the player's distance-adaptive pass launch speed (its hardest possible
+# pass) — see AIActionScoring.pass_launch_speed.
 var wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 
 # How fast the blade traverses its ROM to chase the aim cursor (Hands, =
@@ -102,12 +98,10 @@ var lateral_grip: float = 1.0
 # (conservative — see the GitHub issue on pricing reception per receiver).
 var reception_ceiling_mult: float = 1.0
 
-# Backhand power coefficient (= SkaterController.backhand_power_coefficient,
-# a flat mechanic under attributes v4 — backhand technique is the human,
-# leaned only by the blade-curve gear). The release-offset sampler
-# prices a backhand-side release at this fraction of the wrister pace, so the
-# in-tight backhand finish is exactly as attractive as this build's hands make
-# it. Default mirrors the controller's 0.75.
+# Backhand power coefficient (= SkaterController.backhand_power_coefficient — a
+# flat mechanic: backhand technique is the human, leaned only by the blade-curve
+# gear). The release-offset sampler prices a backhand-side release at this
+# fraction of the wrister pace. Default mirrors the controller's 0.75.
 var backhand_power_coefficient: float = 0.75
 
 # Body-check delivery: the attacker impulse coefficient. The victim impulse is

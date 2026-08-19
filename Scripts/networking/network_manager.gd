@@ -12,10 +12,6 @@ const BOT_ID_MAX: int = BOT_ID_BASE + 9  # 10 bots max (5 per team, 5v5 capacity
 
 # Re-exported from ClockSync so lag-comp resolvers can reference it without
 # loading the script directly. Single source of truth lives in clock_sync.gd.
-# Used by pickup/poke claim rewind to find the host's snapshot whose blade
-# state matches what the client predicted at view-time — the input that
-# produced the client's blade at host_timestamp T was stamped T + INPUT_LEAD_SEC
-# and the host's gated processing produced its snapshot at host wall T + INPUT_LEAD_SEC.
 const _ClockSyncScript: GDScript = preload("res://Scripts/networking/clock_sync.gd")
 const INPUT_LEAD_SEC: float = _ClockSyncScript.INPUT_LEAD_SEC
 
@@ -325,54 +321,21 @@ var _input_batch_buf := PackedByteArray()
 var _clock_sync: RefCounted = null  # ClockSync instance, client only
 
 # ── Tick-domain simulation clock ─────────────────────────────────────────────
-# Godot drives physics from an accumulator inside the main loop: at 60 fps with
-# a 120 Hz tick, TWO _physics_process steps run back to back and THEN the frame
-# renders. Both read the same Time.get_ticks_msec() — and at its 1 ms resolution,
-# the same value. So a wall-derived clock hands two different ticks the same
-# instant.
-#
-# That is fatal for anything produced once per tick and compared with strict
-# inequality, which is exactly what input stamps are: RemoteController's dedupe
-# drops any input whose stamp is <= the newest queued, so a colliding pair
-# silently loses one. A client on a display slower than the physics rate then
-# delivers fewer inputs than the host consumes — the queue starves, the drain
-# fires, and the lead servo (whose error term is pop-overdue, measured on the
-# same wall clock) reads the frame-bunching offset as genuine lateness and
-# integrates to its ceiling. Measured in playtest: input_lead_extra pinned at the
-# 50 ms cap for a full session on a 30 ms link, input_starvation triggering every
-# auto-marker, and drains up to 52/s against a queue averaging 11 deep.
-#
-# So the input path gets a clock in the domain it actually lives in: one that
-# advances by exactly TICK_DURATION per physics step. Consecutive stamps are then
-# one tick apart BY CONSTRUCTION at any framerate, and pop-overdue measures
-# genuine lateness with no render-rate term. This is what Source gets from
-# putting a tick number in the usercmd and Overwatch from numbering command
-# frames — neither wall-stamps a per-tick event.
-#
-# It still has to name instants on the HOST's timeline, so it is SLEWED toward
-# estimated_host_time() rather than free-running: a bounded per-tick correction
-# that tracks real clock drift while rejecting the frame jitter that motivated
-# this. The step is two orders of magnitude below TICK_DURATION, so sim_time()
-# stays strictly increasing per tick and stamps can never collide.
-#
-# Deliberately NOT used for RENDER instants. A frame draws an arbitrary wall
-# moment between ticks, so interpolation and prediction targets keep reading
-# estimated_host_time(); quantizing them to the tick grid would stutter at high
-# refresh rates (see "render rate is a clock" in the networking CLAUDE.md). The
-# two clocks stay within the slew bound of each other, so a render-time claim
-# stamp read against the tick-time input timeline remains valid.
+# The clock that owns everything produced or consumed once per tick — input
+# stamps, the host's consumption gate, pop-overdue. It advances exactly
+# TICK_DURATION per physics step and is slewed toward estimated_host_time(),
+# which stays the clock for RENDER instants. See CLAUDE.md in this directory,
+# "Two clocks, and the input path uses the tick one", for why a wall-derived
+# clock cannot stamp a per-tick event.
 const _SIM_SLEW_S: float = 0.0001   # 0.1 ms/tick = 12 ms/s of drift tracking
 const _SIM_RESYNC_S: float = 0.1    # beyond this, snap: NTP warmup, not drift
 var _sim_ticks: int = 0
 var _sim_offset: float = 0.0
 var _sim_started: bool = false
-# Carrier-event redundancy (see SnapshotEventLog): the host records each carrier
-# event and appends the recent set to every unreliable world-state packet in
-# `_broadcast_state`; clients apply the block in `receive_world_state` and gate
-# the reliable backstop RPCs through the same seq watermark. Connection-scoped:
-# replaced only in reset() — deliberately NOT in prepare_for_new_game(), because
-# a rematch keeps client connections (and their watermarks) alive, and a seq
-# restart would make them silently drop every event of the next match.
+# Carrier-event redundancy (see SnapshotEventLog). Connection-scoped: replaced
+# only in reset(), never in prepare_for_new_game() — a rematch keeps client
+# connections and their seq watermarks alive, and restarting the seq would make
+# them silently drop every event of the next match.
 var _event_log: SnapshotEventLog = SnapshotEventLog.new()
 # Stored once so the 120 Hz client receive path doesn't allocate a bound
 # Callable per packet.
@@ -391,11 +354,8 @@ var packet_loss_pct: float = 0.0
 # Host-side: per-peer downstream (host->client) loss %. The client measures its OWN
 # world-state loss from gaps in the seq numbers it received (the accurate signal —
 # _ws_drop_window below) and reports it in each input-batch header; the host stores
-# it here verbatim. This replaced an echo-gap estimator that re-derived loss from
-# the client's last-received seq: because the client echoed only its LATEST seq
-# once per batch while world state broadcasts at STATE_RATE, any WS packet the
-# client received-but-didn't-echo (Steam delivers clumpy) was miscounted as
-# dropped, inflating a clean link to ~50%. Read by get_peer_loss_rate.
+# it here verbatim rather than re-deriving it from an echoed seq, which undersamples
+# a stream that broadcasts far faster than the echo. Read by get_peer_loss_rate.
 var _peer_loss_rates: Dictionary = {}
 # peer_id -> newest input stamp that peer's RemoteController already holds, in
 # raw wire units (u32 @ 0.1 ms). The input decoder's skip gate — see
@@ -450,15 +410,11 @@ var input_delta: float = 1.0 / Constants.INPUT_RATE
 var state_delta: float = 1.0 / Constants.STATE_RATE
 # Number of physics ticks between broadcasts. PHYSICS_TICK / STATE_RATE
 # (120/60 = 2 — every other tick). Recomputed by `set_broadcast_rate`, a runtime
-# knob with no callers today (the per-phase dead-puck downshift was removed:
-# stoppage phases are seconds long so it saved nothing meaningful, starved
-# client interpolation buffers right before the faceoff drop, and polluted
-# the client jitter window, which assumes STATE_RATE packet spacing); kept
-# for future congestion response. Stall resilience:
-# on a host main-thread freeze, Godot's physics catch-up fires multiple
-# back-to-back physics ticks. The counter increments in NetworkManager._physics_process
-# for each, and GameManager._physics_process invokes try_broadcast() per tick,
-# so back-to-back broadcasts fire at the cadence threshold — clients get the
+# knob with no callers today, kept for future congestion response; the cadence
+# must not be downshifted per phase, since the client jitter window assumes
+# STATE_RATE packet spacing. Stall resilience: on a host main-thread freeze
+# Godot's physics catch-up fires several back-to-back ticks, the counter
+# increments for each, and try_broadcast() fires per tick — so clients get the
 # multiple distinct host_timestamps they need to interpolate through the gap
 # instead of one snap.
 var _state_tick_divisor: int = Constants.PHYSICS_TICK / Constants.STATE_RATE
@@ -801,11 +757,10 @@ func _on_connected_to_server() -> void:
 	_clock_sync.init_session(_session_start_ms)
 	var local_attrs: PlayerAttributes = PlayerPrefs.get_player_attributes()
 	# Stamp the local peer's OWN entry, not [1] (which is the host from a
-	# client's view). on_slot_assigned spawns the local skater via
-	# get_peer_attributes(local_peer_id()); keying at 1 here made that lookup
-	# miss and fall back to all-medium, so the client's own matchup card and
-	# local-prediction build showed defaults while every host-sourced view was
-	# correct. Valid here — the unique id is assigned before connected_to_server.
+	# client's view): on_slot_assigned spawns the local skater via
+	# get_peer_attributes(local_peer_id()), so keying at 1 silently falls back to
+	# all-medium. Valid here — the unique id is assigned before
+	# connected_to_server.
 	_peer_attributes[local_peer_id()] = local_attrs
 	_peer_tape_codes[local_peer_id()] = PlayerPrefs.stick_tape_code
 	_peer_skin_tones[local_peer_id()] = SkinToneRegistry.clamp_index(PlayerPrefs.skin_tone)
@@ -1062,9 +1017,6 @@ func _process(delta: float) -> void:
 		if is_host and not is_offline_mode:
 			_send_host_pings()      # host times each peer's RTT itself
 			_broadcast_all_pings()  # distribute the measured pings (display)
-		# Clients no longer self-report their RTT (report_ping removed) — the host
-		# measures it via host_ping/host_pong, so the ping backing lag-comp claim
-		# validation can't be forged by a modified client.
 
 	if not is_host and _input_batch_provider.is_valid():
 		_input_timer += capped_delta
@@ -1111,9 +1063,8 @@ func _process(delta: float) -> void:
 			_ws_recv_window = 0
 			_ws_loss_window_timer = 0.0
 
-# Runtime broadcast-rate knob. No callers today — see the `_state_tick_divisor`
-# doc-comment for why the per-phase dead-puck downshift was removed — retained
-# as the hook for future congestion response.
+# Runtime broadcast-rate knob. No callers today — retained as the hook for
+# future congestion response (see `_state_tick_divisor`).
 func set_broadcast_rate(hz: float) -> void:
 	state_delta = 1.0 / maxf(hz, 1.0)
 	# `_physics_process` fires the broadcast every Nth physics tick. Round to
@@ -1124,21 +1075,6 @@ func set_broadcast_rate(hz: float) -> void:
 	# Reset the counter so the new cadence starts cleanly from the next tick.
 	_state_tick_counter = 0
 
-# Called by GameManager._capture_and_broadcast_post_physics (PostPhysicsNetHook,
-# physics priority 2) right after StateBufferManager.capture() — AFTER all actor
-# integration this tick, so the broadcast ships this tick's fully-integrated
-# state the same tick it was simulated. The cadence counter is incremented in
-# `_physics_process` (priority 0, so always before the hook) regardless of
-# whether this runs, so on a host stall Godot's physics catch-up still produces
-# back-to-back broadcasts (one per eligible call) with distinct host_timestamps
-# — clients get the multiple snapshots they need to interpolate through the
-# catch-up window.
-#
-# Routing through the hook (rather than firing the broadcast from
-# NetworkManager._physics_process directly) matters because autoload tree order
-# runs NetworkManager before the scene's actors: a broadcast from here at
-# priority 0 would read pre-integration (last tick's) state, re-adding the
-# one-tick departure-latency floor the hook removes.
 # True on the tick whose end-of-tick try_broadcast() will actually fire (the
 # cadence counter is due). Lets tick-path callers piggyback once-per-broadcast
 # work — GameManager's stats dirty-flag flush — on the same cadence. The
@@ -1148,6 +1084,10 @@ func is_broadcast_due() -> bool:
 	return is_host and _state_tick_counter >= _state_tick_divisor
 
 
+# Invoked end-of-tick by GameManager._capture_and_broadcast_post_physics, right
+# after StateBufferManager.capture(). The cadence counter advances in
+# `_physics_process` whether or not this runs, so a host stall's physics catch-up
+# still emits one broadcast per eligible tick with distinct host_timestamps.
 func try_broadcast() -> void:
 	if not is_host:
 		return
@@ -1245,8 +1185,6 @@ func request_join(is_left_handed: bool, player_name: String, jersey_number: int 
 	_peer_gear_styles[sender_id] = GearStyleConfig.from_code(gear_style_code).to_code()
 	_peer_positions[sender_id] = clampi(preferred_position, 0,
 			PlayerRules.POSITION_NAMES.size() - 1)
-	# (ENet per-peer disconnect-timeout tuning lived here; SteamMultiplayerPeer
-	# manages its own keepalive over Steam's relay, so there's nothing to set.)
 	# Seed the host-measured RTT immediately instead of waiting up to a full
 	# _PING_INTERVAL (2 s): until the first sample lands, claim-stamp
 	# plausibility runs on the conservative 150 ms no-sample fallback — a
@@ -1312,9 +1250,8 @@ func get_peer_steam_id(peer_id: int) -> int:
 	# for REMOTE joiners — the local player never joins itself, so the map has no
 	# entry for it. Resolve that one from SteamManager instead of reporting 0,
 	# which otherwise makes the local player indistinguishable from a bot to
-	# anything keying on Steam identity (the career shot map read empty for
-	# exactly this reason: every shot the local player took was logged under 0).
-	# Offline is the worst case — the local player is the ONLY human there.
+	# anything keying on Steam identity. Offline is the worst case — the local
+	# player is the ONLY human there.
 	if peer_id == local_peer_id():
 		return SteamManager.steam_id
 	return _peer_steam_ids.get(peer_id, 0)
@@ -1581,9 +1518,9 @@ func receive_pong(client_send_time: float, host_time: float) -> void:
 # ── Host-measured peer RTT ────────────────────────────────────────────────────
 # The host times a round trip to each peer ITSELF so lag-comp claim validation
 # (is_claim_stamp_plausible, via get_peer_ping_ms) reads a ping the host measured
-# rather than one the client self-reported. The old report_ping let a modified
-# client forge a large RTT — or never report at all — to widen its claim-stamp
-# "timestamp-shopping" window. Unreliable + routed through the net sim like the
+# rather than one the client self-reported: a self-reported RTT is a lever for
+# widening a modified client's claim-stamp "timestamp-shopping" window, so no
+# peer may ever report its own. Unreliable + routed through the net sim like the
 # clock-sync pings: a dropped probe just skips one sample (the EMA tolerates gaps)
 # and the dev latency sim is folded into the measurement.
 func _send_host_pings() -> void:
@@ -1620,12 +1557,6 @@ func _record_host_measured_rtt(peer_id: int, sample_ms: float) -> void:
 	_peer_rtt_ema_ms[peer_id] = ema
 	_peer_ping_ms[peer_id] = int(roundf(ema))
 
-# Client-authoritative blade geometry rides the claim: the client sends the blade
-# it actually reached with (blade_curr + one-tick-prior blade_prev for the swept
-# test, plus the top-hand grip for the pickup reception face-normal), so the host
-# validates against what the client saw instead of reconstructing the blade from
-# its lossy self-view snapshot. World-space; the host reach-clamps each point to
-# the claimant's server-authoritative body (LagCompRewind.clamp_client_blade).
 # The claimant's CURRENT stamp lead (constant + adaptive extra, ms) — rides
 # every claim so the host's self-view rewind matches the lead the client
 # actually stamped its inputs with (bounded in LagCompRewind.self_view_time).
@@ -1646,9 +1577,8 @@ var _last_sampled_ack: float = 0.0
 # at least trigger − target ≈ 25 ms in a single snapshot, and the last drained
 # stamp reads hugely overdue. Feeding that to the servo is a double response:
 # the drain ALREADY cleared the backlog, so the extra lead buys nothing and is
-# charged straight to this player's input latency. Two playtest client rows
-# showed the servo pinned at its 50 ms ceiling all game on 20 ms links with the
-# host draining ~4/s — the signature of exactly this loop.
+# charged straight to this player's input latency — the servo winds to its
+# ceiling and stays there.
 #
 # Detected client-side with no wire change: the host pops one input per tick and
 # broadcasts every _state_tick_divisor ticks, so a healthy ack advances by
@@ -2638,24 +2568,12 @@ func _compute_target_interpolation_delay() -> float:
 	var rtt_half: float = rtt / 2.0
 	var broadcast_interval: float = 1.0 / Constants.STATE_RATE
 	# Minimum is RTT/2 + one full broadcast interval so render_time always has
-	# a buffered state ahead of it between packet arrivals. Jitter margin on top.
-	#
-	# The margin is the DE-CLUMPED packet-delay spread (Jacobson mean + 4x mean-
-	# deviation of each packet's delay vs the host clock — get_packet_delay_spread_ms).
-	# Because every packet is timed against its own host-capture stamp, relay
-	# clumping (several snapshots landing together, then a gap) barely moves it:
-	# it measures genuine PATH jitter, not arrival bunching. So it needs no clump-
-	# compensation multiplier and is used at 1.0x — lower baseline render latency
-	# on every remote entity than the old arrival-gap "jitter_p95 x 2.0" cushion,
-	# which over-cushioned a clean link to absorb clumps it couldn't tell apart
-	# from jitter. Transient clumps are absorbed by the asymmetric +10ms/packet
-	# up-clamp in adapt_interpolation_delay instead of by a fat static baseline.
-	#
-	# Canary if this under-cushions a real link: "Guessing ahead" (extrapolation
-	# /s, F3) climbing past the <1/s target — the buffer is underrunning between
-	# clumps faster than the up-clamp can chase, visible as rhythmic snap-back on
-	# remote skaters during fast play. If that shows up, swap the margin back to
-	# the conservative `get_jitter_p95() * 2.0`. See ARCHITECTURE.md -> Tier 2A.
+	# a buffered state ahead of it between packet arrivals. The jitter margin on
+	# top is the DE-CLUMPED packet-delay spread, used at 1.0x because it already
+	# measures path jitter rather than arrival bunching; transient clumps are
+	# absorbed by adapt_interpolation_delay's asymmetric up-clamp instead of by a
+	# fat static baseline. Rationale, the F3 canary, and the one-line revert are
+	# in CLAUDE.md in this directory.
 	var jitter_margin: float = get_packet_delay_spread_ms() / 1000.0
 	var target: float = rtt_half + broadcast_interval + jitter_margin
 	return clampf(target, maxf(rtt_half + broadcast_interval, 0.016), 0.200)
@@ -2669,11 +2587,8 @@ func adapt_interpolation_delay(current: float) -> float:
 	#     Without this aggressive up-rate, extrapolation fires repeatedly on all
 	#     remote skaters during the catch-up window (visible micro-stutter).
 	#   -1.5ms/packet down: 90ms/sec, recovers a 60ms buffer over-inflation in
-	#     ~660ms — inside the industry norm band (~80-150 ms/sec). Earlier
-	#     tunings were sized for other broadcast rates and don't carry forward:
-	#     the original -1ms/packet was 40ms/sec at 40Hz (slow — buffer stayed
-	#     inflated ~10s); the interim -3ms/packet was 360ms/sec at 120Hz (too
-	#     aggressive, risks undershoot if jitter returns inside the window).
+	#     ~660ms — inside the industry norm band (~80-150 ms/sec). Faster risks
+	#     undershoot if the jitter returns inside the recovery window.
 	# NOTE: these are PER-PACKET steps, so halving STATE_RATE halves both rates.
 	# If the 60Hz up-rate proves too slow on a jittery link the canary is
 	# extrapolation_pct climbing after RTT spikes — raise the up-clamp, don't
@@ -2725,13 +2640,11 @@ func set_input_batch_provider(provider: Callable) -> void:
 # All notify_* cue RPCs below are RELIABLE on purpose: each is a single
 # transient event with no retransmit redundancy of its own (unlike world state,
 # which repeats at the broadcast rate, or carrier events, which ride the
-# snapshot event block as a second channel). As plain "unreliable" RPCs, any
-# packet drop deleted the cue outright — the host heard the contact, a client
-# got permanent silence, which playtests reported as missing audio. They're
-# rare (edge-latched per contact) and tiny, so reliable delivery costs nothing
-# measurable; a cue arriving one retransmit late still beats one that never
-# arrives. (Transfer-mode change only — RPC names/signatures unchanged, so no
-# PROTOCOL_VERSION bump.)
+# snapshot event block as a second channel), so an unreliable drop deletes the
+# cue outright and that client hears permanent silence. They're rare
+# (edge-latched per contact) and tiny, so reliable delivery costs nothing
+# measurable, and a cue arriving one retransmit late still beats one that never
+# arrives.
 func send_board_hit_to_all(position: Vector3) -> void:
 	for peer_id: int in connected_peer_ids():
 		notify_board_hit.rpc_id(peer_id, position)
@@ -2793,9 +2706,9 @@ func send_body_check_to_all(hitter_peer_id: int, victim_peer_id: int,
 	for peer_id: int in connected_peer_ids():
 		notify_body_check.rpc_id(peer_id, hitter_peer_id, victim_peer_id, force, hit_dir)
 
-# hitter_peer_id on the wire since PROTOCOL_VERSION 19: the check-delivery
-# body pose (the hitter's shoulder drive) fires from this same broadcast so it
-# lands the identical frame as the burst/thud on every machine.
+# hitter_peer_id is on the wire because the check-delivery body pose (the
+# hitter's shoulder drive) fires from this same broadcast, so it lands the
+# identical frame as the burst/thud on every machine.
 @rpc("authority", "reliable")
 func notify_body_check(hitter_peer_id: int, victim_peer_id: int,
 		force: float, hit_dir: Vector3) -> void:

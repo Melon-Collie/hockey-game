@@ -12,15 +12,12 @@ extends Node3D
 		_position_hand_markers()
 
 # ── Blade Tuning ──────────────────────────────────────────────────────────────
-# Cosmetic blade tilt, applied to the blade *mesh* only — never the Blade marker
+# Resting blade tilt, applied to the blade *mesh* only — never the Blade marker
 # the puck-contact math reads (set_blade_position / get_blade_contact_global).
-# Toe-lift (lie) is handedness-neutral; the face-open loft flips sign with
-# handedness, since the forehand face is on opposite sides for L/R shots. Applied
-# from _position_hand_markers() so it tracks live handedness flips. Both are
-# tunable — flip a sign here if a side looks wrong in the editor.
-# Resting blade tilt. Toe-lift (about X, lie angle, handedness-neutral) is kept
-# small; the face-open loft (axial twist about the hosel line, handedness-signed
-# — the forehand face is on opposite sides for L/R) is a tiny resting cup.
+# Toe-lift (about X, the lie angle) is handedness-neutral and kept small; the
+# face-open loft (axial twist about the hosel line) is a tiny resting cup and
+# flips sign with handedness, since the forehand face is on opposite sides for
+# L/R shots.
 const _BLADE_TOE_LIFT_DEG: float = 4.0
 const _BLADE_FACE_OPEN_DEG: float = 4.0
 # Rigid shaft-follow pitch (see _apply_blade_tilt): the blade mesh pitches by
@@ -242,15 +239,11 @@ var _face_gear_mesh: MeshInstance3D = null
 # (cross-body reach, arm × 0.5625) and the backhand cap is chain-derived
 # (sqrt(arm_eff² − shoulder-to-hand drop²)), so no reachable hand target ever
 # exceeds the arm's length — the forearm never draws stretched.
-# Baseline lengths give one-arm = 0.70m; with the shoulder caps at ±0.22
-# that's a wingspan ≈ 1.84m on a 1.78m body (~103% of height, inside the
-# 100–104% real athletes run; the segments
-# split evenly because the distal bone ends at the gloved-fist center, and
-# elbow→fist really is about humerus-length).
 # 0.33 per segment ≈ real shoulder→elbow and elbow→fist-center at the mesh's
-# native 5'10" (the lower bone ends at the FIST, so it carries the hand's
-# length too). The old 0.35s read long on screen — with hands close on the
-# stick, the surplus folded into wide-flared elbows.
+# native 5'10" — the distal bone ends at the FIST, so it carries the hand's
+# length too, which is also why the two split evenly. One arm = 0.70 m; with the
+# shoulder caps at ±0.22 that is a wingspan ≈ 1.84 m on a 1.78 m body, ~103% of
+# height and inside the 100–104% real athletes run.
 @export var upper_arm_length: float = 0.33
 @export var forearm_length: float = 0.33
 # Pole direction for the elbow (upper-body local). Mostly down with a real
@@ -260,17 +253,16 @@ var _face_gear_mesh: MeshInstance3D = null
 @export var arm_pole_local: Vector3 = Vector3(0.55, -1.0, 0.1)
 # Base size of the arm bone meshes. scale.z is set per tick to the bone's
 # actual length; X/Y control arm thickness. Sized as a padded JERSEY SLEEVE
-# (elbow pad + liner under cloth), not a bare arm — bare-arm 0.055 radius
-# read skinny next to the 0.09 socks.
+# (elbow pad + liner under cloth), not a bare arm: a bare-arm 0.055 radius reads
+# skinny next to the 0.09 socks.
 @export var arm_mesh_thickness: float = 0.13
 # Radius of the elbow joint spheres positioned per-tick at the IK elbow.
 # Well proud of arm_mesh_thickness * 0.5 so the joint reads as the elbow
 # PAD bulging under the sleeve, the arm's answer to the deltoid caps.
 @export var elbow_sphere_radius: float = 0.082
-# 0.064 puts the fist mesh (±1.05 unit-width) at ~13.4 cm across the
-# knuckles — real glove proportion; the old 0.07 read a touch oversized.
-# Radius of the hand spheres positioned per-tick at the IK hand — gloved
-# fists, so slightly thicker than the sleeve they hang from.
+# Radius of the gloved fist positioned per-tick at the IK hand — slightly
+# thicker than the sleeve it hangs from. 0.064 puts the fist mesh (±1.05
+# unit-width) at ~13.4 cm across the knuckles, a real glove proportion.
 @export var hand_sphere_radius: float = 0.064
 # Gap (along the bone direction, toward the elbow) between the hand-sphere
 # center and the forward face of the glove cuff cylinder. Without this the
@@ -303,8 +295,7 @@ var _face_gear_mesh: MeshInstance3D = null
 # ── Body Check Tuning ─────────────────────────────────────────────────────────
 @export var weight: float = 1.0
 # Fraction of closing momentum the inelastic resolver transfers on a committed
-# check (SkaterCollisionRules — the only body-check delivery term now; the old
-# restitution/drive-through exports were pre-inelastic dead code, removed). At
+# check (SkaterCollisionRules — the only body-check delivery term). At
 # equal mass the victim's knockback is closing × transfer × 0.5, so this is the
 # master "how hard does a check hit" dial: raising it strips/staggers/knocks-down
 # at lower closing speeds AND deepens the attacker's own inelastic decel (the
@@ -366,7 +357,6 @@ var is_local_skater: bool = false
 @onready var blade: Marker3D = $MeshRoot/UpperBody/Blade
 @onready var shoulder: Marker3D = $MeshRoot/UpperBody/Shoulder
 @onready var stick_mesh: MeshInstance3D = $MeshRoot/UpperBody/StickMesh
-# Made public so SkaterUniformCoordinator can colour the head mesh.
 
 # Cached blade MeshInstance3D (child of the Blade marker) and the curve sign
 # its procedural mesh was last built with (0 = not built yet). The tilt pass
@@ -388,25 +378,23 @@ var bottom_hand: Marker3D = null
 # ── Arm rig ───────────────────────────────────────────────────────────────────
 # Both arms — bones, elbow balls, gloved fists and wrist cuffs — are one skinned
 # mesh on one Skeleton3D, ten bones, surface index == bone index ==
-# SkaterMeshBuilder.UpperBone. See that file for why rigid weights make this an
-# exact replacement for the ten nodes it replaces rather than a lookalike.
+# SkaterMeshBuilder.UpperBone (see there for the four properties that make a
+# bone pose mean a plain local transform).
 #
-# Everything outside this file addresses a part by its ArmPart: the uniform
+# Everything outside this file addresses a part by its UpperBone: the uniform
 # coordinator paints through upper_surface_material(), the appearance pass sizes
-# through set_arm_part_thickness(), and the per-frame IK poses through the
+# through the set_arm_*_radius seams, and the per-frame IK poses through the
 # _pose_arm_* helpers below.
 var _arm_skeleton: Skeleton3D = null
 var _arm_mesh: MeshInstance3D = null
 # Per-part cross-section scale, owned by the sizing seam (build proportions) and
-# composed into every pose write. It is a stored vector rather than something
-# read back off the current pose because a pose write replaces the whole
-# transform: with nodes the thickness could live in scale X/Y and survive a
-# rotation write, and a bone pose has no such half.
+# composed into every pose write. Stored rather than read back off the live pose
+# because a pose write replaces the whole transform — no component of it survives
+# on its own, so every writer must supply all three parts.
 var _arm_thickness: PackedVector3Array = PackedVector3Array()
 # Torso / helmet / shoulder caps: pose = basis · scale at position, each part
 # owned separately (authored rest or live rotation; sizing seam; sizing seam).
-# Same split as the leg rig — a pose write replaces the whole transform, so
-# nothing can be left to survive in a component the way node scale did.
+# Same split as the leg rig, for the reason given at _arm_thickness.
 var _upper_basis: Array[Basis] = []
 var _upper_scale: PackedVector3Array = PackedVector3Array()
 var _upper_pos: PackedVector3Array = PackedVector3Array()
@@ -415,12 +403,11 @@ var _upper_base_pos: PackedVector3Array = PackedVector3Array()
 var _helmet_base_euler: Vector3 = Vector3.ZERO
 
 # Visual forearm-bulk multiplier (the Hands attribute's arm tell), stamped by
-# SkaterAppearanceCoordinator.apply. The glove cuffs must stay proud of the
-# scaled forearm cylinder: with a fixed cuff radius, Hands 4's forearm
-# (0.055 × 1.20) landed EXACTLY on the cuff's 0.11 × 0.6 — two coaxial
-# cylinders with identical radii, z-fighting along the whole wrist — and
-# Hands 5 poked clean through it. Read by both the appearance pass and the
-# uniform pass, which size the cuff independently and in either order.
+# SkaterAppearanceCoordinator.apply. The glove cuff radius must scale with this,
+# not stay fixed: at Hands 4 the scaled forearm (0.055 × 1.20) is EXACTLY the
+# fixed cuff's 0.11 × 0.6 — coaxial cylinders of equal radius, z-fighting the
+# whole wrist — and Hands 5 pokes clean through. Read by both the appearance and
+# the uniform pass, which size the cuff independently and in either order.
 var forearm_visual_mult: float = 1.0
 
 # Butt-end knob cylinder at the top of the shaft (just past the top hand).
@@ -444,12 +431,10 @@ signal body_check_received(impulse: Vector3)
 # local player's controller uses it to capture its reconcile prediction snapshot
 # at the same post-integration sub-step the host samples for its world-state
 # broadcast (StateBufferManager.capture → fill_network_state, which reads the
-# post-move skater.global_position). Capturing the snapshot pre-move (in the
-# controller's priority -1 pass) left the client's prediction for host_timestamp
-# T one integration step (~one tick of travel) behind the host's authoritative
-# state for the same T — a benign phase offset that, at skating speed, exceeded
-# reconcile_position_threshold on nearly every moving tick and drove a reconcile
-# storm. Emitted for every skater; only the local controller connects.
+# post-move skater.global_position). The snapshot must not be taken pre-move:
+# one integration step of phase offset against the host's state for the same
+# host_timestamp exceeds reconcile_position_threshold on nearly every moving
+# tick. Emitted for every skater; only the local controller connects.
 signal post_move_integrated()
 # Mirrors SkaterStateMachine.State for the current carrier. Updated each tick
 # by Local/RemoteController so the goalie AI can read shot-state tells (e.g.
@@ -511,7 +496,7 @@ var _flex_prev_state: int = 0
 var _flex_sent: float = 0.0            # last uniform written (dirty guard)
 var _shaft_len_sent: float = 0.0       # last shaft_len_m uniform written (dirty guard)
 
-# ── Cosmetic Rig Dirty-Flag (mirrors Goalie._connectors_pose_changed) ─────────
+# ── Cosmetic Rig Dirty-Flag ──────────────────────────────────────────────────
 # The stick/arm/cuff/sphere rebuild in update_stick_mesh / update_arm_mesh /
 # update_bottom_arm_mesh is a pure function of five marker LOCAL positions — the
 # to_global → IK solve → to_local round-trip cancels the body transform, so the
@@ -792,11 +777,6 @@ func _ready() -> void:
 		shaft.subdivide_depth = _STICK_FLEX_SEGMENTS
 		stick_mesh.mesh = shaft
 
-	# Swap the scene's primitive part meshes for the shared low-poly faceted
-	# set. Order-free relative to the coordinators below — the uniform painter
-	# overrides materials on these nodes and the appearance rig scales the
-	# nodes, so mesh identity is free to change here.
-
 	# On-skates stance: the scene layout is standing height, so the skate
 	# stack lifts both body roots (see SkaterMeshBuilder.SKATE_LIFT_M — the
 	# blade meshes reach correspondingly deeper to keep the steel on the
@@ -851,35 +831,23 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	# Cosmetic mesh pass at render rate. The stick and arm meshes are pure
 	# write-only functions of the marker positions (top_hand, blade, shoulder,
-	# bottom_hand) that the physics-rate controllers and interpolators
-	# maintain — nothing reads the mesh transforms back. Recomputing them at
-	# the physics rate wasted ~75% of the work on poses that never rendered, and
-	# reconcile re-ran them once per replayed input (a hitch exactly when the
-	# network was already degraded). One pass per rendered frame, after all
-	# physics ticks for the frame have finalized the markers, is exactly the
-	# work the screen consumes.
-	# Skip the marker-driven rig rebuild when hidden or when nothing moved since
-	# the last frame (dirty-flag, same pattern as Goalie._update_connectors).
-	# Stick flex is time/state-driven — it runs every frame regardless (it has
-	# its own shader-write guard) so a mid-shot whip never freezes on an
-	# otherwise-static pose.
+	# bottom_hand) the physics-rate controllers and interpolators maintain —
+	# nothing reads the mesh transforms back — so one pass per rendered frame,
+	# after every physics tick for that frame has finalized the markers, is
+	# exactly the work the screen consumes. On the tick instead, ~75% of it
+	# draws to nobody and reconcile re-runs it once per replayed input, a hitch
+	# arriving exactly when the network is already degraded. The rebuild is
+	# skipped when hidden or when no marker moved (dirty flag); stick flex is
+	# time/state-driven, so it runs every frame regardless (own shader-write
+	# guard) and a mid-shot whip never freezes on an otherwise-static pose.
 	#
-	# Physics interpolation is on project-wide, and it snapshots node transforms
-	# at tick boundaries, so the two halves of this pass pay for it differently.
-	# The marker-driven meshes lose nothing: their markers only move on the tick
-	# anyway, so a tick-boundary snapshot captures every pose they ever hold.
 	# render_pose_update's pose — gait, head tracking, off-hand IK — is genuinely
-	# time-driven here, so interpolation resamples it at the tick rate and draws
-	# it a tick late. That is a real cost against the reason this pass moved to
-	# render rate, and it is accepted: the gait is a few-Hz oscillation, so tick
-	# sampling still oversamples it heavily, and a tick of latency on a cosmetic
-	# pose is invisible.
-	#
-	# What is NOT an option is opting these nodes out to win that fidelity back.
-	# An opted-out child renders against the body's un-interpolated (post-tick)
-	# position while the body renders interpolated, which separates the two by up
-	# to a tick of travel — the stick would visibly leave the hands at speed.
-	# Staying attached to the body beats sampling the pose more often.
+	# time-driven, so project-wide physics interpolation resamples it at the tick
+	# rate and draws it a tick late. Accepted: the gait is a few-Hz oscillation
+	# and a tick of latency on a cosmetic pose is invisible. Do NOT opt these
+	# nodes out to win that back — an opted-out child renders against the body's
+	# post-tick position while the body renders interpolated, separating the two
+	# by up to a tick of travel, and the stick visibly leaves the hands at speed.
 	if is_visible_in_tree():
 		# Cosmetic pose (leg gait / head / off-hand IK) at render rate, before the
 		# marker-driven mesh rebuild that consumes it. Skipped entirely when hidden
@@ -897,15 +865,12 @@ func _process(delta: float) -> void:
 			update_arm_mesh()
 			update_bottom_arm_mesh()
 	_update_stick_flex(delta)
-	# World HUD (ring, name, chevrons, beacon) at RENDER rate. It used to run in
-	# _physics_process, rewriting the world transforms of ~10 top_level nodes per
-	# skater at 120 Hz to produce something the screen samples at half that — the
-	# case the hot-path rule names outright. Nothing reads these back and no
-	# gameplay depends on them, so the physics rate bought nothing; running here
-	# also aligns the markers with the pose actually being drawn.
-	# Its internal timers (ping bubble, ring recolour) are wall-clock accumulators
-	# over delta, so a different tick source changes when they fire by less than a
-	# frame, not how long they last.
+	# World HUD (ring, name, chevrons, beacon) at RENDER rate: ~10 top_level node
+	# transforms per skater that nothing reads back and no gameplay depends on,
+	# so the physics rate would buy nothing and running here aligns them with the
+	# pose actually being drawn. Its internal timers (ping bubble, ring recolour)
+	# are wall-clock accumulators over delta, so the tick source changes when they
+	# fire by less than a frame, not how long they last.
 	if not CosmeticFreeze.hud:
 		_hud.update(delta)
 
@@ -1125,9 +1090,8 @@ func clamp_body_to_rink() -> void:
 # body EDGE stops at the panels) and strip any velocity pointing into the net, so
 # the skater slides free instead of being re-seated by the shove next tick — most
 # often when the goalie bulldozes a skater across the goal line before the
-# crease-dwell ghost fires. Pure value-type math — no allocation, hot-path safe at
-# 120 Hz × actors. Called live after clamp_body_to_rink and re-used by
-# LocalController's reconcile replay.
+# crease-dwell ghost fires. Called live after clamp_body_to_rink; same replay
+# and allocation contract.
 func clamp_body_to_net() -> void:
 	var radius: float = collision_radius()
 	var xz := Vector2(global_position.x, global_position.z)
@@ -1155,9 +1119,8 @@ func clamp_body_to_net() -> void:
 # slides along it instead of being re-seated next tick. Reads the same
 # host-refreshed goalie pose cache the blade clamp uses (position / rotation_y /
 # is_butterfly). A ghosted skater (crease-dwell / offside) passes through, matching
-# the is_ghost gate in _resolve_player_collisions. Pure value-type math — no
-# allocation, hot-path safe at 120 Hz × actors. Called live after the rink/net
-# clamps and re-used by LocalController's reconcile replay so both paths agree.
+# the is_ghost gate in _resolve_player_collisions. Called live after the rink/net
+# clamps; same replay and allocation contract.
 func clamp_body_to_goalies() -> void:
 	if is_ghost or not _goalie_data_provider.is_valid():
 		return
@@ -1192,12 +1155,6 @@ func clamp_body_to_goalies() -> void:
 		_touched_boundary = true
 
 
-# Re-positions the four hand/shoulder Marker3Ds based on the current
-# is_left_handed value. Called from _ready() once the markers exist, and
-# from the is_left_handed setter whenever the flag is flipped after spawn
-# (free-play picker → free-play skater follows without a respawn). Safe
-# to call before _ready() — exits early if the markers haven't been
-# created yet.
 # Attribute-scaled shoulder anchor placement. Called from
 # SkaterController.apply_attributes BEFORE the ROM derivation reads
 # shoulder_height — the logical anchors mirror the visual shoulder-ball
@@ -1210,6 +1167,9 @@ func set_shoulder_anchor(offset: float, height: float) -> void:
 	_position_hand_markers()
 
 
+# Re-positions the four hand/shoulder Marker3Ds for the current is_left_handed
+# value. Safe to call before _ready() — exits early while the markers are still
+# missing.
 func _position_hand_markers() -> void:
 	if shoulder == null or top_hand == null or bottom_shoulder == null or bottom_hand == null:
 		return
@@ -1287,9 +1247,9 @@ func get_toe_drag_factor() -> float:
 # twisting about its own line. Structurally load-bearing, not flavor — the
 # hosel tip (the point update_stick_mesh aims the shaft at) LIES ON that axis,
 # so it is invariant under any twist angle: the shaft→blade junction cannot
-# kink and the shaft never swings when a dressing engages. Rotating the same
-# angles about a heel-local axis instead (as this used to, about Z and Y)
-# dragged the tip off the shaft line by up to a few cm at full toe drag. The
+# kink and the shaft never swings when a dressing engages. Do not rotate these
+# angles about a heel-local axis instead — that drags the tip off the shaft line
+# by up to a few cm at full toe drag. The
 # twist also sweeps the toe horizontally (~7 cm at 20°) — the drag curl the
 # overhead camera reads. The one remaining junction bend is the follow-pitch
 # clamp at its floor/ceiling, which is deliberate (the dig floor keeps the toe
@@ -1499,10 +1459,10 @@ func apply_blade_pattern(curve_gear: int) -> void:
 #
 # The stick REBUILD it triggers is cosmetic, so it is deferred to the render-rate
 # rig pass in _process via this flag rather than run here. The marker dirty-flag
-# there cannot see a blend change on its own — the tilt moves the hosel tip the
-# shaft is aimed at without moving any marker — which is why the rebuild used to
-# live in the physics tick. (The rebuild must be the FULL stick pass, not just
-# the tilt: if the shaft doesn't follow the hosel, the joint opens.)
+# there cannot see a blend change on its own: the tilt moves the hosel tip the
+# shaft is aimed at without moving any marker. The rebuild must be the FULL
+# stick pass, not just the tilt — if the shaft doesn't follow the hosel, the
+# joint opens.
 func _update_blade_elevation(delta: float) -> void:
 	var target: float = float(elevation_level) / float(ShotMechanics.ELEVATION_HIGH)
 	if is_equal_approx(_blade_elevation_blend, target):
@@ -1579,30 +1539,16 @@ func get_facing() -> Vector2:
 	return _facing
 
 
-# ── Skating Stride ────────────────────────────────────────────────────────────
-# Procedural leg animation, driven by SkaterSkatingCoordinator. Each leg is a
-# two-segment pivot chain in the scene (see Scenes/Skater.tscn):
-#
-#   LowerBody/LegL          Node3D at the hip joint  — rotate to swing the leg
-#     ├─ HipL, ThighL, KneeL   (upper-leg meshes)
-#     └─ ShinL              Node3D at the knee joint — rotate for the knee bend
-#          └─ SockL, SkateL, FootL   (lower-leg meshes)
-#
-# Animating is just rotating the two pivots — the limb meshes hang underneath
-# and keep their own positions and .scale (the latter owned by
-# SkaterAppearanceCoordinator), so the gait and attribute scaling never write
-# the same property. Pivots are resolved lazily and null-guarded so the rig
-# degrades to a static pose if the scene hasn't been updated yet.
 # ── Leg rig ───────────────────────────────────────────────────────────────────
 # Both legs are one skinned mesh on one Skeleton3D, sixteen bones in the chain
-# LowerBody → Leg → Shin, mirroring the node tree it replaces (see
-# SkaterMeshBuilder.LegBone). Twelve of the bones carry geometry; the four pivots
-# exist to be rotated by the gait.
+# LowerBody → Leg → Shin (see SkaterMeshBuilder.LegBone). Twelve of the bones
+# carry geometry; the four pivots exist to be rotated by the gait
+# (SkaterSkatingCoordinator).
 #
-# Pose = basis · scale, at position. The three parts are owned separately, so
-# each is stored rather than read back off the current pose: `_leg_basis` is the
-# authored rest rotation (constant for the twelve parts; the four pivots are
-# rewritten by set_leg_swing), `_leg_scale` and `_leg_pos` are the sizing seam's.
+# Pose = basis · scale, at position, each part stored separately: `_leg_basis` is
+# the authored rest rotation (constant for the twelve geometry bones; the four
+# pivots are rewritten by set_leg_swing), `_leg_scale` and `_leg_pos` are the
+# sizing seam's.
 var _leg_skeleton: Skeleton3D = null
 var _leg_mesh: MeshInstance3D = null
 var _leg_basis: Array[Basis] = []
@@ -1620,17 +1566,14 @@ var _leg_base_scale: PackedVector3Array = PackedVector3Array()
 var _leg_base_pos: PackedVector3Array = PackedVector3Array()
 
 
+# Hip pitch/roll and knee bend, straight onto the four pivot bones. All radians:
 # pitch = fore/aft swing (local X) and roll = side-to-side splay (local Z) of the
 # whole leg about the hip; knee = flex of the lower leg (local X) about the knee.
-# All radians.
-# Hip pitch/roll and knee bend, straight onto the four pivot bones. The pivots
-# carry no scale and their scene rotation is overwritten here (it always was —
-# the node version assigned `rotation` outright), so the pose is the gait's
-# basis over the sizing seam's position, with nothing to read back.
 #
-# The knee writes only X, which as a node meant "read the current euler, change
-# x, write it back" — the shin's authored Y/Z survived. `_leg_shin_base_euler`
-# holds those so the composed basis says the same thing.
+# The pivots carry no scale and their authored rotation is overwritten outright,
+# so the pose is the gait's basis over the sizing seam's position. The knee write
+# owns X only — `_leg_shin_base_euler` carries the scene's authored Y/Z into the
+# composed basis.
 func set_leg_swing(left_pitch: float, left_roll: float, left_knee: float,
 		right_pitch: float, right_roll: float, right_knee: float,
 		left_yaw: float = 0.0, right_yaw: float = 0.0) -> void:
@@ -1689,15 +1632,13 @@ func _pose_leg_pivot(bone: int, euler: Vector3) -> void:
 
 
 # ── Rendered pose seam (on-ice HUD, ice VFX) ─────────────────────────────────
-# Where this skater is being DRAWN this frame. `global_transform` is the
-# post-tick physics pose, which is up to a tick of travel away from it — anything
-# that must sit under the body on screen (slot ring, chevrons, name plate,
-# stamina gauge, slapper reticle) has to read this instead, or it steps at 120 Hz
-# against a body that slides at the refresh rate.
+# Where this skater is being DRAWN this frame. Anything placed onto the body at
+# render rate — slot ring, chevrons, name plate, stamina gauge, slapper reticle —
+# reads this rather than `global_transform`, the post-tick pose up to a tick of
+# travel away.
 #
-# Memoized per drawn frame because several readers want it and their _process
-# order is not fixed: computing it on demand keeps every one of them on the SAME
-# frame's pose instead of leaving whichever runs first a frame ahead.
+# Memoized per drawn frame: several readers want it and their _process order is
+# not fixed, so computing it on demand keeps them all on the SAME frame's pose.
 var _render_xform: Transform3D = Transform3D.IDENTITY
 var _render_xform_frame: int = -1
 
@@ -1716,14 +1657,11 @@ func render_transform() -> Transform3D:
 # ice marks made from here follow the SKATES, not the torso. Falls back to the
 # old body-center offset until the rig is built.
 #
-# The transform half is read INTERPOLATED, the bone pose half as-is: physics
-# interpolation renders the body between tick poses, while the bone pose is
-# whatever the render-rate gait wrote this frame. Composing the two gives the
-# drawn body position carrying the drawn foot pose — which is the same layering
-# the rest of the rig gets, just spelled out here because this seam is consumed
-# by a system that draws into world space. A plain global_transform read would
-# be the post-tick body, laying every stroke up to a tick of travel ahead of the
-# skate that cut it.
+# The transform half is read INTERPOLATED, the bone pose half as-is: the body
+# renders between tick poses, while the bone pose is whatever the render-rate
+# gait wrote this frame. Composing the two gives the drawn body carrying the
+# drawn foot; a plain global_transform read lays every stroke up to a tick of
+# travel ahead of the skate that cut it.
 func blade_mark_position(left: bool) -> Vector3:
 	if _leg_skeleton == null:
 		var t: Transform3D = get_global_transform_interpolated()
@@ -2114,11 +2052,6 @@ func _update_wrister_address(delta: float) -> void:
 	_address_factor = new_addr
 
 
-# Where along the blade the carried puck rides, as a fraction of blade_length
-# from the heel — the contact-point tell. 0.5 (mid-blade, i.e. no offset) when
-# not carrying, so the non-carry consumers of get_carry_target_global() see the
-# plain blade contact they always did.
-#
 # Where along the blade the WOUND-UP puck sits, as a signed offset from
 # mid-blade in fractions of blade_length — the contact-point tell, told the
 # way every other tell here is told: the BLADE slides around the still puck
@@ -2135,24 +2068,6 @@ func _aim_seat_offset_u() -> float:
 			* _aim_seat_blend
 
 
-# Where the puck pins while carrying. The blade marker is shifted to the
-# forehand/backhand side via the IK target (so the stick visibly attaches to
-# the offset blade). The puck sits at the un-offset position — adjacent to
-# the blade on the opposite face, where the cursor effectively is. All the
-# heel→toe contact storytelling (elevation seat, stroke prosody, catches)
-# lives on the blade MESH instead (_apply_blade_tilt), so this pin never
-# drifts off the cursor.
-# Pure derivation: contact − face_normal × forehand_factor × carry_blade_offset.
-# Returns get_blade_contact_global() (centered) when not carrying or when
-# the geometry is degenerate, so existing non-carry consumers are unaffected.
-#
-# Slapshot wind-up override: when slapshot pinning is active the puck stays
-# at a fixed lateral/forward offset from the player (matched to the one-timer
-# slapper zone) instead of following the blade, which is lifted overhead and
-# pulled back over the back shoulder during the coil. This keeps the puck on
-# the ice in front of the skater so they can coast / brake during the wind-up
-# without leaving the puck behind, and so the eventual shot fires from a sane
-# ice position rather than from the elevated blade tip.
 # Correction the controller's per-tick net collision applies to the raw pin, so
 # the carried puck is HELD at the twine instead of being allowed inside it. Zero
 # whenever the pin is clear (the overwhelmingly common case). Written every
@@ -2170,6 +2085,21 @@ func get_carry_target_global() -> Vector3:
 	return _carry_target_raw() + carry_pin_correction
 
 
+# Where the puck pins while carrying: contact − face_normal × forehand_factor ×
+# carry_blade_offset. The blade MARKER is shifted to the forehand/backhand side
+# by the IK target, so the stick visibly attaches to the offset blade while the
+# puck sits at the un-offset position, where the cursor effectively is. All the
+# heel→toe contact storytelling (elevation seat, stroke prosody, catches) lives
+# on the blade MESH instead (_apply_blade_tilt), so this pin never drifts off the
+# cursor. Falls back to get_blade_contact_global() (centered) when not carrying
+# or when the geometry is degenerate.
+#
+# Slapshot wind-up override: while slapshot pinning is active the puck holds at a
+# fixed lateral/forward offset from the player (matched to the one-timer slapper
+# zone) rather than following the blade, which is lifted overhead and pulled back
+# over the shoulder during the coil. That keeps the puck on the ice in front of
+# the skater — so they can coast or brake through the wind-up without leaving it
+# behind — and fires the shot from a sane ice position, not the elevated tip.
 func _carry_target_raw() -> Vector3:
 	if _slapshot_pin_active:
 		var local := Vector3(_slapshot_pin_local.x, 0.0, _slapshot_pin_local.y)
@@ -2381,9 +2311,8 @@ func set_knockdown_fall(axis: Vector3, tilt: float) -> void:
 	mesh_root.basis = Basis(axis.normalized(), tilt)
 
 
-# Head yaw, onto the helmet bone. `helmet.rotation.y = angle` meant "read the
-# euler, change Y, write it back", so the scene's authored X/Z survived —
-# _helmet_base_euler carries them.
+# Head yaw, onto the helmet bone. The write owns Y only; _helmet_base_euler
+# carries the scene's authored X/Z into the composed basis.
 func set_head_angle(angle: float) -> void:
 	_upper_basis[SkaterMeshBuilder.UpperBone.HELMET] = Basis.from_euler(
 			Vector3(_helmet_base_euler.x, angle, _helmet_base_euler.z))
@@ -2521,8 +2450,6 @@ func update_stick_mesh() -> void:
 #
 # Reads only the rendered stick pose, which every machine reconstructs from the
 # replicated blade/hand markers, so the bow direction agrees across the lobby.
-# (The carry side it used to key off now also updates per-peer, but it is
-# smoothing state a beat behind the pose — the marker read is frame-exact.)
 func _solve_stick_flex_axis(shaft_dir: Vector3) -> float:
 	var horiz: float = sqrt(shaft_dir.x * shaft_dir.x + shaft_dir.z * shaft_dir.z)
 	if horiz < 0.0001:
@@ -2541,9 +2468,9 @@ func _hosel_tip_upper_body() -> Vector3:
 	return blade.transform * tip_local
 
 
-# Caps the extended butt end with the knob, its long axis (local Y) aligned
-# to the shaft — same look_at + rotate_object_local(X, 90°) trick
-# as the glove cuffs. `to_shaft_end` is the hand→hosel-tip vector the shaft
+# Caps the extended butt end with the knob, its long axis (local Y) aligned to
+# the shaft — the same looking_at + X(+90°) composition as the glove cuffs.
+# `to_shaft_end` is the hand→hosel-tip vector the shaft
 # itself was aimed with, so the knob and the shaft always share one axis; the
 # knob wraps the top of the butt extension, slightly proud of its end.
 func _update_stick_knob(stick_origin: Vector3, to_shaft_end: Vector3) -> void:
@@ -2551,12 +2478,10 @@ func _update_stick_knob(stick_origin: Vector3, to_shaft_end: Vector3) -> void:
 		return
 	if to_shaft_end.length_squared() < 0.0001:
 		return
-	# Entirely in upper-body space: the previous version pushed three points out
-	# to world purely to aim a look_at and pull the result back, when every
-	# input was already local and to_global is affine (so the direction is the
-	# same vector either way). One write, no round trip.
-	# The knob is a solid-coloured cylinder, so roll is unobservable and the
-	# up vector only has to dodge colinearity — unlike the shaft above.
+	# Entirely in upper-body space — every input is already local and to_global
+	# is affine, so a world round trip would compute the same direction. The knob
+	# is a solid-coloured cylinder, so roll is unobservable and the up vector only
+	# has to dodge colinearity, unlike the shaft above.
 	var up_shaft: Vector3 = -to_shaft_end.normalized()
 	var knob_h: float = SkaterMeshBuilder.KNOB_HEIGHT_M
 	var knob_center: Vector3 = stick_origin \
@@ -2564,7 +2489,7 @@ func _update_stick_knob(stick_origin: Vector3, to_shaft_end: Vector3) -> void:
 	# Post-multiplied X(+90°) maps the cylinder's long axis onto the aim, which
 	# is what rotate_object_local did. Safe to compose directly here because the
 	# knob carries no node scale (SkaterUniformCoordinator._rebuild_stick_knob
-	# never sets one) — with scale present this is the trap _update_cuff_transform
+	# never sets one) — with scale present this is the trap _pose_arm_cuff
 	# documents.
 	stick_knob_mesh.transform = Transform3D(
 			Basis.looking_at(up_shaft, _up_for_look_at(up_shaft))
@@ -2720,24 +2645,21 @@ func update_bottom_arm_mesh() -> void:
 
 
 # One pose write per part, each a whole Transform3D built in upper-body space —
-# the space the skeleton lives in, so a pose IS the local transform its node
-# carried. Deliberately NOT position/scale/look_at: that trio costs six transform
-# operations, two of which resolve the global chain (look_at reads
-# get_global_transform, writes back through set_global_transform, then restores
-# scale through a get_scale/set_scale pair). Building the basis and assigning
-# once has no global round-trip, and at ten parts per skater this is the densest
-# such site in the rig.
+# the space the skeleton lives in. Deliberately NOT position/scale/look_at: that
+# trio costs six transform operations, two of which resolve the global chain
+# (look_at reads get_global_transform, writes back through set_global_transform,
+# then restores scale through a get_scale/set_scale pair). Building the basis and
+# assigning once has no global round-trip, and at ten parts per skater this is
+# the densest such site in the rig.
 #
-# Orientation is built from the LOCAL span rather than the world one. The two
-# agree whenever upper_body's basis is a rotation, and the local form is the
-# more correct of the two under a scaled parent — it points the bone at the
-# endpoints the position term already uses (which were always local). The up
-# vector only has to avoid colinearity: the bone prism is rotationally
-# symmetric about its long axis, so roll is unobservable (see _up_for_look_at).
+# Orientation is built from the LOCAL span, not the world one: the two agree
+# whenever upper_body's basis is a rotation, and under a scaled parent the local
+# form is the correct one — it points the bone at the same endpoints the position
+# term uses. The up vector only has to avoid colinearity, since the bone prism is
+# rotationally symmetric about its long axis (see _up_for_look_at).
 #
-# scaled_local is basis·S throughout, matching how a Node3D composed rotation and
-# scale. The plain scaled() is S·basis and would put the size on the wrong axes
-# once a part tilts.
+# scaled_local is basis·S throughout. The plain scaled() is S·basis and puts the
+# size on the wrong axes once a part tilts.
 func _pose_arm_bone(part: int, a_world: Vector3, b_world: Vector3) -> void:
 	var a_local: Vector3 = upper_body.to_local(a_world)
 	var b_local: Vector3 = upper_body.to_local(b_world)
@@ -2748,7 +2670,7 @@ func _pose_arm_bone(part: int, a_world: Vector3, b_world: Vector3) -> void:
 	if length < 0.0001:
 		# Degenerate span: move it, hold the orientation it already had. A pose
 		# write replaces the whole transform, so "leave the basis alone" has to be
-		# spelled out — with a node it was what writing only `position` did.
+		# spelled out.
 		var held: Transform3D = _arm_skeleton.get_bone_pose(part)
 		held.origin = center
 		_arm_skeleton.set_bone_pose(part, held)
@@ -2898,10 +2820,10 @@ func _build_leg_rig() -> void:
 	for bone: int in count:
 		_repose_leg_bone(bone)
 	# Freed only after every offset is read — the whole point of the subtree.
-	# free() rather than queue_free(): the scene's placeholder primitives are no
-	# longer swapped for generated ones, so a deferred free would render grey
-	# cylinders through the real legs for the frame it waited. Safe here — these are plain children whose own _ready has
-	# already run, and nothing is iterating the subtree.
+	# free() rather than queue_free(): a deferred free renders the scene's
+	# placeholder primitives through the real legs for the frame it waits. Safe
+	# here — these are plain children whose _ready has run, and nothing is
+	# iterating the subtree.
 	lower_body.get_node("LegL").free()
 	lower_body.get_node("LegR").free()
 
@@ -2935,9 +2857,8 @@ func set_leg_bone_position(bone: int, pos: Vector3) -> void:
 
 
 # Read seams for the gait tests: the rotation the gait wrote and the position the
-# sizing seam wrote, as they now live on the rig's bones rather than on a node's
-# `rotation` / `position`. The euler round-trips exactly for the four pivots,
-# whose basis is built from one (set_leg_swing).
+# sizing seam wrote. The euler round-trips exactly for the four pivots, whose
+# basis is built from one (set_leg_swing).
 func leg_bone_euler(bone: int) -> Vector3:
 	return _leg_skeleton.get_bone_pose(bone).basis.get_euler()
 
@@ -2962,10 +2883,10 @@ func set_leg_surface_material(surface: int, mat: Material) -> void:
 	_leg_mesh.set_surface_override_material(surface, mat)
 
 
-# Ten bones, no parents, all identity rest — the flat sibling layout the parts
-# had as nodes, so a pose write means exactly what it meant then. The mesh is a
-# child of the skeleton so the two share a transform space with nothing to keep
-# in sync.
+# Fourteen bones, no parents, all identity rest (see SkaterMeshBuilder.UpperBone
+# for why that makes a pose write a plain local transform). The mesh is a child
+# of the skeleton, so the two share a transform space with nothing to keep in
+# sync.
 func _build_arm_rig() -> void:
 	_upper_basis.resize(SkaterMeshBuilder.UPPER_BONE_COUNT)
 	_upper_scale.resize(SkaterMeshBuilder.UPPER_BONE_COUNT)
@@ -3025,7 +2946,7 @@ func _build_arm_rig() -> void:
 
 # The per-skater material for one upper-body surface, created from the shared
 # mesh's surface default on first use. Painters and the ghost fade both go
-# through this — material_override would repaint all fifteen at once.
+# through this — material_override would repaint every surface at once.
 func upper_surface_material(surface: int) -> StandardMaterial3D:
 	return SkaterMeshBuilder.surface_override(_arm_mesh, surface)
 
@@ -3111,9 +3032,9 @@ func upper_bone_base_position(bone: int) -> Vector3:
 
 
 # ── Arm sizing seam ───────────────────────────────────────────────────────────
-# Three setters because the three geometries have three scaling contracts, the
-# same split the node rig had. The stored vector is the part's whole pose scale
-# except for a bone's Z, which is its live length.
+# Three setters because the three geometries have three scaling contracts. The
+# stored vector is the part's whole pose scale except for a bone's Z, which is
+# its live length.
 func set_arm_bone_radius(part: int, radius: float) -> void:
 	_arm_thickness[part] = Vector3(radius, radius, 1.0)
 
@@ -3171,8 +3092,8 @@ func set_block_stance(active: bool) -> void:
 # SHOT-BLOCK: the wider block_body_radius, banded from the ice up to block_seal_height so a
 # low shot is sealed. Both dimensions are the one-knee pose's — the leg extended along the
 # ice on one side and the stick flat on the other earn the width; the kneeling head caps the
-# height, so beating a committed blocker means going OVER him. Reach is uniform across the
-# band (unlike the old sphere, which bulged at one height).
+# height, so beating a committed blocker means going OVER him. Reach is uniform
+# across the band.
 func get_body_block_radius() -> float:
 	return block_body_radius if _block_stance_active else body_block_radius
 
@@ -3216,9 +3137,6 @@ func set_jersey_info(p_name: String, number: int) -> void:
 	_uniform.apply_jersey_info(p_name, number)
 
 
-# Repaints the skin parts (head + neck, created by SkaterMeshBuilder) to the
-# player's identity tone. Albedo only, preserving the current alpha so a
-# repaint landing mid-ghost doesn't snap the skin opaque.
 # ── On-ice ring (read by IceRingField, drawn by the ice shader) ───────────────
 # The slot ring is not a node on this skater any more; the ice shader draws it
 # from a uniform array. These are the two facts the field needs per frame.
@@ -3293,12 +3211,12 @@ func name_plate_visible() -> bool:
 	return _hud.name_plate_visible()
 
 
+# Repaints the skin to the player's identity tone. Albedo only, preserving the
+# current alpha so a repaint landing mid-ghost doesn't snap the skin opaque.
+# Head and neck are one SURFACE of the helmet mesh (they wear the same material),
+# so there is a single paint target — and it goes through surface_override,
+# because the default lives on the mesh every skater shares.
 func set_skin_tone(index: int) -> void:
-	# Head and neck are one SURFACE of the helmet mesh, not child nodes — they
-	# always wore the same skin material, so the merge gave them a single paint
-	# target. surface_override duplicates the shared default on first use; the
-	# default lives on the mesh every skater shares, so writing it directly would
-	# give the whole roster one skin tone.
 	var skin: Color = SkinToneRegistry.color_for(index)
 	var mat: StandardMaterial3D = upper_surface_material(
 			SkaterMeshBuilder.UpperSurface.HELMET_SKIN)

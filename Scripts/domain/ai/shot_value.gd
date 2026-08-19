@@ -1,16 +1,10 @@
 class_name AIShotValue
 
-# THE SEAM. One function the whole decision layer asks "how good is a shot from
-# here", and one function that answers it. Everything the bots rank — carry
-# candidates, pass receivers, off-puck seams, the shoot/don't gate — goes
-# through `for_release`, so replacing the model behind it is a one-line change
-# rather than surgery across a dozen call sites with eighteen positional
-# arguments each.
-#
-# That narrowness is the point and it is deliberate insurance: this model is
-# knowingly an APPROXIMATION, adopted while the live goalie is being retuned.
-# When he settles we re-measure, and either it holds or it is swapped. Neither
-# outcome should cost more than editing this file.
+# THE SEAM. Everything the bots rank — carry candidates, pass receivers, off-puck
+# seams, the shoot/don't gate — asks "how good is a shot from here" through
+# `for_release`, so the model behind it can be replaced in this file alone. That
+# narrowness is deliberate insurance: the model is knowingly an APPROXIMATION,
+# adopted while the live goalie is being retuned.
 #
 # ── The model ────────────────────────────────────────────────────────────────
 # XGBaseline's public form — a logistic in log-distance and angle — plus ONE
@@ -39,12 +33,9 @@ class_name AIShotValue
 # tie-breakers are left. Displacement is what makes "make him move" scoreable,
 # and it is measurable rather than assumed — see displacement_deficit_m.
 #
-# Deliberately NOT modelled yet: the DOWN (butterfly) state and screens. Both
-# are whole-goalie states rather than body parts, so they fit this model's
-# grain and drop in as further logit terms when something measures them. The
-# post seal started on that list and came off it — see POST_SEAL_LOGIT — after
-# the switchover showed a VH-sealed dead angle reading as an ordinary angled
-# shot.
+# Deliberately NOT modelled: the DOWN (butterfly) state and screens. Both are
+# whole-goalie states rather than body parts, so they fit this model's grain and
+# drop in as further logit terms when something measures them.
 #
 # Pure/static and engine-free, like every other domain evaluator.
 

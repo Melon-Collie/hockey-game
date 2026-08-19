@@ -4,13 +4,12 @@ extends RefCounted
 const _PhysicsConstants: GDScript = preload("res://Scripts/game/constants.gd")
 
 # CARRIER role behavior: the puck-carrying utility AI. Scores SHOOT
-# (wrister), PASS (per teammate), and CARRY (8 polar candidates +
-# slot anchor + own-half wall exits + stand-still) on equal footing every
-# PICK_ACTION_PERIOD_TICKS ticks. Hysteresis on the current intent
-# prevents flicker between close-scoring fire options during pre-aim;
-# CARRY does NOT get a hysteresis bonus (stand-still's shot branch IS
-# the shoot-now score, so it ties with fire by construction, and we
-# want fire to win those ties).
+# (wrister), PASS (per teammate), and CARRY (the candidate set _best_carry
+# builds) on equal footing every PICK_ACTION_PERIOD_TICKS ticks. Hysteresis
+# on the current intent prevents flicker between close-scoring fire options
+# during pre-aim; CARRY does NOT get a hysteresis bonus — stand-still's shot
+# branch IS the shoot-now score, so it ties with fire by construction and
+# fire should win those ties.
 #
 # This module is stateful — it owns hysteresis state, scratch
 # buffers, and the cooldown counter. SkaterAgentStateMachine creates
@@ -68,39 +67,27 @@ const PASS_MIN_VALUE: float = 0.02
 # release that merely ties the carry must not win. The dump is not chosen on
 # merits at all — it is what is left when the carry is worth nothing and no
 # release qualifies (see the residual block in _pick_commit_phase), so there is
-# nothing for a bar to gate. The margin that used to sit here existed to stop a
-# dump winning the value compete by an epsilon; retiring the compete retires the
-# margin with it.
+# nothing for a bar to gate.
 
 # ── Settle doubt: how sure a FRESH carrier has to be to give the puck up ──────
-# The three bars above say what an ACTIVE option (shoot / pass / dump) is worth
-# releasing the puck for. A bot that has only just gained the puck has not read
-# the ice yet, so for a beat it discounts its own valuation of all three: the
-# option must be worth MORE than the standing bar to be worth the puck
-# (ctx.settle_penalty_frac = 0.5 doubles every bar), and the discount decays as
-# it settles. Difficulty knob — 0.0 at Hard and for the perfect bot.
+# A bot that has only just gained the puck has not read the ice yet, so for a
+# beat it discounts its own valuation of every ACTIVE option against that
+# option's bar above: the option must be worth MORE than the standing bar to be
+# worth the puck (ctx.settle_penalty_frac = 0.5 doubles every bar), and the
+# discount decays as it settles. Difficulty knob — 0.0 at Hard and for the
+# perfect bot.
 #
-# It handicaps the option against its BAR, never against the carry it competes
-# with, and that distinction is the whole design. Carrying is what the bot does
-# while it deliberates, and the stand-still carry candidate is BY CONSTRUCTION
-# worth the same as firing from where it stands (see _best_carry) — so the same
-# handicap applied inside the fire-vs-carry compete could only be a uniform
-# DELAY: it would suppress the doorstep tap-in exactly as hard as the hopeless
-# point shot, which is the "dithers on gimmes, then fires everything at once"
-# shape the flat settle gate this replaced actually had. Against an absolute bar
-# the handicap is a SELECTIVITY dial instead — a slot look out-values any raised
-# bar on the first tick, a feed threaded past two sticks does not and gets taken
-# only once the doubt drains. Obvious plays stay instant; close calls visibly
-# deliberate, which is what a human read looks like from the stands.
-#
-# The flat "may not commit for N seconds" gate is the frac → 1.0 limit of this
-# (nothing clears an infinite bar), so no behavior it produced is out of reach.
+# Charge it against the BAR, never against the carry it competes with. The
+# stand-still carry candidate is BY CONSTRUCTION worth the same as firing from
+# where the bot stands (see _best_carry), so a handicap inside the fire-vs-carry
+# compete can only be a uniform DELAY — it holds the doorstep tap-in exactly as
+# hard as the hopeless point shot.
 #
 # Constant-hazard decay, the same exp(-t/τ) form as AIActionScoring's delay
-# discount. It never reaches exactly zero, which is harmless HERE (an option
-# sitting within an epsilon of its bar is a coin flip either way) and would NOT
-# have been in the compete, where stand-still ties fire exactly and any residual
-# penalty would suppress firing forever.
+# discount. It never reaches exactly zero, which is harmless against an absolute
+# bar (an option within an epsilon of its bar is a coin flip either way) but
+# would not be inside the compete, where stand-still ties fire exactly and any
+# residual penalty would suppress firing forever.
 func _settle_penalty(ctx: RoleContext) -> float:
 	if ctx.settle_penalty_frac <= 0.0:
 		return 0.0
@@ -259,14 +246,8 @@ const OZ_RETREAT_LINE_BUFFER_M: float = GameRules.DEFAULT_STICK_LENGTH_M + 1.0
 # targets, not just discounted.
 const OZ_RECEIVE_LINE_BUFFER_M: float = GameRules.DEFAULT_STICK_LENGTH_M + 0.7
 
-# (Blade reach cone + facing turn rate now come from the bot's real caps —
-# RoleContext.self_reach_cone_half_angle / self_facing_turn_rate — so an aim
-# anywhere inside the true ±157° reach cone fires with no body turn, and only the
-# narrow back wedge pays, at the bot's Agility-scaled turn rate. See
-# _facing_rotation_time.)
-
-# Carry candidate generation: 8 polar cardinals at this radius +
-# slot anchor + stand-still.
+# The local step a carry candidate is never placed inside: the floor on the
+# beat-scaled forward radii, and the horizon the space fan is sampled over.
 const CARRY_SEARCH_STEP_M: float = 3.0
 # Carry candidates are clamped inside the goal-line buffer and the
 # rink-X inset — both defined on AIRoleHelpers (single source).
@@ -334,30 +315,18 @@ const OUTLET_DEVELOP_WINDOW_S: float = 1.2
 # is the spot it's at, and the live pass scoring already prices that.
 const OUTLET_DEVELOP_MIN_SPEED_M_S: float = 1.0
 
-# Pre-baked rotations for the 8 polar cardinal carry candidates.
-# REARWARD cardinals — lateral and back, the arc the forward space fan does not
-# span (it looks only where the carrier is trying to go, ±70°). These stay a
-# fixed local ring on purpose: they are escape/reset moves whose value is
-# "somewhere other than here", not destinations worth planning a route to. The
-# forward half of the old 8-spoke ring is gone — see the field-derived block in
-# _best_carry.
 # REAR/LATERAL ring angles, relative to the carry direction — the half of the
-# bearing circle the space fan does not span (it looks only +/-70 degrees, and
-# only where the carrier is trying to GO).
+# bearing circle the space fan does not span (it looks only ±70°, and only where
+# the carrier is trying to GO). These are escape/reset moves whose value is
+# "somewhere other than here".
 #
-# ONE ring, not two. This used to be a local 3 m arc plus a separate 6 m
-# "retreat" arc over the same five angles, both at fixed radii. The radii now
-# come from each bearing's own beat reach at two fractions, exactly as the
-# forward candidates take theirs — which merges the two: the near fraction IS
-# the local reposition, the far one IS the committed peel-out, both sized to
-# what the carrier can actually cover instead of to two hand-picked distances.
-#
-# Straight back (PI) is included. It was briefly dropped for going 0-for-82 at
-# a fixed 3 m, but that was an artefact of the placement rather than a fact
-# about the angle: a 3 m reverse is a shuffle inside the defender's re-close
-# radius, and the committed version of the same move is exactly why the old
-# retreat arc existed. Beat-scaled placement offers both, so the angle no
-# longer needs a hand-set distance to be representable.
+# ONE ring, not two: the radii come from each bearing's own beat reach at two
+# fractions, exactly as the forward candidates take theirs, so the near fraction
+# IS the local reposition and the far one IS the committed peel-out — both sized
+# to what the carrier can actually cover rather than to two hand-picked
+# distances. That is also what keeps straight back (PI) worth representing: at a
+# fixed 3 m a reverse is a shuffle inside the defender's re-close radius, and
+# only the committed version is a real play.
 const _REAR_ANGLES: Array[float] = [
 		PI * 0.5, PI * 0.75, PI, -PI * 0.75, -PI * 0.5,
 ]
@@ -377,7 +346,7 @@ const CARRY_REAR_MIN_STEP_M: float = AIActionScoring.EVADE_STICK_REACH_M
 # RADII: fractions of the planning beat. Two of them, so the near gradient a
 # standstill carrier steers on survives when the beat stretches out at speed.
 # PLAN_BEAT_S: the horizon a carry candidate is a PLAN over rather than a
-# steering nudge — one second of travel, which reduces to the old 3 m local
+# steering nudge — one second of travel, which reduces to a 3 m local
 # step at a standstill and reaches ~9 m (the blue line, from mid-neutral-zone)
 # at a full stride. Physical: it is how far ahead the carrier commits, and the
 # whole point is that it moves with his real pace instead of being pinned at a
@@ -415,10 +384,10 @@ const PASS_OPTION_DISCOUNT: float = 0.8
 # only defenders that are NOT already beaten: a defender projected (at the
 # evasion horizon, so a fast back-checker who'll pull even by then still counts)
 # more than this far behind the carrier along the netward line is screened for
-# free and excluded. Without this, a beaten checker trailing the rush kept the
-# shield engaged and the carrier stayed turned side-on instead of squaring to
-# the net the instant it cleared its man — the reported "protecting the puck
-# after they've already beaten the guy pressuring them." A body-scale slack, the
+# free and excluded. Without it a beaten checker trailing the rush keeps the
+# shield engaged and the carrier stays turned side-on instead of squaring to the
+# net the instant it clears its man — "protecting the puck after they've already
+# beaten the guy pressuring them". A body-scale slack, the
 # same band the state machine's man-to-beat test uses (CARRY_MAN_TO_BEAT_BEHIND_M):
 # a defender even/beside the carrier still earns the shield; only one clearly
 # skated past drops out. Physical screen measurement, not a shape knob.
@@ -729,8 +698,7 @@ var _pass_option_ceiling: float = 0.0
 var _decision: RoleDecision = RoleDecision.new()
 
 # ── Carry-candidate beam (two-ply search budget) ─────────────────────────────
-# The two-ply reads (pass OPTION + carry CONTINUATION) are ~90% of a carry
-# candidate's cost, and the exact incumbent-bound prunes lose their teeth
+# The two-ply pass-OPTION read is ~90% of a carry candidate's cost, and the exact incumbent-bound prunes lose their teeth
 # exactly where the compete is at its most expensive — open ice, where
 # safety/lane ≈ 1 for every spot so no candidate's ceiling falls below the
 # running best. The beam bounds that worst case by POLICY instead: pass 1
@@ -764,10 +732,10 @@ var _beam_time: Array[float] = []
 # BEST one-ply total seen so far. Exact for the argmax even though it can
 # prune candidates out of the beam: a candidate whose ceiling ≤ the best
 # one-ply row can never out-upgrade that row (upgrades only raise values),
-# so it can't win from inside the beam either — and matching the old
-# sequential compete's incumbent-bound strength is what keeps the CONTESTED
-# case cheap (under pressure most candidates still die at the lane/safety
-# ceilings before paying for their arrival-shot read). Reset per _best_carry.
+# so it can't win from inside the beam either — and that incumbent-bound
+# strength is what keeps the CONTESTED case cheap (under pressure most
+# candidates die at the lane/safety ceilings before paying for their
+# arrival-shot read). Reset per _best_carry.
 var _beam_prune_bound: float = -INF
 
 # ── Debug readout ────────────────────────────────────────────────────────────
@@ -848,16 +816,10 @@ func decide(ctx: RoleContext) -> RoleDecision:
 
 
 # Post-commit cooldown from `base_ticks` (the eval period, less any dispatch a
-# sliced eval's commit phase already consumed).
-# OPEN-ICE LOD: the full compete is at its most expensive exactly when
-# its answer changes least — nobody within reach, committed to keep
-# skating. With every opponent outside OPEN_ICE_LOD_RADIUS_M and the
-# argmax answering CARRY, re-arm at a third of the rate. Grounded
-# safety margin: worst-case closing is two skaters head-on (~18 m/s),
-# so a threat appearing at the radius needs ~0.36 s to reach a stick
-# on the puck — several extended periods; the next full eval sees him
-# while he is still outside every reach model. Fire/pass intents keep
-# the full cadence (their follow-through is timing-critical).
+# sliced eval's commit phase already consumed), extended by the open-ice LOD
+# (see OPEN_ICE_LOD_RADIUS_M) when the argmax answered CARRY with nobody near.
+# Fire/pass intents keep the full cadence — their follow-through is
+# timing-critical.
 func _arm_pick_cooldown(ctx: RoleContext, base_ticks: int) -> void:
 	_pick_action_cooldown = base_ticks
 	if intended_action != INTENT_CARRY:
@@ -1193,9 +1155,8 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 	# zeroes a release behind the line, but it scores the velocity-projected
 	# release (puck led by body speed) and clamps a behind-the-goalie release to a
 	# jam point in FRONT of him — so a carrier whose body is past the line but
-	# whose projected blade lands a hair in front scored a phantom point-blank open
-	# net and fired a zero-angle rip off the outer pipe (the "skate past the goal
-	# line and clank the outer bar" bug). The mouth faces up-ice: from on/behind
+	# whose projected blade lands a hair in front scores a phantom point-blank open
+	# net and fires a zero-angle rip off the outer pipe. The mouth faces up-ice: from on/behind
 	# the line there is no direct shot, only a wrap or a walk-out CARRY. Gate on the
 	# real puck's forward distance, not the projection.
 	var puck_forward_of_line: float = (puck_now.z - attacking_goal.z) \
@@ -1323,11 +1284,10 @@ func _pick_fire_phase(ctx: RoleContext) -> void:
 		# filled above) ride along as sightline bodies — the net-front man parked
 		# in the goalie's eyes is what makes the point blast a real chance.
 		# THE SEAM, same as the carry and pass legs. The fire-vs-carry-vs-pass
-		# compete is a comparison, so all three sides have to be denominated in
-		# the same currency — leaving the shoot leg on the saturating hole model
-		# while the others moved to NHL-calibrated xG made SHOOT win outright
-		# (a 1.0 ceiling against a 0.4 one), which is exactly what the
-		# backdoor-feed and peel-out tests caught.
+		# compete is a comparison, so all three sides must be denominated in the
+		# same currency: the saturating hole model on the shoot leg against
+		# NHL-calibrated xG on the others makes SHOOT win outright, a 1.0 ceiling
+		# against a 0.4 one (the backdoor-feed and peel-out fixtures catch it).
 		#
 		# The replicated pose (_shot_env_hands / _pads / _five_hole) drops out
 		# of the GATE and stays where it is truth: picking aim / loft / power
@@ -1409,12 +1369,10 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	var best_pass_score: float = _phase_best_pass_score
 	var best_pass_saucer: bool = _phase_best_pass_saucer
 
-	# Top-level CARRY — best carry candidate (8 polar around the slot
-	# direction + slot anchor + own-half wall exits + stand-still).
-	# Each scored uniformly:
-	# score_at(candidate, projected_opps) × path_clear × time_decay.
-	# Time uses momentum-aware effective speed so reverse candidates
-	# self-discount via longer arrival time.
+	# Top-level CARRY — the best candidate _best_carry builds, each scored
+	# uniformly as score_at(candidate, projected_opps) × path_clear × time_decay.
+	# Time uses momentum-aware effective speed, so reverse candidates
+	# self-discount through their longer arrival.
 	# Smart-ping SHOOT: a teammate ordered this carrier to fire (see
 	# PING_SHOOT_EV_MULT — bias, not force; a zero shot stays zero).
 	# Stand-still's shot branch shares the raw shoot-now score (see _best_carry)
@@ -1443,19 +1401,18 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	carry_score *= lerpf(FORWARD_PRESSURE_MIN_SCALE, 1.0, forward_space)
 	# …but judge SELF by the same currency a pass receiver gets: _pass_ev credits
 	# a receiver with the best shot he can REACH by driving in (drive-in credit).
-	# Without the mirror, two equally-covered wingers at the blue line each rated
-	# the OTHER man's future above their own present — my carry paid the forward-
-	# pressure discount while his drive-in didn't — and the puck ping-ponged
+	# Without the mirror, two equally-covered wingers at the blue line each rate
+	# the OTHER man's future above their own present — my carry pays the forward-
+	# pressure discount while his drive-in does not — and the puck ping-pongs
 	# along the line (an offside factory) instead of ever entering the zone. The
 	# same formula on MY OWN spot floors the carry: a symmetric mate can never
 	# out-score me by proxy, so the pass only wins when he is GENUINELY more
 	# open, and a free entry gets taken by the man who already has the puck.
 	# Priced at our OWN velocity, exactly as the receiver's is (_pass_ev passes
-	# receiver_vel): the drive-in's whole point is that it is momentum-honest —
-	# a man in stride carries his pace into the drive while one curling back
-	# must brake it out first — and omitting it here priced every carrier as if
-	# he were standing still, so a gliding mate was credited with momentum the
-	# man actually holding the puck was denied.
+	# receiver_vel): the drive-in is momentum-honest — a man in stride carries his
+	# pace into the drive while one curling back must brake it out first — so
+	# omitting it here would price every carrier as standing still and credit a
+	# gliding mate with momentum the man holding the puck is denied.
 	var drive_in_value: float = _receiver_drive_in_value(
 			ctx, self_pos, ctx.self_wrister_shot_speed,
 			ctx.caps_by_peer.get(ctx.peer_id), ctx.self_velocity)
@@ -1568,18 +1525,14 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# -INF on the label means "nothing was conceded", not "a dump scored -INF".
 	debug_dump_score = -INF
 	# ── The dump is a RESIDUAL, not an option ────────────────────────────────
-	# It used to be scored and entered in the compete: search 36 deliveries,
-	# price each as gain-minus-concession, and let the winner run against the
-	# carry. Every calibration problem this area has ever had came from that one
-	# decision, because it requires a dumped puck's whole future to be
-	# commensurable with a carry's next beat, in one currency, at every point on
-	# the rink. It is not, and the symptoms were the ones you would predict from
-	# an incommensurable compete: the dump reached a spot the carry was forbidden
-	# to name (its credit is horizon-capped), so it out-scored an OPEN carrier on
-	# an EMPTY RINK; it won by being the SAFE play whenever the carry was
-	# contested, though the real cost of a failed entry and a dump-in are within
-	# a hair of each other; and the softest release on the ladder kept winning
-	# because its landing solve put the puck in the slot.
+	# Never score the dump and enter it in the value compete. That asks a dumped
+	# puck's whole future to be commensurable with a carry's next beat, in one
+	# currency, at every point on the rink, and it is not: the dump reaches a
+	# spot the carry is forbidden to name (its credit is horizon-capped), so it
+	# out-scores an OPEN carrier on an EMPTY RINK; it wins by being the SAFE play
+	# whenever the carry is contested, though the real cost of a failed entry and
+	# a dump-in are within a hair of each other; and the softest release on the
+	# ladder keeps winning because its landing solve puts the puck in the slot.
 	#
 	# Real hockey does not make this choice on value either. Every coaching
 	# source states it as an ordering, not a comparison: carry when you have
@@ -1590,8 +1543,8 @@ func _pick_commit_phase(ctx: RoleContext, rebuild_lists: bool) -> void:
 	# recovered only 22-29% of the time, and the conclusion drawn from it is that
 	# players give the puck up at the blue line too easily.
 	#
-	# So the question is no longer "is a dump worth more than a carry" but "is
-	# there anything else left". Retention is HOPELESS only when keeping the puck
+	# So the question is not "is a dump worth more than a carry" but "is there
+	# anything else left". Retention is HOPELESS only when keeping the puck
 	# is honestly worth nothing — the strip-point-priced carry has non-positive
 	# EV AND there is no drive-in to skate into — which is an ABSOLUTE read with
 	# no reference to the dump and no bar to tune. A qualified fire then beats
@@ -1932,10 +1885,10 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# INTENT_PASS block): the launch is solved so the puck lands at the
 		# magnet pace in the RECEIVER'S frame — harder onto a streaker, softer
 		# to one curling back. Scoring at the static pace while firing the
-		# relative one over-credited every feed to a receiver curling toward
-		# the play: the lane was priced at ~20 m/s but the real puck left
-		# soft, handing defenders the longer flight to close (picked off) and
-		# beating the saucer variant with a flat EV the flat feed never had.
+		# relative one over-credits every feed to a receiver curling toward the
+		# play: the lane prices at ~20 m/s while the real puck leaves soft,
+		# handing defenders the longer flight to close and beating the saucer
+		# variant with a flat EV the flat feed never had.
 		var to_recv: Vector3 = receiver_state.position - pass_origin
 		to_recv.y = 0.0
 		var scored_pass_dir: Vector3 = to_recv.normalized() \
@@ -1954,9 +1907,9 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# if a variant actually gets far enough to need it. Space is a property of
 		# the receiver and the ice around him, not of the pass that reaches him
 		# (the flat and saucer leads differ by well under a stick's reach, and the
-		# read is a smooth field), so computing it per variant paid for the same
-		# answer twice on the hottest path in the compete and let the two variants
-		# disagree about how open the same teammate was. It stays LAZY because
+		# read is a smooth field), so computing it per variant would pay for the
+		# same answer twice on the hottest path in the compete and let the two
+		# variants disagree about how open the same teammate is. It stays LAZY because
 		# it is the dominant cost here and _pass_ev's hard-zero gates (net-blocked
 		# lane, own-slot crossing, dead lane) reject a receiver before his value
 		# is ever priced — a covered man must not be paid for.
@@ -1987,10 +1940,8 @@ func _compute_best_pass(ctx: RoleContext, self_facing_xz: Vector2,
 		# Saucer competes only when the FLAT feed is contested — that is the
 		# variant's own first filter (SAUCER_SKIP_WHEN_LANE_CLEAR), read here
 		# off the flat variant's already-solved lane so a clear-lane receiver
-		# skips the whole second lead-solve + lane + EV. (The variant's
-		# internal check re-ran the flat lane at the saucer's slightly
-		# different lead; gating on the lane of the feed that would actually
-		# fire is the filter's intent.) A flat variant that filtered before
+		# skips the whole second lead-solve + lane + EV — the filter's intent is
+		# the lane of the feed that would actually fire. A flat variant that filtered before
 		# its lane solve leaves 0.0 — "contested" — so the saucer still gets
 		# its own look at leads the flat pass couldn't take.
 		if saucer_speed >= GameRules.DEFAULT_WRISTER_POWER_MIN_M_S \
@@ -2170,7 +2121,7 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	# The pass flies from the PUCK (the blade), not the body — judge the lane
 	# the puck actually travels. From behind the net the two differ by up to a
 	# stick's reach, which is exactly where "clear from the chest, clanks the
-	# frame from the blade" lived. (self_pos stays the carrier-body reference for
+	# frame from the blade" lives. (self_pos stays the carrier-body reference for
 	# the receiver scoring / loss-point terms below.)
 	var origin: Vector3 = _pass_origin(ctx)
 	# Hard zeros: net-blocker (segment crosses a net body) and own-DZ
@@ -2190,10 +2141,10 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	# ~135 ms after the intent commits, with the carried puck swept through
 	# the windup; a forechecker whose stick reaches the release point inside
 	# that window pokes it off the blade before it ever flies — the same
-	# race the shot's pressure factor runs (release_contest_clean), which
-	# the pass never priced: a defender on the carrier's HIP was invisible
-	# unless he happened to sit on the lane line, so a swarmed defenseman
-	# kept firing "clean" breakout feeds straight into pokes. Raced from
+	# race the shot's pressure factor runs (release_contest_clean). Without
+	# it a defender on the carrier's HIP is invisible unless he happens to
+	# sit on the lane line, and a swarmed defenseman fires "clean" breakout
+	# feeds straight into pokes. Raced from
 	# CURRENT opponent spots (the windup starts now); the poke surrenders
 	# the puck AT the blade — the most expensive loss point a breakout pass
 	# has. This is also what makes a pressured carrier move the puck EARLY:
@@ -2252,7 +2203,7 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	# bodies momentum-projected from their RELEASE-TIME spots
 	# (_scratch_opponents_release, already advanced by the windup) over the
 	# flight, sticks maneuvering over the short reception window (EVADE_HORIZON_S
-	# — see reach_clearance). A feed to a blanketed man now reads as the giveaway
+	# — see reach_clearance). A feed to a blanketed man reads as the giveaway
 	# it is, and one to a man a defender is skating onto during the windup no
 	# longer reads clear.
 	var reception_safety: float = AIActionScoring.clearance_to_safety(
@@ -2271,24 +2222,18 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	# the undiscounted benefit is a hard upper bound. A receiver who cannot beat
 	# the best feed found so far even at full marks is decided, and pricing him
 	# further is pure hot-path cost. This matters because the space read is the
-	# dominant term here and it runs PER TEAMMATE: in 5v5 the carrier was paying
-	# for four of them every re-eval to use one. Same exact-bound pattern as
+	# dominant term here and it runs PER TEAMMATE: in 5v5 that is four solves
+	# every re-eval to use one. Same exact-bound pattern as
 	# _score_move_candidate_base's prune ladder.
 	if receiver_value * completion * time_decay <= useless_below:
 		return 0.0
 	# The receiver pays the SAME forward-pressure toll the carrier's own score
-	# does: his value is what he can do with the puck from HIS spot, and a mate
-	# whose netward path is just as clogged as ours is not an upgrade. Without
-	# the mirror, two equally-covered wingers at the blue line each rated the
-	# other man's future above their own discounted present, and the puck
-	# ping-ponged along the line (an offside factory) instead of entering the
-	# zone. Symmetric coverage → symmetric discount → the man ALREADY holding
-	# the puck keeps it; the pass wins only when the mate is genuinely clearer.
-	# Priced at the receiver's OWN velocity and build, exactly as the carrier's
-	# side is (see _forward_clearance_at): a mate curling back into the play
-	# reads less space than one in stride through the same ice, and a lateral
-	# feed can no longer beat a carry by being credited with momentum it does
-	# not have while the carrier's is thrown away.
+	# does — the other half of the mirror the carry leg documents: his value is
+	# what he can do with the puck from HIS spot, so symmetric coverage gives
+	# symmetric discount and the pass wins only when the mate is genuinely
+	# clearer. Priced at the receiver's OWN velocity and build, exactly as the
+	# carrier's side is (see _forward_clearance_at), so a mate curling back reads
+	# less space than one in stride through the same ice.
 	# Solved once per receiver by _compute_best_pass and shared across its
 	# variants; < 0 means "compute it here" (the developing-outlet feed, which
 	# prices a single hypothetical spot).
@@ -2302,7 +2247,7 @@ func _pass_ev(ctx: RoleContext, receiver_spot: Vector3, pass_speed: float,
 	# minus the turnover cost of each loss mode. The pressure the
 	# carrier is under is priced by the CARRY/HOLD alternatives' own strip cost
 	# (they lose value under pressure) — the pass wins when it out-EVs them, with
-	# no separate "escape" bonus (that double-counted the pressure).
+	# no separate "escape" bonus, which would double-count the pressure.
 	var benefit: float = receiver_value * completion * time_decay
 	# Poked at the release: the puck squirts loose at the blade — the most
 	# expensive loss point a breakout pass has.
@@ -2387,28 +2332,6 @@ func _facing_rotation_time(self_facing_xz: Vector2, self_pos: Vector3,
 	return overshoot / maxf(turn_rate, 0.001)
 
 
-# Returns [best_score, best_pos] across all carry candidates:
-#   - Stand-still (current position, encodes patience)
-#   - Up to 6 field-derived FORWARD candidates: the space fan's best bearings
-#     at two fractions of the planning beat (see CARRY_FIELD_*)
-#   - Up to 10 REAR/LATERAL candidates: the five bearings the fan does not
-#     span, each at two fractions of that bearing's OWN beat reach, so an
-#     unavailable direction produces none (see _REAR_ANGLES)
-#   - The OZ slot anchor (long-range "drive at slot")
-#   - Two zone-exit wall routes when in our own half (see CARRY_EXIT_*)
-#   - Two post walkouts when behind either goal line (see WALKOUT_*)
-#   - The objective-directed evasion seam
-#
-# Each movement candidate scored uniformly and in TWO PASSES (see
-# CARRY_BEAM_WIDTH): every candidate gets the one-ply base score
-# (_score_move_candidate_base), then only the beam's best rows pay for the
-# two-ply reads (_upgrade_candidate_two_ply). Time uses momentum-aware
-# effective speed (backward candidates self-discount via longer arrival),
-# and a candidate whose straight route crosses a net frame prunes (the
-# walkouts are the exempt, around-the-post routes).
-#
-# `shoot_now_score` is the top-level SHOOT eval (pre-ping, pre-hysteresis):
-# stand-still's shot branch shares it verbatim — see the stand-still block.
 # Is a carry candidate on ice this bot can legally stand and handle on?
 #
 # The front-of-net rule is the plain clamp: rink side of both goal lines, a body's
@@ -2448,6 +2371,28 @@ func _candidate_ice_legal(candidate: Vector3, allow_behind: bool) -> bool:
 	return GameRules.push_out_of_net(xz).is_equal_approx(xz)
 
 
+# Returns [best_score, best_pos] across all carry candidates:
+#   - Stand-still (current position, encodes patience)
+#   - Up to 6 field-derived FORWARD candidates: the space fan's best bearings
+#     at two fractions of the planning beat (see CARRY_FIELD_*)
+#   - Up to 10 REAR/LATERAL candidates: the five bearings the fan does not
+#     span, each at two fractions of that bearing's OWN beat reach, so an
+#     unavailable direction produces none (see _REAR_ANGLES)
+#   - The OZ slot anchor (long-range "drive at slot")
+#   - Two zone-exit wall routes when in our own half (see CARRY_EXIT_*)
+#   - Two post walkouts when behind either goal line (see WALKOUT_*)
+#   - The objective-directed evasion seam
+#
+# Each movement candidate scored uniformly and in TWO PASSES (see
+# CARRY_BEAM_WIDTH): every candidate gets the one-ply base score
+# (_score_move_candidate_base), then only the beam's best rows pay for the
+# two-ply reads (_upgrade_candidate_two_ply). Time uses momentum-aware
+# effective speed (backward candidates self-discount via longer arrival),
+# and a candidate whose straight route crosses a net frame prunes (the
+# walkouts are the exempt, around-the-post routes).
+#
+# `shoot_now_score` is the top-level SHOOT eval (pre-ping, pre-hysteresis):
+# stand-still's shot branch shares it verbatim — see the stand-still block.
 func _best_carry(ctx: RoleContext, shoot_now_score: float,
 		directed_seam: Vector3) -> Array:
 	var self_pos: Vector3 = ctx.self_pos
@@ -2474,9 +2419,9 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 		fwd_x = to_slot_x * inv
 		fwd_z = to_slot_z * inv
 
-	# Score the 8 polar cardinals + slot anchor first; stand-still is
-	# scored last and only wins if STRICTLY greater than the best
-	# movement candidate. By construction stand-still ties with the
+	# Movement candidates are scored first; stand-still is compared last and
+	# only wins if STRICTLY greater than the best of them. By construction
+	# stand-still ties with the
 	# best fire option from the same instant (its shot branch IS the
 	# shoot-now score, and outside the zone its potential branch prices
 	# holding ground) — so stand-still ties with fire whenever the shot
@@ -2530,19 +2475,16 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 
 	# FORWARD candidates — generated from the space field's per-bearing profile
 	# (_scratch_bearing_control, filled by the forward-space read in
-	# _pick_commit_phase), not from a fixed ring. Replaces the forward half of
-	# the old 8 polar cardinals AND the whole committed-cut ring.
+	# _pick_commit_phase), not from a fixed ring of spokes. Fixed spokes spend
+	# most of their samples on directions the field already knows are walled, and
+	# none on the seam between two of them.
 	#
-	# Two defects it retires. (1) FIXED RADIUS: candidates sat 3 m out (6 m for
-	# the cut ring) no matter how fast the carrier was moving, so a bot at 9 m/s
-	# was choosing between spots 0.33 s away while re-deciding every 33 ms — a
-	# steering question dressed as a plan, with nothing sampled at the range
-	# where a zone entry is actually decided. The radius is now one PLANNING
-	# BEAT of travel at the carrier's real speed, which reduces to the old 3 m
-	# step at a standstill and reaches the blue line at a full stride — the same
-	# geometry the cut ring was hand-placed to catch. (2) BLIND BEARINGS: eight
-	# fixed spokes spend most of their samples on directions the field already
-	# knows are walled, and none on the seam between two of them.
+	# The radius is one PLANNING BEAT of travel at the carrier's real speed. A
+	# fixed radius is a steering question dressed as a plan: at 3 m a bot moving
+	# 9 m/s chooses between spots 0.33 s away while re-deciding every 33 ms, and
+	# nothing samples the range where a zone entry is actually decided. Beat
+	# scaling reduces to a 3 m step at a standstill and reaches the blue line at
+	# a full stride.
 	#
 	# The profile is ranked by control × forward projection — control alone would
 	# rate a wide-open sideways bearing above a merely-good netward one, and the
@@ -2591,9 +2533,9 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	# far this carrier travels forward in a beat, so reusing it back here would
 	# grow the rear radii with speed — precisely backwards. Travelling forward
 	# at pace, a spot behind you is not somewhere you can go: reaching it means
-	# shedding cross-speed, braking out the reversal and re-accelerating. The
-	# old fixed radii ignored that entirely and offered the same five spots at
-	# 9 m/s as at a standstill, paying full candidate cost for every one.
+	# shedding cross-speed, braking out the reversal and re-accelerating. Fixed
+	# radii ignore that entirely and offer the same five spots at 9 m/s as at a
+	# standstill, paying full candidate cost for every one.
 	#
 	# beat_reach_along returns negative when the bearing is off the reachable
 	# disc altogether, so an unavailable direction simply produces no candidate
@@ -2629,13 +2571,11 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	# out there the slot anchor + local candidates already cover the up-ice
 	# gradient.
 	#
-	# The gate used to be own HALF, which included the near half of the neutral
-	# zone — where the route is not merely redundant but backwards: the exit
-	# target sits just inside the blue line, so a carrier already past that line
-	# is being offered a spot BEHIND itself. Measured over the benchmark
-	# scenarios, every one of this ring's argmax wins came from inside the
-	# defensive zone (10 DZ / 0 NZ / 0 OZ), so the neutral-zone half of its
-	# generations was pure cost.
+	# Gating on own HALF instead would include the near half of the neutral zone,
+	# where the route is not merely redundant but backwards: the exit target sits
+	# just inside the blue line, so a carrier already past that line is offered a
+	# spot BEHIND itself. Over the benchmark scenarios every one of this ring's
+	# argmax wins came from inside the defensive zone (10 DZ / 0 NZ / 0 OZ).
 	if own_goal_dir * self_pos.z > GameRules.BLUE_LINE_Z:
 		var exit_x: float = GameRules.RINK_HALF_WIDTH - CARRY_EXIT_WALL_INSET_M
 		var exit_z: float = own_goal_dir * (GameRules.BLUE_LINE_Z - CARRY_EXIT_NZ_LEAD_M)
@@ -2707,21 +2647,21 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	# movement candidate — patience must be earned. Its SHOT branch is the
 	# top-level shoot-now score, shared verbatim: "hold and fire from here"
 	# and SHOOT are the same physical act (the wind-up runs either way, and
-	# momentum carries the release downstream over it), so pricing stand's
-	# shot separately at the CURRENT spot let a mid-cut hold read richer than
-	# the fire from the same instant — the projected release sits past the
-	# cut's apex while "here" still reads pre-apex — and the bot held at
-	# exactly the moment the window was open. Sharing the number restores the
-	# compete's fire-wins-ties construction by definition: stand_total =
+	# momentum carries the release downstream over it). Pricing stand's shot
+	# separately at the CURRENT spot lets a mid-cut hold read richer than the
+	# fire from the same instant — the projected release sits past the cut's
+	# apex while "here" still reads pre-apex — so the bot holds at exactly the
+	# moment the window is open. Sharing the number makes the compete's
+	# fire-wins-ties construction hold by definition: stand_total =
 	# shoot_now × safety − cost ≤ shoot_now ≤ fire. Outside the zone the hold
 	# also prices its position potential, realization-discounted like every
 	# other candidate. Same EV shape as the movement candidates: poke-safety
 	# discounts the benefit AND its complement is the strip probability
-	# feeding turnover_cost. Without the cost term stand-still was the only
-	# candidate that didn't price losing the puck, so under a converging
-	# forechecker every escape route went EV-negative while freezing stayed
-	# positive — the bot planted itself at exactly the moment it
-	# should skate clear. Safety is the static reachable-clearance read (a closing
+	# feeding turnover_cost. Without the cost term stand-still is the only
+	# candidate that does not price losing the puck, so under a converging
+	# forechecker every escape route goes EV-negative while freezing stays
+	# positive and the bot plants itself at exactly the moment it should skate
+	# clear. Safety is the static reachable-clearance read (a closing
 	# defender still registers from its momentum over the reaction window).
 	if stand_total > best_score:
 		best_score = stand_total
@@ -2733,38 +2673,6 @@ func _best_carry(ctx: RoleContext, shoot_now_score: float,
 	return [maxf(best_score, 0.0), best_pos, best_score]
 
 
-# Last-resort DUMP, zone-gated. Returns
-# [dump_value, aim_point, is_soft, is_rim, settle_point, launch_speed]; -INF
-# when no dump applies here (own-side neutral zone, or already in the OZ).
-#
-# The aim point and the settle point are DIFFERENT and both are returned. The
-# aim is where the stick points (a standoff down the launch line); the settle is
-# where the puck ends up, which is what every EV term below is priced at. They
-# used to be the same number doing both jobs, which is the defect this rewrite
-# exists to remove.
-#
-# Both dumps are chosen by SEARCHING RELEASES (AIActionScoring's
-# dump_clear_candidates / solve_dump_in) and pricing where the puck actually
-# comes to rest, not by aiming at a hand-placed spot and pricing the concession
-# there. A dump at any pace the bot can produce out-slides the rink several times
-# over, so the aim point is a place the puck passes through at speed — pricing the
-# giveaway there understated it wherever the aim was far from our net, which is
-# why a clear read cheap enough to beat carries that had real space.
-#
-# The two dumps are different errands and are priced as such:
-#   DZ CLEAR — every launch that neither ices nor dies in our own zone is a legal
-#     candidate, and the one we concede LEAST by is the clear. Still a pure
-#     concession: no gain term, so its value cannot exceed zero.
-#   NZ DUMP-IN — an offensive play. Get it deep, win it back, forecheck. Its
-#     gain is the race, and it cannot be icing by construction (offered only
-#     past the red line; icing needs a release from our own half).
-#
-# The 5v5 two-leg rim pricing this replaced is gone rather than ported. It
-# existed to price a bank the release could not actually execute — the route was
-# scored out to a wall waypoint and down it while the puck was fired at the
-# chord — and a searched release makes the distinction meaningless: a launch
-# angled into the near boards IS the rim, and the landing solver walks the real
-# carom instead of a modelled one.
 # Two clears priced within this of each other are the same clear as far as the
 # compete is concerned, so depth breaks the tie (see _best_dump). Sized well
 # under the shot-threat scale everything here is denominated in — a real
@@ -2778,8 +2686,8 @@ const CLEAR_PRICE_TIE_BAND: float = 0.001
 #
 # The clear's search ranks its candidates with this and _best_dump reports the
 # winner with it, so the delivery that is chosen is the delivery the compete is
-# told about. Those used to be two different numbers, ranked in different
-# currencies (see AIActionScoring.dump_clear_candidates).
+# told about — one number, one currency (see
+# AIActionScoring.dump_clear_candidates).
 func _dump_concession(ctx: RoleContext, spot: Vector3, our_goalie: Vector3,
 		defending_goal: Vector3, known_recovery: float = -1.0) -> Vector2:
 	var recovery: float = known_recovery
@@ -2796,6 +2704,30 @@ func _dump_concession(ctx: RoleContext, spot: Vector3, our_goalie: Vector3,
 	return Vector2(concede, recovery)
 
 
+# Last-resort DUMP, zone-gated. Returns
+# [dump_value, aim_point, is_soft, is_rim, settle_point, launch_speed]; -INF
+# when no dump applies here (own-side neutral zone, or already in the OZ).
+#
+# The aim point and the settle point are DIFFERENT and both are returned: the
+# aim is where the stick points (a standoff down the launch line), the settle is
+# where the puck ends up, and every EV term below is priced at the settle. One
+# number cannot do both jobs — a dump at any pace the bot can produce out-slides
+# the rink several times over, so the aim is a place the puck passes through at
+# speed, and pricing the giveaway there understates it wherever the aim is far
+# from our net (a clear cheap enough to beat carries that had real space).
+#
+# Both dumps are therefore chosen by SEARCHING RELEASES (AIActionScoring's
+# dump_clear_candidates / solve_dump_in) and pricing where the puck comes to
+# rest. A launch angled into the near boards IS the rim, and the landing solver
+# walks the real carom, so there is no separate two-leg rim pricing.
+#
+# The two dumps are different errands and are priced as such:
+#   DZ CLEAR — every launch that neither ices nor dies in our own zone is a legal
+#     candidate, and the one we concede LEAST by is the clear. Still a pure
+#     concession: no gain term, so its value cannot exceed zero.
+#   NZ DUMP-IN — an offensive play. Get it deep, win it back, forecheck. Its
+#     gain is the race, and it cannot be icing by construction (offered only
+#     past the red line; icing needs a release from our own half).
 func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 	var self_pos: Vector3 = ctx.self_pos
 	var attacking_goal: Vector3 = ctx.attacking_goal_pos
@@ -2911,23 +2843,22 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 	# The CLEAR is left as a pure concession, and the recovery race reaches its
 	# value through `concede` instead: a winger posted where the puck comes to
 	# rest raises recovery, which lowers what we hand over. Paying the clear a
-	# gain term as well was measured to break the compete — it made a clear score
-	# positive outright, so it beat CARRYING in situations with a clean regroup
-	# available, which is the dump-with-space failure in reverse. What a
-	# recovered clear is worth in the carry's own currency is a live calibration
-	# question, not something to settle with a term that happens to balance.
+	# gain term as well breaks the compete: it makes a clear score positive
+	# outright, so it beats CARRYING wherever a clean regroup exists — the
+	# dump-with-space failure in reverse. What a recovered clear is worth in the
+	# carry's own currency is a live calibration question, not something to
+	# settle with a term that happens to balance.
 	var gain: float = 0.0
 	if is_soft:
 		# MOMENTUM-HONEST chase clock, the same one every other arrival in the
-		# model uses. This was `nearest_distance / max_speed` — an instant
-		# full-speed sprint from a standstill — while the carry it competes with
-		# prices its arrival through time_to_arrive, ramp and all. Over a routine
-		# 11 m chase that lie is worth about a full second, and it is worth it in
-		# exactly one direction: the dump got to the puck at a pace no skater can
-		# produce while carrying paid the real one, so flinging it ahead beat
-		# skating it in over the SAME ground. Nearest by ETA, not by metres — the
-		# man already moving that way is the chaser even when someone flat-footed
-		# is standing closer.
+		# model uses. Never price it as `nearest_distance / max_speed`: that is an
+		# instant full-speed sprint from a standstill, worth about a second over a
+		# routine 11 m chase, and worth it in exactly one direction — the dump
+		# reaches the puck at a pace no skater can produce while the carry it
+		# competes with pays time_to_arrive's real ramp, so flinging it ahead
+		# beats skating it in over the SAME ground. Nearest by ETA, not by metres:
+		# the man already moving that way is the chaser even when someone
+		# flat-footed stands closer.
 		var chase_t: float = AIActionScoring.time_to_arrive(
 				self_pos, settle, ctx.self_velocity, ctx.self_max_speed,
 				ctx.self_max_accel, ctx.self_lateral_grip)
@@ -2941,12 +2872,11 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 		# The settle spot's potential is FUTURE value — recovering the puck deep
 		# is not a shot, it is a spot the winner still has to skate in from — so
 		# it pays the same realization discount every other future-value read in
-		# the model pays (see potential_realization_discount). The dump was the
-		# one consumer that skipped it, and skipping it is what made this
-		# trigger-happy: a carry candidate's potential arrives here already
-		# discounted over the travel that cashes it, so an UNdiscounted deep
-		# settle spot was being compared against discounted neutral-zone ones —
-		# a deep spot's raw value against a near spot's realized value. With the
+		# the model pays (see potential_realization_discount). Skipping it here is
+		# what makes a dump trigger-happy: a carry candidate's potential arrives
+		# already discounted over the travel that cashes it, so an UNdiscounted
+		# deep settle spot competes against discounted neutral-zone ones — a deep
+		# spot's raw value against a near spot's realized value. With the
 		# term in, the two legs telescope on both sides (chase decay x settle
 		# realization = travel decay x candidate realization = the same
 		# realization from HERE), and the compete reduces to what it should
@@ -2966,8 +2896,20 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 	return [gain - concede, aim, is_soft, false, settle, launch.length()]
 
 
+# Pass-1 candidate entry (see CARRY_BEAM_WIDTH): base-score `candidate` into
+# the beam rows and tighten the running prune bound to the best one-ply
+# total so far (see _beam_prune_bound for why that stays exact).
+func _beam_score_base(ctx: RoleContext, candidate: Vector3,
+		our_goalie: Vector3, is_post_walkout: bool) -> void:
+	var total: float = _score_move_candidate_base(
+			ctx, candidate, our_goalie, is_post_walkout, _beam_prune_bound)
+	if total > _beam_prune_bound:
+		_beam_prune_bound = total
+
+
 # EV of one movement carry candidate — the uniform scoring every
-# non-stand-still candidate (polar step, slot anchor, wall exit) runs:
+# non-stand-still candidate (field bearing, rear step, slot anchor, wall exit,
+# post walkout, evasion seam) runs:
 #
 #   benefit − turnover_cost, where
 #   benefit = score_at(candidate, projected_opps) × path_clear
@@ -2992,21 +2934,11 @@ func _best_dump(ctx: RoleContext, our_goalie: Vector3) -> Array:
 # destination: a carry that ends in open ice but threads our own slot must pay the
 # slot's turnover cost. Cost self-localizes: ~0 driving into the OZ, large when the
 # route drags the puck through our own slot.
-# Pass-1 candidate entry (see CARRY_BEAM_WIDTH): base-score `candidate` into
-# the beam rows and tighten the running prune bound to the best one-ply
-# total so far (see _beam_prune_bound for why that stays exact).
-func _beam_score_base(ctx: RoleContext, candidate: Vector3,
-		our_goalie: Vector3, is_post_walkout: bool) -> void:
-	var total: float = _score_move_candidate_base(
-			ctx, candidate, our_goalie, is_post_walkout, _beam_prune_bound)
-	if total > _beam_prune_bound:
-		_beam_prune_bound = total
-
-
-# ONE-PLY pass of the beam (see CARRY_BEAM_WIDTH): everything above except
-# the two-ply reads, which _upgrade_candidate_two_ply adds for the beam's
-# winners. Every finite score also appends a beam row stashing the
-# intermediates the upgrade needs, so pass 2 recomputes nothing.
+#
+# ONE-PLY pass of the beam (see CARRY_BEAM_WIDTH): everything above except the
+# two-ply reads, which _upgrade_candidate_two_ply adds for the beam's winners.
+# Every finite score also appends a beam row stashing the intermediates the
+# upgrade needs, so pass 2 recomputes nothing.
 func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 		our_goalie: Vector3, is_post_walkout: bool = false,
 		best_so_far: float = -INF) -> float:
@@ -3152,13 +3084,12 @@ func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 	# play gives him — carry, wind-up and flight. He tracks throughout, so the
 	# residual at release is the honest budget.
 	#
-	# Measured at the DESTINATION, deliberately. Sampling the route and taking
-	# the max was tried and reverted — see the note on _score_at. The carrier
-	# re-decides at ~30 Hz, so it already walks the route one tick at a time
-	# and re-prices the shot at every point on it; pricing the future shot INTO
-	# the carry as well double-counts that loop, and a max over K samples is
-	# optimistically biased against the shoot and pass legs, which get one
-	# estimate each.
+	# Measured at the DESTINATION, deliberately — never as a max over route
+	# samples. The carrier re-decides at ~30 Hz, so it already walks the route
+	# one tick at a time and re-prices the shot at every point on it; pricing
+	# the future shot INTO the carry as well double-counts that loop, and a max
+	# over K samples is optimistically biased against the shoot and pass legs,
+	# which get one estimate each.
 	var release_t: float = local_time + SkaterAgentStateMachine.BOT_WRISTER_LOOKAHEAD_S \
 			+ cand_flight + ctx.shot_timing_error_s * 0.5
 	var cand_displacement: float = AIShotValue.displacement_deficit_m(
@@ -3221,16 +3152,8 @@ func _score_move_candidate_base(ctx: RoleContext, candidate: Vector3,
 # at_self, so when even that can't raise dest_score the per-receiver lane
 # loop is already decided and skips wholesale.
 #
-# A carry CONTINUATION credit used to be maxf'd in here too — a second
-# speculative leg from the candidate to the slot, priced with the first
-# leg's physics and haircut for stacking two coarse plans. It is gone. It
-# existed only because the five-hole currency went FLAT in the offensive
-# zone: with every candidate returning nearly the same number, the two-ply
-# read was the only thing that could separate "cut in behind the beaten
-# man" from "orbit the perimeter". On the value seam that separation is
-# already in the one-ply surface, measured rather than manufactured — the
-# same cut-in/escape fixture that needed the continuation to open a 2.1x
-# margin now opens 2.2x without it.
+# There is no second speculative carry leg here: separating "cut in behind the
+# beaten man" from "orbit the perimeter" is already in the one-ply value seam.
 func _upgrade_candidate_two_ply(ctx: RoleContext, i: int) -> float:
 	var candidate: Vector3 = _beam_pos[i]
 	var dest_score: float = _beam_dest[i]
@@ -3417,21 +3340,19 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 		return potential_nz * AIActionScoring.potential_realization_discount(
 				pos, attacking_goal)
 	# THE SEAM (AIShotValue): the public xG form plus a keeper-displacement
-	# term, in place of the five-hole geometry. The hole model is not gone — it
-	# still picks aim / loft / power once SHOOT wins — but it no longer prices
-	# the ranking decisions, because a max over five holes with structural
-	# cliffs cannot supply the small, meaningful DIFFERENCES a carry beam
-	# consumes. Displacement arrives as a measured metre figure rather than the
-	# 0..1 unsettled scalar, which saturated the moment he was caught moving at
-	# all and so could not say HOW beaten he was.
+	# term. The ranking decisions are priced here rather than by the five-hole
+	# geometry (which still picks aim / loft / power once SHOOT wins), because a
+	# max over five holes with structural cliffs cannot supply the small,
+	# meaningful DIFFERENCES a carry beam consumes. Displacement arrives as a
+	# measured metre figure rather than the 0..1 unsettled scalar, which
+	# saturates the moment he is caught moving at all and so cannot say HOW
+	# beaten he is.
 	#
-	# KNOWN CONSEQUENCE, deliberately left standing for the experiment:
-	# `_aim_spread_rad` is now unused. xG is a property of the chance, not of
-	# who is shooting — correct for a stat, but it means the per-tier scatter
-	# dial stops acting as the SELECTIVITY lever BotSkillProfile documents it
-	# to be. A wobblier hand should decline marginal shots; on this path it no
-	# longer does. If the switchover holds, that comes back as a term on the
-	# shoot/don't gate rather than baked into the spot's value.
+	# The seam does NOT model the shooter: `_aim_spread_rad` is unused here, xG
+	# being a property of the chance rather than of who is shooting. So on this
+	# path the per-tier scatter dial does not act as the SELECTIVITY lever
+	# BotSkillProfile describes — a wobblier hand does not decline marginal
+	# shots.
 	var shoot_s: float = AIActionScoring.score_shoot_value(
 			pos, attacking_goal, predicted_goalie_pos, keeper_displacement_m,
 			GameRules.NET_HALF_WIDTH, opps, shot_speed_m_s,
@@ -3441,14 +3362,12 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 		# value map) is not consulted here; once a goalie is in play a real shot
 		# probability is the better read of a spot.
 		#
-		# The OZ_POSSESSION_VALUE floor that used to sit here is GONE, and that
-		# is the point of the switchover rather than a side effect. It existed
-		# because the old currency went dead-FLAT when no shot was available —
-		# every candidate returning exactly 0.01, so the argmax fell through to
-		# turnover cost and the carrier orbited the perimeter. A smooth xG
-		# surface does not go flat: a spot with no shot right now still scores
-		# by its distance and angle, so there is a gradient to climb without
-		# needing an anti-noise constant to stand in for one.
+		# No possession floor is needed under this read. A flat currency (one
+		# that returns the same constant wherever no shot is available) leaves
+		# the argmax to fall through to turnover cost and the carrier orbiting
+		# the perimeter, which is what an additive floor exists to mask. A
+		# smooth xG surface does not go flat: a spot with no shot right now
+		# still scores by its distance and angle, so the gradient is real.
 		return shoot_s
 	var potential_s: float = AIActionScoring.position_potential(
 			pos, attacking_goal, opps)
@@ -3460,9 +3379,9 @@ func _score_at(ctx: RoleContext, pos: Vector3, from_pos: Vector3,
 # The pass OPTION a carry candidate opens: the best cached receiver value
 # reachable through a CLEAR lane from the candidate spot. Backing off a
 # containing defender is valuable precisely because separation reopens
-# passing lanes — but the candidate eval priced only the spot's own
-# shot/potential, so a contained carrier's retreat earned nothing and it
-# pacified against the man instead. Coarse by design: receivers valued at
+# passing lanes; priced on the spot's own shot/potential alone, a contained
+# carrier's retreat earns nothing and it pacifies against the man instead.
+# Coarse by design: receivers valued at
 # their CURRENT spots (cached once per re-eval in _pick_action), lanes judged
 # against CURRENT defenders — this only has to rank SPOTS; the fired pass is
 # still fully solved at fire time. Priced as a future action: lane ×
@@ -3501,19 +3420,6 @@ func _candidate_pass_option(ctx: RoleContext, candidate: Vector3,
 	return best
 
 
-# The carry CONTINUATION a candidate opens — _candidate_pass_option's twin for
-# the carrier's own skating. From the candidate, arriving at pace, price the
-# slot drive with the same physics the first leg ran: opponents projected
-# through both legs, the keeper tracked over the whole route, second-leg
-# reach-safety and lane, time decay. This is the two-ply read that separates
-# "cut in behind the beaten man" from "orbit the perimeter": one step deep,
-# against a set goalie, both spots read nearly the same and the safety
-# gradient alone picks the orbit — the transient opening a beaten defender
-# concedes only prices in on the step AFTER the cut, exactly when he can no
-# longer recover into it (calibration in test_role_carrier). Credited via
-# maxf like the pass option, so a spot's value is the best thing it lets the
-# carrier DO next. OZ regime only: outside the zone position_potential's
-# whole-rink gradient already pulls net-ward.
 # The value of an open pass receiver DRIVING IN: the best value they can reach by
 # carrying toward the net, not just a one-timer / potential from where they catch it.
 # Models "a wide-open man walks into a better chance" (OZ) and "an ahead man with a
@@ -3619,16 +3525,9 @@ func _carrier_forward_clearance(ctx: RoleContext) -> float:
 #
 # The read is AIActionScoring.controlled_space — a fan of carry paths across the
 # forward cone, each priced by the same carry_safety the real carry candidates
-# use, area-weighted (see that block doc for the model). It replaced a single
-# netward ray through carry_lane_clearance, which was a corridor-occupancy test
-# with three defects this discount could not tolerate: no clock (a defender 3 m
-# ahead and one 8 m ahead read identically, and the carrier's own pace changed
-# nothing), a hard cliff at the reach boundary (measured 0.556 at 1.0 m off the
-# ray vs 1.000 at 2.0 m — 45 cm deciding whether the puck went cross-ice), and
-# it judged ONE straight path while discounting a carry search that spans eight
-# directions, so open ice beside a gap-controller still read as a wall. The fan
-# fixes all three at once, and the momentum credit is not a term — it falls out
-# of pricing each sample at its honest time_to_arrive.
+# use, area-weighted; that block doc carries the model and why a single netward
+# ray cannot serve as this discount. The momentum credit is not a term here: it
+# falls out of pricing each sample at its honest time_to_arrive.
 func _forward_clearance_at(ctx: RoleContext, pos: Vector3, vel: Vector3,
 		caps: AISkaterCaps) -> float:
 	return AIActionScoring.controlled_space(
@@ -3805,15 +3704,12 @@ func _slot_anchor(own_goal_dir: float) -> Vector3:
 	return Vector3(0.0, 0.0, slot_z)
 
 
-# Returns the opposing goalie's CURRENT world position. Used as input
-# to AIActionScoring.predict_goalie_pos. Falls back to the attacking
-# goal when goalie state isn't buffered yet (first-frame edge case).
 # Where a pass physically leaves from: the carried puck (riding the blade, up
 # to a stick's reach from the body), falling back to the body center when the
 # snapshot has no puck. Mirrors the shot model's puck-origin release ref: the
 # lead solve, the friction-compensated launch speed, and the net/lane checks
-# all measure the real flight, not a flight from the passer's chest — on a
-# close feed the ~1 m origin error was a systematic over-lead.
+# all measure the real flight, not a flight from the passer's chest, where the
+# ~1 m origin error is a systematic over-lead on a close feed.
 func _pass_origin(ctx: RoleContext) -> Vector3:
 	if ctx.snapshot.puck_state != null:
 		return Vector3(
@@ -3822,6 +3718,9 @@ func _pass_origin(ctx: RoleContext) -> Vector3:
 	return ctx.self_pos
 
 
+# Returns the opposing goalie's CURRENT world position. Used as input
+# to AIActionScoring.predict_goalie_pos. Falls back to the attacking
+# goal when goalie state isn't buffered yet (first-frame edge case).
 func _goalie_now(ctx: RoleContext) -> Vector3:
 	var opp_goalie: GoalieNetworkState = ctx.snapshot.goalie_states.get(1 - ctx.team_id)
 	if opp_goalie == null:

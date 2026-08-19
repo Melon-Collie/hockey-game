@@ -8,59 +8,12 @@ extends RefCounted
 # configs; HARD leaves every value at the controller's authored default, so Hard
 # is *exactly* the authored goalie by construction.
 #
-# ── Why these knobs ──────────────────────────────────────────────────────────
-# A lesser goalie must play like a WEAKER goalie, not a dumb one — every lever
-# here is a trait a real weaker goalie actually has, so every tier still reads as
-# a goalie (tracks the play, squares up, drops butterfly; he just gives up the
-# net and can't rob you). Two groups:
-#
-# Read-latency / stick group:
-#   • reaction_delay_s       — the reflexive leg-drop read latency, the goalie's
-#     CORE save mechanism (it gates the butterfly drop that seals the five-hole
-#     and the low corners). Higher → in-tight and quick-release low shots land
-#     before the pads ever start moving. The single strongest "reacts, but
-#     slower" lever.
-#   • prearmed_reaction_delay_s — the primed (quiet-eye) read after watching a
-#     visible windup. CRITICAL for the lower tiers: beginners telegraph every
-#     shot (long deliberate wrister coils), which primes the goalie into its
-#     FASTEST read — an untiered prearm makes Easy sharpest against exactly the
-#     shots newcomers take. Higher → a telegraphed shot still beats him.
-#   • butterfly_drop_s       — pads-to-floor time once the drop commits. Higher
-#     → the five-hole and low ice stay open through a longer drop window.
-#   • arm_reaction_delay_s   — glove/blocker read latency. Higher → the arms
-#     start later, so top-corner and quick-release shots beat him more.
-#   • cross_crease_react_delay_s — back-door read latency. Higher → he loses the
-#     cross-crease race more readily (the 2-on-1 / royal-road one-timer).
-#   • poke_radius_m          — stick-strip reach on a carried puck. Lower → dekes
-#     and in-tight puckhandling get through more often.
-#   • screen_max_extra_delay_s — CAP (s) on the grounded screen-occlusion pickup
-#     delay (how long a body hides the puck from the goalie — see GoalieBehavior
-#     Rules.screen_occlusion_delay). Higher → point shots through traffic beat him
-#     more (a weaker goalie loses a screened puck for longer).
-#   • move_read_scramble_delay_s — extra read latency while SCRAMBLING (standing
-#     up out of a butterfly, or riding a committed lunge). Higher → rebounds and
-#     second chances convert harder against him. Deliberately the only tiered
-#     caught-unset latency: a goalie merely travelling on his feet pays the small
-#     untiered `move_read_speed_delay` instead, because his real cost is the
-#     momentum he carries through the reaction freeze — and THAT tier-varies for
-#     free off lateral_accel_mps2 (worse edges take longer to kill, so he drifts
-#     further past the puck). See GoalieController.unset_drift_decel_ratio.
-#
-# Positioning / save group (the "give up the net" levers, so the scale is a real
-# ladder rather than reaction latency alone):
-#   • depth_aggressive_m / depth_base_m — challenge depth on the depth chart.
-#     Lower → the goalie sits DEEPER, cutting less angle, so there's more net to
-#     shoot at from everywhere. The strongest "beatable but realistic" lever — a
-#     positionally-passive goalie giving you the net.
-#   • glove_react_max_speed_mps / blocker_react_max_speed_mps — arm reach speed.
-#     Lower → he can't pull the corner back, so corner shots score.
-#   • pad_toe_out_butterfly_deg — rebound steering. Lower → saves kick back into
-#     the slot instead of to the corner, so second chances appear.
-#   • lateral_accel_mps2 — how fast a lateral push ramps up (NOT the top speed).
-#     Lower → he's slow to get moving side-to-side, beaten across on quick plays.
-#   • five_hole_base_m — the standing pad gap (m of separation each side). Higher
-#     → a visibly leaky five-hole whenever the paddle is off-center (tracking,
-#     active blade); the drop still seals it, just later on the lower tiers.
+# Every lever here is a trait a real weaker goalie actually has, so a lower tier
+# still reads as a goalie — tracks the play, squares up, drops butterfly — that
+# gives up the net and can't rob you, rather than as a dumb one. They fall in two
+# groups: read latencies (when he starts moving) and positioning / save levers
+# (how much net he concedes), which is what makes the ladder a real one instead
+# of reaction latency alone.
 #
 # AI MIRROR: the bots' shot/pass scoring predicts the live goalie with the same
 # read model (leg/arm delays, drop time, lateral accel ramp, arm deploy), held as
@@ -96,8 +49,12 @@ var poke_radius_m: float
 # can hide the puck from the goalie before the read starts).
 var screen_max_extra_delay_s: float
 # Extra read latency (s) while scrambling — standing up out of a butterfly, or
-# out of the play on a committed lunge. Merely travelling on his feet is priced
-# separately and untiered (GoalieController.move_read_speed_delay).
+# out of the play on a committed lunge. The only tiered caught-unset latency:
+# merely travelling on his feet pays the small untiered
+# GoalieController.move_read_speed_delay, because there his real cost is the
+# momentum carried through the reaction freeze, which already tier-varies off
+# lateral_accel_mps2 (worse edges take longer to kill, so he drifts further past
+# the puck — GoalieController.unset_drift_decel_ratio).
 var move_read_scramble_delay_s: float
 # Challenge depth (m) at the doorstep / mid-range on the depth chart. Lower sits
 # the goalie deeper in the net, giving up shooting angle.
@@ -118,15 +75,21 @@ var lateral_accel_mps2: float
 # tiers most players face.
 var puck_play_go_margin_s: float
 # Reflexive leg-drop read latency (s) — gates the butterfly drop that seals the
-# five-hole and low ice. AI-mirrored (AIActionScoring.goalie_leg_delay_s).
+# five-hole and low ice, so it is the single strongest "reacts, but slower"
+# lever. AI-mirrored (AIActionScoring.goalie_leg_delay_s).
 var reaction_delay_s: float
 # Primed (quiet-eye) read latency (s) after watching a visible windup — the
-# floor BOTH reads shortcut to when the goalie is pre-armed.
+# floor BOTH reads shortcut to when the goalie is pre-armed. Tiering it matters
+# most at the bottom: beginners telegraph every shot (long deliberate wrister
+# coils), so an untiered prearm makes Easy sharpest against exactly the shots
+# newcomers take.
 var prearmed_reaction_delay_s: float
 # Pads-to-floor time (s) once the butterfly commits. AI-mirrored
 # (AIActionScoring.goalie_butterfly_drop_s).
 var butterfly_drop_s: float
-# Standing five-hole pad gap (m of separation each side of center).
+# Standing five-hole pad gap (m of separation each side of center). Higher = a
+# visibly leaky five-hole whenever the paddle is off-centre (tracking, active
+# blade); the drop still seals it, just later.
 var five_hole_base_m: float
 # READ STALENESS (s) — how old the goalie's belief about WHERE the shot is going
 # is when he commits to it. Distinct from every other knob here: the rest set
@@ -147,12 +110,10 @@ var five_hole_base_m: float
 # are not "harder to beat", they are just indistinguishable.
 var read_lag_s: float
 # READ RE-SOLVE TIME (s) — how long it takes him to correct a WRONG belief once
-# the puck is in flight and he can watch it. Split out of `read_lag_s`, which
-# used to set both: how stale the pre-read is AND how fast it converges. Those
-# are physically different — one is the age of a wind-up read, the other is how
-# quickly a goalie re-solves a live puck he is now tracking — and tying them
-# together meant you could not lengthen the deception window without also making
-# the pre-read staler.
+# the puck is in flight and he can watch it. Physically a different quantity from
+# `read_lag_s` (the age of a wind-up read), which is why it is a separate knob:
+# tying them together means the deception window cannot lengthen without also
+# making the pre-read staler.
 #
 # It is the term that decides whether LATERAL deception pays. The belief is only
 # wrong for this long, and the arms recover in whatever is left of the flight:
@@ -200,8 +161,8 @@ func _init(p_arm_reaction_delay_s: float, p_cross_crease_react_delay_s: float,
 	five_hole_base_m = p_five_hole_base_m
 
 
-# Hard == the GoalieController @export defaults verbatim. Keep these in sync with
-# the controller so applying Hard is a true no-op (the ceiling we've tuned).
+# Hard == the GoalieController @export defaults verbatim, so applying Hard is a
+# true no-op (pinned by tests/unit/rules/test_goalie_profile_mirrors.gd).
 static func hard() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.18, 0.12, 0.25, 0.30, 0.12,
 			1.75, 1.30, 5.0, 5.0, 18.0, 14.0, 0.9,
@@ -226,8 +187,7 @@ static func normal() -> GoalieSkillProfile:
 # butterfly leave the five-hole and low corners open from inside the slot, the
 # arms start late and crawl (top corners open), the primed read barely beats the
 # cold one (telegraphed beginner windups still score), and he's slow to get
-# moving across. Only a shot more or less AT him gets saved. Still tracks,
-# squares, and drops butterfly — a real but weak goalie, never a statue.
+# moving across. Only a shot more or less AT him gets saved.
 static func easy() -> GoalieSkillProfile:
 	return GoalieSkillProfile.new(0.45, 0.40, 0.08, 0.70, 0.35,
 			0.90, 0.60, 2.4, 2.4, 5.0, 6.0, INF,

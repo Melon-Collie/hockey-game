@@ -29,7 +29,7 @@ var strong_x: float = 1.0
 # Opponent peer_id this defender is assigned to cover ("man-on-threat"),
 # from TeamBrain's central threat partition. -1 = unassigned (no brain,
 # offensive/neutral state, or a defender outside the backline) — in that
-# case defensive roles fall back to their legacy all-opponents minimax.
+# case defensive roles fall back to the all-opponents minimax.
 # Lets the MARK defenders focus on a DISTINCT man so two don't both
 # collapse onto the single most dangerous opponent.
 var assigned_threat_peer: int = -1
@@ -43,19 +43,18 @@ var threat_shoot_base_by_opp: Dictionary[int, float] = {}
 # is genuinely attacking, who is back, the numbers, backpressure, coverage
 # accounting. Live reference to the brain's instance (a frozen copy in
 # production dispatch). Never null: an unwired context gets the inert read from
-# TeamStrategyView, which reports Mode.NONE and no attackers, so behavior with
-# no brain is exactly what it was before the read existed.
+# TeamStrategyView, which reports Mode.NONE and no attackers.
 var rush_read: AIRushRead = TeamStrategyView.new().get_rush_read()
 # Last dispatch's answer to "did I hold my forward stand?" — the incumbent side
 # of the pinch read's control hysteresis (AIRoleHelpers.may_hold_forward_stand).
 # Reset across a slot change, same contract as prev_role_target.
 var prev_held_forward_stand: bool = false
 # Peer -> team_id lookup for opponent / teammate filtering. Live dict
-# owned by PlayerRegistry; roles read with `dict.get(pid, -1)`. Used to
-# be a `Callable`; downgraded to a Dictionary because role decide() and
-# its helpers iterate skaters at AI dispatch rate and the Callable.call
-# overhead showed up in profiles. Empty dict = nothing resolves (the
-# decide() helpers all default to -1 unknown).
+# owned by PlayerRegistry; roles read with `dict.get(pid, -1)`. A Dictionary
+# rather than a resolver `Callable` on purpose: role decide() and its helpers
+# iterate skaters at AI dispatch rate, where Callable.call overhead shows up in
+# profiles. Empty dict = nothing resolves (the decide() helpers all default to
+# -1 unknown).
 var team_id_by_peer: Dictionary = {}
 # Smoothed per-peer linear acceleration (m/s² in world XZ), keyed by
 # peer_id. Built by SkaterAgentStateMachine from frame-over-frame
@@ -64,7 +63,7 @@ var team_id_by_peer: Dictionary = {}
 # extrapolation — a receiver who's turning or just starting to skate
 # arrives meaningfully off the constant-velocity prediction over a
 # 0.4-0.6 s pass window. Missing entries default to ZERO (no accel
-# adjustment) — same behaviour as before this field existed.
+# adjustment).
 var acceleration_by_peer: Dictionary = {}
 
 # Smoothed per-peer HEADING turn rate (rad/s, signed), keyed by peer_id — how
@@ -72,7 +71,7 @@ var acceleration_by_peer: Dictionary = {}
 # commitment read: a receiver mid-cut is hard to lead, so a feed to one is
 # priced as riskier in the pass EV (see _pass_variant_ev → pass_miss_prob). A
 # running estimate, so confidence builds over time. Missing entries default to
-# 0.0 (settled / no penalty) — same behaviour as before this field existed.
+# 0.0 (settled / no penalty).
 var heading_omega_by_peer: Dictionary = {}
 
 # Per-peer attribute-scaled capabilities (AISkaterCaps), keyed by peer_id — every
@@ -81,15 +80,15 @@ var heading_omega_by_peer: Dictionary = {}
 # instead of the league average. Memoized by PlayerRegistry (rebuilt only on
 # spawn / picker, never per tick) and passed here by live reference, same pattern
 # as team_id_by_peer / acceleration_by_peer. Read `caps_by_peer.get(pid, null)`;
-# a missing entry (unit tests, unwired) means "fall back to the league default",
-# which reproduces the prior behaviour exactly.
+# a missing entry (unit tests, unwired) means "fall back to the league default".
 var caps_by_peer: Dictionary = {}
 
 # ── Self capabilities (attribute-scaled, this bot only) ───────────────────────
 # Populated by SkaterAgentStateMachine from its own AISkaterCaps so the carrier
 # scores ITS OWN actions with this bot's real top speed / shot speed instead of
-# league defaults. Defaults equal the baseline, so unwired contexts (unit tests)
-# keep the prior behaviour. (Cross-player evaluation reads caps_by_peer above.)
+# league defaults. Defaults equal the league baseline, so an unwired context
+# (unit tests) scores as an average body. (Cross-player evaluation reads
+# caps_by_peer above.)
 var self_max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
 # This bot's real all-direction thrust (Acceleration-scaled max_accel). Feeds
 # time_to_arrive's cross-momentum shed cost, so a high-Acceleration build prices a
@@ -98,7 +97,6 @@ var self_max_accel: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
 # This bot's lateral-grip multiplier (AISkaterCaps.lateral_grip) — its own
 # ETA reads shed cross-momentum at the real perpendicular authority.
 var self_lateral_grip: float = 1.0
-# Also the upper clamp on this bot's distance-adaptive pass launch speed.
 # This bot's own aim-execution spread (radians, worst-case): the per-release
 # sampled aim error over the blade aim arm. The shot-aim model reserves this
 # much of the net's entry width so a corner snipe's error spreads into
@@ -123,6 +121,8 @@ var self_pass_aim_error_rad: float = 0.0
 # delay lands early enough — the honest counterpart of the aim spread, on
 # the WHEN axis instead of the WHERE. 0 for a tick-perfect (test/raw) agent.
 var shot_timing_error_s: float = 0.0
+# This bot's charged wrister release speed — also the upper clamp on its
+# distance-adaptive pass launch speed.
 var self_wrister_shot_speed: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
 # This bot's blade angle ladder (tan per elevated level, x/y/z = LOW/MID/HIGH
 # — AISkaterCaps.loft_tans), so its own HIGH-hole rung-picker prices the arcs
@@ -147,8 +147,7 @@ var self_blade_reach: float = SkaterAgentStateMachine.BLADE_REACH_M
 # This bot's blade reach cone half-angle (ROM + torso twist) and Agility-scaled
 # facing turn rate — how the carrier prices the rotation an out-of-cone aim costs
 # (_facing_rotation_time). A shot/pass anywhere inside the cone is free (no body
-# turn); only the narrow back wedge pays, at this turn rate. League defaults when
-# unwired (unit tests) reproduce the prior scoring.
+# turn); only the narrow back wedge pays, at this turn rate.
 var self_reach_cone_half_angle: float = deg_to_rad(157.0)
 var self_facing_turn_rate: float = 6.0
 # Release-offset sampling inputs (carrier shoot-now eval): the Hands-scaled blade
@@ -163,19 +162,19 @@ var self_backhand_power_coefficient: float = 0.75
 var self_forehand_perp_sign: float = -1.0
 
 # ── Difficulty pace knobs (from BotSkillProfile, this bot only) ───────────────
-# Set by SkaterAgentStateMachine each tick from the applied skill profile.
-# Defaults are the no-op baseline, so unwired contexts (unit tests, perfect bot)
-# behave exactly as before these existed.
+# Set by SkaterAgentStateMachine each tick from the applied skill profile;
+# defaults are the no-op baseline (unit tests, perfect bot).
 # Extra metres PRESSURE drops its cut-off line back toward our net (pressure.gd).
 var pursuit_standoff_m: float = 0.0
 # Multiplier on this bot's own pass launch speed (carrier.gd own-pass sites).
 var pass_speed_scale: float = 1.0
-# How hard the on-puck pressurer hunts body checks. 1.0 = today; 0.0 = never
-# commits a check (pure containment). Consumed in evaluate_body_check.
+# How hard the on-puck pressurer hunts body checks. 1.0 = full hit-hunting;
+# 0.0 = never commits a check (pure containment). Consumed in
+# evaluate_body_check.
 var check_aggression: float = 1.0
 # Multiplier on DEFENSIVE_ANTICIPATION_S — how far ahead a defender reads the
 # other attackers when pricing the carrier's options (lead_threat, via the
-# anticipating collect_opponents callers). 1.0 = today. Never moves a stand.
+# anticipating collect_opponents callers). Never moves a stand.
 var defensive_anticipation_scale: float = 1.0
 # SETTLE DOUBT: fraction by which a freshly-possessed carrier handicaps its own
 # read of every ACTIVE option (shoot / pass / dump) against that option's
@@ -209,13 +208,13 @@ var plays_rush_pass_lanes: bool = true
 # pressure the blade pulls the puck to the protected side of the reachable-set
 # seam (carrier protect_offset/protect_gain, consumed by the state machine's
 # carry mouse aim) and the poke-evade deke cuts toward the seam instead of a
-# blind perpendicular. False = today's naive forward carry (the puck stays
-# presented ahead of the body — the easy pickpocket a newcomer needs).
+# blind perpendicular. False = a naive forward carry (the puck stays presented
+# ahead of the body — the easy pickpocket a newcomer needs).
 var protects_the_puck: bool = true
 
 # ── Smart-ping directive (a human teammate's tactical order) ──────────────────
 # Populated per dispatch from TeamBrain.ping_* (AIPingDirectives). Defaults are
-# the no-op baseline so unwired contexts (unit tests) behave exactly as before.
+# the no-op baseline (unit tests).
 # GO_THERE steering override for THIS bot; Vector3.INF = none. The off-puck
 # state machine replaces RoleDecision.target_position with it.
 var ping_move_target: Vector3 = Vector3.INF
