@@ -78,7 +78,7 @@ extends Node3D
 	set(v):
 		glass_color = v
 		_rebuild()
-@export var ice_color: Color = Color(0.84, 0.91, 1.0):
+@export var ice_color: Color = Color(0.92941177, 0.9490196, 0.972549, 1):
 	set(v):
 		ice_color = v
 		_rebuild()
@@ -91,7 +91,7 @@ extends Node3D
 		blue_line_color = v
 		_rebuild()
 @export_group("Ice Shader")
-@export var ice_fog_color: Color = Color(0.84, 0.91, 1.0):
+@export var ice_fog_color: Color = Color(0.7490196, 0.80784315, 0.8862745, 1):
 	set(v):
 		ice_fog_color = v
 		_rebuild()
@@ -112,7 +112,7 @@ extends Node3D
 # skater/goal reflections hold together under the WorldEnvironment's SSR (see
 # docs/arena-atmosphere-spec.md), high enough that the ice keeps its
 # slightly-diffuse head-on read rather than becoming a mirror.
-@export_range(0.0, 1.0) var ice_roughness_head_on: float = 0.15:
+@export_range(0.0, 1.0) var ice_roughness_head_on: float = 0.35:
 	set(v):
 		ice_roughness_head_on = v
 		_rebuild()
