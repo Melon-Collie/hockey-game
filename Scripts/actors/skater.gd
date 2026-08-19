@@ -6,7 +6,7 @@ extends Node3D
 # picker) — the setter re-positions the four hand/shoulder Marker3Ds so the
 # rig follows. Most other sign-flips (stick orientation, blade side, IK pole)
 # read this at runtime and need no special handling.
-@export var is_left_handed: bool = true:
+var is_left_handed: bool = true:
 	set(v):
 		is_left_handed = v
 		_position_hand_markers()
@@ -59,7 +59,7 @@ const _BLADE_CRADLE_CUP_DEG: float = 8.0             # axial twist (handedness-s
 # so the drawn arm roots at the deltoid cap. Sits so the cap's blunt base
 # seats into the trap slope (torso upper-chest x extent ~0.21) with its
 # equator just proud of the jersey.
-@export var shoulder_offset: float = 0.22
+var shoulder_offset: float = 0.22
 # Shoulder Y in upper-body-local space. Matches the ShoulderL/R ball centers
 # in the scene (keep in sync) so the drawn arm hangs from the visible
 # shoulder rather than a point 5 cm below it. Vertical drop from shoulder to
@@ -70,7 +70,7 @@ const _BLADE_CRADLE_CUP_DEG: float = 8.0             # axial twist (handedness-s
 # hand can never be placed beyond the arm's length — raising this shrinks
 # flat-footed reach; the directional reach lean (SkaterPoseCoordinator) buys
 # it back by tilting the whole frame toward the target.
-@export var shoulder_height: float = 0.40
+var shoulder_height: float = 0.40
 # Blade length (heel to toe). The Blade Marker3D represents the heel (where
 # the shaft meets the blade); the blade mesh extends forward by this distance.
 # The puck plays at the contact point, which is blade_length * 0.5 forward
@@ -78,7 +78,7 @@ const _BLADE_CRADLE_CUP_DEG: float = 8.0             # axial twist (handedness-s
 # set_blade_position() orients via look_at each tick). The visible blade mesh
 # is generated from this length by StickBladeMeshBuilder (_rebuild_blade_mesh)
 # — the BoxMesh in Scenes/Skater.tscn is only a pre-_ready placeholder.
-@export var blade_length: float = GameRules.DEFAULT_BLADE_LENGTH_M
+var blade_length: float = GameRules.DEFAULT_BLADE_LENGTH_M
 # Cosmetic blade-mesh geometry (StickBladeMeshBuilder): how deep the curve
 # bows, how late along the blade it turns (higher = toe curve, lower = heel
 # curve), the radius of the rounded toe corner, and how far the face twists
@@ -86,21 +86,21 @@ const _BLADE_CRADLE_CUP_DEG: float = 8.0             # axial twist (handedness-s
 # blade_length only; the gameplay face angle is PlayerAttributes' own table.
 # Defaults are the M92 pattern; apply_blade_pattern swaps the set per the
 # CURVE gear.
-@export var blade_curve_depth: float = 0.022
-@export var blade_curve_power: float = 3.0
-@export var blade_toe_round_m: float = 0.028
-@export var blade_face_twist_deg: float = 7.0
+var blade_curve_depth: float = 0.022
+var blade_curve_power: float = 3.0
+var blade_toe_round_m: float = 0.028
+var blade_face_twist_deg: float = 7.0
 # Length of the hosel — the tapered throat carrying the heel cross-section up
 # the shaft line (the shaft-follow tilt keeps the blade rigidly at
 # blade_lie_deg to the shaft, so fixed blade-local hosel geometry stays glued
 # to the rendered shaft in every pose). Blade mesh only; the tape band keeps
 # its flat heel cap.
-@export var blade_hosel_length: float = 0.085
+var blade_hosel_length: float = 0.085
 # The stick's built-in lie: the shaft↔ice angle at which the blade sits flat.
 # Derived from the rest pose (hand ~0.87 m above the heel over a
 # sqrt(1.30² − 0.87²) ≈ 0.97 m horizontal run → atan ≈ 42°, i.e. about a
 # real lie 5.5). The shaft-follow pitch reads deviation from this angle.
-@export var blade_lie_deg: float = 42.0
+var blade_lie_deg: float = 42.0
 # Reception ceiling lean from the blade-curve gear (attributes v4): the
 # reception decision sites scale the puck's league deflect ceiling + squared
 # bonus by this — a flatter pattern soaks a harder feed. Set by
@@ -125,27 +125,27 @@ var gear_style: GearStyleConfig = GearStyleConfig.new()
 # common case pays for no node at all.
 var _face_gear_attach: BoneAttachment3D = null
 var _face_gear_mesh: MeshInstance3D = null
-@export var wall_squeeze_threshold: float = 0.3
+var wall_squeeze_threshold: float = 0.3
 # When the puck is lost on the boards (blade squeezed past the threshold above),
 # it squirts ALONG the boards in the carrier's travel direction. This blends a
 # small fraction of the inward wall normal into that release so the puck peels a
 # touch off the boards rather than hugging them — reads as coming free. 0 = pure
 # along-wall slide; ~0.25 ≈ 14° off the boards.
-@export var wall_pin_inward_bias: float = 0.25
+var wall_pin_inward_bias: float = 0.25
 # How far the blade mesh visually shifts perpendicular to the stick toward the
 # forehand or backhand face during carry. Player's cursor stays at the puck;
 # the visible blade renders just to one side of the puck on the appropriate
 # face. Pure cosmetic — IK math, pickup distance, shot release all use the
 # centered blade contact.
-@export var carry_blade_offset: float = 0.07
+var carry_blade_offset: float = 0.07
 # How fast the rendered carry factor lerps toward the discrete ±1 side.
 # Higher = snappier flip, lower = visible swing through center. ~12/s ≈ 80 ms
 # to traverse 95% of the transition.
-@export var carry_side_lerp_speed: float = 12.0
+var carry_side_lerp_speed: float = 12.0
 # Peak Y lift (world meters) of the transit hop — the blade rising over the
 # puck while the pushing face flips (see get_carry_transit_factor). Set to 0
 # to disable.
-@export var carry_transit_lift: float = 0.10
+var carry_transit_lift: float = 0.10
 # ── Stickhandling push model (docs/stickhandling-push-model-plan.md) ──────────
 # The blade renders on the side of the puck it is PUSHING from — the side
 # opposite the puck's motion in the carrier's frame — and inward pulls play
@@ -158,21 +158,21 @@ var _face_gear_mesh: MeshInstance3D = null
 # as the flip hysteresis, since re-flipping takes a genuine opposite stroke
 # back above the same bar. Sized well above interpolation noise and well
 # under a deliberate dangle stroke.
-@export var carry_flip_speed: float = 0.8
+var carry_flip_speed: float = 0.8
 # Inward-pull speed band (m/s toward the body) over which the pull grammar
 # ramps 0→1. The floor keeps a slow reposition a plain cradle; the ceiling
 # lands full grammar at a committed pull, still far under the dangle
 # speed cap.
-@export var carry_pull_ramp_min: float = 0.8
-@export var carry_pull_ramp_max: float = 2.5
+var carry_pull_ramp_min: float = 0.8
+var carry_pull_ramp_max: float = 2.5
 # Half-band (m of handedness-normalized body-local blade X) over which an
 # inward pull blends between the toe drag (forehand side) and the heel cradle
 # (backhand side), covering pulls through body centre without a seam.
-@export var carry_diagonal_band: float = 0.15
+var carry_diagonal_band: float = 0.15
 # Ease rate (units/s) for the two pull-gesture factors — fast enough to land
 # inside a real pull (~0.13 s full swing), slow enough not to flicker on a
 # jittery stroke.
-@export var carry_gesture_ease: float = 8.0
+var carry_gesture_ease: float = 8.0
 # Duration (s) of one transit hop. A flip that arrives while a hop is still
 # in flight rides it out rather than restarting, so a fast dangle bounces
 # once per stroke instead of hovering mid-air (the plan's trap #2).
@@ -180,7 +180,7 @@ var _face_gear_mesh: MeshInstance3D = null
 # (~2 / carry_side_lerp_speed ≈ 0.17 s): the blade crosses at the same speed
 # but hangs before landing, which is the readable gap between blade touches —
 # release off the toe, a beat of air, the heel catch on the far face.
-@export var carry_transit_hop_time: float = 0.24
+var carry_transit_hop_time: float = 0.24
 # ── Catch/release blade geometry (mesh-only, like the wrister address) ────────
 # The visible blade slides along its own heel→toe axis so each stroke reads as
 # real contact prosody: a hard push rolls the puck out toward the TOE (the toe
@@ -192,12 +192,12 @@ var _face_gear_mesh: MeshInstance3D = null
 #
 # Toe-ward ride at full stroke speed, as a fraction of blade_length; ramps in
 # over [carry_flip_speed, carry_stroke_full_speed] of lateral stroke.
-@export var carry_stroke_toe_u: float = 0.12
-@export var carry_stroke_full_speed: float = 3.0
+var carry_stroke_toe_u: float = 0.12
+var carry_stroke_full_speed: float = 3.0
 # Heel-first landing offset at the instant of the catch (fraction of
 # blade_length), decaying to the seat at carry_catch_decay per second.
-@export var carry_catch_heel_u: float = 0.14
-@export var carry_catch_decay: float = 7.0
+var carry_catch_heel_u: float = 0.14
+var carry_catch_decay: float = 7.0
 # ── Pass-reception cushion (mesh-only, same channel as the catch above) ───────
 # A caught feed knocks the blade back along its own arrival line before the
 # hands re-seat it — the visible momentum absorb of the catch. Fired by each
@@ -209,18 +209,18 @@ var _face_gear_mesh: MeshInstance3D = null
 # a real corral. One continuous model — there is deliberately no separate
 # slow-pickup animation. Blade-mesh slide plus a wrist cup closing over the
 # puck; the marker, pin, and cursor binding are untouched.
-@export var reception_give_max: float = 0.12       # m of give at a ceiling-speed catch
-@export var reception_give_decay: float = 5.0      # blend/s back to the seat
-@export var reception_cup_deg: float = 7.0         # extra face close-over at full give
+var reception_give_max: float = 0.12       # m of give at a ceiling-speed catch
+var reception_give_decay: float = 5.0      # blend/s back to the seat
+var reception_cup_deg: float = 7.0         # extra face close-over at full give
 # Closing speed (m/s, receiver frame) at which the give saturates. Mirrors the
 # any-angle deflect ceiling (Puck.deflect_min_speed) — a hotter arrival
 # deflects instead of catching, so the visual maxes out there.
-@export var reception_give_full_speed: float = 22.0
+var reception_give_full_speed: float = 22.0
 # Commit threshold on |aim_dir · face_normal| (both unit) for the wrister
 # address flip — the aim line must sit at least ~asin(this) (~14°) off the
 # stick line before the addressed side changes, so a near-parallel aim holds
 # instead of flickering. See _update_wrister_address.
-@export var wrister_address_commit_dot: float = 0.25
+var wrister_address_commit_dot: float = 0.25
 # WHERE ALONG THE BLADE the wound-up puck sits, as a fraction of blade_length
 # from the heel (0.5 = mid-blade, the un-tell'd contact point). This is the
 # diegetic readout of the loft level during a wrister wind-up: the level is
@@ -230,8 +230,8 @@ var _face_gear_mesh: MeshInstance3D = null
 # (_aim_seat_offset_u → _apply_blade_tilt): the BLADE slides around the frozen
 # puck, the pin never leaves the cursor. Derived per peer from the replicated
 # elevation_level and blade pose, so remote views agree.
-@export var carry_contact_flat_u: float = 0.34
-@export var carry_contact_high_u: float = 0.70
+var carry_contact_flat_u: float = 0.34
+var carry_contact_high_u: float = 0.70
 
 # ── Arm Tuning ────────────────────────────────────────────────────────────────
 # Two-bone arm IK: shoulder → elbow → top_hand. ROM is derived from these
@@ -244,31 +244,31 @@ var _face_gear_mesh: MeshInstance3D = null
 # length too, which is also why the two split evenly. One arm = 0.70 m; with the
 # shoulder caps at ±0.22 that is a wingspan ≈ 1.84 m on a 1.78 m body, ~103% of
 # height and inside the 100–104% real athletes run.
-@export var upper_arm_length: float = 0.33
-@export var forearm_length: float = 0.33
+var upper_arm_length: float = 0.33
+var forearm_length: float = 0.33
 # Pole direction for the elbow (upper-body local). Mostly down with a real
 # outward flare (+X is away from the body; the sign flips per side in
 # update_arm_mesh) and a touch backward — a hockey top-hand elbow rides out
 # and slightly behind the chest line, not pinned against the ribs.
-@export var arm_pole_local: Vector3 = Vector3(0.55, -1.0, 0.1)
+var arm_pole_local: Vector3 = Vector3(0.55, -1.0, 0.1)
 # Base size of the arm bone meshes. scale.z is set per tick to the bone's
 # actual length; X/Y control arm thickness. Sized as a padded JERSEY SLEEVE
 # (elbow pad + liner under cloth), not a bare arm: a bare-arm 0.055 radius reads
 # skinny next to the 0.09 socks.
-@export var arm_mesh_thickness: float = 0.13
+var arm_mesh_thickness: float = 0.13
 # Radius of the elbow joint spheres positioned per-tick at the IK elbow.
 # Well proud of arm_mesh_thickness * 0.5 so the joint reads as the elbow
 # PAD bulging under the sleeve, the arm's answer to the deltoid caps.
-@export var elbow_sphere_radius: float = 0.082
+var elbow_sphere_radius: float = 0.082
 # Radius of the gloved fist positioned per-tick at the IK hand — slightly
 # thicker than the sleeve it hangs from. 0.064 puts the fist mesh (±1.05
 # unit-width) at ~13.4 cm across the knuckles, a real glove proportion.
-@export var hand_sphere_radius: float = 0.064
+var hand_sphere_radius: float = 0.064
 # Gap (along the bone direction, toward the elbow) between the hand-sphere
 # center and the forward face of the glove cuff cylinder. Without this the
 # cuff sits flush against the hand sphere and visually swallows it; a small
 # pullback exposes the hand sphere as a distinct ball at the wrist.
-@export var cuff_wrist_offset: float = 0.05
+var cuff_wrist_offset: float = 0.05
 
 # ── Stick Flex Tuning (cosmetic) ──────────────────────────────────────────────
 # Vertex-shader shaft bow (Shaders/stick_flex.gdshader), driven entirely from
@@ -278,22 +278,22 @@ var _face_gear_mesh: MeshInstance3D = null
 # pinned endpoints — the hand and blade anchors (gameplay) never move.
 # Amplitudes are unsigned metres; which way the bow points is geometry, solved
 # per frame in _stick_flex_axis.
-@export var stick_flex_max_m: float = 0.07       # mid-shaft bow at full wrister charge
-@export var stick_flex_slap_m: float = 0.10      # contact bow of the slapshot / one-timer
-@export var stick_flex_windup_m: float = 0.045   # trailing bow at a full slapper wind-up
-@export var stick_flex_load_speed: float = 10.0  # how fast the bow tracks the charge
-@export var stick_whip_hz: float = 9.0           # release-whip oscillation frequency
-@export var stick_whip_damping: float = 14.0     # release-whip decay rate
+var stick_flex_max_m: float = 0.07       # mid-shaft bow at full wrister charge
+var stick_flex_slap_m: float = 0.10      # contact bow of the slapshot / one-timer
+var stick_flex_windup_m: float = 0.045   # trailing bow at a full slapper wind-up
+var stick_flex_load_speed: float = 10.0  # how fast the bow tracks the charge
+var stick_whip_hz: float = 9.0           # release-whip oscillation frequency
+var stick_whip_damping: float = 14.0     # release-whip decay rate
 
 # ── Body Footprint ────────────────────────────────────────────────────────────
 # Radius (m) of the disc every analytic contact path treats as this skater's
 # body: skater-vs-skater in _resolve_player_collisions and the rink / net /
 # goalie containment clamps. Scaled per-build by SkaterController.apply_attributes
 # (radius_mult), so read it through collision_radius() rather than caching it.
-@export var body_collision_radius: float = 0.35
+var body_collision_radius: float = 0.35
 
 # ── Body Check Tuning ─────────────────────────────────────────────────────────
-@export var weight: float = 1.0
+var weight: float = 1.0
 # Fraction of closing momentum the inelastic resolver transfers on a committed
 # check (SkaterCollisionRules — the only body-check delivery term). At
 # equal mass the victim's knockback is closing × transfer × 0.5, so this is the
@@ -302,15 +302,15 @@ var _face_gear_mesh: MeshInstance3D = null
 # symmetric exchange — a real check costs the checker some speed too). Scaled
 # per-build by PlayerAttributes.check_delivery_mult (flat 1.0 in v4 — mass is the
 # only differentiator), so the same 0.65 lands for every build.
-@export var body_check_transfer: float = 0.65
-@export var body_check_brace_resistance: float = 0.4
+var body_check_transfer: float = 0.65
+var body_check_brace_resistance: float = 0.4
 # Fraction of body_check_transfer that lands WITHOUT the hit button committed.
 # The hit button (Ctrl / input.hit_held) is the intent gate: a committed check
 # delivers the full transfer, an incidental bump only this fraction — so skating
 # into someone uncommitted jostles but rarely staggers and never knocks down.
 # Set by the controller each tick via hit_committed below (re-derived from
 # input.hit_held, so it survives reconcile with no wire cost).
-@export var hit_passive_transfer_mult: float = 0.3
+var hit_passive_transfer_mult: float = 0.3
 # True this tick when the attacker is committing a check (hit button held +
 # stamina available). Written by SkaterController._apply_movement from the
 # replicated input.hit_held; read in _resolve_player_collisions to pick between
@@ -330,8 +330,8 @@ var is_host_machine: bool = false
 var is_local_skater: bool = false
 
 # ── Body Block Tuning ─────────────────────────────────────────────────────────
-@export var body_block_radius: float = 0.5
-@export var block_body_radius: float = 0.9
+var body_block_radius: float = 0.5
+var block_body_radius: float = 0.9
 # World-Y ceiling of the shot-block seal — the top of the KNEELING body (helmet
 # shell, ≈1.44 m at the default build; the standing head reaches ≈1.85 m). A
 # blocker who drops to a knee gives up everything above it, so elevating over
@@ -339,7 +339,7 @@ var is_local_skater: bool = false
 # purpose: the pose is a render-rate cosmetic (SkaterSkatingCoordinator), and
 # collision must not depend on when a frame happened to draw. Re-derive it if
 # the kneel angles move — test_shot_body_animation pins the two together.
-@export var block_seal_height: float = 1.45
+var block_seal_height: float = 1.45
 # Vertical center of the body-block sphere, in skater-local space (origin sits at
 # the hips). Raised to torso height so the PASSIVE sphere (body_block_radius)
 # clears a grounded puck (top ≈ ice_height + radius ≈ 0.12) — loose pucks on the
@@ -348,7 +348,7 @@ var is_local_skater: bool = false
 # rebases it to seal from the ice up (the hip-height origin puts this local
 # offset at the torso, so without the rebase a flat shot slid under the block).
 # Mirrors the grounded-vs-airborne split the blade already uses.
-@export var body_block_height: float = 0.7
+var body_block_height: float = 0.7
 
 # ── Node References ───────────────────────────────────────────────────────────
 @onready var mesh_root: Node3D = $MeshRoot
@@ -2975,8 +2975,8 @@ var _trunk_texture_roll: float = 0.0
 # fully because its big components are sustained postures (the effort dig, the
 # sprint lean) the head genuinely leans with — a low follow there detaches the
 # helmet from the torso top at deep folds. 1.0 / 1.0 restores rigid coupling.
-@export var helmet_pitch_follow: float = 0.85
-@export var helmet_roll_follow: float = 0.4
+var helmet_pitch_follow: float = 0.85
+var helmet_roll_follow: float = 0.4
 
 
 func set_trunk_texture(pitch_add: float, roll_add: float) -> void:

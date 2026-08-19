@@ -263,10 +263,15 @@ Controllers drive them. `GameManager` owns spawning and world state.
 `SkaterNetworkState` / `PuckNetworkState` directly; serialization happens only at
 the RPC boundary.
 
-**Get it working, then tune numbers.** Use `@export` for tunables. Don't
-prematurely optimize or bikeshed constants before the mechanic runs. **Live
+**Get it working, then tune numbers.** Author a tunable as a plain class-level
+`var` with its value in code. `@export` is for the handful a `.tscn` genuinely
+overrides — of 573 exports on the two controllers and `Skater`, a scene set
+exactly zero of them, so the inspector rows were pure cost. They stay `var`
+rather than `const` because `apply_attributes` scales them per skater at
+runtime. Don't prematurely optimize or bikeshed constants before the mechanic
+runs. **Live
 editor tuning is not a workflow here** — hot-path code may cache config objects
-built from exports (rebuilt on `apply_attributes`) without preserving per-tick
+built from those fields (rebuilt on `apply_attributes`) without preserving per-tick
 rebuild semantics. Don't undo config caching to restore live-tuning.
 
 **Grounded models over magic-number curves, in evaluation code especially.** When

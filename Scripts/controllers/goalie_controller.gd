@@ -7,7 +7,7 @@ extends Node
 # each collaborator.
 
 # ── Tuning ────────────────────────────────────────────────────────────────────
-@export var catches_left: bool = true
+var catches_left: bool = true
 
 # RADIUS from goal center (the arc-positioning radius consumed by
 # GoalieBehaviorRules.target_arc_position), on the Buckley A/B/C/D ladder.
@@ -18,30 +18,30 @@ extends Node
 # and `depth_aggressive` is the CEILING on that solve rather than a zone value.
 # `depth_base` / `depth_conservative` survive only as rush-backflow anchors and
 # tier dials.
-@export var depth_aggressive: float = 1.75
-@export var depth_base: float = 1.30
+var depth_aggressive: float = 1.75
+var depth_base: float = 1.30
 # RESTING depth — middle of the blue paint, held while the play has not entered
 # the zone (`_threat_is_in_zone`). BPS "C".
-@export var depth_conservative: float = 0.70
-@export var depth_defensive: float = 0.10
+var depth_conservative: float = 0.70
+var depth_defensive: float = 0.10
 # Minimum gap (m) the goalie keeps between himself and the threat while
 # challenging. PHYSICAL, not a feel dial: his torso and pads have real depth, so
 # standing level with the puck means the carrier walks around a body that has
 # already committed forward — and it puts the puck inside his own poke reach,
 # where a whiffed jab leaves the net empty.
-@export var challenge_standoff: float = 0.60
-@export var zone_post_z: float = 2.0
+var challenge_standoff: float = 0.60
+var zone_post_z: float = 2.0
 # How fast `_current_depth` lerps toward the depth target — the exponential
 # settle that shapes ARRIVAL. Big moves are rate-capped by `depth_max_speed`
 # below; fast retreats under a genuine rush are owned by the rate-matched rush
 # backflow.
-@export var depth_speed: float = 4.0
+var depth_speed: float = 4.0
 # Physical ceiling (m/s) on in/out crease movement. A real goalie's telescoping
 # push / backward C-cut runs ~2–2.5 m/s; uncapped, the exponential lerp opens a
 # 1.3 m challenge→crease change at ~5 m/s. The rush backflow's rate-matched
 # retreat deliberately bypasses this cap — it matches the attacker's closing
 # speed, the real constraint on a backflow.
-@export var depth_max_speed: float = 2.2
+var depth_max_speed: float = 2.2
 # Minimum perpendicular depth (m in front of the goal line) the goalie CENTER
 # holds while squared to a shot in front of the net (STANDING / READY /
 # RECOVERING / idle BUTTERFLY). The torso and pads have real Z thickness and
@@ -53,25 +53,25 @@ extends Node
 # (COILING/SLIDING post seal), behind-net (PLAYING_PUCK), or planted
 # (COVERING/CATCHING) states, where sitting at/behind the line is the correct
 # play (wraps, walkouts, dead-angle post seals).
-@export var min_challenge_depth: float = 0.20
+var min_challenge_depth: float = 0.20
 
-@export var shuffle_speed: float = 2.0
-@export var t_push_speed: float = GameRules.DEFAULT_GOALIE_T_PUSH_SPEED_M_S
+var shuffle_speed: float = 2.0
+var t_push_speed: float = GameRules.DEFAULT_GOALIE_T_PUSH_SPEED_M_S
 # Lateral push acceleration (m/s²). The goalie ramps up to shuffle / T-push speed
 # instead of snapping to it, so a quick play can beat him across before he
 # reaches speed. The cross-crease desperation push bypasses this (stays instant).
 # Default sourced from GameRules so AIActionScoring's slide prediction stays in
 # lockstep.
-@export var lateral_accel: float = GameRules.DEFAULT_GOALIE_LATERAL_ACCEL_M_S2
-@export var lateral_threshold: float = 0.3
-@export var max_facing_angle: float = 70.0
+var lateral_accel: float = GameRules.DEFAULT_GOALIE_LATERAL_ACCEL_M_S2
+var lateral_threshold: float = 0.3
+var max_facing_angle: float = 70.0
 # The head yaws toward the RAW puck in every state — through the reaction
 # freeze, in RVH, and while down. Purely cosmetic: no gameplay read keys off the
 # head, and it rides the existing head_yaw wire field to clients/replays. (Where
 # his eyes SIT is `head_peek_max_offset`, which is not cosmetic.)
-@export var head_track_max_yaw_deg: float = 60.0
-@export var rotation_speed: float = 5.0
-@export var rvh_transition_speed: float = 6.0
+var head_track_max_yaw_deg: float = 60.0
+var rotation_speed: float = 5.0
+var rvh_transition_speed: float = 6.0
 
 # Base leg read after a COLD release (no windup was being read). 0.13 s sits
 # below the measured ~0.18-0.20 s elite simple-reaction floor — the gap is
@@ -80,14 +80,14 @@ extends Node
 # (GoalieSkillProfile.reaction_delay_s) and AI-mirrored per tier via
 # AIActionScoring.goalie_leg_delay_s — this default and the scorer's both read
 # GameRules; change together.
-@export var reaction_delay: float = GameRules.DEFAULT_GOALIE_REACTION_DELAY_S
+var reaction_delay: float = GameRules.DEFAULT_GOALIE_REACTION_DELAY_S
 # Arms specifically take longer to react than legs. Legs are reflexive (drop
 # instantly when the brain reads "low shot"); arms require "where in the
 # upper net" computation which adds processing time. Setting this longer
 # than `reaction_delay` makes close-range top-corner shots score because
 # the arm doesn't even start moving in time. Long shots still allow full
 # extension once the arm clears the delay.
-@export var arm_reaction_delay: float = GameRules.DEFAULT_GOALIE_ARM_REACTION_DELAY_S
+var arm_reaction_delay: float = GameRules.DEFAULT_GOALIE_ARM_REACTION_DELAY_S
 
 # Imminence gate on the reflexive low-shot butterfly drop. The goalie reads and
 # freezes the instant a shot is RELEASED (arm reach + tracking start right
@@ -97,7 +97,7 @@ extends Node
 # up the ice reads as a low shot from across the rink and drops the goalie long
 # before the play arrives. At 0.45s a 25 m/s shot drops around the top of the
 # circles; slower pucks have to get correspondingly closer before it commits.
-@export var drop_max_time_to_impact: float = 0.45
+var drop_max_time_to_impact: float = 0.45
 
 # ── Pre-armed read (quiet-eye anticipation) ──────────────────────────────────
 # Reading a visible windup from a slot shooter (_is_reading_shot_threat) for
@@ -126,15 +126,15 @@ extends Node
 # with their aim, so a stable aim through the wind-up makes the stale sample equal
 # the truth and a telegraphed shot is read exactly as well. Zero disables it
 # entirely (belief == truth). Difficulty-varied via GoalieSkillProfile.read_lag_s.
-@export var read_lag: float = 0.05
+var read_lag: float = 0.05
 # How long it takes him to CORRECT a wrong belief once the puck is in flight and
 # he can watch it. A different quantity from `read_lag` — see
 # GoalieSkillProfile.read_converge_s.
-@export var read_converge_time: float = 0.13
-@export var prearmed_reaction_delay: float = 0.07
-@export var prearm_read_time: float = 0.40
-@export var prearm_linger: float = 0.25
-@export var prime_slot_distance: float = 6.0
+var read_converge_time: float = 0.13
+var prearmed_reaction_delay: float = 0.07
+var prearm_read_time: float = 0.40
+var prearm_linger: float = 0.25
+var prime_slot_distance: float = 6.0
 
 # Imminence gate on STARTING a release reaction at all: a release more than this
 # many seconds from crossing the goal line begins no reaction (no freeze, no arm
@@ -144,7 +144,7 @@ extends Node
 # universal-reaction path picks them up at `universal_react_max_time_to_impact`.
 # 0.9 s covers point shots (a 30 m/s blue-line slapshot is ~0.65 s out) while
 # ignoring slow clears/passes from distance.
-@export var react_max_time_to_impact: float = 0.9
+var react_max_time_to_impact: float = 0.9
 
 # ── Screening ─────────────────────────────────────────────────────────────────
 # A body between shooter and goalie hides the puck, so the read can't start until
@@ -160,15 +160,15 @@ extends Node
 # feet ~0.85 below it). Sight is taken at the height the eyeline crosses the body,
 # so the same screener is a torso to a standing goalie and a pair of shins to a
 # goalie who has gone down looking for the puck.
-@export var screen_max_extra_delay: float = 0.30  # s — CAP on the screen-occlusion pickup delay
-@export var screener_torso_half_width: float = 0.35  # m — a body in gear, at and above the hips
-@export var screener_leg_half_width: float = 0.16    # m — a shin, at the ice
-@export var screener_hip_height: float = 0.85        # m — where the silhouette stops narrowing
+var screen_max_extra_delay: float = 0.30  # s — CAP on the screen-occlusion pickup delay
+var screener_torso_half_width: float = 0.35  # m — a body in gear, at and above the hips
+var screener_leg_half_width: float = 0.16    # m — a shin, at the ice
+var screener_hip_height: float = 0.85        # m — where the silhouette stops narrowing
 # How far off his angle he will step to get his eyes around a body. Feel, not
 # geometry: the STEP is solved (GoalieBehaviorRules.screen_peek_offset), this is
 # only how much net he is willing to sell for the look. A screen he cannot clear
 # inside it buys him nothing and he stays square, which is the intended failure.
-@export var screen_peek_max_offset: float = 0.35     # m
+var screen_peek_max_offset: float = 0.35     # m
 # HIS EYES ARE NOT ON HIS MIDLINE, and that is the first thing he moves. Craning
 # — head over, shoulders leaning, feet and pads planted — buys this much lateral
 # sight for NO angle at all, because the coverage does not move with it. Only
@@ -180,7 +180,7 @@ extends Node
 # different quantity — where he is LOOKING, not where his eyes ARE — and it is
 # still cosmetic. This one is not: it moves the sightline the occlusion solve is
 # taken along.
-@export var head_peek_max_offset: float = 0.15       # m
+var head_peek_max_offset: float = 0.15       # m
 
 # ── Caught moving ─────────────────────────────────────────────────────────────
 # Being unset costs three things, and only the third is perceptual: momentum he
@@ -195,9 +195,9 @@ extends Node
 # of a butterfly or riding a committed lunge carries no lateral momentum for the
 # drift to model, and the failure there is that the response is not AVAILABLE yet
 # rather than that it starts late.
-@export var move_read_speed_delay: float = 0.04    # s — read latency when moving on his feet
-@export var move_read_scramble_delay: float = 0.12 # s — read latency while recovering / mid-lunge
-@export var move_read_reference_speed: float = 2.5 # m/s — planar speed counted as fully moving
+var move_read_speed_delay: float = 0.04    # s — read latency when moving on his feet
+var move_read_scramble_delay: float = 0.12 # s — read latency while recovering / mid-lunge
+var move_read_reference_speed: float = 2.5 # m/s — planar speed counted as fully moving
 # Deceleration available to kill lateral momentum during the reaction freeze,
 # as a fraction of `lateral_accel` (the accel he gets from a LOADED edge). Below
 # 1.0 because stopping is the harder half: a goalie caught mid-push has weight on
@@ -205,10 +205,10 @@ extends Node
 # a full 3.8 m/s T-push carries ~0.4 m past the commit point and takes ~0.4 s to
 # kill — the "he slid past the post" goal. Tier-varies for free off lateral_accel:
 # worse edges (Easy, 6 m/s²) drift further, which is correct.
-@export var unset_drift_decel_ratio: float = 0.7
+var unset_drift_decel_ratio: float = 0.7
 
-@export var shot_speed_threshold: float = 5.0
-@export var net_half_width: float = 0.915
+var shot_speed_threshold: float = 5.0
+var net_half_width: float = 0.915
 # Margin past the net edges for "is this a shot on goal" classification.
 # Generous on purpose — real goalies track anything heading at their general
 # area, even shots clearly going wide (could deflect, tip, rebound). Cross-
@@ -216,7 +216,7 @@ extends Node
 # (low z-velocity → huge t_to_goal → impact_x lands way off-net), so a wide
 # margin doesn't pull passes in. Pickup / boards / post / net signals clear
 # the reaction freeze if it does turn out to be a pass.
-@export var net_margin: float = 3.0
+var net_margin: float = 3.0
 
 # Universal puck tracking — react to any loose puck on track to cross the goal
 # line soon, not just shots released by an opposing carrier. Catches board
@@ -225,42 +225,42 @@ extends Node
 # puck oozing at the 5-hole from a foot out must trigger a reaction even though
 # it's slow. `min_speed` is only an anti-jitter floor for near-stationary
 # pucks; `max_time_to_impact` is the real "is a goal imminent" gate.
-@export var universal_react_min_speed: float = 1.0
-@export var universal_react_max_time_to_impact: float = 0.6
+var universal_react_min_speed: float = 1.0
+var universal_react_max_time_to_impact: float = 0.6
 
 # Diagnostic toggle. When on, prints to the console whenever the universal
 # reaction fires and whenever the post-seal clamp actively pulls the standing
 # target in (i.e. the clamp changed the value, not a no-op). Host-only so the
 # log isn't doubled. Leave off in normal play.
-@export var debug_goalie_reads: bool = false
+var debug_goalie_reads: bool = false
 
-@export var rvh_depth: float = 0.1
+var rvh_depth: float = 0.1
 # How far INBOARD of the post the post-seal spot sits. Shared by the VH/RVH
 # stance position and by the arc solver's sharp-angle convergence target, so the
 # squared stance hands off to post integration at the same place rather than
 # teleporting. (= outer pad reach 0.88 - 0.50 body inset toward post.)
-@export var post_seal_inset: float = 0.38
-@export var rvh_early_angle: float = 80.0
-@export var rvh_post_pad_angle: float = 15.0
+var post_seal_inset: float = 0.38
+var rvh_early_angle: float = 80.0
+var rvh_post_pad_angle: float = 15.0
 
-@export var five_hole_base: float = 0.02
-@export var five_hole_shuffle_max: float = 0.04
-@export var five_hole_t_push_max: float = 0.10
+var five_hole_base: float = 0.02
+var five_hole_shuffle_max: float = 0.04
+var five_hole_t_push_max: float = 0.10
 
-@export var tracking_speed: float = 8.0
+var tracking_speed: float = 8.0
 # Far-range tracking lerp speed — the quiet-eye lag. At range
 # a real goalie's angle corrections are smooth and slightly laggy; slowing the
 # tracking lerp low-passes stickhandle wiggle (±1.5 m at ~2 Hz attenuates to
 # roughly ±0.35 m of threat motion — ≈±0.06 m of goalie arc travel at B depth)
 # without moving the squaring target off the puck. Blended from `tracking_speed`
 # (in tight) toward this by the chest_track distance ramp.
-@export var tracking_speed_far: float = 3.0
-@export var part_lerp_speed: float = 6.0
-@export var reaction_lerp_speed: float = 18.0
+var tracking_speed_far: float = 3.0
+var part_lerp_speed: float = 6.0
+var reaction_lerp_speed: float = 18.0
 # Recovery rises body parts from butterfly pose → READY pose. Tuned so the rise
 # is ~95% complete by `recovery_duration = 0.35 s` (lerp is asymptotic, so the
 # speed is ≈ 3 / duration).
-@export var recovery_lerp_speed: float = 9.0
+var recovery_lerp_speed: float = 9.0
 
 # ── Threat tracking ───────────────────────────────────────────────────────────
 # Weight of the shooter's BODY in the squaring target; the rest is the puck.
@@ -274,7 +274,7 @@ extends Node
 # lateral target is a damped, geometrically compressed arc position rather than a
 # raw lerp. A distance fade cancels analytically too — jitter and offset both
 # scale with 1/distance, leaving the ratio unchanged with range.
-@export var shooter_weight: float = 0.20
+var shooter_weight: float = 0.20
 # PINNED-WINDUP override — applies to BOTH shot wind-ups
 # (SkaterStateMachine.state_pins_puck). A pinned puck does not jitter (the slapper
 # holds it at a fixed lateral offset to the blade side, the wrister freezes the
@@ -285,7 +285,7 @@ extends Node
 # compresses lateral target changes, so do not reach for this lever expecting it
 # to move him far. (A naive reading of the geometry suggests ~offset*(1-w)
 # ≈ 25 cm; that is wrong.)
-@export var shooter_weight_pinned_windup: float = 0.0
+var shooter_weight_pinned_windup: float = 0.0
 # Slapper aim shade (anticipatory read): shades the lateral target toward where
 # the shot will cross the goalie's depth plane (from the shooter's published
 # predicted velocity), ramped by how long he has read the wind-up
@@ -302,13 +302,13 @@ extends Node
 # making a mis-aimed shade worse than none. The TEMPORAL read credit (the
 # quiet-eye prearm) has no such restriction and covers both wind-ups, because
 # readiness to move is direction-agnostic.
-@export_range(0.0, 1.0, 0.05) var slapper_aim_shade: float = 0.7
+var slapper_aim_shade: float = 0.7
 # Distance ramp for the puck-lead fade and the tracking-lag scale. Between
 # `chest_track_near_distance` and `chest_track_far_distance` the jittery
 # puck-velocity lead fades to zero and the tracking lerp slows toward
 # `tracking_speed_far`. Distances are Euclidean carrier→goal-center.
-@export var chest_track_near_distance: float = 2.5
-@export var chest_track_far_distance: float = 7.0
+var chest_track_near_distance: float = 2.5
+var chest_track_far_distance: float = 7.0
 # Lead-the-target time. Threat position projects forward by
 # `carrier.velocity * carrier_velocity_lead_time` so the goalie pre-positions
 # toward where the carrier WILL be — the realistic answer to "skater is
@@ -317,7 +317,7 @@ extends Node
 # jitter has small velocities (~1-2 m/s) so the lead barely moves
 # (0.2-0.4 m), and the existing tracking-speed lerp smooths brief deke
 # velocity spikes so quick fakes don't drag the goalie out of position.
-@export var carrier_velocity_lead_time: float = 0.12
+var carrier_velocity_lead_time: float = 0.12
 # Puck velocity lead — CARRIER-PRESENT (dangle) branch only. Projects where the
 # PUCK is going (vs just the carrier body), which catches what the carrier lead
 # misses and is what keeps the goalie in front of forehand-backhand dekes:
@@ -326,14 +326,14 @@ extends Node
 # Shorter than the carrier lead because puck velocity is jittery during
 # stickhandling — the tracking-speed lerp + this shorter lead means transient
 # dangles don't drag the goalie out while sustained motion does.
-@export var puck_velocity_lead_time: float = 0.08
+var puck_velocity_lead_time: float = 0.08
 # Puck velocity lead — LOOSE-puck (no carrier) branch, i.e. a pass/rebound in
 # flight. Deliberately ~0: the goalie must NOT front-run a back-door pass, so he
 # tracks where the puck IS and loses the cross-crease race to a hard pass like a
 # real goalie. Kept separate from the dangle lead above so weakening the pass
 # read does not touch deke coverage. Raise slightly if he's too beatable on
 # slower cross-ice plays.
-@export var loose_puck_velocity_lead_time: float = 0.0
+var loose_puck_velocity_lead_time: float = 0.0
 
 # ── Rush retreat (speed-matched backflow) ────────────────────────────────────
 # Against a CLOSING opposing carrier inside `rush_engage_distance`, depth follows
@@ -345,10 +345,10 @@ extends Node
 # below `rush_min_closing_speed` keeps the challenge and a stalled rush lets the
 # chart re-challenge, so decelerating strands the goalie out at challenge depth
 # while a speed rush arrives on a goalie already at depth.
-@export var rush_engage_distance: float = 8.0
-@export var rush_mid_distance: float = 4.5
-@export var rush_arrive_distance: float = 1.5
-@export var rush_min_closing_speed: float = 1.5
+var rush_engage_distance: float = 8.0
+var rush_mid_distance: float = 4.5
+var rush_arrive_distance: float = 1.5
+var rush_min_closing_speed: float = 1.5
 # WHERE THE RETREAT LANDS, and deliberately NOT `depth_defensive`. D is "on the
 # post, or tracking the puck behind the net" and C is the middle of the paint
 # under a live lateral play; a shooter coming straight in from
@@ -359,7 +359,7 @@ extends Node
 # anchor sweep in tests/unit/ai/test_goalie_post_lane_drive.gd stops moving the
 # control. Below 0.40 the post-lane drive concedes 4x what a centre-lane drive
 # does; at 0.40 they concede alike; past 0.55 he stops being beatable on either.
-@export var rush_arrive_depth: float = 0.40
+var rush_arrive_depth: float = 0.40
 
 # ── Backdoor-aware depth (anticipatory) ──────────────────────────────────────
 # The read a goalie makes BEFORE the pass: with a one-timer man on the weak side
@@ -369,9 +369,9 @@ extends Node
 # reuse t_push_speed / lateral_accel / cross_crease_react_delay so the positioning
 # read stays consistent with the live push it is predicting. Sitting deeper opens
 # the carrier's direct-shot angle — a genuine trade the shooter can exploit.
-@export var backdoor_release_time: float = 0.15         # s — receiver's one-timer swing
-@export var backdoor_assumed_pass_speed: float = GameRules.DEFAULT_QUICK_PASS_POWER_M_S
-@export var backdoor_max_shooter_distance: float = 9.0  # m — shooter→goal eligibility
+var backdoor_release_time: float = 0.15         # s — receiver's one-timer swing
+var backdoor_assumed_pass_speed: float = GameRules.DEFAULT_QUICK_PASS_POWER_M_S
+var backdoor_max_shooter_distance: float = 9.0  # m — shooter→goal eligibility
 
 # ── Beaten-wide post seal ────────────────────────────────────────────────────
 # When GoalieBehaviorRules.is_beaten_wide says the T-push race to the tuck point
@@ -383,8 +383,8 @@ extends Node
 # dangle routinely swings the body through that, so anything lower reads the first
 # move of every deke as "beaten to the post". The distance gate is tactical feel —
 # how far out a lateral cut reads as a tuck threat.
-@export var beaten_wide_min_lateral_speed: float = 2.5   # m/s — a drive, not a lateral shuffle
-@export var beaten_wide_max_threat_distance: float = 4.0 # m — in-tight gate (threat→goal)
+var beaten_wide_min_lateral_speed: float = 2.5   # m/s — a drive, not a lateral shuffle
+var beaten_wide_max_threat_distance: float = 4.0 # m — in-tight gate (threat→goal)
 # Quiet-eye confirmation on CARRIER-driven lateral commits (the standing
 # beaten-wide drop and the butterfly pad-coverage slide): the verdict must
 # hold continuously this long before the goalie sells out. A genuine drive to
@@ -394,18 +394,18 @@ extends Node
 # elite goalie commits; the audit's anticipation research). PASS-driven
 # commits stay instant by design — a puck in flight cannot cut back, so the
 # cross-crease one-timer seal keeps its zero-hesitation commit.
-@export var lateral_commit_confirm_s: float = 0.15
+var lateral_commit_confirm_s: float = 0.15
 
 # "An opposing stick is on this puck" — a poke-range radius, used by the cover
 # read to tell a loose puck he can safely sweep from one he has to smother.
-@export var puck_contest_radius: float = 1.5 # m
+var puck_contest_radius: float = 1.5 # m
 
 # ── Butterfly commitment ─────────────────────────────────────────────────────
 # Once the goalie drops they cannot stand-skate. Lateral movement is via
 # committed butterfly slides only. They cannot reach RVH directly — must
 # stand up first (RECOVERING window).
-@export var butterfly_min_hold_time: float = 0.35   # s the goalie must stay down
-@export var recovery_duration: float = 0.35         # s spent standing back up
+var butterfly_min_hold_time: float = 0.35   # s the goalie must stay down
+var recovery_duration: float = 0.35         # s spent standing back up
 # Pads-to-floor time. GROUNDED: motion capture of a pro goalie measures butterfly
 # drop velocity at 2.07 ± 0.09 m/s (Brock Univ., Sports 10(6):96) — over the
 # ~0.4 m the pads/hips fall, the ice seal lands ~0.2 s after commitment. The gap
@@ -414,15 +414,15 @@ extends Node
 # full completion. Difficulty-varied (GoalieSkillProfile.butterfly_drop_s) and
 # AI-mirrored per tier via AIActionScoring.goalie_butterfly_drop_s; this default
 # mirrors the scorer's GOALIE_BUTTERFLY_DROP_S baseline — change both together.
-@export var butterfly_drop_speed: float = 0.20      # s for pads to close to floor
-@export var butterfly_radius: float = 0.40          # arc radius from goal center while down
+var butterfly_drop_speed: float = 0.20      # s for pads to close to floor
+var butterfly_radius: float = 0.40          # arc radius from goal center while down
 # Knee shuffle — the smallest of the three down-movement tiers (micro-scoot,
 # backside push, committed slide). Idle BUTTERFLY tracks the arc target at this
 # pace with the seal held, so post-save re-centering and scramble adjustments
 # don't leave the goalie a statue between slides; genuine cross-crease coverage
 # still needs the committed slide. Suppressed while reacting — same freeze as the
 # upright mover.
-@export var knee_shuffle_speed: float = 0.7          # m/s — micro-scoot pace while sealed
+var knee_shuffle_speed: float = 0.7          # m/s — micro-scoot pace while sealed
 
 # ── Butterfly slide (pivot-and-ride) ─────────────────────────────────────────
 # Real goalies plant the outside (non-post) leg, pivot off it, and swing the
@@ -431,14 +431,14 @@ extends Node
 # Destination is committed at slide-start; mid-slide can't correct. That's the
 # realism win — fast cross-passes can beat the slide because the goalie already
 # committed the read.
-@export var slide_initial_speed: float = 2.8        # m/s push-off speed (visible glide, not teleport)
-@export var slide_friction: float = 2.6             # m/s² decay — brisk enough to read as a discrete
+var slide_initial_speed: float = 2.8        # m/s push-off speed (visible glide, not teleport)
+var slide_friction: float = 2.6             # m/s² decay — brisk enough to read as a discrete
                                                     # plant-push-seal, not a long floaty glide, while
                                                     # still carrying far enough to complete a full
                                                     # post-to-post span before the min-speed snap
 
-@export var slide_min_speed: float = 0.3            # m/s — slide ends below this
-@export var slide_cooldown: float = 0.20            # s between committed slides
+var slide_min_speed: float = 0.3            # m/s — slide ends below this
+var slide_cooldown: float = 0.20            # s between committed slides
 # Slide trigger is a pad-coverage check: slide when the puck (projected forward
 # by slide_anticipation_time via _puck_velocity_est) is past the goalie's pad
 # reach by more than slide_coverage_buffer, AND the puck is within
@@ -446,14 +446,14 @@ extends Node
 # scenarios — forehand-backhand deke (puck dragged past goalie's pads while
 # carrier stays put) and cross-crease pass (puck flies across into pad-edge
 # territory on the other side) — without needing separate detector paths.
-@export var slide_threat_max_distance: float = 6.0  # m — Euclidean puck→goal; filters long shots
-@export var slide_coverage_buffer: float = 0.10     # m — past pad edge before triggering (anti-jitter)
-@export var slide_anticipation_time: float = 0.10   # s — projects puck via velocity so cross-crease commits early
+var slide_threat_max_distance: float = 6.0  # m — Euclidean puck→goal; filters long shots
+var slide_coverage_buffer: float = 0.10     # m — past pad edge before triggering (anti-jitter)
+var slide_anticipation_time: float = 0.10   # s — projects puck via velocity so cross-crease commits early
 # Shooter-present gate: only slide if there's someone who can actually shoot
 # the puck. Opposing carrier (any range) counts; loose puck counts only if an
 # opposing skater is within this radius. No need to seal the back door for a
 # puck nobody can play.
-@export var slide_loose_puck_shooter_radius: float = 2.0
+var slide_loose_puck_shooter_radius: float = 2.0
 
 # ── Active blade intent ───────────────────────────────────────────────────────
 # When an opposing shooter is close, the goalie yaws the blocker assembly so
@@ -463,12 +463,12 @@ extends Node
 #   - Loose puck within `active_blade_loose_puck_radius` with an opposing
 #     skater within `slide_loose_puck_shooter_radius` (re-using the slide
 #     trigger's shooter-present helper).
-@export var active_blade_carrier_radius: float = 2.5
-@export var active_blade_loose_puck_radius: float = 1.5
+var active_blade_carrier_radius: float = 2.5
+var active_blade_loose_puck_radius: float = 1.5
 # Max blocker-assembly yaw the active-stick intent will apply. Smaller than
 # the elevated-reach yaw cap because the blocker pad rides with the rotation
 # and we don't want it swinging off the right side.
-@export var active_blade_max_yaw_deg: float = 25.0
+var active_blade_max_yaw_deg: float = 25.0
 # Lunge: the blocker assembly briefly extends forward — the stick blade jabs at
 # the puck. Brief active window with a cooldown so the goalie can't spam-stick
 # Lunge: the blocker assembly briefly extends forward — the stick blade jabs at
@@ -481,14 +481,14 @@ extends Node
 # goalie-to-puck distance trigger fires while the blade is already inside
 # `goalie_poke_radius`, paying the fully-unset read penalty for a jab he does not
 # need.
-@export var lunge_extension: float = 0.35        # m — forward push at peak
-@export var lunge_duration: float = 0.15         # s — active window (0→peak→0 sin curve)
-@export var lunge_cooldown: float = 0.60         # s — minimum gap between lunges
+var lunge_extension: float = 0.35        # m — forward push at peak
+var lunge_duration: float = 0.15         # s — active window (0→peak→0 sin curve)
+var lunge_cooldown: float = 0.60         # s — minimum gap between lunges
 # Goalie poke check: when the stick blade comes within this radius of the
 # carried puck, the goalie strips it. The puck is magneted to the carrier's
 # blade with no physics during carry, so RigidBody contact won't fire — this
 # is the explicit substitute. Host-only.
-@export var goalie_poke_radius: float = 0.25
+var goalie_poke_radius: float = 0.25
 
 # ── Paddle-down sweep ─────────────────────────────────────────────────────────
 # Butterfly-only stick behavior: paddle drops flat to the ice and the blocker
@@ -497,10 +497,10 @@ extends Node
 # carrier without breaking the pad seal. Composes with the goalie poke check
 # automatically — the swept blade reaches further laterally and the per-tick
 # poke check fires when it comes within range of a carried puck.
-@export var paddle_sweep_trigger_distance: float = 1.5
-@export var paddle_sweep_max_yaw_deg: float = 65.0
-@export var paddle_sweep_y_drop: float = 0.08
-@export var paddle_sweep_x_extension: float = 0.10
+var paddle_sweep_trigger_distance: float = 1.5
+var paddle_sweep_max_yaw_deg: float = 65.0
+var paddle_sweep_y_drop: float = 0.08
+var paddle_sweep_x_extension: float = 0.10
 
 # ── Standing sweep ───────────────────────────────────────────────────────────
 # Upright equivalent of the paddle-down sweep. More aggressive blade reach
@@ -509,11 +509,11 @@ extends Node
 # loose pucks) at close range, where the goalie has time to commit and
 # coaches teach being more aggressive with the stick. Against fast carriers
 # the default mild active blade intent stays.
-@export var standing_sweep_trigger_distance: float = 2.0
-@export var standing_sweep_carrier_max_speed: float = 3.0  # m/s — above this, default to mild intent
-@export var standing_sweep_max_yaw_deg: float = 45.0
-@export var standing_sweep_y_drop: float = 0.04
-@export var standing_sweep_x_extension: float = 0.06
+var standing_sweep_trigger_distance: float = 2.0
+var standing_sweep_carrier_max_speed: float = 3.0  # m/s — above this, default to mild intent
+var standing_sweep_max_yaw_deg: float = 45.0
+var standing_sweep_y_drop: float = 0.04
+var standing_sweep_x_extension: float = 0.06
 
 # ── Rebound steering (pad toe-out) ───────────────────────────────────────────
 # Pads are angled (Y-yaw, toes outward) so a save deflects the puck toward the
@@ -521,8 +521,8 @@ extends Node
 # control, no physics override. Butterfly carries the larger angle: it's the
 # low-shot / 5-hole save posture where a straight-back rebound is most
 # dangerous. Pushed into the pose builder in _configure_collaborators.
-@export var pad_toe_out_standing_deg: float = 12.0
-@export var pad_toe_out_butterfly_deg: float = 18.0
+var pad_toe_out_standing_deg: float = 12.0
+var pad_toe_out_butterfly_deg: float = 18.0
 # Sealing-pad squaring range (m). The toe-out steers rebounds but angles a pad
 # off the goal-line plane; pressed to a post that angle opens a seam beside the
 # post. When a butterfly pad's outer edge comes within this distance of its post
@@ -531,7 +531,7 @@ extends Node
 # butterfly sits `net_half_width - pad_edge` (~0.075 m) short of each post, so
 # keep this under that or a centred drop squares both pads and loses all rebound
 # steering. Set 0 to disable (pads always toed out).
-@export var post_seal_square_range: float = 0.06
+var post_seal_square_range: float = 0.06
 
 # ── Loose-puck clear (sweep the crease) ──────────────────────────────────────
 # The stick poke check only strips a CARRIED puck — a loose puck sitting at the
@@ -542,15 +542,15 @@ extends Node
 # from any non-reacting state, butterfly or upright, regardless of whether an
 # opponent is nearby — clearing the crease is correct even with no pressure.
 # Drives the standing / paddle sweep pose too so the reach reads visually.
-@export var clear_reach: float = 1.4            # m — goalie-to-puck distance the stick can sweep
-@export var clear_max_puck_speed: float = 4.0   # m/s — above this it's a live shot/rebound, leave it
-@export var clear_max_height: float = 0.12      # m — puck must be on the ice; airborne pucks aren't swept
-@export var clear_dwell: float = 0.35           # s — the puck must sit clearable this long before the sweep
-@export var clear_speed: float = 7.0            # m/s imparted to the swept puck
-@export var clear_lateral_weight: float = 1.0   # corner-ward bias (lateral vs forward)
-@export var clear_forward_weight: float = 0.5   # out-of-crease bias
-@export var clear_center_deadband: float = 0.15 # m — |puck.x| under this picks the stick side
-@export var clear_cooldown: float = 0.45        # s between sweeps (anti-dribble)
+var clear_reach: float = 1.4            # m — goalie-to-puck distance the stick can sweep
+var clear_max_puck_speed: float = 4.0   # m/s — above this it's a live shot/rebound, leave it
+var clear_max_height: float = 0.12      # m — puck must be on the ice; airborne pucks aren't swept
+var clear_dwell: float = 0.35           # s — the puck must sit clearable this long before the sweep
+var clear_speed: float = 7.0            # m/s imparted to the swept puck
+var clear_lateral_weight: float = 1.0   # corner-ward bias (lateral vs forward)
+var clear_forward_weight: float = 0.5   # out-of-crease bias
+var clear_center_deadband: float = 0.15 # m — |puck.x| under this picks the stick side
+var clear_cooldown: float = 0.45        # s between sweeps (anti-dribble)
 # ── Cover / freeze (smother) ──────────────────────────────────────────────────
 # The cover fires exactly when the lane model says every sweep would feed an
 # opponent's stick AND an opponent is on the puck (USA Hockey "Controlling
@@ -562,10 +562,10 @@ extends Node
 # (and OFF / free play) holds `cover_hold_s` then plays it out through the same
 # lane-aware sweep. `cover_cooldown_s` keeps the smother a scramble-killer rather
 # than a spammable wall.
-@export var cover_reach_time: float = 0.35      # s — glove-to-puck smother race window
-@export var cover_secure_radius: float = 0.55   # m — puck must still be this close when the glove lands
-@export var cover_hold_s: float = 0.85          # s — ARCADE hold before the live release
-@export var cover_cooldown_s: float = 7.0       # s — between covers (success or failed gamble)
+var cover_reach_time: float = 0.35      # s — glove-to-puck smother race window
+var cover_secure_radius: float = 0.55   # m — puck must still be this close when the glove lands
+var cover_hold_s: float = 0.85          # s — ARCADE hold before the live release
+var cover_cooldown_s: float = 7.0       # s — between covers (success or failed gamble)
 # A puck at rest ON the goalie's body — a deadened save settling on top of the
 # butterfly pads. The goalie is the only body that can support a puck off the
 # ice (the puck mask excludes skaters), and a pad-shelf puck is unplayable
@@ -574,10 +574,10 @@ extends Node
 # it's a covered puck anyway, so it triggers the same smother, bypassing the
 # cover cooldown (there is no other resolution). Detection is the pure
 # GoalieBehaviorRules.puck_resting_on_goalie window held for a dwell.
-@export var cover_body_rest_dwell_s: float = 0.3      # s — must SIT there, not bounce through
-@export var cover_body_rest_max_height: float = 0.6   # m — pad/lap shelf envelope the glove can pin
-@export var cover_body_radius: float = 0.7            # m — butterfly's horizontal span
-@export var cover_escape_height: float = 0.9          # m — above the collapsed torso = out of the smother
+var cover_body_rest_dwell_s: float = 0.3      # s — must SIT there, not bounce through
+var cover_body_rest_max_height: float = 0.6   # m — pad/lap shelf envelope the glove can pin
+var cover_body_radius: float = 0.7            # m — butterfly's horizontal span
+var cover_escape_height: float = 0.9          # m — above the collapsed torso = out of the smother
 
 # ── Catch-and-hold (glove) ────────────────────────────────────────────────────
 # A controlled GLOVE save pins the puck into the glove instead of dropping it
@@ -586,8 +586,8 @@ extends Node
 # beat and plays on — the real delay-of-game incentive. The drop places the puck
 # at the goalie's feet, where the dwell → lane-aware windup-strike clear takes
 # over.
-@export var catch_hold_pressure_radius: float = 2.5  # m — opponent inside this → hold/freeze
-@export var catch_quick_drop_s: float = 0.4           # s — unpressured look-and-drop beat
+var catch_hold_pressure_radius: float = 2.5  # m — opponent inside this → hold/freeze
+var catch_quick_drop_s: float = 0.4           # s — unpressured look-and-drop beat
 
 # Clear-sweep animation. The sweep imparts the clearing velocity instantly; on
 # its own the puck just shoots to the corner with no stick motion, which reads
@@ -596,32 +596,32 @@ extends Node
 # blade visibly shoves the puck out. Mirrors the lunge animation idiom. Purely
 # cosmetic (the clear velocity is already applied); magnitudes pushed to the pose
 # builder in _configure_collaborators.
-@export var sweep_anim_duration: float = 0.22       # s — swing-through window
-@export var sweep_anim_x_extension: float = 0.14    # m — lateral push toward the send corner at peak
-@export var sweep_anim_z_extension: float = 0.18    # m — forward (out-of-crease) push at peak
-@export var sweep_anim_max_yaw_deg: float = 40.0    # blade yaw toward the send side at peak
+var sweep_anim_duration: float = 0.22       # s — swing-through window
+var sweep_anim_x_extension: float = 0.14    # m — lateral push toward the send corner at peak
+var sweep_anim_z_extension: float = 0.18    # m — forward (out-of-crease) push at peak
+var sweep_anim_max_yaw_deg: float = 40.0    # blade yaw toward the send side at peak
 # Windup: the clear runs windup → STRIKE → follow-through. The decision starts a
 # short backswing (blade cocks away from the send corner) and the clear VELOCITY
 # applies only at the strike moment, when the blade snaps through the puck, so the
 # stick is visibly what clears it. During the windup the puck is still live: if it
 # gets whacked away or picked up first the strike whiffs, and the follow-through
 # still plays — an honest missed sweep.
-@export var sweep_windup_s: float = 0.12            # s — backswing before the strike
-@export var sweep_windup_x_extension: float = 0.12  # m — cock away from the send corner at peak
-@export var sweep_windup_z_pull: float = 0.06       # m — pull back toward the body at peak
-@export var sweep_windup_max_yaw_deg: float = 25.0  # blade yaw away from the send side at peak
+var sweep_windup_s: float = 0.12            # s — backswing before the strike
+var sweep_windup_x_extension: float = 0.12  # m — cock away from the send corner at peak
+var sweep_windup_z_pull: float = 0.06       # m — pull back toward the body at peak
+var sweep_windup_max_yaw_deg: float = 25.0  # blade yaw away from the send side at peak
 
 # Body rotation toward the slide direction, applied as a fixed end angle (not
 # free-form facing). The pad's effective lateral reach shrinks by cos(rotation),
 # so the slide target body_x has to account for it — the two settings are
 # computed together so the leading pad EDGE lands on the post regardless of
 # rotation. Pure visual "lean into the motion" without breaking the seal.
-@export var slide_max_rotation_deg: float = 25.0
+var slide_max_rotation_deg: float = 25.0
 # Coil phase duration. The slide is two-phase: body rotates in place (loading
 # weight on the far leg) for this long, then push-off translates linearly to
 # the seal target. Reads as a deliberate plant-and-push instead of the body
 # teleporting laterally with rotation lerping independently.
-@export var slide_coil_duration: float = 0.12
+var slide_coil_duration: float = 0.12
 
 # ── Cross-crease detection (STANDING push only) ──────────────────────────────
 # A pass whipping across the slot is read off PUCK velocity, not the smoothed
@@ -634,34 +634,34 @@ extends Node
 # long-developing feeds. (Butterfly slides are NOT triggered here — they come
 # out of the pad-coverage check in _try_commit_slide, which handles both this
 # and dekes uniformly.)
-@export var cross_crease_slot_depth: float = 5.0        # m in front of goal the pass window covers
-@export var cross_crease_lateral_ratio: float = 1.5     # |vx| must exceed |vz|*this to count as a pass
-@export var cross_crease_min_lateral_speed: float = 6.0 # m/s puck lateral speed to trigger
-@export var cross_crease_lead_time: float = 0.30        # s to project the puck forward for the target
+var cross_crease_slot_depth: float = 5.0        # m in front of goal the pass window covers
+var cross_crease_lateral_ratio: float = 1.5     # |vx| must exceed |vz|*this to count as a pass
+var cross_crease_min_lateral_speed: float = 6.0 # m/s puck lateral speed to trigger
+var cross_crease_lead_time: float = 0.30        # s to project the puck forward for the target
 # Human read delay before the push engages — the goalie doesn't move for this
 # long after the pass releases. On a quick royal-road one-timer this delay alone
 # loses him the race; raise it to make the back door deadlier, lower it (toward
 # the dangle/shot reaction_delay) to give him a fighting chance on the cross.
-@export var cross_crease_react_delay: float = 0.12      # s before the standing drive engages
-@export var cross_crease_push_duration: float = 0.50    # s the standing push stays committed
+var cross_crease_react_delay: float = 0.12      # s before the standing drive engages
+var cross_crease_push_duration: float = 0.50    # s the standing push stays committed
 # Lateral coverage half-extent used to clamp the STANDING cross-crease drive so
 # the goalie stays inside the net. This is the standing (pads-together) coverage,
 # NOT the splayed butterfly pad edge (pad_local_offset + butterfly_pad_half_width
 # = 0.84): clamping the standing push by the butterfly extent left only ±0.075 m
 # of travel, T-pushing the goalie to net CENTER — the opposite of sealing the far
 # post. Default = pad_local_offset (goalie can drive its near pad toward the post).
-@export var cross_crease_drive_edge: float = 0.42
+var cross_crease_drive_edge: float = 0.42
 # When a slide commits toward a post (extreme lateral target), the goalie
 # also pulls deep so the sealing pad presses the post — backdoor /
 # wraparound coverage. Depth target = lerp(current_depth, post_seal_depth)
 # scaled by how extreme the lateral slide endpoint is. Slides toward
 # centre hold depth; slides to ±net_half_width go fully deep.
-@export var post_seal_depth: float = 0.10
+var post_seal_depth: float = 0.10
 # Lateral offset from goalie center to the pad center in butterfly. Used to
 # compute the slide target so the sealing pad ends up even with the post:
 # goalie center sits at ±(net_half_width - pad_local_offset). Matches the
 # `left_pad_pos.x = -0.42` value baked into the BUTTERFLY body config.
-@export var pad_local_offset: float = 0.42
+var pad_local_offset: float = 0.42
 # Half-extent of a splayed butterfly pad along the goalie's lateral (X) axis.
 # Subtle: the pad collider is BoxShape3D(0.28, 0.84, 0.2), but in butterfly the
 # pad is rotated 90° around its Z axis (see GoalieBodyConfigBuilder), which
@@ -671,29 +671,29 @@ extends Node
 # center. Slide targets aim for (post - pad_edge_extent) so the visible pad
 # edge lands ON the post rather than overhanging it — sealing with the edge,
 # not the center.
-@export var butterfly_pad_half_width: float = 0.42
+var butterfly_pad_half_width: float = 0.42
 # Forward bow of the pivot arc at mid-slide, in metres. The goalie's center
 # traces a slight arc toward the shooter as the body pivots around the
 # push-off foot — depth peaks at mid-slide then settles at the seal target.
 # Purely visual; 0.0 = straight lateral line.
-@export var slide_pivot_arc_depth: float = 0.04
+var slide_pivot_arc_depth: float = 0.04
 # How much the push-off pad lifts off the ice at the start of the push (metres,
 # Y offset). Returns to zero as the slide decays so it settles flat.
-@export var slide_pushoff_lift: float = 0.05
+var slide_pushoff_lift: float = 0.05
 # Rotation (degrees) the push-off pad kicks toward vertical at push-off.
 # 0° = stays flat like sealing pad; 35° = partial kick — enough to read as
 # a plant-and-push. Returns to flat as the slide decays.
-@export var slide_pushoff_rot_deg: float = 35.0
+var slide_pushoff_rot_deg: float = 35.0
 # Body lean into the slide direction (degrees Z rotation). Shifts weight into
 # the push — without it, only the yaw moves and the pivot read is lost.
-@export var slide_body_lean_deg: float = 6.0
+var slide_body_lean_deg: float = 6.0
 # Suppress slide triggers for this long after a "shot event" — either a shot
 # being released OR the puck contacting the goalie. Real goalies track up to
 # release, then commit to their read and process the outcome; they can't
 # simultaneously read a shot AND react to a new lateral threat. After a save,
 # deflection trajectories are also unpredictable in this window. One timer
 # covers both cases.
-@export var post_event_slide_lockout: float = 0.25
+var post_event_slide_lockout: float = 0.25
 
 # ── Shot anticipation (pre-lean) ──────────────────────────────────────────────
 # While reading a windup the goalie pre-leans toward where the shot is currently
@@ -704,9 +704,9 @@ extends Node
 # so the arm-delay / glove-speed caps still hold. The non-directional "hands up"
 # tell is the fallback when the current aim isn't at the net. Host-only like all
 # goalie AI; the lean rides the broadcast glove/blocker pose to clients.
-@export var prelean_strength: float = 0.35          # 0 = off, 1 = full reach pre-committed
-@export var prelean_max_distance: float = 9.0       # m — goalie→shooter range the read fires within
-@export var prelean_ready_lift: float = 0.06        # m — non-directional hands-up lift (remote shooters)
+var prelean_strength: float = 0.35          # 0 = off, 1 = full reach pre-committed
+var prelean_max_distance: float = 9.0       # m — goalie→shooter range the read fires within
+var prelean_ready_lift: float = 0.06        # m — non-directional hands-up lift (remote shooters)
 # Commit window (s): while the goalie is reading a charging shot from a slot
 # shooter — and briefly after — it has committed to that shot and can't also
 # anticipate a new lateral threat. The cross-crease desperation push is
@@ -714,56 +714,56 @@ extends Node
 # committed goalie to the back door (the realism the slide-commit math already
 # wants, but which the standing push undercut by pre-jumping the pass). A slow,
 # telegraphed cross-pass made before/after the window still gets tracked.
-@export var prelean_commit_window: float = 0.25
+var prelean_commit_window: float = 0.25
 
 # ── Behind-net puck play (tier-1 conservative rim stop) ──────────────────────
 # Tuning for the trip. Doctrine and the GO race's conservatism are in
 # Scripts/controllers/CLAUDE.md; the race itself is
 # GoalieBehaviorRules.puck_play_race_clear, driven by GoaliePuckPlay.
-@export var puck_play_skate_speed: float = 4.2      # m/s — goalies skate slower than skaters
-@export var puck_play_skate_accel: float = 8.0      # m/s² — out/back push ramp
-@export var puck_play_go_margin: float = 0.9        # s — surplus required to GO (INF = never)
-@export var puck_play_abort_margin: float = 0.45    # s — mid-trip floor; below it, bail (hysteresis)
-@export var puck_play_stop_beat: float = 0.25       # s — settle the trap before turning back
-@export var puck_play_set_beat: float = 0.15        # s — must beat the rim to the spot by this
-@export var puck_play_capture_radius: float = 1.0   # m — paddle trap reach at the stop point
-@export var puck_play_min_puck_speed: float = 4.0   # m/s — slower pucks don't need a stop
-@export var puck_play_max_puck_speed: float = 22.0  # m/s — faster rims are shots/clears, stay home
-@export var puck_play_opponent_speed: float = 11.0  # m/s — assume full sprint (conservative bound)
-@export var puck_play_net_front_exclusion: float = 3.0 # m — opponent near the net front vetoes the trip
-@export var puck_play_cooldown_s: float = 4.0       # s — between trips (no dithering at the post)
-@export var puck_play_boards_inset: float = 0.7     # m — stop point this far inside the end boards
-@export var puck_play_post_clearance: float = 0.55  # m — waypoint this far outside the post
+var puck_play_skate_speed: float = 4.2      # m/s — goalies skate slower than skaters
+var puck_play_skate_accel: float = 8.0      # m/s² — out/back push ramp
+var puck_play_go_margin: float = 0.9        # s — surplus required to GO (INF = never)
+var puck_play_abort_margin: float = 0.45    # s — mid-trip floor; below it, bail (hysteresis)
+var puck_play_stop_beat: float = 0.25       # s — settle the trap before turning back
+var puck_play_set_beat: float = 0.15        # s — must beat the rim to the spot by this
+var puck_play_capture_radius: float = 1.0   # m — paddle trap reach at the stop point
+var puck_play_min_puck_speed: float = 4.0   # m/s — slower pucks don't need a stop
+var puck_play_max_puck_speed: float = 22.0  # m/s — faster rims are shots/clears, stay home
+var puck_play_opponent_speed: float = 11.0  # m/s — assume full sprint (conservative bound)
+var puck_play_net_front_exclusion: float = 3.0 # m — opponent near the net front vetoes the trip
+var puck_play_cooldown_s: float = 4.0       # s — between trips (no dithering at the post)
+var puck_play_boards_inset: float = 0.7     # m — stop point this far inside the end boards
+var puck_play_post_clearance: float = 0.55  # m — waypoint this far outside the post
 # Skating-stride cadence for the trip (rad of stride phase per METER traveled —
 # distance-driven so the feet never treadmill; a full two-push cycle every
 # ~2.6 m at 2.4). The stride itself is the skater gait's idiom reduced to the
 # pad rig (GoalieBodyConfigBuilder._apply_puck_play_stride) and only plays on
 # the behind-net skate — crease movement (shuffle / T-push) is correctly a
 # glide, which is why the goalie never strides in the crease.
-@export var puck_play_stride_cadence: float = 2.4
+var puck_play_stride_cadence: float = 2.4
 
 # Recovery proximity: while in BUTTERFLY, the goalie holds whenever the puck
 # is within this Euclidean distance — covers genuine jam plays, post-save
 # rebounds bouncing in front, and slow follow-ups. Only when the puck has
 # clearly cleared this zone does speed/direction-based recovery apply. ~2.4m
 # is a couple of stick-lengths from the goalie, ~half-slot.
-@export var recovery_proximity_threshold: float = 2.4
+var recovery_proximity_threshold: float = 2.4
 
 # Reaction freeze ends only on a discrete resolving event: puck hits this
 # goalie, hits the boards, hits a post, hits the net, or is picked up by
 # any skater. After the event there's a short delay before the freeze
 # clears — `reaction_clear_delay`. The goalie isn't simultaneously
 # processing the resolution AND deciding the next move; gives them a beat.
-@export var reaction_clear_delay: float = 0.25
+var reaction_clear_delay: float = 0.25
 # Faster freeze-clear when the puck contacts this goalie (a save) — the read is
 # resolved the instant the save lands, so the goalie lifts the freeze quickly and
 # can track / slide to the rebound instead of standing frozen while it sits in the
 # slot. Non-save resolutions keep the longer `reaction_clear_delay` beat.
-@export var save_clear_delay: float = 0.08
+var save_clear_delay: float = 0.08
 # Hard cap on `_reacting_to_shot` duration as a safety net only. The freeze
 # is supposed to end via a resolving event; this catches edge cases where
 # none of the expected events fire (puck stuck somewhere, signal missed).
-@export var max_reaction_duration: float = 1.0
+var max_reaction_duration: float = 1.0
 
 # ── Ready stance ──────────────────────────────────────────────────────────────
 # Distinct half-down stance triggered when the play is in the goalie's
@@ -772,14 +772,14 @@ extends Node
 # faster, and gives the player visual signal that the goalie is engaged. The
 # goalie returns to READY (not STANDING) after butterfly recovery while the
 # threat persists, so they aren't bouncing all the way upright between drops.
-@export var ready_zone_distance: float = 25.0  # m — puck perp distance threshold to enter READY
+var ready_zone_distance: float = 25.0  # m — puck perp distance threshold to enter READY
 
 # Lateral deadband for the RVH_LEFT ↔ RVH_RIGHT swap. The puck has to
 # cross the goalie's centerline by at least this much before the post
 # being hugged switches sides. Without this, a puck hovering at
 # ~x=0 (e.g., directly behind the net) flickers the state every tick
 # from float jitter, spamming state-change RPCs.
-@export var rvh_swap_deadband_m: float = 0.25
+var rvh_swap_deadband_m: float = 0.25
 # Goal-line hysteresis for the RVH ↔ VH stance-family swap.
 # VH is the post stance for a sharp-angle SHOT threat still in FRONT of the
 # goal line — post pad vertical, keeping short-side-high coverage (Jake Allen /
@@ -788,64 +788,64 @@ extends Node
 # in-front sharp angles concedes the top of the net. The puck must cross the
 # goal line by this much before the family switches, so a puck dribbling along
 # the line doesn't flicker the stance.
-@export var post_stance_swap_deadband_m: float = 0.15
+var post_stance_swap_deadband_m: float = 0.15
 
 # ── Client Render Tuning ──────────────────────────────────────────────────────
 # Clients render the broadcast pose from a small buffer and run no local AI —
 # see Scripts/networking/CLAUDE.md for the render instant and why.
-@export var extrapolation_max_ms: float = 50.0  # cap dead-reckon when snapshots are late
-@export var rejoin_blend_duration: float = 0.075  # smoothstep window back from extrapolation
+var extrapolation_max_ms: float = 50.0  # cap dead-reckon when snapshots are late
+var rejoin_blend_duration: float = 0.075  # smoothstep window back from extrapolation
 
-@export var low_shot_threshold: float = 0.45
+var low_shot_threshold: float = 0.45
 # The legs-or-hands fork. Not a chosen number: it is the height where the
 # butterfly silhouette runs out (GoalieAnatomy.butterfly_cover_ceiling), so a
 # shot below it is one the seal can still take and a shot above it is one the
 # drop would hand over.
-@export var elevated_threshold: float = GoalieAnatomy.butterfly_cover_ceiling()
-@export var react_hand_y_min: float = 0.50
-@export var react_hand_y_max: float = 1.55
+var elevated_threshold: float = GoalieAnatomy.butterfly_cover_ceiling()
+var react_hand_y_min: float = 0.50
+var react_hand_y_max: float = 1.55
 # Reach height ABOVE THE CHEST ANCHOR — the posture cost of being down. Each pose
 # authors a `body_pos.y` (READY 1.06, STANDING 1.22, BUTTERFLY 0.40) and the hand
 # ceiling is that plus this, capped by `react_hand_y_max`. DERIVED, not chosen:
 # 1.06 + 0.49 = 1.55, the human upright ceiling, so only the down postures give
 # anything up. See GoalieBodyConfigBuilder._reachable_hand_y.
-@export var arm_reach_above_chest: float = 0.49
-@export var react_hand_z: float = -0.28
+var arm_reach_above_chest: float = 0.49
+var react_hand_z: float = -0.28
 # Glove arm reach. The glove (in `_apply_elevated_shot_reaction`) moves
 # toward the shot's lateral impact point clamped within these bounds, so
 # the goalie actively extends the arm to make catch saves rather than
 # just rotating the wrist in place. Inward bound stops cross-body reach
 # from looking goofy. Forward Z increases with reach distance — extending
 # the arm naturally moves the glove forward of the body line.
-@export var glove_max_x_outward: float = -0.85   # max extension to the glove side
-@export var glove_max_x_inward: float = -0.10    # max cross-body reach
-@export var glove_max_z_reach: float = 0.10      # extra forward Z at full extension
-@export var glove_max_yaw_deg: float = 60.0      # cap on glove Y rotation toward puck
+var glove_max_x_outward: float = -0.85   # max extension to the glove side
+var glove_max_x_inward: float = -0.10    # max cross-body reach
+var glove_max_z_reach: float = 0.10      # extra forward Z at full extension
+var glove_max_yaw_deg: float = 60.0      # cap on glove Y rotation toward puck
 # Blocker reach mirrors the glove. Pad+stick are rigid so we only translate
 # the assembly toward the intercept; yaw is around Y so the per-state X tilt
 # (which keeps the blade on the ice) stays intact. Sign-mirrored from glove
 # values since the blocker is on the +X side for `catches_left = true`.
-@export var blocker_max_x_outward: float = 0.85
-@export var blocker_max_x_inward: float = 0.10
-@export var blocker_max_z_reach: float = 0.10
-@export var blocker_max_yaw_deg: float = 60.0
+var blocker_max_x_outward: float = 0.85
+var blocker_max_x_inward: float = 0.10
+var blocker_max_z_reach: float = 0.10
+var blocker_max_yaw_deg: float = 60.0
 # Body lean toward the reach side during elevated saves. Real goalies shift
 # weight into the save — torso tilts toward the side the arm is extending.
 # Without it, only the arms move and the save reads as a wrist twist.
 # Scaled by the absolute lateral reach distance (small lean for body shots,
 # full lean for corner pulls).
-@export var body_lean_max_deg: float = 14.0
-@export var body_lean_reach_norm: float = 0.7   # reach distance that maps to full lean
+var body_lean_max_deg: float = 14.0
+var body_lean_reach_norm: float = 0.7   # reach distance that maps to full lean
 # Shoulder save: forward/back pitch on the body during an elevated shot reaction.
 # Low-chest shots (intercept_y below `shoulder_pitch_y_neutral`) lean the torso
 # forward to present the chest into the shot. Upper-body / head shots lean the
 # torso back so the chest collider rocks up and the glove/blocker have room to
 # come in. Applied additively on top of each state's resting body pitch so the
 # butterfly's existing -10° forward lean is preserved at neutral height.
-@export var shoulder_pitch_y_neutral: float = 0.95
-@export var shoulder_pitch_forward_max_deg: float = 8.0
-@export var shoulder_pitch_back_max_deg: float = 5.0
-@export var shoulder_pitch_y_range: float = 0.55  # y-distance from neutral that maps to full back lean
+var shoulder_pitch_y_neutral: float = 0.95
+var shoulder_pitch_forward_max_deg: float = 8.0
+var shoulder_pitch_back_max_deg: float = 5.0
+var shoulder_pitch_y_range: float = 0.55  # y-distance from neutral that maps to full back lean
 # Hard cap on glove linear speed during shot reactions, in m/s (max per-frame
 # travel = speed * delta). GROUNDED in explosive human hand speed: a reactive
 # glove save flashes ~0.6-0.75 m in ~0.13 s ≈ ~5 m/s effective, and boxing
@@ -857,13 +857,13 @@ extends Node
 # AIActionScoring mirrors this as the arm deploy ramp (goalie_arm_deploy_s =
 # HIGH-band EXT / speed; baseline const GOALIE_ARM_DEPLOY_S, re-derived per tier
 # in set_goalie_profile) — change the baselines together.
-@export var glove_react_max_speed: float = 5.0
+var glove_react_max_speed: float = 5.0
 # Blocker (entire BlockArm assembly) reach speed cap, mirroring the glove.
 # Same magnitude — both arms have similar reach speed; if blocker should be
 # faster (some real goalies' dominant hand), bump this up.
-@export var blocker_react_max_speed: float = 5.0
+var blocker_react_max_speed: float = 5.0
 
-@export var five_hole_butterfly_move_max: float = 0.18  # opens with slide velocity
+var five_hole_butterfly_move_max: float = 0.18  # opens with slide velocity
 
 # Host-side: the goalie has secured (smothered) a loose puck. GameManager
 # resolves it by ruleset — NHL whistles a defensive-zone faceoff; ARCADE / OFF

@@ -5,7 +5,6 @@ extends GutTest
 # advertised promise that the mid-side targets are reachable with one notch
 # of loft (ELEVATION_LOW), so a loft retune that breaks the drill fails here.
 
-const _SKATER: GDScript = preload("res://Scripts/controllers/skater_controller.gd")
 
 
 func test_pool_and_names_are_parallel() -> void:
@@ -31,7 +30,10 @@ func test_targets_sit_inside_the_net_mouth() -> void:
 # centre — that's the "achievable with one notch of loft" promise. (FLAT
 # stays on the ice and can't reach them; HIGH passes through on its arc.)
 func test_side_targets_are_reachable_with_low_loft() -> void:
-	var vy_low: float = float(_SKATER.get_property_default_value("loft_vertical_speed_low"))
+	# Read off a pristine controller rather than the script's property metadata:
+	# the shot tunables are plain fields (no scene overrides any of them), and
+	# get_property_default_value only answers for exported ones.
+	var vy_low: float = float(autofree(SkaterController.new()).loft_vertical_speed_low)
 	var apex: float = vy_low * vy_low / (2.0 * GameRules.GRAVITY_M_S2)
 	for i: int in AccuracyDrillRules.TARGET_NAMES.size():
 		if not AccuracyDrillRules.TARGET_NAMES[i].contains("SIDE"):

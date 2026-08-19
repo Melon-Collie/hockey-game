@@ -145,13 +145,17 @@ func test_no_signals_without_listeners() -> void:
 	assert_eq(dead.size(), 0, "no signals without listeners")
 
 
-func test_no_exports_nothing_reads() -> void:
+# Public class-level fields, whether or not they carry @export. The two used to
+# be one check because the tunables were all exported; once the 573 that no
+# scene overrides became plain `var`, an @export-only pattern would have gone
+# blind on every one of them. Locals are untouched — the pattern is anchored at
+# column 0, so only class fields match.
+func test_no_public_fields_nothing_reads() -> void:
 	var dead: Dictionary = _orphans(
-			"^@export(?:_[a-z_]+)?(?:\\([^)]*\\))? var ([a-z][a-z_0-9]*)", PackedStringArray())
+			"^(?:@export(?:_[a-z_]+)?(?:\\([^)]*\\))? )?var ([a-z][a-z_0-9]*)", PackedStringArray())
 	for name: String in dead:
-		fail_test("@export `%s` at %s is never read — it is a tunable that tunes " % [name, dead[name]] +
-				"nothing, and the inspector still offers it")
-	assert_eq(dead.size(), 0, "no exports nothing reads")
+		fail_test("`%s` at %s is never read — a tunable that tunes nothing" % [name, dead[name]])
+	assert_eq(dead.size(), 0, "no public fields nothing reads")
 
 
 # Guards the guard: if the corpus scan ever comes back thin, every assertion

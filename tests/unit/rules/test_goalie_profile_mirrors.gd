@@ -31,22 +31,21 @@ const _MIRRORED_EXPORTS: Array[StringName] = [
 	&"read_converge_time", &"butterfly_drop_speed", &"five_hole_base",
 ]
 
-const _CTRL: GDScript = preload("res://Scripts/controllers/goalie_controller.gd")
-
-
-func _authored_default(name: StringName) -> float:
-	return float(_CTRL.get_property_default_value(name))
-
-
+# The authored defaults are read off a PRISTINE controller rather than from the
+# script's property metadata: these are plain fields now (no scene overrides any
+# of them), and `get_property_default_value` only answers for exported ones. A
+# second instance is also the more honest comparison — it is the same object the
+# game builds, with its field initialisers run and nothing applied.
 func test_applying_hard_leaves_every_authored_default_untouched() -> void:
+	var authored: GoalieController = autofree(GoalieController.new())
 	var ctrl: GoalieController = autofree(GoalieController.new())
 	ctrl.apply_skill_profile(GoalieSkillProfile.hard())
 	for name: StringName in _MIRRORED_EXPORTS:
-		assert_almost_eq(float(ctrl.get(name)), _authored_default(name), 1e-9,
+		assert_almost_eq(float(ctrl.get(name)), float(authored.get(name)), 1e-9,
 				"applying Hard must not move `%s` — Hard IS the authored default" % name)
 
 
-# The list above has to stay complete or the guard quietly shrinks. Every export
+# The list above has to stay complete or the guard quietly shrinks. Every field
 # _apply_skill_profile writes is a field the profile owns, so the count is the
 # contract: if someone wires a nineteenth knob, this fails until it is listed.
 func test_mirrored_export_list_covers_every_field_the_profile_writes() -> void:

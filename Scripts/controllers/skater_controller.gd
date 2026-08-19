@@ -7,25 +7,25 @@ const State = SkaterStateMachine.State
 var _sm: SkaterStateMachine = SkaterStateMachine.new()
 
 # ── Movement Tuning ───────────────────────────────────────────────────────────
-@export var thrust: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
-@export var friction: float = 0.8
-@export var friction_drag: float = 0.27
-@export var max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
-@export var move_deadzone: float = 0.1
-@export var brake_multiplier: float = 4.0
+var thrust: float = GameRules.DEFAULT_SKATER_THRUST_M_S2
+var friction: float = 0.8
+var friction_drag: float = 0.27
+var max_speed: float = GameRules.DEFAULT_SKATER_MAX_SPEED_M_S
+var move_deadzone: float = 0.1
+var brake_multiplier: float = 4.0
 # Lateral grip — perpendicular-to-motion thrust authority (the edges' bite in a
 # cut; see SkaterMovementRules.MovementConfig.lateral_grip). 1.0 = the shipped
 # neutral feel; per-build value = base × agility_mult in apply_attributes, and
 # the skate-profile gear slot leans it later. Turn radius at speed rides this.
-@export var lateral_grip: float = 1.0
-@export var puck_carry_speed_multiplier: float = 0.92  # pre-apply default; per-build value is set by apply_attributes (PlayerAttributes.carry_speed_mult, Speed-eased)
-@export var backward_thrust_multiplier: float = 0.80
-@export var crossover_thrust_multiplier: float = 0.90
+var lateral_grip: float = 1.0
+var puck_carry_speed_multiplier: float = 0.92  # pre-apply default; per-build value is set by apply_attributes (PlayerAttributes.carry_speed_mult, Speed-eased)
+var backward_thrust_multiplier: float = 0.80
+var crossover_thrust_multiplier: float = 0.90
 # Ceiling on the velocity fed to the gait during the faceoff / intro skate-in
 # (see begin_approach / apply_approach). The glide always completes in a fixed
 # duration, so a far start implies a high velocity — clamp it here so the stride
 # animation reads as a hard skate rather than over-spinning past its range.
-@export var approach_max_gait_speed: float = 9.0
+var approach_max_gait_speed: float = 9.0
 # ── Sprint / Stamina Tuning ───────────────────────────────────────────────────
 # Sprint (Shift) burns a stamina pool for a top-speed burst. Boost is primarily
 # the speed cap; a smaller thrust bump lets you actually reach it. Stamina is a
@@ -34,23 +34,23 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # (PlayerAttributes.sprint_ceiling_mult), which grounds the sprint CEILING to the
 # 20–25 mph NHL burst band so a burner opens a gear a plodder doesn't have. This
 # @export is only the pre-apply default (a neutral build).
-@export var sprint_max_speed_multiplier: float = 1.14
+var sprint_max_speed_multiplier: float = 1.14
 # Fraction of the puck-carry speed penalty waived WHILE sprinting — heads-down,
 # straight-line, flat-out. Lets a fast carrier separate; the real carry cost is
 # the sprint stamina drain below, not an intrinsic slowdown.
-@export var sprint_carry_penalty_bypass: float = 0.6
-@export var sprint_thrust_multiplier: float = 1.20
-@export var sprint_drain_per_sec: float = 0.45         # ~2.2s of full sprint off-puck
-@export var sprint_carry_drain_multiplier: float = 1.6 # carrying drains faster (~1.4s)
-@export var stamina_regen_per_sec: float = 0.25        # baseline (medium Physical): ~4s to refill, ~2s to the 0.5 sprint-unlock
-@export var sprint_unlock_fraction: float = 0.5        # exhausted → recover to here before sprinting again
+var sprint_carry_penalty_bypass: float = 0.6
+var sprint_thrust_multiplier: float = 1.20
+var sprint_drain_per_sec: float = 0.45         # ~2.2s of full sprint off-puck
+var sprint_carry_drain_multiplier: float = 1.6 # carrying drains faster (~1.4s)
+var stamina_regen_per_sec: float = 0.25        # baseline (medium Physical): ~4s to refill, ~2s to the 0.5 sprint-unlock
+var sprint_unlock_fraction: float = 0.5        # exhausted → recover to here before sprinting again
 # Turn-rate scale while sprinting (< 1.0 = wider, lazier turns). This is the
 # tradeoff that makes sprint a decision rather than a hold-always button:
 # committed straight-line speed at the cost of agility, mirroring the
 # hustle/turn-radius coupling in sim hockey games. Scales facing_drag_speed in
 # SkaterPoseCoordinator.apply_facing. Deterministic from sprint_active, so it
 # re-derives identically through reconcile replay (no new wire state).
-@export var sprint_turn_multiplier: float = 0.55
+var sprint_turn_multiplier: float = 0.55
 # ── Hit-Button (Body-Check Commit) Tuning ─────────────────────────────────────
 # The hit button (Ctrl / input.hit_held) commits a check: it delivers the full
 # body-check transfer (see Skater.hit_passive_transfer_mult for the uncommitted
@@ -60,7 +60,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # the replicated skater.hit_committed). So a big hit is a committed read (line them
 # up, spend stamina, give up puck play), not a free bump. Deterministic from the
 # replicated input.hit_held, so every cost re-derives through reconcile replay.
-@export var hit_stamina_drain_per_sec: float = 0.5    # drained while committing a check
+var hit_stamina_drain_per_sec: float = 0.5    # drained while committing a check
 # Turn-rate scale while committing (< 1.0 = wider turns). Now 1.0 (no penalty): the
 # commitment cost moved entirely onto the withdrawn stick above, so you can steer
 # Turn-rate scale while committing (< 1.0 = wider turns). 1.0 — the commitment
@@ -69,7 +69,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # backwards. Full-speed homing is still bounded because sprinting in for max
 # closing pays sprint's own turn radius (sprint_turn_multiplier). Dial below 1.0
 # if committed checks feel too sticky.
-@export var hit_turn_multiplier: float = 1.0
+var hit_turn_multiplier: float = 1.0
 # Commit stance (cosmetic): while the Hit button is held the skater visibly loads
 # up for the check — leans into it, drops the leading shoulder, sinks into a
 # crouch, and (empty-handed only) pulls the stick up off the ice. A render-rate
@@ -78,10 +78,10 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # committed), so it reads on every machine and never affects puck play. Deliberately
 # pronounced — the stance has to be unmistakable so the commitment (and the withdrawn
 # stick) is legible to the player and their opponent. Eases in/out as Ctrl is held.
-@export var hit_commit_lean_deg: float = 24.0         # forward trunk lean into the check
-@export var hit_commit_shoulder_deg: float = 19.0     # leading-shoulder drop (roll)
-@export var hit_commit_crouch_m: float = 0.12         # sink into the checking stance
-@export var hit_commit_blade_lift_m: float = 0.22     # stick raise off the ice on an empty-handed commit
+var hit_commit_lean_deg: float = 24.0         # forward trunk lean into the check
+var hit_commit_shoulder_deg: float = 19.0     # leading-shoulder drop (roll)
+var hit_commit_crouch_m: float = 0.12         # sink into the checking stance
+var hit_commit_blade_lift_m: float = 0.22     # stick raise off the ice on an empty-handed commit
 # Loaded blade pose: while committing (empty-handed), the blade STOPS chasing the
 # cursor and eases to a fixed body-local "ready to hit" position — stick up (the
 # lift above) and held in front, so the stance snaps to a distinct silhouette
@@ -90,9 +90,9 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # convention). Gameplay-inert — the blade is withdrawn from puck play while
 # committed, so this is a pure cosmetic override that eases back to cursor tracking
 # on release. Feel dials; verify the silhouette in-game.
-@export var hit_commit_blade_local_x: float = 0.10    # forehand-side offset of the loaded blade
-@export var hit_commit_blade_local_z: float = -0.34   # how far in FRONT the loaded blade sits (−z = ahead)
-@export var hit_commit_pose_speed: float = 9.0        # how fast the stance eases in/out
+var hit_commit_blade_local_x: float = 0.10    # forehand-side offset of the loaded blade
+var hit_commit_blade_local_z: float = -0.34   # how far in FRONT the loaded blade sits (−z = ahead)
+var hit_commit_pose_speed: float = 9.0        # how fast the stance eases in/out
 # ── Body-Check Stagger Tuning ─────────────────────────────────────────────────
 # Getting checked hard staggers the victim: a temporary thrust penalty plus a
 # stamina bite, both scaled by how hard the hit landed (the m/s transfer impulse).
@@ -112,17 +112,17 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Closing past the ref keeps scaling the impulse linearly into the knockdown band
 # below, so a sprint / head-on collision is a bigger hit: a ceiling, not a
 # requirement. Still feel tunables.
-@export var stagger_min_impulse: float = 0.6       # m/s transfer delta below which a hit doesn't stagger
-@export var stagger_ref_impulse: float = 1.35      # m/s transfer delta treated as a full-strength check (== puck-strip threshold)
-@export var stagger_max_seconds: float = 1.0       # recovery window of a full-strength check
-@export var stagger_max_stamina_drain: float = 0.35  # pool fraction a full-strength check bites
-@export var stagger_max_thrust_penalty: float = 0.5  # peak thrust reduction at full stagger
+var stagger_min_impulse: float = 0.6       # m/s transfer delta below which a hit doesn't stagger
+var stagger_ref_impulse: float = 1.35      # m/s transfer delta treated as a full-strength check (== puck-strip threshold)
+var stagger_max_seconds: float = 1.0       # recovery window of a full-strength check
+var stagger_max_stamina_drain: float = 0.35  # pool fraction a full-strength check bites
+var stagger_max_thrust_penalty: float = 0.5  # peak thrust reduction at full stagger
 # Cosmetic stumble while staggered: a decaying trunk wobble layered into the
 # gait's trunk texture (SkaterSkatingCoordinator). Amplitude tracks the time
 # left on stagger_timer, and the wobble phase is derived FROM the timer, so
 # every machine renders the identical stumble from the replicated value.
-@export var stagger_wobble_deg: float = 9.0   # peak trunk wobble at full stagger
-@export var stagger_wobble_hz: float = 3.0    # wobble frequency
+var stagger_wobble_deg: float = 9.0   # peak trunk wobble at full stagger
+var stagger_wobble_hz: float = 3.0    # wobble frequency
 # Directional recoil: on top of the wobble, the whole torso reels the way the
 # hit shoved it (pitch + roll), easing out as stagger_timer decays — a body
 # absorbing the check, not just shaking. Direction is the transfer impulse
@@ -130,7 +130,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # (they get the timer off the wire, not the direction), but a knockdown entry
 # re-derives the true direction from the replicated slide velocity
 # (_sync_knockdown_meta). Applied in SkaterPoseCoordinator._apply_lean.
-@export var stagger_recoil_deg: float = 13.0  # peak torso recoil lean at full stagger
+var stagger_recoil_deg: float = 13.0  # peak torso recoil lean at full stagger
 # ── Knockdown Tuning ──────────────────────────────────────────────────────────
 # The top of the stagger continuum: a hit whose victim impulse exceeds
 # knockdown_impulse KNOCKS THE VICTIM DOWN — movement locked, no puck interaction,
@@ -145,11 +145,11 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # 1.6) so a committed bot check lands a hard stagger/strip and, at real closing,
 # tips into a knockdown. Set knockdown_impulse very high (or 0) to effectively
 # disable knockdowns.
-@export var knockdown_impulse: float = 1.8         # m/s victim impulse above which a hit knocks down
-@export var knockdown_ref_impulse: float = 3.1     # m/s impulse of a maximal (longest) knockdown
-@export var knockdown_min_seconds: float = 0.7     # down time of a just-barely knockdown
-@export var knockdown_max_seconds: float = 1.5     # down time of a maximal hit
-@export var knockdown_friction: float = 8.0        # m/s² the downed body sheds speed while sliding
+var knockdown_impulse: float = 1.8         # m/s victim impulse above which a hit knocks down
+var knockdown_ref_impulse: float = 3.1     # m/s impulse of a maximal (longest) knockdown
+var knockdown_min_seconds: float = 0.7     # down time of a just-barely knockdown
+var knockdown_max_seconds: float = 1.5     # down time of a maximal hit
+var knockdown_friction: float = 8.0        # m/s² the downed body sheds speed while sliding
 # Knockdown pose (cosmetic): a downed player FALLS — the knees buckle into the
 # collapse crouch that matches the gait's drop, the whole cosmetic rig tips
 # about the skates in the hit direction under a tipping-body model
@@ -163,34 +163,34 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # stagger stumble.
 # knockdown_getup_seconds is the tail window over which the whole pose eases back
 # up (the get-up) — it holds full while more than this much time remains.
-@export var knockdown_pose_drop_m: float = 0.3     # buckle sink — the tilt does the lying-down
-@export var knockdown_fold_deg: float = 20.0       # airborne torso curl; resolves to lie-flat on landing
-@export var knockdown_getup_seconds: float = 0.4   # tail over which the down pose eases back up
+var knockdown_pose_drop_m: float = 0.3     # buckle sink — the tilt does the lying-down
+var knockdown_fold_deg: float = 20.0       # airborne torso curl; resolves to lie-flat on landing
+var knockdown_getup_seconds: float = 0.4   # tail over which the down pose eases back up
 # Fall model tunables (KnockdownFallRules.Config — units and physical
 # justifications live on the fields there).
-@export var knockdown_fall_buckle_seconds: float = 0.1
-@export var knockdown_fall_accel: float = 6.0
-@export var knockdown_fall_settle_deg: float = 84.0
-@export var knockdown_fall_restitution: float = 0.3
-@export var knockdown_fall_rest_omega: float = 0.7
-@export var knockdown_fall_com_height_m: float = 0.95
-@export var knockdown_fall_max_entry_omega: float = 4.2
+var knockdown_fall_buckle_seconds: float = 0.1
+var knockdown_fall_accel: float = 6.0
+var knockdown_fall_settle_deg: float = 84.0
+var knockdown_fall_restitution: float = 0.3
+var knockdown_fall_rest_omega: float = 0.7
+var knockdown_fall_com_height_m: float = 0.95
+var knockdown_fall_max_entry_omega: float = 4.2
 # Head-ward extent of the tipped body (height + a little stick/arm slack): both
 # the obstacle probe distance and the reach the deflection budgets against
 # (KnockdownFallRules.wall_safe_fall_dir), so a fall near the glass or the goal
 # net lies along the obstacle instead of through it.
-@export var knockdown_fall_body_reach_m: float = 1.9
-@export var knockdown_brace_in_seconds: float = 0.15  # arms pull into the brace over this
+var knockdown_fall_body_reach_m: float = 1.9
+var knockdown_brace_in_seconds: float = 0.15  # arms pull into the brace over this
 # Downed-leg sprawl (KnockdownFallRules.sprawl_into): the scatter window after
 # first ice contact, and the free leg's outward splay at a maximal hit.
-@export var knockdown_sprawl_in_seconds: float = 0.25
-@export var knockdown_sprawl_splay_deg: float = 18.0
+var knockdown_sprawl_in_seconds: float = 0.25
+var knockdown_sprawl_splay_deg: float = 18.0
 # ── Facing Tuning ─────────────────────────────────────────────────────────────
 # How fast facing drifts toward the cursor during normal play. Lower = more
 # skating lag before the body re-orients (more backskate/crossover time).
 # Good range: 1.0 (very lazy) – 3.0 (snappy).
-@export var facing_drag_speed: float = 5.0
-@export var facing_drag_speed_braking: float = 10.0
+var facing_drag_speed: float = 5.0
+var facing_drag_speed_braking: float = 10.0
 # Facing RECOVERY rate during the shot follow-through. The coil freezes facing at
 # the wind-up cursor position (it must — the coil is the torso twisting relative
 # to the planted lower body), so at release the body is squared to where the aim
@@ -199,7 +199,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # to the stale facing and the stick swings to the wrong side before catching the
 # cursor. Recover hard through the follow-through so the body is re-squared by the
 # handoff and the blade tracks straight from the finish to the cursor.
-@export var follow_through_facing_recover_speed: float = 18.0
+var follow_through_facing_recover_speed: float = 18.0
 
 # ── Blade / Stick / Top-Hand IK Tuning ────────────────────────────────────────
 # Blade world-space Y. 0.0 = ice surface. Converted to upper-body-local via
@@ -207,7 +207,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # fixed world height regardless of where the upper body anchor is placed in the
 # scene. This also means crouching (block stance) doesn't pull the blade
 # through the ice — the local Y compensates automatically.
-@export var blade_height: float = 0.03
+var blade_height: float = 0.03
 # World-space height the blade rises to when lifted (stick-lift / Q held, or a
 # forced pop from an opponent's stick lift). A lifted blade clears grounded
 # pucks and sticks — it only meets airborne pucks, to tip them. Eased in via
@@ -227,16 +227,16 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # 0.52 (contact point 0.55) sits at the top of that range, which is where the
 # tips that matter live: a HIGH feed arriving at a net-front player sits at
 # 0.9–1.1 m, and the reach ceiling only gets there at the top of the band.
-@export var blade_lift_height: float = 0.52
+var blade_lift_height: float = 0.52
 # Lifted-blade pivot for the MID deflect mode (air-up tip): the low-air plane,
 # under the HIGH pivot above and above a saucer's apex (~0.21–0.26 m) so
 # camping MID still can't cheese saucer passes. See the deflect-mode table in
 # PuckCollisionRules.deflect_loft_speed.
-@export var blade_lift_height_mid: float = 0.35
+var blade_lift_height_mid: float = 0.35
 # Fixed, rigid shaft length (hand to blade heel). Baseline 1.30 m ≈ adult
 # senior stick shaft (butt-to-heel). The blade mesh extends forward from the
 # heel; see Skater.blade_length. Total hand-to-toe is stick_length + blade_length.
-@export var stick_length: float = GameRules.DEFAULT_STICK_LENGTH_M
+var stick_length: float = GameRules.DEFAULT_STICK_LENGTH_M
 # Hand Y in upper-body-local space. Baseline resting position (used in the FAR
 # regime); in the CLOSE regime the hand rises toward `hand_y_max` so the stick
 # tilts more vertical and the blade can tuck in close to the body.
@@ -255,7 +255,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # 1.03 → 0.97), but the shallower shoulder-to-hand drop re-aims the arm budget
 # sideways (derived backhand ROM 0.37 → 0.46 m of hand displacement), so rim reach
 # is roughly preserved and the directional reach lean stays pure bonus on top.
-@export var hand_rest_y: float = -0.10
+var hand_rest_y: float = -0.10
 # Ceiling for hand Y in the CLOSE regime. When aiming very close to the
 # skater, the hand rises to shorten the stick's horizontal projection; this
 # cap keeps the pose anatomical (0.30 local = 1.30 m world at L2 — the hand
@@ -264,7 +264,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # every frame. With default stick_length = 1.30 m and the blade on the ice
 # (blade_y ≈ -0.97 local at L2), hand_y_max = 0.30 → hand-to-blade drop
 # 1.27 → min horizontal stick reach ≈ 0.28 m.
-@export var hand_y_max: float = 0.30
+var hand_y_max: float = 0.30
 # Asymmetric ROM for the top hand (measured from shoulder in upper-body-local
 # horizontal plane, expressed in "forehand side = positive angle" convention).
 # Forehand cross-body reach is anatomically limited; backhand same-side reach
@@ -272,27 +272,27 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Note: the upper body twists toward the blade (upper_body_twist_ratio = 1.0),
 # which effectively reduces how far the hand must reach in upper-body-local space
 # — these values assume that twist is active.
-@export var rom_forehand_angle_max_deg: float = 90.0
-@export var rom_backhand_angle_max_deg: float = 90.0
+var rom_forehand_angle_max_deg: float = 90.0
+var rom_backhand_angle_max_deg: float = 90.0
 # Reach caps are DERIVED in apply_attributes — forehand from the anatomical
 # cross-body ratio, backhand from the arm chain (sqrt(arm_eff² − drop²), the
 # farthest a rest-height hand can sit without out-reaching the arm). These
 # defaults just mirror the baseline-size derivation for any skater that has
 # not had attributes applied yet.
-@export var rom_forehand_reach_max: float = 0.39
-@export var rom_backhand_reach_max: float = 0.46
+var rom_forehand_reach_max: float = 0.39
+var rom_backhand_reach_max: float = 0.46
 # Fraction of full arm extension the backhand ROM rim uses. 1.0 solves the
 # reach with a ramrod-straight arm; slightly under keeps a hint of elbow bend
 # at max extension so the rim pose stays organic.
-@export var rom_arm_extension: float = 0.97
+var rom_arm_extension: float = 0.97
 # Board shield (see BoardPlayRules): how close the boards must be before a
 # CARRIER's stance starts turning parallel to them, and how far it may turn. The
 # probe is roughly a stick-and-arm reach, so the shield engages exactly when the
 # wall starts eating the blade's reachable set rather than at some earlier
 # distance; the cap stops at "square along the boards" — the real pinned posture
 # — which is what the max is measuring toward, not a feel curve to taste.
-@export var board_shield_probe: float = 1.1
-@export var board_shield_max_deg: float = 55.0
+var board_shield_probe: float = 1.1
+var board_shield_max_deg: float = 55.0
 # Cap on how fast the aim target can move in world XZ per second. The IK consumes
 # the smoothed target, so the blade visibly inherits the cap. Sits in the
 # dangle-speed range (~8-14 m/s): a medium player's full ROM span is ~1.18 m, so
@@ -301,7 +301,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # stat), so this cap is uniform. Tune UP if deliberate aim feels laggy, DOWN if
 # fast dangling feels the same at L1 and L5 — a live-feel call that cannot be
 # measured headless.
-@export var max_blade_speed: float = 10.0
+var max_blade_speed: float = 10.0
 # Second-order blade: acceleration cap (m/s²) on the dangle velocity — the
 # stick's INERTIA. Direction REVERSALS pay the cost, traverse speed doesn't.
 # Per-build value derives from lever geometry in apply_attributes: cap ∝
@@ -310,12 +310,12 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # attributes v4 — geometry, never a fidelity table. The shipped 250 was
 # playtest-calibrated across the min/neutral/max builds; 0 disables inertia
 # entirely (the pre-v4 first-order servo, bit-exact).
-@export var max_blade_accel: float = 250.0
+var max_blade_accel: float = 250.0
 # The k in cap ∝ 1/lever^k. Raw physics is k=2 (I ∝ mL²), but reversal time
 # then scales ~L³ across the build range — too brutal. The model's FORM is
 # physical; the exponent is feel — 1.6 is the playtest-calibrated spread
 # (scalpel↔scythe contrast reads clearly without breaking the scythe).
-@export var blade_inertia_exponent: float = 1.6
+var blade_inertia_exponent: float = 1.6
 
 # ── Nudge (self-tap, nutmeg setup) ────────────────────────────────────────────
 # Tap stick-lift (Q) while carrying in plain SKATING_WITH_PUCK to push the puck a
@@ -325,14 +325,14 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # a small nudge along the blade's current motion direction, so RELATIVE to the
 # carrier it's just a soft tap in the stick's sweep direction — keep skating and
 # you re-collect it. nudge_speed is that relative tap speed (m/s).
-@export var nudge_speed: float = 2.2
+var nudge_speed: float = 2.2
 
 # Fraction of the carrier's horizontal momentum the nudged puck inherits. Below
 # 1.0 the puck drifts back RELATIVE to the carrier while skating (faster skating
 # → bigger drift), opening the nutmeg gap instead of the puck keeping perfect
 # pace. Stationary it's a no-op (skater velocity ~ 0). Keep close to 1.0 so the
 # carrier can still re-collect after the gap opens.
-@export var nudge_velocity_retain: float = 0.85
+var nudge_velocity_retain: float = 0.85
 
 # ── Bottom-Hand IK Tuning ─────────────────────────────────────────────────────
 # The bottom hand is purely reactive: each tick it targets a point a short way
@@ -342,29 +342,29 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # Never influences blade placement. See domain/rules/bottom_hand_ik.gd.
 # Fraction along the shaft (0 = top hand, 1 = blade heel) that the bottom hand
 # grips. ~0.25 on a 1.30 m shaft ≈ a typical hockey grip width.
-@export var bottom_hand_grip_fraction: float = 0.25
+var bottom_hand_grip_fraction: float = 0.25
 # Fine-tune Y offset added to the bottom hand's shaft-derived grip height
 # (SkaterIKCoordinator.update_bottom_hand lerps top-hand Y toward blade Y at
 # the grip fraction, then adds this). 0.0 = grip sits exactly on the shaft.
-@export var bh_hand_y: float = 0.0
+var bh_hand_y: float = 0.0
 # Blade world angle (from skater forward, toward backhand) at which the bottom
 # hand starts releasing toward the shoulder rest. Match upper_body_max_twist_deg
 # so the hand releases exactly when the body can no longer rotate to follow.
-@export var bh_release_angle_deg: float = 67.0
+var bh_release_angle_deg: float = 67.0
 # Degrees past bh_release_angle_deg over which the hand blends to full rest.
-@export var bh_release_angle_band_deg: float = 15.0
+var bh_release_angle_band_deg: float = 15.0
 
 # ── Upper Body Tuning ─────────────────────────────────────────────────────────
-@export var upper_body_twist_ratio: float = 0.8
-@export var upper_body_max_twist_deg: float = 67.0   # caps rotation so extreme angles don't over-rotate
-@export var upper_body_return_speed: float = 6.0
+var upper_body_twist_ratio: float = 0.8
+var upper_body_max_twist_deg: float = 67.0   # caps rotation so extreme angles don't over-rotate
+var upper_body_return_speed: float = 6.0
 # Upper-body twist follow-through (secondary motion) — a damped spring trails
 # the tracked twist so the shoulders whip through a fast cut and settle instead
 # of tracking rigidly. Renders the tracked angle plus the spring's lag; zero at
 # steady state. follow_gain 0 restores rigid tracking.
-@export var upper_body_follow_gain: float = 0.4        # how far the shoulders overshoot the whip
-@export var upper_body_follow_stiffness: float = 110.0  # spring constant (higher = quicker catch-up)
-@export var upper_body_follow_damping: float = 18.0     # damping (near-critical — a clean settle)
+var upper_body_follow_gain: float = 0.4        # how far the shoulders overshoot the whip
+var upper_body_follow_stiffness: float = 110.0  # spring constant (higher = quicker catch-up)
+var upper_body_follow_damping: float = 18.0     # damping (near-critical — a clean settle)
 # Reach lean — the torso tips TOWARD the blade's reach direction (pitch +
 # roll, see SkaterPoseCoordinator.compute_upper_body_lean_target). Because
 # the blade IK solves in the leaned frame, this lean genuinely extends world
@@ -372,9 +372,9 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # the longer stick footprint from the dropped hands) — the honest way a real
 # player buys reach. engage_power > 1 keeps the torso quiet through mid-ROM
 # stickhandling and commits the lean near full extension.
-@export var upper_body_lean_max_deg: float = 18.0
-@export var upper_body_lean_engage_power: float = 1.6
-@export var upper_body_lean_return_speed: float = 8.0
+var upper_body_lean_max_deg: float = 18.0
+var upper_body_lean_engage_power: float = 1.6
+var upper_body_lean_return_speed: float = 8.0
 
 # ── Velocity Lean / Skating Posture Tuning ────────────────────────────────────
 # Trunk lean INTO travel, re-derived from velocity on every machine (never
@@ -383,112 +383,112 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # read as skating; backward skating sits slightly back; lateral travel banks
 # into the carve. The lower body banks fully but follows the forward pitch
 # only fractionally — the legs stay under the hips while the trunk folds.
-@export var velocity_lean_forward_max_deg: float = 20.0
-@export var velocity_lean_back_max_deg: float = 6.0
-@export var velocity_lean_lateral_max_deg: float = 12.0
-@export var velocity_lean_speed: float = 6.0
-@export var lower_body_pitch_follow: float = 0.35
+var velocity_lean_forward_max_deg: float = 20.0
+var velocity_lean_back_max_deg: float = 6.0
+var velocity_lean_lateral_max_deg: float = 12.0
+var velocity_lean_speed: float = 6.0
+var lower_body_pitch_follow: float = 0.35
 
 # ── Lower Body Lag Tuning ─────────────────────────────────────────────────────
-@export var lower_body_lag_max_deg: float = 20.0
-@export var lower_body_lag_speed: float = 5.0
+var lower_body_lag_max_deg: float = 20.0
+var lower_body_lag_speed: float = 5.0
 
 # ── Skating Stride Tuning ─────────────────────────────────────────────────────
 # Procedural leg gait — see SkaterSkatingCoordinator. All cosmetic. Forward,
 # backward, and lateral (crossover) gaits blend by direction of travel.
-@export var stride_cadence: float = 1.4          # low-speed slope: radians of stride phase per metre skated
-@export var stride_cadence_max_rate: float = 6.5  # rad/s ceiling the cadence saturates toward (caps sprint leg turnover)
-@export var stride_roll_deg: float = 7.0          # side-to-side leg rock amplitude (fwd/back)
+var stride_cadence: float = 1.4          # low-speed slope: radians of stride phase per metre skated
+var stride_cadence_max_rate: float = 6.5  # rad/s ceiling the cadence saturates toward (caps sprint leg turnover)
+var stride_roll_deg: float = 7.0          # side-to-side leg rock amplitude (fwd/back)
 # Forward push amplitude (fore/aft). Raised 6 → 10 when the knee fore-aft
 # compensation landed: the old visible "reach" was mostly the knee-release
 # artifact kicking the skate forward mid-stroke, so once the foot started
 # tracking the thigh-design curve the honest stride needed a bigger wave to
 # cover the same ground (with the correct slow-recovery / fast-push timing).
-@export var stride_pitch_deg: float = 10.0
-@export var stride_back_pitch_deg: float = 6.0    # backward C-cut amplitude (reaches forward)
-@export var crossover_lean_deg: float = 6.0       # static lean into the strafe direction
-@export var crossover_scissor_deg: float = 8.0    # aim-locked strafe: legs scissor laterally
+var stride_pitch_deg: float = 10.0
+var stride_back_pitch_deg: float = 6.0    # backward C-cut amplitude (reaches forward)
+var crossover_lean_deg: float = 6.0       # static lean into the strafe direction
+var crossover_scissor_deg: float = 8.0    # aim-locked strafe: legs scissor laterally
 # Carve crossovers — engaged by path curvature (CarveRules), not lateral
 # velocity: crossovers are how a skater TURNS at speed. Roles are fixed by
 # the turn direction: the outside leg lifts and steps across (over_*,
 # clearance), the inside leg extends beneath the body (under_roll).
 # carve_stride_fade bleeds the fore/aft stride out as the carve engages —
 # in a hard carve the crossovers ARE the stride.
-@export var carve_ref_turn_rate: float = 1.6   # rad/s of travel-direction turn = full carve
-@export var carve_min_speed: float = 2.5       # m/s floor — slow pivots are steps, not crossovers
-@export var carve_engage_speed: float = 5.0    # carve blend ease rate
-@export var carve_over_roll_deg: float = 24.0  # crossing (outside) leg roll across the body
-@export var carve_under_roll_deg: float = 16.0 # inside leg under-push roll
-@export var carve_over_pitch_deg: float = 8.0  # crossing leg also steps AHEAD
-@export var carve_clearance_knee_deg: float = 28.0  # lift while crossing the planted leg
-@export var carve_stride_fade: float = 0.7     # fraction of fore/aft stride removed at full carve
+var carve_ref_turn_rate: float = 1.6   # rad/s of travel-direction turn = full carve
+var carve_min_speed: float = 2.5       # m/s floor — slow pivots are steps, not crossovers
+var carve_engage_speed: float = 5.0    # carve blend ease rate
+var carve_over_roll_deg: float = 24.0  # crossing (outside) leg roll across the body
+var carve_under_roll_deg: float = 16.0 # inside leg under-push roll
+var carve_over_pitch_deg: float = 8.0  # crossing leg also steps AHEAD
+var carve_clearance_knee_deg: float = 28.0  # lift while crossing the planted leg
+var carve_stride_fade: float = 0.7     # fraction of fore/aft stride removed at full carve
 # Crossover rhythm + cadence (see the carve block in SkaterSkatingCoordinator):
 # the over-step and under-push alternate halves of the stride cycle (two-beat
 # push-push), the legs hold a static lean into the turn, and while the path is
 # actually bending the stride frequency follows the ARC — steps per radian of
 # heading change — instead of straight-line speed. Forward-gated: a backward
 # turn keeps its C-cuts (forward crossover roles mirror wrong through the flip).
-@export var crossover_phase_per_turn: float = 7.0  # stride-phase rad per rad of heading change at full carve
-@export var carve_forward_ramp: float = 1.0    # m/s of forward travel over which crossovers fade in
-@export var carve_base_lean_deg: float = 7.0   # static both-leg lean into the turn while striding a carve
-@export var carve_rock_fade: float = 0.85      # edge-rock/abduction/scissor faded out at full carve
+var crossover_phase_per_turn: float = 7.0  # stride-phase rad per rad of heading change at full carve
+var carve_forward_ramp: float = 1.0    # m/s of forward travel over which crossovers fade in
+var carve_base_lean_deg: float = 7.0   # static both-leg lean into the turn while striding a carve
+var carve_rock_fade: float = 0.85      # edge-rock/abduction/scissor faded out at full carve
 # Centripetal trunk bank: the inclination that balances a turn is atan(v·ω/g),
 # derived from the speed and turn rate the carve already smooths — so every
 # machine banks identically with no new state, and the angle scales with how
 # hard the arc actually is instead of a fixed lean. The legs' carve lean
 # carries part of the physical angle; the gain sets the trunk's share.
-@export var carve_bank_gain: float = 0.5       # fraction of the physical bank angle the trunk shows
-@export var carve_bank_knee_accel: float = 2.0 # m/s² of lateral accel at half bank authority — the steering-noise gate
-@export var carve_bank_max_deg: float = 16.0   # trunk bank cap for the tightest whips
-@export var carve_stance: float = 0.75         # stance floor at full carve — sit low to hold the edges
+var carve_bank_gain: float = 0.5       # fraction of the physical bank angle the trunk shows
+var carve_bank_knee_accel: float = 2.0 # m/s² of lateral accel at half bank authority — the steering-noise gate
+var carve_bank_max_deg: float = 16.0   # trunk bank cap for the tightest whips
+var carve_stance: float = 0.75         # stance floor at full carve — sit low to hold the edges
 # Gliding — releasing all movement keys settles the legs to rest (the stride
 # is input-gated, v15 intent byte) while this floor keeps working knees under
 # a coasting skater, scaled by speed.
-@export var glide_stance: float = 0.5
-@export var stride_knee_deg: float = 18.0         # recovery tuck depth of the swinging (unloaded) knee
-@export var stride_intensity_speed: float = 6.0   # how fast the legs ease in/out of motion
-@export var stride_skew: float = 0.3              # push/recovery asymmetry of the stroke (0 = pure sine)
+var glide_stance: float = 0.5
+var stride_knee_deg: float = 18.0         # recovery tuck depth of the swinging (unloaded) knee
+var stride_intensity_speed: float = 6.0   # how fast the legs ease in/out of motion
+var stride_skew: float = 0.3              # push/recovery asymmetry of the stroke (0 = pure sine)
 # Shifts the leg-pitch stroke behind the body: the push extends (1+bias)× the
 # amplitude back while the recovery reaches only (1−bias)× ahead, so the
 # returning skate lands under the hips instead of kicking out in front.
 # 0 = symmetric metronome (the old forward-kick look).
-@export var stride_rear_bias: float = 0.45
-@export var stride_abduction_deg: float = 10.0    # outward flare of the extending leg (the skating "V" push)
-@export var stride_bob_m: float = 0.02            # vertical body bob per half-stride (weight transfer)
-@export var stride_sway_deg: float = 3.0          # torso weight-shift roll oscillating with the stride
-@export var stride_dig_lean_deg: float = 8.0      # extra trunk pitch from effort: forward driving, back braking
+var stride_rear_bias: float = 0.45
+var stride_abduction_deg: float = 10.0    # outward flare of the extending leg (the skating "V" push)
+var stride_bob_m: float = 0.02            # vertical body bob per half-stride (weight transfer)
+var stride_sway_deg: float = 3.0          # torso weight-shift roll oscillating with the stride
+var stride_dig_lean_deg: float = 8.0      # extra trunk pitch from effort: forward driving, back braking
 # Trunk inertia at the texture seam: the trunk texture sums many reads and
 # each carries residual step/noise from its input; the trunk — the body's
 # most massive segment — cannot physically re-orient at those frequencies.
 # One first-order tracker on the SUMMED texture models that inertia (the
 # stagger wobble bypasses it — a stumble is supposed to shake). 0 = off.
-@export var trunk_texture_smooth_rate: float = 14.0
+var trunk_texture_smooth_rate: float = 14.0
 # Glide-vs-push: stride amplitude scales above/below the speed baseline by the
 # sign of tangential acceleration — driving digs in, coasting settles to a glide.
-@export var stride_effort_ref_accel: float = 9.0  # m/s^2 of tangential accel mapping to full push effort
-@export var stride_effort_speed: float = 5.0      # how fast the glide<->push effort signal eases
-@export var stride_push_gain: float = 0.7         # how far effort drives amplitude off the speed baseline
-@export var stride_glide_floor: float = 0.35      # min amplitude scale when coasting (the glide)
-@export var stride_push_ceiling: float = 1.5      # max amplitude scale when driving hard
+var stride_effort_ref_accel: float = 9.0  # m/s^2 of tangential accel mapping to full push effort
+var stride_effort_speed: float = 5.0      # how fast the glide<->push effort signal eases
+var stride_push_gain: float = 0.7         # how far effort drives amplitude off the speed baseline
+var stride_glide_floor: float = 0.35      # min amplitude scale when coasting (the glide)
+var stride_push_ceiling: float = 1.5      # max amplitude scale when driving hard
 # Stance — the speed-engaged crouch. The skater sits into flexed hips/knees as
 # soon as they're moving with intent; SkaterSkatingCoordinator derives the
 # matching knee flex and body drop from the leg geometry so one export drives
 # an anatomically consistent crouch that keeps the skates planted on the ice.
-@export var stance_hip_deg: float = 22.0            # static hip flex at full stance
-@export var stance_full_speed_fraction: float = 0.45  # fraction of max_speed at which the crouch fully engages
-@export var stance_push_gain: float = 0.35          # effort deepens (push) / shallows (glide) the stance
-@export var stance_knee_release: float = 0.85       # fraction of stance knee flex released at full push extension
+var stance_hip_deg: float = 22.0            # static hip flex at full stance
+var stance_full_speed_fraction: float = 0.45  # fraction of max_speed at which the crouch fully engages
+var stance_push_gain: float = 0.35          # effort deepens (push) / shallows (glide) the stance
+var stance_knee_release: float = 0.85       # fraction of stance knee flex released at full push extension
 # Faceoff ready stance — during the FACEOFF_PREP countdown the speed-driven
 # crouch is floored at faceoff_stance (players are at a standstill, so the
 # intensity envelope alone would leave them bolt upright) and the feet
 # stagger fore/aft (stick-side foot back, braced for the draw). Phase is
 # replicated, so every machine poses its skaters identically.
-@export var faceoff_stance: float = 0.85       # stance engagement floor at the dot
-@export var faceoff_split_deg: float = 9.0     # fore/aft leg stagger at the dot
+var faceoff_stance: float = 0.85       # stance engagement floor at the dot
+var faceoff_split_deg: float = 9.0     # fore/aft leg stagger at the dot
 # Fraction of the rest blade radius at which this skater's CENTER spawns from
 # the faceoff dot — reach-derived so a Size-1 center (short stick + arms) can
 # play the drop as comfortably as a Size-5 (see faceoff_center_distance).
-@export var faceoff_center_reach_fraction: float = 0.9
+var faceoff_center_reach_fraction: float = 0.9
 # Faceoff-draw swipe capture (see Skater.begin_draw_tracking / FaceoffDrawRules).
 # A center's blade-swipe crest is retained through the draw so the contest reads
 # the sweep, not the raw tick-at-contact velocity — this is what lets a well-aimed
@@ -497,29 +497,29 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # an early guess; faceoff_draw_window auto-ends tracking that long after the drop.
 # The timing REWARD curve lives with the contest resolver (PuckController.contest_
 # draw_timing_*). Read by PhaseCoordinator when it arms the two centers.
-@export var faceoff_draw_peak_decay: float = 12.0
-@export var faceoff_draw_window: float = 1.0
+var faceoff_draw_peak_decay: float = 12.0
+var faceoff_draw_window: float = 1.0
 # Hockey stop — braking hard at speed turns the lower body across the travel
 # direction (legs sideways, torso still on the play) with a scissored,
 # edge-rolled stance. Engagement derives from the velocity-based effort
 # signal (HockeyStopRules — hysteresis + side latch), so remotes/bots read
 # the identical stop with no wire state. All cosmetic; brake physics and the
 # skid VFX are untouched.
-@export var hockey_stop_effort: float = 0.55     # braking-effort fraction that engages
-@export var hockey_stop_min_speed: float = 3.0   # m/s floor — no stop pose from a shuffle
-@export var hockey_stop_max_yaw_deg: float = 70.0  # lower-body turn cap across travel
-@export var hockey_stop_split_deg: float = 14.0  # leading/trailing leg scissor
-@export var hockey_stop_edge_deg: float = 12.0   # shared leg roll — edges biting
-@export var hockey_stop_stance: float = 0.9      # stance floor while stopping (deep knees)
-@export var hockey_stop_trunk_roll_deg: float = 6.0  # trunk bank over the skid
-@export var hockey_stop_blend_speed: float = 9.0 # pose ease-in/out rate
+var hockey_stop_effort: float = 0.55     # braking-effort fraction that engages
+var hockey_stop_min_speed: float = 3.0   # m/s floor — no stop pose from a shuffle
+var hockey_stop_max_yaw_deg: float = 70.0  # lower-body turn cap across travel
+var hockey_stop_split_deg: float = 14.0  # leading/trailing leg scissor
+var hockey_stop_edge_deg: float = 12.0   # shared leg roll — edges biting
+var hockey_stop_stance: float = 0.9      # stance floor while stopping (deep knees)
+var hockey_stop_trunk_roll_deg: float = 6.0  # trunk bank over the skid
+var hockey_stop_blend_speed: float = 9.0 # pose ease-in/out rate
 # Hip-to-travel alignment — the lower body yaws toward the direction of
 # MOTION (torso keeps facing the cursor) so the legs stride along travel
 # instead of flailing through the crossover/backward blends whenever cursor
 # and movement disagree. Clamped: misalignment beyond the cap still plays
 # the backward C-cut / crossover gaits on the residual, as designed.
-@export var hip_align_max_deg: float = 50.0  # cap on the hips' turn toward travel
-@export var hip_align_speed: float = 6.0     # how fast the hips settle onto the travel line
+var hip_align_max_deg: float = 50.0  # cap on the hips' turn toward travel
+var hip_align_speed: float = 6.0     # how fast the hips settle onto the travel line
 # Pivot — the facing↔travel swap (PivotRules; the pivot block in
 # SkaterSkatingCoordinator). ψ = travel direction in the body frame; a pivot
 # is ψ transiting the lateral band at speed, driven by |dψ/dt| — facing
@@ -529,103 +529,103 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # around to the exit orientation over the transit's tail. Derived entirely
 # from replicated facing + velocity, so every machine reads the identical
 # pivot; phase comes from ψ itself, so an aborted swing unwinds cleanly.
-@export var pivot_band_lo_deg: float = 50.0   # ψ where the transit begins — matches hip_align_max_deg for a seamless handoff
-@export var pivot_band_hi_deg: float = 130.0  # ψ where the transit completes
-@export var pivot_rate_min: float = 2.5       # rad/s of |dψ/dt| that reads as a pivot, not a drifting cursor
-@export var pivot_min_speed: float = 2.5      # m/s floor — pivoting is a gliding move; slow spins are steps
-@export var pivot_step_begin: float = 0.6     # transit fraction where the hips step around to the exit line
-@export var pivot_depth_ramp_deg: float = 50.0  # ψ depth past the band edge over which the hold earns full authority — the aim-flick guard
-@export var pivot_commit_time: float = 0.22   # seconds ψ must DWELL in the band before full authority — a flick returns sooner, a pivot parks
-@export var pivot_yaw_speed: float = 12.0     # hip tracking ease while pivoting (hip_align_speed is too lazy to hold ψ)
-@export var pivot_stride_fade: float = 0.85   # stride suppression while engaged — pivots glide, they don't stride
-@export var pivot_stance: float = 0.8         # stance floor — the step-around needs bent knees
-@export var pivot_mohawk_deg: float = 50.0    # lead-skate external rotation at the transit's middle (heel-to-heel V); negative mirrors the lead choice
-@export var pivot_blend_speed: float = 8.0    # engage/release ease of the whole read
+var pivot_band_lo_deg: float = 50.0   # ψ where the transit begins — matches hip_align_max_deg for a seamless handoff
+var pivot_band_hi_deg: float = 130.0  # ψ where the transit completes
+var pivot_rate_min: float = 2.5       # rad/s of |dψ/dt| that reads as a pivot, not a drifting cursor
+var pivot_min_speed: float = 2.5      # m/s floor — pivoting is a gliding move; slow spins are steps
+var pivot_step_begin: float = 0.6     # transit fraction where the hips step around to the exit line
+var pivot_depth_ramp_deg: float = 50.0  # ψ depth past the band edge over which the hold earns full authority — the aim-flick guard
+var pivot_commit_time: float = 0.22   # seconds ψ must DWELL in the band before full authority — a flick returns sooner, a pivot parks
+var pivot_yaw_speed: float = 12.0     # hip tracking ease while pivoting (hip_align_speed is too lazy to hold ψ)
+var pivot_stride_fade: float = 0.85   # stride suppression while engaged — pivots glide, they don't stride
+var pivot_stance: float = 0.8         # stance floor — the step-around needs bent knees
+var pivot_mohawk_deg: float = 50.0    # lead-skate external rotation at the transit's middle (heel-to-heel V); negative mirrors the lead choice
+var pivot_blend_speed: float = 8.0    # engage/release ease of the whole read
 # Input-intent gait reads (GaitIntentRules, v15 intent byte) — signals for
 # what the player is TRYING to do, layered over the velocity-derived gait.
 # All cosmetic; every signal derives from replicated state, so local, bot,
 # and remote skaters read identically.
-@export var intent_signal_speed: float = 6.0     # ease rate of the smoothed intent signals
+var intent_signal_speed: float = 6.0     # ease rate of the smoothed intent signals
 # Dig-in: intent held at low speed — explosive, choppy first strides.
-@export var dig_in_fade_speed: float = 4.0       # m/s where the dig hands off to the speed gait
-@export var dig_in_intensity: float = 0.85       # stride intensity floor while digging in
-@export var dig_in_cadence_rate: float = 4.5     # rad/s stride-phase floor — quick chop from a standstill
-@export var dig_in_chop: float = 0.35            # push-amplitude cut at full dig (short strides)
-@export var dig_in_stance: float = 0.7           # stance floor — power comes from bent knees
-@export var dig_in_lean_deg: float = 6.0         # extra forward trunk pitch driving out of the start
+var dig_in_fade_speed: float = 4.0       # m/s where the dig hands off to the speed gait
+var dig_in_intensity: float = 0.85       # stride intensity floor while digging in
+var dig_in_cadence_rate: float = 4.5     # rad/s stride-phase floor — quick chop from a standstill
+var dig_in_chop: float = 0.35            # push-amplitude cut at full dig (short strides)
+var dig_in_stance: float = 0.7           # stance floor — power comes from bent knees
+var dig_in_lean_deg: float = 6.0         # extra forward trunk pitch driving out of the start
 # Reversal: intent opposing travel at speed — the stop-and-go weight shift.
-@export var reversal_min_speed: float = 2.5      # m/s floor — a slow reversal is just a step
-@export var reversal_start_opposition: float = 0.5  # travel·intent opposition where the shift begins
-@export var reversal_stride_fade: float = 0.8    # stride suppression at full reversal (legs plant)
-@export var reversal_stance: float = 0.85        # stance floor — sits down hard into the plant
-@export var reversal_lean_deg: float = 7.0       # trunk tips BACK against the travel it fights
-@export var reversal_plant_deg: float = 8.0      # wide-V outward leg plant
+var reversal_min_speed: float = 2.5      # m/s floor — a slow reversal is just a step
+var reversal_start_opposition: float = 0.5  # travel·intent opposition where the shift begins
+var reversal_stride_fade: float = 0.8    # stride suppression at full reversal (legs plant)
+var reversal_stance: float = 0.85        # stance floor — sits down hard into the plant
+var reversal_lean_deg: float = 7.0       # trunk tips BACK against the travel it fights
+var reversal_plant_deg: float = 8.0      # wide-V outward leg plant
 # Shuffle: lateral intent at low speed — hips stay square, legs side-step.
-@export var shuffle_fade_speed: float = 4.0      # m/s where crossovers take over from the shuffle
-@export var shuffle_start_lateral: float = 0.6   # lateral intent fraction where the shuffle begins
-@export var shuffle_intensity: float = 0.6       # stride intensity floor while side-stepping
-@export var shuffle_cadence_rate: float = 3.0    # rad/s stride-phase floor for the steps
+var shuffle_fade_speed: float = 4.0      # m/s where crossovers take over from the shuffle
+var shuffle_start_lateral: float = 0.6   # lateral intent fraction where the shuffle begins
+var shuffle_intensity: float = 0.6       # stride intensity floor while side-stepping
+var shuffle_cadence_rate: float = 3.0    # rad/s stride-phase floor for the steps
 # Backpedal: intent held behind the facing — a defender's deliberate back-skate.
 # The C-cut re-shape (sweep/tuck/pitch below): real backward skating carves
 # alternating C's with the blades never leaving the ice — the push is a lateral
 # out-and-in sweep of one leg at a time, not a fore/aft pump with a recovery
 # lift. All three fade in with the backpedal read; 0 restores the mirrored
 # forward gait.
-@export var backpedal_start: float = 0.35        # backward intent fraction where the read begins
-@export var backpedal_ccut_roll_deg: float = 6.0 # extra shared edge rock under the C-cuts
-@export var backpedal_ccut_sweep_deg: float = 8.0  # extra per-leg out-and-in flare of the pushing leg
-@export var backpedal_tuck_fade: float = 0.75    # recovery-tuck lift removed at full C-cut (blades stay down)
-@export var backpedal_pitch_fade: float = 0.4    # fore/aft pump removed at full C-cut (the push is the sweep)
-@export var backpedal_chest_deg: float = 4.0     # chest-up trunk pitch over the C-cuts
+var backpedal_start: float = 0.35        # backward intent fraction where the read begins
+var backpedal_ccut_roll_deg: float = 6.0 # extra shared edge rock under the C-cuts
+var backpedal_ccut_sweep_deg: float = 8.0  # extra per-leg out-and-in flare of the pushing leg
+var backpedal_tuck_fade: float = 0.75    # recovery-tuck lift removed at full C-cut (blades stay down)
+var backpedal_pitch_fade: float = 0.4    # fore/aft pump removed at full C-cut (the push is the sweep)
+var backpedal_chest_deg: float = 4.0     # chest-up trunk pitch over the C-cuts
 # Glide enrichment: coasting (no keys) sways weight edge-to-edge, and a carve
 # released into a glide exits the turn on its edges (one-foot-glide read).
-@export var glide_sway_deg: float = 2.5          # lazy edge-to-edge roll amplitude
-@export var glide_sway_hz: float = 0.4           # sway frequency — far below stride cadence
-@export var glide_carve_lean_deg: float = 10.0   # legs lean into the arc gliding out of a turn
-@export var glide_inside_tuck_deg: float = 10.0  # inside-leg knee tuck — weight on the outside edge
+var glide_sway_deg: float = 2.5          # lazy edge-to-edge roll amplitude
+var glide_sway_hz: float = 0.4           # sway frequency — far below stride cadence
+var glide_carve_lean_deg: float = 10.0   # legs lean into the arc gliding out of a turn
+var glide_inside_tuck_deg: float = 10.0  # inside-leg knee tuck — weight on the outside edge
 # Sprint read: sprint_active (resolved where the skater is simulated; bit 5 of
 # the v16 intent byte for client-rendered remotes) drives a visibly committed
 # gait — LONGER, more powerful strides (the cadence ceiling already keeps leg
 # turnover flat, so sprint reads as reach, not churn), a deeper sit, and the
 # shoulders driving forward. Doubles as the opponent-stamina tell: a skater
 # who stops striding like this has run out of sprint.
-@export var sprint_stride_gain: float = 0.35     # stride amplitude boost at full sprint
-@export var sprint_stance_gain: float = 0.18     # extra crouch depth while sprinting
-@export var sprint_lean_deg: float = 7.0         # extra forward trunk pitch while sprinting
+var sprint_stride_gain: float = 0.35     # stride amplitude boost at full sprint
+var sprint_stance_gain: float = 0.18     # extra crouch depth while sprinting
+var sprint_lean_deg: float = 7.0         # extra forward trunk pitch while sprinting
 # Cadence "gears" — grounded in on-ice biomechanics: from acceleration to
 # sustained max velocity real skaters DROP stride frequency and lengthen the
 # glide (speed is power per stride, not faster turnover). cruise_gear (fast AND
 # not still accelerating) eases the stride rate down, deepens the sit, and warps
 # the stroke toward a longer glide dwell. All zero while accelerating/digging,
 # so the start/chop feel is untouched; set these to 0 to restore the prior gait.
-@export var cadence_cruise_falloff: float = 0.28    # max fraction the stride rate eases down at sustained cruise
-@export var glide_hold_skew: float = 0.25           # extra stroke skew at cruise — snappier push, longer glide dwell
-@export var cadence_glide_stance_gain: float = 0.12 # extra sit depth at sustained top speed
+var cadence_cruise_falloff: float = 0.28    # max fraction the stride rate eases down at sustained cruise
+var glide_hold_skew: float = 0.25           # extra stroke skew at cruise — snappier push, longer glide dwell
+var cadence_glide_stance_gain: float = 0.12 # extra sit depth at sustained top speed
 # Spring weight transfer (Rosen-style secondary motion) — a damped spring lags
 # the lateral weight shift behind the stride so the body rides over the loaded
 # leg and settles with follow-through instead of rolling rigidly with it. Adds
 # "weight" for almost nothing. weight_shift_deg 0 restores the prior gait.
-@export var weight_shift_deg: float = 2.5           # amplitude of the springy lateral body lean
-@export var weight_spring_stiffness: float = 90.0   # spring constant (higher = snappier follow)
-@export var weight_spring_damping: float = 14.0     # damping (near-critical — a clean settle with slight overshoot)
+var weight_shift_deg: float = 2.5           # amplitude of the springy lateral body lean
+var weight_spring_stiffness: float = 90.0   # spring constant (higher = snappier follow)
+var weight_spring_damping: float = 14.0     # damping (near-critical — a clean settle with slight overshoot)
 
 # ── Wrister Tuning ────────────────────────────────────────────────────────────
-@export var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
-@export var max_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
-@export var backhand_power_coefficient: float = 0.75
-@export var max_charge_direction_variance: float = 35.0
+var min_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MIN_M_S
+var max_wrister_power: float = GameRules.DEFAULT_WRISTER_POWER_MAX_M_S
+var backhand_power_coefficient: float = 0.75
+var max_charge_direction_variance: float = 35.0
 # Forehand-default deadband (RADIANS of net swing rotation) for the
 # forehand/backhand read: a stroke whose blade sweeps less than this net angle
 # around the player — a near-straight push — defaults to forehand. A backhand
 # is the deliberate rotational commit past it. See
 # ShotMechanics.is_backhand_from_swing. 0.35 rad ≈ 20°.
-@export var wrister_backhand_deadband: float = 0.35
+var wrister_backhand_deadband: float = 0.35
 # ── Wrister power model (ShotMechanics.wrister_power_t) ──
 # Power is a feel-curve over the release speed signal (cursor speed for humans,
 # a committed target for bots — see _wrister_sweep_speed). power_curve shapes
 # where an ordinary flick lands in the band. Feel tunable, NOT attribute-scaled
 # (Shot scales the ceiling).
-@export var wrister_power_curve: float = GameRules.DEFAULT_WRISTER_POWER_CURVE
+var wrister_power_curve: float = GameRules.DEFAULT_WRISTER_POWER_CURVE
 # ── Pure mouse-speed wrister ──
 # Wrister power is a curve over the raw SCREEN-space cursor speed (px/s) — flick
 # fast = hard, sweep slow = soft — distance-independent. Direction is still the
@@ -633,8 +633,8 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # wrister_mouse_speed_full is the cursor speed (px/s) that reads as full power.
 # It's PER-SETUP (scales with DPI/resolution), so players calibrate via the
 # Shot Power Sensitivity setting rather than this raw reference.
-@export var wrister_mouse_speed_full: float = 2500.0
-@export var wrister_mouse_speed_smoothing: float = 14.0
+var wrister_mouse_speed_full: float = 2500.0
+var wrister_mouse_speed_smoothing: float = 14.0
 # ── Travel-gated ceiling (ShotMechanics.wrister_travel_cap_t) — CURRENTLY OFF ──
 # The blade is FROZEN during the wrister charge, so it sweeps no blade path and
 # this gate has nothing to read: `_wrister_stroke_travel` returns INF and the
@@ -653,102 +653,102 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 #   wrister_travel_cap_floor: fraction of the power band reachable with zero
 #     travel — the instant flick-pass / snap tier (0.4 of the 10..33 base band
 #     ≈ 19 m/s, a crisp pass; %-based, so Shot scales it with the ceiling).
-@export var wrister_full_stroke_travel: float = 1.0
-@export var wrister_travel_cap_floor: float = 0.4
+var wrister_full_stroke_travel: float = 1.0
+var wrister_travel_cap_floor: float = 0.4
 # Blade-speed budget ALONG the shot axis during a wrister aim (m/s of blade
 # travel, applied relative to the skater like max_blade_speed). High and FLAT
 # (not Hands-scaled) so the wind-back-and-snap of a wrister tracks responsively
 # for every player — Hands still gates the off-axis (lateral/dangle) component,
 # which stays capped at max_blade_speed. See SkaterIKCoordinator.apply_blade_from_mouse.
-@export var wrister_on_axis_blade_speed: float = 60.0
+var wrister_on_axis_blade_speed: float = 60.0
 # Fixed power of the quick pass (blade→cursor snap fired by the dedicated
 # quick_pass button). Doubles as the pass speed, so it stays flat for everyone.
-@export var quick_pass_power: float = GameRules.DEFAULT_QUICK_PASS_POWER_M_S
+var quick_pass_power: float = GameRules.DEFAULT_QUICK_PASS_POWER_M_S
 # Loft-level vertical launch speeds (m/s), shared by quick passes, wristers, and
 # Loft — the manual angle ladder (docs/elevation-rework-plan.md v3; the full
 # story lives on the ShotMechanics loft-level doc). The fixed vertical speeds
 # below feed the QUICK-PASS table only (LOW = the saucer pass, MID/HIGH = the
 # flip); charged shots ride shot_loft_y — set angles from the curve gear's
 # ladder (loft_tan_low/mid/high vars above, set in apply_attributes).
-@export var loft_vertical_speed_low: float = GameRules.DEFAULT_LOFT_VY_LOW_M_S
-@export var loft_vertical_speed_high: float = GameRules.DEFAULT_LOFT_VY_HIGH_M_S
+var loft_vertical_speed_low: float = GameRules.DEFAULT_LOFT_VY_LOW_M_S
+var loft_vertical_speed_high: float = GameRules.DEFAULT_LOFT_VY_HIGH_M_S
 
 # ── Head Tracking Tuning ─────────────────────────────────────────────────────
-@export var head_track_speed: float = 12.0
-@export var head_track_max_deg: float = 60.0
+var head_track_speed: float = 12.0
+var head_track_max_deg: float = 60.0
 
 # ── Slapper Tuning ────────────────────────────────────────────────────────────
-@export var slapper_wind_up_height: float = 1.0
+var slapper_wind_up_height: float = 1.0
 # (No separate wind-up duration — the pose fills over max_slapper_charge_time,
 # see slapper_wind_up_t(), so the animation IS the charge readout.)
 # Full-charge tell: with no charge ring, the wind-up pose IS the gauge, so
 # "the coil is maxed" needs a live cue — a small quiver at the apex (the
 # shooter straining at the top). Amplitude in metres on the blade height,
 # half of it on the top hand.
-@export var slapper_full_quiver_m: float = 0.02
-@export var slapper_full_quiver_hz: float = 9.0
-@export var slapper_zone_radius: float = 0.5
+var slapper_full_quiver_m: float = 0.02
+var slapper_full_quiver_hz: float = 9.0
+var slapper_zone_radius: float = 0.5
 # Where the one-timer reception zone (and slap-with-puck pin) lives. Heavily
 # lateral with a small forward bias matches a real cross-ice one-timer stance:
 # puck arrives on the blade side, slightly ahead of the player's centre, so
 # they can swing through it without reaching forward.
-@export var slapper_zone_offset_x: float = 1.0  # lateral offset toward blade side
-@export var slapper_zone_offset_z: float = -0.4  # forward offset (negative = in front of player)
-@export var min_slapper_power: float = GameRules.DEFAULT_SLAPPER_POWER_MIN_M_S
-@export var max_slapper_power: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
-@export var max_slapper_charge_time: float = 0.7
-@export var slapper_blade_x: float = 1.0
-@export var slapper_blade_z: float = -0.5
+var slapper_zone_offset_x: float = 1.0  # lateral offset toward blade side
+var slapper_zone_offset_z: float = -0.4  # forward offset (negative = in front of player)
+var min_slapper_power: float = GameRules.DEFAULT_SLAPPER_POWER_MIN_M_S
+var max_slapper_power: float = GameRules.DEFAULT_SLAPPER_POWER_MAX_M_S
+var max_slapper_charge_time: float = 0.7
+var slapper_blade_x: float = 1.0
+var slapper_blade_z: float = -0.5
 # Wind-up coil: layered on top of the aim-tracking torso angle. Rotates the
 # back shoulder away from the target (for RHS that's CW from above, i.e. left
 # shoulder points at the puck) while pulling the top hand up and across the
 # body toward the back shoulder. The coil fills over the FULL charge time
 # (slapper_wind_up_t) — the pose is the charge gauge — sqrt-eased so it snaps
 # into motion early and creeps to its apex exactly at max charge.
-@export var slapper_wind_up_twist_deg: float = 80.0
-@export var slapper_wind_up_hand_up: float = 0.30      # top hand rises (m)
+var slapper_wind_up_twist_deg: float = 80.0
+var slapper_wind_up_hand_up: float = 0.30      # top hand rises (m)
 # Pushes the top hand forward in upper-body-local space (negative local Z).
 # After the torso coil, this body-local "forward" points along the rotated
 # body's new forward direction in world — so for an LHS player coiled CCW
 # the hand ends up upper-left, for an RHS player coiled CW it ends up
 # upper-right. The hand rides the rotation but is placed in front of the
 # back shoulder rather than glued to it.
-@export var slapper_wind_up_hand_forward: float = 0.35
+var slapper_wind_up_hand_forward: float = 0.35
 # Lateral body-local offsets — left at 0 because they fight the coil (a
 # body-local +Z offset rotates to a world -X under the coil, pulling the hand
 # off the back-shoulder side). Available to tune if a held pose needs extra
 # lateral character without flipping that direction.
-@export var slapper_wind_up_hand_back: float = 0.0     # top hand pulls behind shoulder (+local z, m)
-@export var slapper_wind_up_hand_inward: float = 0.0   # top hand pulls across body toward back shoulder (m)
+var slapper_wind_up_hand_back: float = 0.0     # top hand pulls behind shoulder (+local z, m)
+var slapper_wind_up_hand_inward: float = 0.0   # top hand pulls across body toward back shoulder (m)
 # Where the blade lives at full wind-up (in body-local space, before the body
 # coils). Forward in upper-body-local (negative Z) places the blade ahead of
 # the rotated body in world space — same trick as the top hand. With the
 # coil this lands the blade on the same side as the back-shoulder rotated
 # *through* world-forward, so the stick reads as loaded across the front of
 # the player rather than wrapping behind the back shoulder.
-@export var slapper_wind_up_blade_x: float = 0.4       # blade lateral offset at full charge (was slapper_blade_x=1.0)
-@export var slapper_wind_up_blade_z: float = -0.4      # blade depth at full charge — negative = forward in body-local
+var slapper_wind_up_blade_x: float = 0.4       # blade lateral offset at full charge (was slapper_blade_x=1.0)
+var slapper_wind_up_blade_z: float = -0.4      # blade depth at full charge — negative = forward in body-local
 # Snappier lerp during the slapshot coil — the default upper_body_return_speed
 # is tuned for gentle aim-tracking and lags a fast coil, which reads as a
 # half-finished wind-up.
-@export var slapper_wind_up_lerp_speed: float = 18.0
+var slapper_wind_up_lerp_speed: float = 18.0
 # Seconds after the puck arrives to release before the wind-up cancels back to
 # carry. Every peer arms this same honest value for the carrier it is predicting;
 # only the HOST simulating a REMOTE carrier adds one_timer_window_lag_grace on
 # top, because it armed the window before that carrier could have seen the catch.
-@export var one_timer_window_duration: float = 0.45
+var one_timer_window_duration: float = 0.45
 # Human timing window, in seconds, either side of the ideal commit. Applied
 # ALONG the puck's line (ShotReleaseRules.one_timer_connects), so it forgives
 # being early or late — never being wide.
-@export var one_timer_leniency_time: float = 0.08
-@export var one_timer_center_power_bonus: float = 0.10  # ±10%: edge of zone = −10%, dead centre = +10%
+var one_timer_leniency_time: float = 0.08
+var one_timer_center_power_bonus: float = 0.10  # ±10%: edge of zone = −10%, dead centre = +10%
 # Minimum wind-up (seconds of slapper charge) before an arriving puck opens the
 # timed one-timer window. Below it — the "puck was already at the stick when the
 # wind-up began" case — a forced window would open at ~zero power and cancel
 # straight to carry (a flicker + a shot that never happens). Under this floor the
 # catch rolls into a plain slapshot charge instead: keep winding up, release when
 # ready. Feel floor, deliberately small so genuine early one-timers still window.
-@export var one_timer_min_windup_time: float = 0.15
+var one_timer_min_windup_time: float = 0.15
 # Retention: seconds the committed one-timer swing holds before the puck leaves.
 # A real one-timer is not instant — the blade travels down onto the puck, the
 # shaft loads against it, and the shot comes off the recoil. This is that beat:
@@ -758,7 +758,7 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 # slapper_follow_through_contact_frac ≈ 0.11 s) so the puck leaves on the beat
 # the finish animation already treats as blade contact, instead of a tenth of a
 # second before the stick gets there.
-@export var one_timer_retention_time: float = 0.11
+var one_timer_retention_time: float = 0.11
 
 var show_one_timer_indicator: bool = false
 
@@ -771,42 +771,42 @@ var show_one_timer_indicator: bool = false
 # fixed low, slapper full) — a soft pass flicks, a full-charge bomb finishes
 # high. Shapes ride sin(PI · t^arc_skew): 1.0 is a symmetric up-down arc, <1
 # peaks earlier so the finish snaps up with the release and settles slowly.
-@export var follow_through_duration: float = 0.22             # wrister — short + front-loaded so the whip fires WITH the release (was 0.35)
-@export var quick_pass_follow_through_duration: float = 0.18  # snap pass flick
-@export var slapper_follow_through_duration: float = 0.5
+var follow_through_duration: float = 0.22             # wrister — short + front-loaded so the whip fires WITH the release (was 0.35)
+var quick_pass_follow_through_duration: float = 0.18  # snap pass flick
+var slapper_follow_through_duration: float = 0.5
 # Lower = the whip peaks EARLIER (0.4 → peak at ~t=0.18 of the timer, ~40 ms after
 # release, then a slow settle). This is what makes the coil discharge explosively
 # with the shot instead of the old mid-timer bell (peak ~130 ms after the puck
 # already left). Shared with the slapper finish.
-@export var follow_through_arc_skew: float = 0.4
+var follow_through_arc_skew: float = 0.4
 # Last fraction of the wrister/quick/slapper FT spent easing the finish aim (torso
 # twist + blade) from the shot line back to the LIVE cursor, so the pose ends
 # where the mouse actually is and hands off to blade-tracking without re-rotating
 # (the "follow-through, then a reset back" read). 0 keeps the pure shot-line
 # finish. Blends the aim only in the tail so the shot-line follow-through still
 # reads through the meat of the timer.
-@export var follow_through_return_frac: float = 0.4
-@export var wrister_follow_through_min_power: float = 0.55  # amplitude floor at zero charge
-@export var quick_pass_follow_through_power: float = 0.5
-@export var wrister_follow_through_hand_y: float = 0.35
-@export var wrister_follow_through_blade_lift: float = 0.55  # high-finish blade height off the ice
-@export var wrister_follow_through_reach: float = 0.5  # forward hand CARRY along the shot line (= arm extension; the blade reaches a full stick beyond it)
+var follow_through_return_frac: float = 0.4
+var wrister_follow_through_min_power: float = 0.55  # amplitude floor at zero charge
+var quick_pass_follow_through_power: float = 0.5
+var wrister_follow_through_hand_y: float = 0.35
+var wrister_follow_through_blade_lift: float = 0.55  # high-finish blade height off the ice
+var wrister_follow_through_reach: float = 0.5  # forward hand CARRY along the shot line (= arm extension; the blade reaches a full stick beyond it)
 # Frozen-wrister whip envelope (attack-hold-release, not a symmetric bell): the
 # blade SNAPS to full extension within attack_frac of the follow-through, HOLDS
 # the finish through the middle, then relaxes over the last release_frac. A bell
 # eased the blade out of the retracted origin and pulled it straight back — it
 # never committed to the finish, which read as delayed. Fractions of the FT timer.
-@export var wrister_whip_attack_frac: float = 0.06
-@export var wrister_whip_release_frac: float = 0.45
-@export var wrister_follow_through_twist_deg: float = 45.0   # shoulders explode through the shot (frozen wrister discharges this instantly)
-@export var slapper_follow_through_twist_deg: float = 50.0   # full uncoil past the shot line
-@export var follow_through_lean_deg: float = 8.0             # trunk drives forward over the front foot
-@export var follow_through_twist_lerp_speed: float = 15.0  # snap the torso from coil through the overshoot fast (was 9.0)
-@export var slapper_follow_through_arc_dist: float = 0.75  # blade XZ travel along the shot line through the finish
-@export var slapper_follow_through_height: float = 0.85    # high-finish blade height off the ice
-@export var slapper_follow_through_hand_y: float = 0.4     # hands rise through the finish
-@export var slapper_follow_through_hand_follow: float = 0.4  # fraction of blade travel the hands follow (limits shaft stretch)
-@export var slapper_follow_through_contact_frac: float = 0.22  # first fraction of the timer spent on the downswing
+var wrister_whip_attack_frac: float = 0.06
+var wrister_whip_release_frac: float = 0.45
+var wrister_follow_through_twist_deg: float = 45.0   # shoulders explode through the shot (frozen wrister discharges this instantly)
+var slapper_follow_through_twist_deg: float = 50.0   # full uncoil past the shot line
+var follow_through_lean_deg: float = 8.0             # trunk drives forward over the front foot
+var follow_through_twist_lerp_speed: float = 15.0  # snap the torso from coil through the overshoot fast (was 9.0)
+var slapper_follow_through_arc_dist: float = 0.75  # blade XZ travel along the shot line through the finish
+var slapper_follow_through_height: float = 0.85    # high-finish blade height off the ice
+var slapper_follow_through_hand_y: float = 0.4     # hands rise through the finish
+var slapper_follow_through_hand_follow: float = 0.4  # fraction of blade travel the hands follow (limits shaft stretch)
+var slapper_follow_through_contact_frac: float = 0.22  # first fraction of the timer spent on the downswing
 
 # ── Shot Body Animation Tuning ────────────────────────────────────────────────
 # Cosmetic lower-body work for the shots (SkaterSkatingCoordinator): the load
@@ -822,30 +822,30 @@ var show_one_timer_indicator: bool = false
 # shot_charge), so local, bot, and remote skaters play the identical animation
 # with zero new network state (same contract as the stick flex). First-pass
 # numbers — tune in the editor.
-@export var wrister_load_stance: float = 0.55          # crouch floor at full charge (fraction of stance_hip_deg)
-@export var wrister_load_lean_deg: float = 5.0         # shared leg roll: weight over the stick-side back leg
-@export var wrister_load_split_deg: float = 8.0        # foot stagger: stick-side foot drops back
-@export var wrister_load_hip_coil_deg: float = 8.0     # hips coil with the torso, stick-side hip back
-@export var wrister_load_blend_speed: float = 6.0      # how fast the load pose tracks the charge (both shots)
-@export var wrister_kick_time: float = 0.5             # seconds of weight transfer/kick after release
-@export var wrister_kick_min_power: float = 0.35       # amplitude floor so snaps and passes still read
-@export var wrister_kick_back_deg: float = 26.0        # back (stick-side) leg drives into extension behind
-@export var wrister_kick_knee_extend_deg: float = 30.0 # back knee straightens through the kick
-@export var wrister_kick_lean_deg: float = 7.0         # shared leg roll: weight lands over the front foot
-@export var wrister_kick_stance: float = 0.5           # front-leg sit through the drive
-@export var wrister_kick_hip_yaw_deg: float = 12.0     # hips uncoil through the shot line
-@export var slapper_load_stance: float = 0.75          # the wind-up sits DEEP — the power position
-@export var slapper_load_lean_deg: float = 7.0         # harder weight-back than the wrister load
-@export var slapper_load_split_deg: float = 11.0       # wider shooting base for the full swing
-@export var slapper_load_hip_coil_deg: float = 16.0    # hips coil under the wound-up torso
-@export var slapper_kick_time: float = 0.6             # spans downswing + contact + finish
-@export var slapper_kick_min_power: float = 0.6        # a slap swing commits the body even off a short wind-up
-@export var slapper_kick_back_deg: float = 34.0        # full back-leg extension through the finish
-@export var slapper_kick_knee_extend_deg: float = 38.0 # back knee straightens hard
-@export var slapper_kick_lean_deg: float = 9.0         # weight lands hard over the front foot
-@export var slapper_kick_stance: float = 0.6           # front-leg sit through the drive
-@export var slapper_kick_hip_yaw_deg: float = 20.0     # hips uncoil hard through the shot line
-@export var shot_stride_fade: float = 0.8              # stride suppression while loading/kicking (glide through the shot)
+var wrister_load_stance: float = 0.55          # crouch floor at full charge (fraction of stance_hip_deg)
+var wrister_load_lean_deg: float = 5.0         # shared leg roll: weight over the stick-side back leg
+var wrister_load_split_deg: float = 8.0        # foot stagger: stick-side foot drops back
+var wrister_load_hip_coil_deg: float = 8.0     # hips coil with the torso, stick-side hip back
+var wrister_load_blend_speed: float = 6.0      # how fast the load pose tracks the charge (both shots)
+var wrister_kick_time: float = 0.5             # seconds of weight transfer/kick after release
+var wrister_kick_min_power: float = 0.35       # amplitude floor so snaps and passes still read
+var wrister_kick_back_deg: float = 26.0        # back (stick-side) leg drives into extension behind
+var wrister_kick_knee_extend_deg: float = 30.0 # back knee straightens through the kick
+var wrister_kick_lean_deg: float = 7.0         # shared leg roll: weight lands over the front foot
+var wrister_kick_stance: float = 0.5           # front-leg sit through the drive
+var wrister_kick_hip_yaw_deg: float = 12.0     # hips uncoil through the shot line
+var slapper_load_stance: float = 0.75          # the wind-up sits DEEP — the power position
+var slapper_load_lean_deg: float = 7.0         # harder weight-back than the wrister load
+var slapper_load_split_deg: float = 11.0       # wider shooting base for the full swing
+var slapper_load_hip_coil_deg: float = 16.0    # hips coil under the wound-up torso
+var slapper_kick_time: float = 0.6             # spans downswing + contact + finish
+var slapper_kick_min_power: float = 0.6        # a slap swing commits the body even off a short wind-up
+var slapper_kick_back_deg: float = 34.0        # full back-leg extension through the finish
+var slapper_kick_knee_extend_deg: float = 38.0 # back knee straightens hard
+var slapper_kick_lean_deg: float = 9.0         # weight lands hard over the front foot
+var slapper_kick_stance: float = 0.6           # front-leg sit through the drive
+var slapper_kick_hip_yaw_deg: float = 20.0     # hips uncoil hard through the shot line
+var shot_stride_fade: float = 0.8              # stride suppression while loading/kicking (glide through the shot)
 
 # ── Body Language Tuning ──────────────────────────────────────────────────────
 # Remaining cosmetic body reads (all in SkaterSkatingCoordinator). Check
@@ -854,34 +854,34 @@ var show_one_timer_indicator: bool = false
 # burst/thud on every machine; the stick-lift read keys off the replicated
 # blade_up; the celebration bounce reads the same timer the raised-stick pose
 # uses (started on every machine — see GameManager._trigger_scorer_celebration).
-@export var check_drive_time: float = 0.45        # seconds of shoulder-drive after a landed hit
-@export var check_drive_lean_deg: float = 14.0    # trunk drives INTO the hit at full hardness
-@export var check_drive_stance: float = 0.6       # legs drive under the hit — the finishing base
-@export var stick_lift_trunk_deg: float = 3.0     # slight chest-up pop while working under a stick
-@export var stick_lift_stance: float = 0.2        # coiled working posture while the blade is up
-@export var stick_lift_blend_speed: float = 10.0  # how fast the lift read engages/releases
-@export var celebration_leg_stance: float = 0.6   # knee-pump depth of the celebration bounce
+var check_drive_time: float = 0.45        # seconds of shoulder-drive after a landed hit
+var check_drive_lean_deg: float = 14.0    # trunk drives INTO the hit at full hardness
+var check_drive_stance: float = 0.6       # legs drive under the hit — the finishing base
+var stick_lift_trunk_deg: float = 3.0     # slight chest-up pop while working under a stick
+var stick_lift_stance: float = 0.2        # coiled working posture while the blade is up
+var stick_lift_blend_speed: float = 10.0  # how fast the lift read engages/releases
+var celebration_leg_stance: float = 0.6   # knee-pump depth of the celebration bounce
 
 # ── Celebration Tuning ────────────────────────────────────────────────────────
 # Cosmetic raised-stick goal celebration (SkaterShotPoseCoordinator.
 # apply_celebration_pose) — heights in upper-body-local metres.
-@export var celebration_hand_y: float = 0.45     # raised top-hand height
-@export var celebration_stick_rise: float = 0.5  # blade height above the raised hand
+var celebration_hand_y: float = 0.45     # raised top-hand height
+var celebration_stick_rise: float = 0.5  # blade height above the raised hand
 
 # ── Shot-Block Tuning ─────────────────────────────────────────────────────────
 # Movement speed while blocking (unused while the stance is fully planted; kept for tuning).
-@export var block_speed_multiplier: float = 0.45
+var block_speed_multiplier: float = 0.45
 # Choreographed "stick down" block pose, authored in upper-body-local space.
 # Forward is local −Z (toward the shooter the stance snapped to on entry); the
 # stick side is +X for a righty, −X for a lefty (blade_side_sign). The blade lies
 # flat on the ice (Y is lean-corrected to ice level); the top hand drops low and
 # pushes forward so the shaft lies down across the lane. First-pass numbers —
 # tune in the editor (see CLAUDE.md "get it working, then tune numbers").
-@export var block_blade_reach: float = 1.0   # forward blade extension from the shoulder (m, local −Z)
-@export var block_blade_x: float = 0.2       # lateral blade offset to the stick side (m)
-@export var block_hand_forward: float = 0.3  # forward push of the top hand (m, local −Z)
-@export var block_hand_x: float = 0.1        # lateral top-hand offset to the stick side (m)
-@export var block_hand_y: float = -0.10      # top-hand height while blocking (m, local; matches mesh-native hand_rest_y)
+var block_blade_reach: float = 1.0   # forward blade extension from the shoulder (m, local −Z)
+var block_blade_x: float = 0.2       # lateral blade offset to the stick side (m)
+var block_hand_forward: float = 0.3  # forward push of the top hand (m, local −Z)
+var block_hand_x: float = 0.1        # lateral top-hand offset to the stick side (m)
+var block_hand_y: float = -0.10      # top-hand height while blocking (m, local; matches mesh-native hand_rest_y)
 # Cosmetic block BODY pose (gait + pose coordinator): the one-knee drop a real
 # skater blocks with — the stick-side knee sinks toward the ice with the shin
 # folded back along it, the far leg extends out to the other side sealing the
@@ -890,39 +890,39 @@ var show_one_timer_indicator: bool = false
 # out of the down leg, and the extended leg's abduction is solved from that
 # height so its skate stays on the ice (SkaterSkatingCoordinator). Keyed off the
 # replicated current_shot_state, so remote blockers read identically.
-@export var block_kneel_hip_deg: float = 30.0    # down-leg thigh, forward of vertical
-@export var block_kneel_shin_deg: float = 88.0   # down-leg shin, from vertical (90 = flat on the ice)
-@export var block_extend_knee_deg: float = 10.0  # residual flex in the extended leg — never locked straight
-@export var block_trunk_pitch_deg: float = 16.0  # chest tips forward over the down knee
-@export var block_trunk_roll_deg: float = 10.0   # ...and rolls onto it, off the extended leg
-@export var block_pose_blend_speed: float = 12.0 # snap-in speed of the body pose (the plant is committed)
+var block_kneel_hip_deg: float = 30.0    # down-leg thigh, forward of vertical
+var block_kneel_shin_deg: float = 88.0   # down-leg shin, from vertical (90 = flat on the ice)
+var block_extend_knee_deg: float = 10.0  # residual flex in the extended leg — never locked straight
+var block_trunk_pitch_deg: float = 16.0  # chest tips forward over the down knee
+var block_trunk_roll_deg: float = 10.0   # ...and rolls onto it, off the extended leg
+var block_pose_blend_speed: float = 12.0 # snap-in speed of the body pose (the plant is committed)
 
 # ── Net Collision ─────────────────────────────────────────────────────────────
 # The stick's own reach perpendicular to the blade segment, added to the pipe
 # radius so the blade stops on the outside of the iron rather than centre-on.
-@export var net_blade_half_thickness: float = 0.012
+var net_blade_half_thickness: float = 0.012
 # Floor on how briskly a puck caught on the pipe leaves the blade. A fast catch
 # inherits the pipe's own rebound instead; this only covers the slow/stationary
 # wedge, where there is no rebound to inherit but the puck must still come off
 # rather than ride along with a stick the post is holding back.
-@export var post_catch_release_speed: float = 1.5
+var post_catch_release_speed: float = 1.5
 # How deep the twine lets the blade sink before stopping it. The mesh is
 # compliant and a real stick does bury itself in it, but only just — reach is
 # bounded before the blade ever gets here (SkaterIKCoordinator._board_reach_limit
 # casts the net as well as the boards), so this only has to soften the residual
 # contact. Deep values read as the stick passing THROUGH the net, which is worse
 # than the hard wall it replaced.
-@export var net_mesh_give: float = 0.04
+var net_mesh_give: float = 0.04
 
 # ── Goalie Body Block ─────────────────────────────────────────────────────────
 # XZ cylinder radius used to push the blade (and carried puck) away from a
 # goalie's body center. Tunable in the editor — matches roughly the goalie's
 # padded chest width. The hand moves with the blade to keep stick length intact.
-@export var goalie_block_radius: float = 0.50
-@export var goalie_strip_power: float = 1.5
+var goalie_block_radius: float = 0.50
+var goalie_strip_power: float = 1.5
 # Half-extents of the butterfly leg-pad strip box in goalie local XZ space.
-@export var butterfly_pad_half_x: float = 0.84
-@export var butterfly_pad_half_z: float = 0.25
+var butterfly_pad_half_x: float = 0.84
+var butterfly_pad_half_z: float = 0.25
 
 # ── References ────────────────────────────────────────────────────────────────
 var skater: Skater = null

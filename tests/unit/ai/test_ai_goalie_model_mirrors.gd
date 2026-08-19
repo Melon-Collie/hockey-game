@@ -27,12 +27,14 @@ func before_all() -> void:
 	_goalie_src = FileAccess.get_file_as_string("res://Scripts/controllers/goalie_controller.gd")
 
 
-# `@export var name: T = <literal>` -> the literal, evaluated as a float.
+# `var name: T = <literal>` at column 0 -> the literal, as a float. Accepts an
+# `@export` prefix too: the goalie's tunables are plain fields now (a scene
+# overrode none of them), but the parser should not care which a knob is.
 func _export_default(name: String) -> float:
 	var re := RegEx.create_from_string(
-			"(?m)^@export var %s\\s*:\\s*float\\s*=\\s*([^\\n#]+)" % name)
+			"(?m)^(?:@export(?:_[a-z_]+)?(?:\\([^)]*\\))? )?var %s\\s*:\\s*float\\s*=\\s*([^\\n#]+)" % name)
 	var m: RegExMatch = re.search(_goalie_src)
-	assert_not_null(m, "no float @export named `%s` in goalie_controller.gd" % name)
+	assert_not_null(m, "no float field named `%s` in goalie_controller.gd" % name)
 	if m == null:
 		return NAN
 	var expr: String = m.get_string(1).strip_edges()
