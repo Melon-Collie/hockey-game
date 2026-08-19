@@ -2385,8 +2385,10 @@ func _dispatch_role_decision(ctx: RoleContext) -> RoleDecision:
 			# High-slot trailer — SUPPORT's goal-side trail read.
 			decision = AIRoleSupport.decide(ctx)
 		_:
-			# Slot.NONE only — the brain has not assigned this peer yet, so
-			# there is nothing to be in position FOR. Hold.
+			# Slot.NONE, and CARRIER for the one brain cadence after a release
+			# (the slot is cached; AIRoleSlots only ever assigns it to the live
+			# carrier_peer_id, so it cannot persist). Either way there is
+			# nothing to be in position FOR yet. Hold.
 			decision = RoleDecision.new()
 			decision.target_position = ctx.self_pos
 	_prev_role_slot = slot
