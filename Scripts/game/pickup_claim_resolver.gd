@@ -33,16 +33,15 @@ extends RefCounted
 # Host-only by contract — caller gates on NetworkManager.is_host. Emits no
 # signals: every effect is a method call on the injected puck controller.
 
-const MAX_CLAIM_AGE_S: float = 0.2
 const CONTEST_WINDOW_S: float = 0.05
 
 var _registry: PlayerRegistry = null
 var _state_buffer: StateBufferManager = null
 var _puck_getter: Callable = Callable()             # () -> Puck
 var _puck_controller_getter: Callable = Callable()  # () -> PuckController
-# Scratch for the claimant's self-view catch-up (reused; receive_claim is
-# host-only).
-var _self_fp := SkaterMovementRules.ForwardResult.new()
+# The claimant's own body and blade at the instant they reached (reused; the
+# resolver is host-only).
+var _claimant := ClaimantView.new()
 
 var _pending_peer_id: int = -1
 var _pending_timer: float = 0.0
@@ -219,12 +218,7 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	if puck.carrier != null or puck.pickup_locked:
 		NetworkManager.send_pickup_claim_nack(peer_id)
 		return
-	# Use session-relative game time so the age check matches host_timestamp's
-	# time base (the client stamped it with estimated_host_time).
-	# Time.get_ticks_msec() is OS uptime and would diverge by however long the
-	# host was alive before the game started.
-	var now: float = NetworkManager.local_time()
-	if now - host_timestamp > MAX_CLAIM_AGE_S:
+	if not LagCompRewind.claim_is_fresh(host_timestamp):
 		NetworkManager.send_pickup_claim_nack(peer_id)
 		return
 	var record: PlayerRecord = _registry.get_record(peer_id)
@@ -289,38 +283,23 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	# Client-authoritative blade ("aim"): the claim carries the blade geometry the
 	# client actually reached with, instead of the host reconstructing it from its
 	# lossy self-view snapshot (the reconstruction diverged from what the client
-	# saw — the grab-then-lose bug). The host still owns the BODY: each client point
-	# is pinned to within the claimant's physical reach of the server-authoritative
-	# body (skater_snap.position) so a modified client can't teleport its blade.
-	var max_reach: float = _peer_max_reach(peer_id)
-	# The self-view instant is past the newest capture on any link whose one-way
-	# is shorter than the claimant's input lead, so both snapshots above are
-	# silently the newest rather than the requested instant. Catch the body up
-	# and rigid-translate its blade/hand with it, or the clamps below fence an
-	# honest full-extension grab against a stale body. No-op once the link's
-	# one-way exceeds the lead. See LagCompRewind.self_view_catch_up.
-	var self_catch: Vector3 = LagCompRewind.self_view_catch_up(
-			skater_snap, record.controller as SkaterController,
-			blade_rewind_time, _state_buffer.newest_host_timestamp(), _self_fp)
-	var blade_curr: Vector3 = LagCompRewind.clamp_client_blade(
-			client_blade_curr, skater_snap.position + self_catch, max_reach)
-	var blade_prev: Vector3 = LagCompRewind.clamp_client_blade(
-			client_blade_prev, skater_prev_snap.position + self_catch, max_reach)
-	var top_hand: Vector3 = LagCompRewind.clamp_client_blade(
-			client_top_hand, skater_snap.position + self_catch, max_reach)
-	# Second, tighter bound: pin each client point to within a plausible continuity
-	# distance of the host's OWN reconstruction of the blade/hand at the rewind
-	# instant (blade_contact_world / top_hand_world, derived from the claimant's
-	# replicated inputs) — shrinks the exploitable slop from the reach sphere to the
-	# reconstruction error. No-ops per point when the host has no reconstruction.
-	var continuity: float = LagCompRewind.blade_continuity_tolerance(_peer_blade_speed(peer_id))
+	# saw — the grab-then-lose bug). The host still owns the BODY, and ClaimantView
+	# is what pins the client's points to it.
+	if not _claimant.resolve(_registry, peer_id, skater_snap,
+			record.controller as SkaterController,
+			blade_rewind_time, _state_buffer.newest_host_timestamp()):
+		NetworkManager.send_pickup_claim_nack(peer_id)
+		return
+	var self_catch: Vector3 = _claimant.catch_up()
+	var blade_curr: Vector3 = _claimant.reach_clamp(client_blade_curr, skater_snap.position)
+	var blade_prev: Vector3 = _claimant.reach_clamp(client_blade_prev, skater_prev_snap.position)
+	var top_hand: Vector3 = _claimant.reach_clamp(client_top_hand, skater_snap.position)
+	# The two bounds are split rather than clamp_blade'd because the divergence
+	# telemetry below measures BETWEEN them.
 	var pre_continuity_blade: Vector3 = blade_curr
-	blade_curr = LagCompRewind.continuity_clamp(
-			blade_curr, skater_snap.blade_contact_world + self_catch, continuity)
-	blade_prev = LagCompRewind.continuity_clamp(
-			blade_prev, skater_prev_snap.blade_contact_world + self_catch, continuity)
-	top_hand = LagCompRewind.continuity_clamp(
-			top_hand, skater_snap.top_hand_world + self_catch, continuity)
+	blade_curr = _claimant.continuity_clamp(blade_curr, skater_snap.blade_contact_world)
+	blade_prev = _claimant.continuity_clamp(blade_prev, skater_prev_snap.blade_contact_world)
+	top_hand = _claimant.continuity_clamp(top_hand, skater_snap.top_hand_world)
 	# Rewind fidelity, measured directly rather than inferred from the miss rate:
 	# how far the client's blade sat from the host's OWN reconstruction of it, and
 	# whether the clamp had to pull it. Recorded for EVERY claim reaching the
@@ -445,22 +424,3 @@ func _arm_pending(peer_id: int, view_time: float,
 	_pending_blade_curr = blade_curr
 	_pending_blade_prev = blade_prev
 
-
-# The claimant's fully-extended physical reach (AISkaterCaps.max_blade_reach),
-# used to bound the client-sent blade against the server body. 0.0 when the peer
-# has no caps entry (can't-happen for a spawned claimant) — the clamp then no-ops.
-func _peer_max_reach(peer_id: int) -> float:
-	if _registry == null:
-		return 0.0
-	var caps: AISkaterCaps = _registry.caps_by_peer.get(peer_id)
-	return caps.max_blade_reach if caps != null else 0.0
-
-
-# The claimant's real Hands-scaled blade traverse speed (AISkaterCaps.blade_speed),
-# feeding the continuity tolerance. 0.0 when the peer has no caps entry — the
-# continuity clamp then reduces to its slack floor, still a valid bound.
-func _peer_blade_speed(peer_id: int) -> float:
-	if _registry == null:
-		return 0.0
-	var caps: AISkaterCaps = _registry.caps_by_peer.get(peer_id)
-	return caps.blade_speed if caps != null else 0.0

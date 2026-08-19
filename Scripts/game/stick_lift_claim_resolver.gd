@@ -22,13 +22,13 @@ extends RefCounted
 #       geometry (attacker's blade within radius of the shaft AND below it)
 #     → apply_lag_comp_stick_lift (idempotent)
 #
-# The shared claim-resolver contract is in Scripts/game/CLAUDE.md.
+# The shared claim-resolver contract is in Scripts/game/CLAUDE.md; the pieces of
+# it that are the same on every resolver live in LagCompRewind.claim_is_fresh
+# and ClaimantView.
 #
 # Geometry is an instantaneous point-vs-segment test (the attacker's blade vs.
 # the victim's hand→blade shaft), so — unlike poke's swept test — it needs no
 # previous-tick snapshot.
-
-const MAX_CLAIM_AGE_S: float = 0.2
 
 var _registry: PlayerRegistry = null
 var _state_buffer: StateBufferManager = null
@@ -36,9 +36,9 @@ var _puck_getter: Callable = Callable()             # () -> Puck
 var _puck_controller_getter: Callable = Callable()  # () -> PuckController
 # Stage-3 forward-prediction scratch (reused; receive_claim is host-only).
 var _fp_result := SkaterMovementRules.ForwardResult.new()
-# Separate scratch for the claimant's self-view catch-up so it can never alias
-# the carrier reconstruction above.
-var _self_fp := SkaterMovementRules.ForwardResult.new()
+# Owns its own scratch, so the claimant reconstruction can never alias the
+# carrier one above.
+var _claimant := ClaimantView.new()
 
 
 func setup(
@@ -63,14 +63,11 @@ func receive_claim(peer_id: int, host_timestamp: float,
 		return
 	if puck.carrier == null or puck.pickup_locked:
 		return
-	# Same age check as pickup/poke — `host_timestamp` is in the
-	# `estimated_host_time` base, matched against session-relative `local_time`.
 	# Anti-cheat: bound the self-reported render delay against the measured link
 	# before any rewind / forward-predict depth reads it (see LagCompRewind).
 	interp_delay_ms = LagCompRewind.plausible_interp_delay_ms(
 			interp_delay_ms, float(NetworkManager.get_peer_ping_ms(peer_id)))
-	var now: float = NetworkManager.local_time()
-	if now - host_timestamp > MAX_CLAIM_AGE_S:
+	if not LagCompRewind.claim_is_fresh(host_timestamp):
 		return
 	var record: PlayerRecord = _registry.get_record(peer_id)
 	if record == null or record.skater == null:
@@ -135,35 +132,13 @@ func receive_claim(peer_id: int, host_timestamp: float,
 	# actually held at send time.
 	if attacker_snap.shot_state == SkaterStateMachine.State.SHOT_BLOCKING:
 		return
-	# Client-authoritative attacker blade ("aim") — the claim carries the blade the
-	# client hooked under the shaft with, reach-clamped to the attacker's
-	# server-authoritative body so a modified client can't teleport it. The victim's
-	# shaft stays REMOTE-view (host-reconstructed, as before). See
-	# PickupClaimResolver / LagCompRewind.clamp_client_blade.
-	var max_reach: float = 0.0
-	var blade_speed: float = 0.0
-	if _registry != null:
-		var caps: AISkaterCaps = _registry.caps_by_peer.get(peer_id)
-		if caps != null:
-			max_reach = caps.max_blade_reach
-			blade_speed = caps.blade_speed
-	# The self-view instant is past the newest capture on any link whose one-way
-	# is shorter than the claimant's input lead, so attacker_snap is silently the
-	# newest rather than the requested instant. Catch the body up and
-	# rigid-translate its blade with it, or the clamps below fence an honest
-	# full-extension lift against a stale body. No-op once the link's one-way
-	# exceeds the lead. See LagCompRewind.self_view_catch_up.
-	var self_catch: Vector3 = LagCompRewind.self_view_catch_up(
-			attacker_snap, record.controller as SkaterController,
-			blade_rewind_time, _state_buffer.newest_host_timestamp(), _self_fp)
-	var attacker_blade: Vector3 = LagCompRewind.clamp_client_blade(
-			client_blade_curr, attacker_snap.position + self_catch, max_reach)
-	# Tighter continuity bound toward the host's own blade reconstruction — see
-	# PickupClaimResolver / LagCompRewind.continuity_clamp. No-ops when the host
-	# has no reconstruction for the attacker at the rewind instant.
-	attacker_blade = LagCompRewind.continuity_clamp(attacker_blade,
-			attacker_snap.blade_contact_world + self_catch,
-			LagCompRewind.blade_continuity_tolerance(blade_speed))
+	# The attacker's blade is client-authoritative aim, bounded by ClaimantView.
+	# The victim's shaft stays REMOTE-view — host-reconstructed above.
+	if not _claimant.resolve(_registry, peer_id, attacker_snap,
+			record.controller as SkaterController,
+			blade_rewind_time, _state_buffer.newest_host_timestamp()):
+		return
+	var attacker_blade: Vector3 = _claimant.clamp_blade(client_blade_curr, attacker_snap)
 	# Host-only claim-outcome telemetry (no-op off the host): the claim reached the
 	# rewound geometry test; a check_blade_under_stick fail is the lag-comp
 	# "reached for it, didn't get it" signal. See NetworkTelemetry / network_sessions.

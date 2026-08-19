@@ -22,11 +22,27 @@ Playtester builds ship via GitHub Releases (`latest` tag). `deploy.yml` computes
 documents its own geometry and reject list in its header; this is the contract
 they all share. **A new claim resolver must follow all of it.**
 
+The parts that are identical on every resolver are single seams, not a list to
+re-implement — `test_claim_resolver_contract.gd` fails a resolver that goes
+around one:
+
+- **`LagCompRewind.claim_is_fresh(host_ts)`** is the absolute age fence, sourced
+  from `ShotReleaseRules.MAX_CLAIM_AGE_S`. Don't hold a local copy of the number.
+- **`ClaimantView`** is the claimant's own body and blade at the instant they
+  reached: `resolve()` catches the body up to the self-view instant, then
+  `reach_clamp` / `continuity_clamp` (or `clamp_blade` for both) bound the
+  client-sent point against it. All three steps, in that order, or the claim
+  quietly misses — see the class header for why the failure is silent.
+
+The rest is judgement the seams can't make for you:
+
 - **Bound the client's self-reported `interp_delay_ms` against the measured link
   before any rewind or forward-predict reads it**
   (`LagCompRewind.plausible_interp_delay_ms`). It is an anti-cheat bound, not a
   sanity check — an unbounded delay lets a modified client pick its own rewind
-  depth.
+  depth. Only a resolver that *reads* the delay needs it: pickup rewinds
+  self-view and puck-view and consults it nowhere, so it takes the parameter as
+  `_interp_delay_ms` and skips the bound.
 - **Rewind the two sides to different instants.** The claimant's own body goes to
   `LagCompRewind.self_view_time(host_ts)`; anything they were *watching* goes to
   `remote_view_time(host_ts, interp_delay)`. Never reach into raw timestamps —
@@ -44,26 +60,19 @@ they all share. **A new claim resolver must follow all of it.**
   RELEASE, not arrival** — write resolvers accordingly, and don't cache anything
   at the signal boundary. The queue is dropped on rematch reset; a claim parked
   across a faceoff is otherwise caught by the resolvers' own `pickup_locked` /
-  ghost / carrier-changed gates.
-- **Still add `LagCompRewind.self_view_catch_up(...)` to body-anchored
-  quantities** read from the self-view snapshot (position, `blade_contact_world`,
-  `top_hand_world` — the blade rides the body, so it rigid-translates with it).
-  With the queue in front it normally returns `Vector3.ZERO`; it remains the
-  backstop for the queue's `MAX_HOLD_S` clamp and for any future path that
-  reaches a resolver without being deferred. Without one of the two, the
-  claimant's own body is rewound short and the reach/continuity clamps fence an
-  honest full-extension claim against a stale body — measured at the lead servo's
-  50 ms cap on a 20 ms link, ~0.59 m against a 0.7 m contact diameter.
-- **Reach-clamp the client-sent blade to the rewound body — never `rtt/2`.** The
-  blade is client-authoritative aim, so the clamp is what bounds it. The host
-  independently reconstructs the blade from replicated inputs; the clamp is the
-  second, tighter bound on top of that.
+  ghost / carrier-changed gates. With the queue in front, `ClaimantView`'s
+  catch-up normally returns `Vector3.ZERO`; it stays the backstop for the queue's
+  `MAX_HOLD_S` clamp and for any future path reaching a resolver undeferred.
+- **Never bound the blade by `rtt/2`.** The blade is client-authoritative aim, so
+  `ClaimantView`'s two clamps are what bound it: reach against the
+  server-authoritative body, then continuity against the host's own
+  independently-reconstructed blade.
 - **Apply idempotently.** A concurrent host-side detection may already have
   resolved the same event, so re-check the carrier on the apply path or the
   effect lands twice.
 - **Reject early and completely**: puck locked, no carrier, carrier changed since
-  the claim, claim staler than `MAX_CLAIM_AGE_S`, skater missing or ghosted, or
-  the claim targets self or a teammate.
+  the claim, claim not fresh, skater missing or ghosted, or the claim targets
+  self or a teammate.
 
 There is no contest window on poke / stick-lift / hit — first valid claim wins,
 and simultaneous claims are arbitrated by RPC arrival order (the loser sees

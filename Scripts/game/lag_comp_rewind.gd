@@ -24,10 +24,19 @@ class_name LagCompRewind
 
 const _INTERP_DELAY_CLAMP_MS_MAX: float = 200.0
 
+# The outer age fence every claim resolver shares, single-sourced from the domain
+# rule the shot-release path already uses. Inside this window the per-peer stamp
+# check below is what stops timestamp shopping; this is the absolute bound, and
+# it is a helper rather than a re-exported constant so a resolver cannot hold a
+# copy of the number to drift from.
+static func claim_is_fresh(host_timestamp: float) -> bool:
+	return NetworkManager.local_time() - host_timestamp <= ShotReleaseRules.MAX_CLAIM_AGE_S
+
+
 # Claim-stamp plausibility bounds. A legit claim is stamped with the client's
 # estimated_host_time() at send and arrives ~one-way later, so its age at
 # arrival is one_way + frame alignment + NTP error. The claim resolvers'
-# MAX_CLAIM_AGE_S (200ms) bounds age absolutely, but inside that window the
+# claim_is_fresh (200ms) bounds age absolutely, but inside that window the
 # earlier stamp wins contested pickups outright — a claimant backdating
 # ~190ms would win essentially every 50/50 puck ("timestamp shopping").
 # Validating age against the host's own ping measurement for that peer
@@ -47,7 +56,7 @@ const _STAMP_NO_SAMPLE_RTT_MS: float = 150.0
 # (NetworkManager.get_peer_ping_ms); <= 0 means no sample yet, in which case a
 # conservative default RTT bounds the past age (NOT unbounded — a client that
 # never reports must not thereby win every backdated 50/50). The resolvers'
-# absolute MAX_CLAIM_AGE_S cap still holds on top of this.
+# absolute claim_is_fresh cap still holds on top of this.
 static func is_claim_stamp_plausible(now: float, host_timestamp: float, peer_rtt_ms: float) -> bool:
 	if not is_finite(host_timestamp):
 		return false

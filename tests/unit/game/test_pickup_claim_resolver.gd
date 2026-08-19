@@ -81,22 +81,6 @@ func test_clear_resets_pending_client_blade() -> void:
 	assert_eq(resolver._pending_blade_prev, Vector3.ZERO)
 
 
-# ── _peer_max_reach ───────────────────────────────────────────────────────────
-# The anti-cheat reach ceiling comes from the peer's memoized caps; a missing
-# entry returns 0.0 so LagCompRewind.clamp_client_blade no-ops (never clamps a
-# legit claim to the body when the ceiling is unknown).
-
-func test_peer_max_reach_reads_caps_entry() -> void:
-	var caps := AISkaterCaps.new()
-	caps.max_blade_reach = 2.5
-	registry.caps_by_peer[9] = caps
-	assert_almost_eq(resolver._peer_max_reach(9), 2.5, 1e-6)
-
-
-func test_peer_max_reach_zero_when_no_caps() -> void:
-	assert_eq(resolver._peer_max_reach(999), 0.0)
-
-
 # ── Claim-vs-present-time arbitration (v40) ──────────────────────────────────
 # The present-time pickup tick consults the pending claim by STAMP instead of
 # unconditionally granting and discarding it (the "host wins every 50/50"

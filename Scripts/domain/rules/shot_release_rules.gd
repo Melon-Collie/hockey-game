@@ -15,8 +15,10 @@ class_name ShotReleaseRules
 # still be able to shoot. Only the one-timer contact test can refuse a shot
 # outright, because firing one requires the swing to actually have met the puck.
 
-# Mirrors PickupClaimResolver.MAX_CLAIM_AGE_S — a release timestamp older than
-# this earns no lag-comp benefits.
+# The absolute age bound on any client-stamped claim, and the single source for
+# it: LagCompRewind.claim_is_fresh reads this constant, and the four claim
+# resolvers go through that. A release timestamp older than this earns no
+# lag-comp benefits.
 const MAX_CLAIM_AGE_S: float = 0.2
 
 # Float-rounding slack on the age boundary. 0.2 isn't representable, so
