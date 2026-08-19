@@ -1010,15 +1010,14 @@ int64_t NativeSkaterGait::apply(
 		r_knee = Math::lerp(r_knee, 0.0, kd_t);
 	}
 
-	// Commit stance.
+	// Commit stance — lean and crouch only. The per-side shoulder load-up is
+	// CheckStanceRules, off the skater's own physics-rate ease, and never a
+	// trunk channel: see the GDScript reference.
 	hit_commit_blend = Math::move_toward(hit_commit_blend,
 			hit_committed ? 1.0 : 0.0, cfg.hit_commit_pose_speed * delta);
 	const double commit_t = hit_commit_blend * (1.0 - kd_t);
 	if (commit_t > 0.001) {
 		trunk_pitch_add += -Math::deg_to_rad(cfg.hit_commit_lean_deg) * commit_t;
-		const Vector3 vel_local = basis_inv.xform(vel);
-		trunk_roll_add += Math::deg_to_rad(cfg.hit_commit_shoulder_deg) * commit_t *
-				sgn((double)vel_local.x);
 		drop += cfg.hit_commit_crouch_m * commit_t;
 	}
 

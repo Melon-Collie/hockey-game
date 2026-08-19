@@ -71,27 +71,36 @@ var hit_stamina_drain_per_sec: float = 0.5    # drained while committing a check
 # if committed checks feel too sticky.
 var hit_turn_multiplier: float = 1.0
 # Commit stance (cosmetic): while the Hit button is held the skater visibly loads
-# up for the check — leans into it, drops the leading shoulder, sinks into a
-# crouch, and (empty-handed only) pulls the stick up off the ice. A render-rate
-# trunk blend (SkaterSkatingCoordinator) off the replicated skater.hit_committed
-# plus a stick raise driven through the IK's blade_y (gameplay-inert while
-# committed), so it reads on every machine and never affects puck play. Deliberately
-# pronounced — the stance has to be unmistakable so the commitment (and the withdrawn
-# stick) is legible to the player and their opponent. Eases in/out as Ctrl is held.
-var hit_commit_lean_deg: float = 24.0         # forward trunk lean into the check
-var hit_commit_shoulder_deg: float = 19.0     # leading-shoulder drop (roll)
+# up for the check — leans into it, sinks into a crouch, drives the leading
+# shoulder forward across the chest with the near arm tucked, and (empty-handed
+# only) pulls the stick up off the ice. Three parts on two clocks: the lean and
+# crouch are a render-rate trunk blend (SkaterSkatingCoordinator), the per-side
+# shoulder load-up is physics-rate on the skater (CheckStanceRules), and the
+# stick rides the IK's blade_y. All three derive from the replicated
+# skater.hit_committed, so they read on every machine, and all three are
+# gameplay-inert while committed. Deliberately pronounced — the commitment (and
+# the withdrawn stick) has to be legible to the player and their opponent.
+#
+# The lean is deliberately the smallest of the three: past roughly 20° a skater
+# reads as reaching for something rather than coiling behind a shoulder, so the
+# pitch sets the attitude and the shoulder carries the read.
+var hit_commit_lean_deg: float = 14.0         # forward trunk lean into the check
 var hit_commit_crouch_m: float = 0.12         # sink into the checking stance
 var hit_commit_blade_lift_m: float = 0.22     # stick raise off the ice on an empty-handed commit
 # Loaded blade pose: while committing (empty-handed), the blade STOPS chasing the
-# cursor and eases to a fixed body-local "ready to hit" position — stick up (the
-# lift above) and held in front, so the stance snaps to a distinct silhouette
-# instead of a raised-but-still-tracking stick. Body-local XZ: +x is the forehand
-# side (× blade_side_sign), −z is in front of the skater (the blade-bearing
-# convention). Gameplay-inert — the blade is withdrawn from puck play while
-# committed, so this is a pure cosmetic override that eases back to cursor tracking
-# on release. Feel dials; verify the silhouette in-game.
+# cursor and eases to a body-local "ready to hit" position — stick up (the lift
+# above), held in front, and swept off the shoulder that is being thrown, so the
+# stance reads as a distinct silhouette instead of a raised-but-still-tracking
+# stick. Body-local XZ: +x is the forehand side (× blade_side_sign), −z is in
+# front of the skater (the blade-bearing convention). The sweep is signed by the
+# lead (Skater.get_check_lead), which keeps the stick out of the shoulder driving
+# into the contact and keeps the silhouette moving WITH the shoulders instead of
+# frozen at one fixed point. Gameplay-inert — the blade is withdrawn from puck
+# play while committed, so this is a pure cosmetic override that eases back to
+# cursor tracking on release. Feel dials; verify the silhouette in-game.
 var hit_commit_blade_local_x: float = 0.10    # forehand-side offset of the loaded blade
 var hit_commit_blade_local_z: float = -0.34   # how far in FRONT the loaded blade sits (−z = ahead)
+var hit_commit_blade_sweep_m: float = 0.16    # how far the loaded blade swings toward the TRAILING side
 var hit_commit_pose_speed: float = 9.0        # how fast the stance eases in/out
 # ── Body-Check Stagger Tuning ─────────────────────────────────────────────────
 # Getting checked hard staggers the victim: a temporary thrust penalty plus a

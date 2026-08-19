@@ -44,7 +44,7 @@ namespace mitts {
 	X(glide_carve_lean_deg) X(glide_hold_skew) X(glide_inside_tuck_deg) \
 	X(glide_stance) X(glide_sway_deg) X(glide_sway_hz) \
 	X(hip_align_max_deg) X(hip_align_speed) X(hit_commit_crouch_m) \
-	X(hit_commit_lean_deg) X(hit_commit_pose_speed) X(hit_commit_shoulder_deg) \
+	X(hit_commit_lean_deg) X(hit_commit_pose_speed) \
 	X(hockey_stop_blend_speed) X(hockey_stop_edge_deg) X(hockey_stop_effort) \
 	X(hockey_stop_max_yaw_deg) X(hockey_stop_min_speed) X(hockey_stop_split_deg) \
 	X(hockey_stop_stance) X(hockey_stop_trunk_roll_deg) X(intent_signal_speed) \

@@ -234,6 +234,16 @@ summing site rather than five writers. The trunk texture in particular goes onto
 the cosmetic torso, helmet and shoulder BONES, never onto the `UpperBody` node,
 whose rotation carries the blade markers and is therefore gameplay geometry.
 
+**A pose the trunk texture cannot express does not belong in the gait.** The
+texture is one pitch and one roll for the whole shell, so it is symmetric by
+construction: any "drop a shoulder" written as roll raises the other shoulder by
+exactly as much. The check-commit load-up is therefore split — the gait keeps the
+lean and the crouch, and the per-side shoulder geometry lives in
+`CheckStanceRules`, eased at PHYSICS rate on the skater
+(`Skater._update_commit_stance`) because the loaded blade position reads it and
+the blade goes on the wire. Anything else asymmetric belongs on that side of the
+line too, not as a new trunk channel.
+
 ## Build once, fill scratch
 
 A per-tick collaborator that produces a compound result should own ONE

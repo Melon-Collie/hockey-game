@@ -327,8 +327,8 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 	#    capped position rather than the raw target.
 	var capped_blade_local: Vector3 = _skater.upper_body_to_local(_smoothed_blade_world)
 	var capped_blade_xz := Vector2(capped_blade_local.x, capped_blade_local.z)
-	# Commit stance: ease the blade OFF the cursor toward a fixed body-local "loaded"
-	# pose while committing (empty-handed), so the stick freezes into a distinct
+	# Commit stance: ease the blade OFF the cursor toward a body-local "loaded"
+	# pose while committing (empty-handed), so the stick settles into a distinct
 	# ready-to-hit silhouette instead of tracking. Blended by _commit_lift_blend
 	# (0 except during a commit), so it lerps in as Ctrl is held and back to cursor
 	# tracking on release — the underlying _smoothed_blade keeps tracking beneath the
@@ -338,8 +338,11 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 	# for the exit.
 	var commit_t: float = _skater.get_commit_lift_blend()
 	if commit_t > 0.0:
+		# Swept off the shoulder being thrown: the leading shoulder is driving
+		# into the contact, and a stick planted on that side swings through it.
 		var loaded := Vector2(
-				_controller.hit_commit_blade_local_x * blade_side_sign,
+				_controller.hit_commit_blade_local_x * blade_side_sign
+						- _skater.get_check_lead() * _controller.hit_commit_blade_sweep_m,
 				_controller.hit_commit_blade_local_z)
 		capped_blade_xz = capped_blade_xz.lerp(loaded, commit_t)
 	# The board limit is re-derived for the CAPPED aim line, not reused from the
