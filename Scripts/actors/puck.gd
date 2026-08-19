@@ -21,7 +21,7 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var max_speed: float = 38.0
 @export var reattach_cooldown: float = 0.5
 @export var nudge_cooldown: float = 0.30  # short re-grab denial after a self nudge tap
-@export var ice_height: float = 0.0175  # = Puck.tscn cylinder half-height (0.035/2); disc bottom rests on y=0
+@export var ice_height: float = 0.0175  # = GameRules.PUCK_COLLISION_HALF_HEIGHT; disc bottom rests on y=0
 @export var pickup_max_speed: float = 8.0
 # RELATIVE puck-speed threshold for catch-vs-deflect: the puck's speed in the
 # RECEIVER'S frame (puck velocity − skater velocity), so a stretch pass to a

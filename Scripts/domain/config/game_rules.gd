@@ -363,15 +363,13 @@ static func _push_out_of_goalie_box(world_xz: Vector2, gpos: Vector2, rot_y: flo
 	return Vector2(gpos.x + world_dx, gpos.y + world_dz)
 
 # ── Puck ──────────────────────────────────────────────────────────────────────
-# Rest height = puck collision half-height (Puck.tscn cylinder height / 2 = 0.035/2),
-# so the disc sits with its bottom face on the ice plane (y=0). Keep in sync with
-# Puck.gd `ice_height` and the Puck.tscn mesh/shape height.
+# Rest height = the disc's half-height, so its bottom face sits on the ice plane
+# (y = 0).
 const PUCK_START_POS: Vector3 = Vector3(0, 0.0175, 0)
-# Puck collision cylinder extents (Puck.tscn CylinderShape3D: radius 0.065,
-# height 0.035). The puck is angular-locked flat (axis_lock_angular_x/z), so its
-# horizontal reach is the radius and its vertical reach the half-height — the two
-# differ and GoalDetectionRules needs both to size the goal mouth to the whole
-# disc. Keep in sync with Puck.tscn.
+# Disc extents, mirroring Assets/puck_mesh.tres (pinned by
+# test_goalie_scene_mirrors). Horizontal reach is the radius and vertical reach
+# the half-height — the two differ, and GoalDetectionRules needs both to size the
+# goal mouth to the whole disc rather than to a point.
 const PUCK_COLLISION_RADIUS: float = 0.065
 const PUCK_COLLISION_HALF_HEIGHT: float = 0.0175
 # Widest |x| a puck's CENTER can cross the goal line at without clipping the
