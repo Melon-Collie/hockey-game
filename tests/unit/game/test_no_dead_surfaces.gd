@@ -27,27 +27,6 @@ extends GutTest
 # with, where a silent one is just rot.
 
 const _ACCEPTED: Dictionary = {
-	# Half-finished extraction (issue #519): the controller re-implements each of
-	# these inline against the collaborator's fields. Whether to finish the
-	# extraction or abandon it is that work's call, not a sweep's.
-	"tick_cover_cooldown": "GoalieCreaseClear — unfinished extraction",
-	"cover_ready": "GoalieCreaseClear — unfinished extraction",
-	"accumulate_dwell": "GoalieCreaseClear — unfinished extraction",
-	"consume_clear_cooldown": "GoalieCreaseClear — unfinished extraction",
-	"begin_windup": "GoalieCreaseClear — unfinished extraction",
-	"tick_windup": "GoalieCreaseClear — unfinished extraction",
-	"tick_anim": "GoalieCreaseClear — unfinished extraction",
-	"begin_follow_through": "GoalieCreaseClear — unfinished extraction",
-	"start_clear_cooldown": "GoalieCreaseClear — unfinished extraction",
-	"windup_in_flight": "GoalieCreaseClear — unfinished extraction",
-	"cancel_windup": "GoalieCreaseClear — unfinished extraction",
-	"begin_cover": "GoalieCreaseClear — unfinished extraction",
-	"tick_cover_reach": "GoalieCreaseClear — unfinished extraction",
-	"tick_cover_hold": "GoalieCreaseClear — unfinished extraction",
-	"end_cover": "GoalieCreaseClear — unfinished extraction",
-	"begin_catch": "GoalieCreaseClear — unfinished extraction",
-	"tick_catch_hold": "GoalieCreaseClear — unfinished extraction",
-
 	# Reachable by a human, not by code.
 	"reset_all_achievements": "debug-gated dev tool, called from a debugger",
 

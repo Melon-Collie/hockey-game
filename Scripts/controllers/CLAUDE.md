@@ -23,6 +23,33 @@ execute; they never reach up. Goalie *math* is pure and lives in
 | `domain/rules/goalie_depth_solver.gd` | depth constraint composition |
 | `domain/rules/goalie_stick_rules.gd` | stick geometry and coverage |
 
+## What kills a collaborator extraction
+
+**A collaborator may accept any number of inputs written from outside. It must
+exclusively own every field it writes itself.**
+
+Measured across the goalie's own collaborators — contested means a field both the
+collaborator and the controller assign:
+
+| collaborator | caller-written fields | contested | methods that died |
+|---|---|---|---|
+| `goalie_puck_play` | 20 | 0 | 0 of 11 |
+| `goalie_shot_reaction` | 7 | 2 | 0 of 10 |
+| `goalie_slide_behavior` | 13 | 2 | 0 of 13 |
+| `goalie_crease_clear` | 37 | 12 | 17 of 27 |
+
+`GoaliePuckPlay` takes the most caller-written fields of any of them and is
+perfectly healthy, so "the caller writes to it" is not the problem. Sharing
+ownership of one field is. Once the controller writes `_clear.cover_cooldown_timer`
+it has re-derived when to write it — the lifecycle — and the collaborator's own
+`tick_cover_cooldown` is redundant from that moment. Twelve contested fields
+produced seventeen unreachable methods, none of which failed anything.
+
+Copy `GoaliePuckPlay`'s field layout: tuning pushed at config time, geometry set
+once at setup, trip state owned outright, and an explicit "requests to the
+controller" block read after `advance()`. One per-tick entry point that takes the
+world as arguments and clears its own outputs at the top.
+
 ## Beatable realism
 
 The goalie should look and move like a real goalie while staying deliberately
