@@ -131,3 +131,24 @@ func test_puck_extents_mirror_the_mesh_resource() -> void:
 	assert_almost_eq(GameRules.PUCK_COLLISION_HALF_HEIGHT, mesh.height * 0.5, 1e-6,
 			"PUCK_COLLISION_HALF_HEIGHT must be half the drawn disc's height, so the " +
 			"disc rests with its bottom face on y = 0")
+
+
+# The chain the scene box actually feeds. GoalieBodyConfigBuilder states it in
+# prose — the standing torso bottom "stays glued to the pad-top seam at 0.86",
+# which is "body centre 1.22 minus the 0.72 Goalie.tscn torso box's half-height"
+# — and GameRules re-states it as a literal for the bot shot model, where
+# AIActionScoring uses it as the HIGH band's arrival floor: a lofted shot only
+# counts as an over-the-pads target if its arc crosses the net line above it.
+#
+# So a torso box resized in the editor should move where a bot believes it can
+# roof one. With TORSO_BOX_HEIGHT_M pinned to the scene above, asserting the
+# derivation closes that path end to end — Goalie.tscn through to the shot model.
+func test_pad_top_seam_derives_from_the_torso_box() -> void:
+	var standing_centre: Vector3 = GoalieBodyConfigBuilder.resting_body_position_for_state(
+			GoalieStateMachine.State.STANDING)
+	assert_almost_eq(GameRules.DEFAULT_GOALIE_PAD_TOP_SEAM_M,
+			standing_centre.y - GoalieAnatomy.TORSO_BOX_HEIGHT_M * 0.5, 1e-6,
+			"DEFAULT_GOALIE_PAD_TOP_SEAM_M must be the standing body centre (%.2f) " % standing_centre.y +
+			"minus half the torso box (%.2f) — resize the box in Goalie.tscn and the "
+			% GoalieAnatomy.TORSO_BOX_HEIGHT_M +
+			"bot's roofing floor has to follow, or it plans against a torso that isn't there.")
