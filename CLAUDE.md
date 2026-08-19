@@ -106,36 +106,87 @@ always in scope.
 ## Comments and documentation
 
 Comments are expensive — they are read on every visit to the file and they
-compete with code for context. Write the ones that carry information the code
-cannot.
+compete with code for context. Large stretches of this codebase are more English
+than code, which is not a sign of care — it is a sign that comments are where
+information goes when nobody decided where it belongs.
 
-**Do write:** why a non-obvious choice was made, a physical justification for a
-constant, a trap the next reader will otherwise fall into, an invariant that
-isn't locally checkable, units and frames of reference.
+### The scope test
 
-**Don't write:** what the code plainly does, changelog prose (what the code used
-to be, which lever was retired, what a past bug was — git holds that), or the
-same explanation twice in one file. A file header and its per-field comments
-should not restate each other.
+**A comment's scope must not exceed the code beneath it.** That is the whole
+rule, and it is the one that can come out *no*.
 
-**Higher-level reasoning belongs in the nearest `CLAUDE.md`, not a file header.**
-Design constitutions, cross-file architecture, and "how this subsystem thinks"
-load on demand from the area doc; a 200-line header essay is paid for by every
-reader of that file. If a comment is explaining the *system* rather than the
-*code beneath it*, move it.
+If a comment explains something larger than the lines it sits on — how a
+subsystem thinks, why two files agree, what the design philosophy is, what the
+code used to be — it is in the wrong place no matter how true or how well
+written it is. "Is this useful?" is not the test; a misplaced comment is usually
+useful, which is exactly why it accumulated. Ask instead: *is this a fact about
+the code directly below?*
 
-**Deferred work does not live in the code — it gets a GitHub issue.** No `TODO`,
-`FIXME`, `HACK`, or "NOT YET WIRED" comments. A note in a file header is invisible
-to planning, has no owner, and goes stale silently: three `TODO(per-player attrs)`
-comments sat in the tree waiting for an API (`attribute_resolver`) that was never
-built, long after the feature they were blocked on had shipped under a different
-name. File the issue with enough context to act on — mechanism, fix sketch, which
-tests move — then delete the comment.
+Passes the test — write these:
 
-What *may* stay at the call site is a present-tense statement of what the code
-does and does not model ("league default rather than the defender's own stick
-length"), because that is a fact about the code as it stands. The plan to change
-it belongs in the issue.
+- why a non-obvious choice was made **here**
+- a physical justification for a constant ("blade traverse over the interpolation
+  window, plus IK slack")
+- a trap the next reader falls into without it
+- an invariant this code relies on but cannot check locally
+- units and frames of reference
+- a present-tense statement of what the code does and does not model ("league
+  default rather than the defender's own stick length")
+
+### Where displaced information goes
+
+Four homes, and one of them is always right:
+
+| What it is | Where it goes |
+|---|---|
+| How a subsystem thinks, cross-file architecture, a design constitution | the nearest area `CLAUDE.md` |
+| "must match X", "mirrors Y", "keep in sync with Z" | a **test** that fails when they diverge |
+| Deferred work, a known gap, a fix someone should make | a **GitHub issue** — never `TODO`/`FIXME`/`HACK` |
+| What the code used to be, which lever was retired, which bug this fixed | **git** — delete it |
+
+The second row is the one most often skipped, and it is the highest-value one. A
+comment saying two things must agree is a test that was never written: it makes
+the claim, and then nothing checks it. `test_goalie_scene_mirrors.gd` and
+`test_net_geometry_mirrors.gd` are what those comments should have been.
+
+The fourth row deserves saying plainly: **narration of the past is not
+documentation.** "This used to use rtt/2", "the old signal only captured
+attacker rebound", "removed in favour of render == rewind" — every reader pays
+for that forever so that one reader might not repeat one mistake. Git holds it,
+and the commit that made the change holds *why*. If the old approach is a trap
+someone will genuinely fall back into, one present-tense sentence saying what
+must NOT be done is worth keeping ("never re-derive the lead at a call site").
+The story of how it was discovered is not.
+
+### Size is a symptom, not a limit
+
+There is no ratio to hit. But when a comment is much longer than the code it
+governs — five lines of English over one line of code — that is a reliable
+signal the information is bigger than its home, and it is a prompt to run the
+scope test rather than a violation on its own. Some one-line constants genuinely
+earn a paragraph. Most do not.
+
+Two specific shapes to delete on sight:
+
+- **Restating a name.** `# Reset the timer` over `_timer = 0.0`. GDScript is
+  already self-naming; a comment that says the identifier back is pure cost.
+- **The same explanation twice in one file.** A file header and its per-field
+  comments must not restate each other. Say it once, at the more specific site.
+
+### Prefer making the code say it
+
+Before writing an explanation, check whether the code can carry it instead: a
+named constant instead of a literal plus a comment, a named local instead of an
+expression plus a comment, an extracted function whose name is the sentence you
+were about to write. That version cannot go stale.
+
+### You own the comments on code you change
+
+This is what keeps the file from re-accumulating. When you touch a function, the
+comments around your change are yours: if one fails the scope test, move it to
+its home now — that is not scope creep, it is the same rule that says stale
+documentation gets fixed on the spot. You are not obliged to sweep the rest of
+the file.
 
 ## Layer Architecture
 
