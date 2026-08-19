@@ -11,12 +11,6 @@ const _SKATE_MAX_PITCH: float = 1.15
 
 const _BRAKE_MIN_SPEED: float = 1.5        # must be moving this fast for brake sound
 
-# No distance cutoff (Godot reads 0.0 as unlimited), matching SoundManager's world
-# pool: a far skater's stride gets quiet, never switched off. A cutoff makes an
-# event's audibility a step function of camera pull-back, which is what made the
-# rink's sounds read as inconsistent from one camera height to the next.
-const _NO_DISTANCE_CUTOFF: float = 0.0
-
 # Last skate-loop blend factor pushed to the player (see _update_skate_loop).
 # -1 forces the first write.
 const _LEVEL_EPSILON: float = 0.002
@@ -28,27 +22,20 @@ var _brake_player: AudioStreamPlayer3D = null
 
 func setup(skater: Skater) -> void:
 	_skater = skater
-	_skate_player = _make_loop_player("res://Sounds/skate_loop.ogg")
-	_brake_player = _make_oneshot_player("res://Sounds/skate_brake.wav")
+	_skate_player = _make_player("res://Sounds/skate_loop.ogg")
+	_brake_player = _make_player("res://Sounds/skate_brake.wav")
 
 
-func _make_loop_player(path: String) -> AudioStreamPlayer3D:
+# A skater's own emitters are ordinary world sounds — same SFX bus, so the SFX
+# slider governs them like everything else on the sheet, and the same falloff
+# constants, so a stride and the puck it is chasing fade together. Both are read
+# from SoundManager rather than copied: a second set of numbers here is a second
+# audible distance, which is the inconsistency this is fixing.
+func _make_player(path: String) -> AudioStreamPlayer3D:
 	var p := AudioStreamPlayer3D.new()
-	p.bus = "Master"
-	p.max_distance = _NO_DISTANCE_CUTOFF
-	p.unit_size = 5.0
-	p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
-	if ResourceLoader.exists(path):
-		p.stream = load(path)
-	add_child(p)
-	return p
-
-
-func _make_oneshot_player(path: String) -> AudioStreamPlayer3D:
-	var p := AudioStreamPlayer3D.new()
-	p.bus = "Master"
-	p.max_distance = _NO_DISTANCE_CUTOFF
-	p.unit_size = 5.0
+	p.bus = "SFX"
+	p.max_distance = SoundManager.NO_DISTANCE_CUTOFF
+	p.unit_size = SoundManager.WORLD_UNIT_SIZE
 	p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 	if ResourceLoader.exists(path):
 		p.stream = load(path)

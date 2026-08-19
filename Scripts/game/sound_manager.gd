@@ -74,34 +74,30 @@ const _SFX_3D_POOL_SIZE: int = 12
 # period buzzer can overlap.
 const _CROWD_POOL_SIZE: int = 4
 
-# 3D world-sound falloff presets, selected via set_world_audio_range. A preset is
-# only how STEEPLY a sound falls off — no preset cuts one off, see the cutoff note
-# below — so a far-side event is always at least faintly present.
+# ONE inverse-distance falloff for every world sound, at every camera, in every
+# mode — the same curve `SkaterSoundController` gives the skate loops. Two dials,
+# and neither is per-camera:
 #
-# LIVE — live play frames the puck closely (game cam ~15 m up), so the tight
-#   curve keeps events spatial without bleeding across the rink.
-# REPLAY_FAR — replay cameras parked far from the action: the offline viewer's
-#   broadcast/chase/POV/free cams and the goal replay's press-box hard cam sit
-#   ~10–38 m from the puck, where the LIVE curve leaves recorded events too
-#   quiet to carry. Widen it so the cinematic distance reads while keeping
-#   stereo cues.
-# REPLAY_NEAR — the goal replay's behind-the-net cam (~4.5–10 m from the puck).
-#   Already in the audible regime, so only a gentle lift: REPLAY_FAR's wide
-#   curve would over-amplify (the close cam would be +13 dB and blow out the
-#   money shot), while LIVE leaves it flat.
-enum AudioRange { LIVE, REPLAY_NEAR, REPLAY_FAR }
-
-const _WORLD_UNIT_SIZE: float = 6.0
-const _REPLAY_FAR_UNIT_SIZE: float = 20.0
-const _REPLAY_NEAR_UNIT_SIZE: float = 10.0
-
+# Unit size is where the curve is anchored, and it is anchored on the LIVE camera
+# because that is the shot the game is played in: the game cam frames the puck
+# from ~15 m up, so events land around -8 dB — present and clearly placed, without
+# bleeding across the rink.
+#
 # NO distance cutoff (Godot reads 0.0 as unlimited). The rink is 60 x 26 m and the
 # camera pulls back off it, so listener-to-event distances past 40 m are ordinary
 # rather than exceptional — a cutoff there silenced far-side play outright instead
-# of merely quieting it. The inverse-distance curve keeps falling on its own
-# (about -17 dB at 40 m, -21 dB at 65 m on the LIVE unit size), which is the
-# "audible but clearly over there" the cutoff was destroying.
-const _NO_DISTANCE_CUTOFF: float = 0.0
+# of merely quieting it. Unbounded, the curve keeps falling on its own (about
+# -17 dB at 40 m, -21 dB at 65 m), which is the "audible but clearly over there"
+# the cutoff was destroying.
+#
+# The cutoff is also why this used to be three presets a camera switched between:
+# with a 40 m wall in the way, the replay cams — parked 4.5-38 m out — needed
+# their own wider curves to reach past it at all. Take the wall away and the
+# widening has nothing left to do, and a level that changes when the direction
+# stays put is its own inconsistency. Replay is quieter than it was on the old
+# REPLAY_FAR preset by design: it is the distance, not a mode.
+const WORLD_UNIT_SIZE: float = 6.0
+const NO_DISTANCE_CUTOFF: float = 0.0
 
 var _streams: Dictionary = {}
 var _pool_ui: Array[AudioStreamPlayer] = []      # UI bus — hover, click
@@ -150,8 +146,8 @@ func _build_pools() -> void:
 	for i: int in _SFX_3D_POOL_SIZE:
 		var p := AudioStreamPlayer3D.new()
 		p.bus = "SFX"
-		p.max_distance = _NO_DISTANCE_CUTOFF
-		p.unit_size = _WORLD_UNIT_SIZE
+		p.max_distance = NO_DISTANCE_CUTOFF
+		p.unit_size = WORLD_UNIT_SIZE
 		p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 		add_child(p)
 		_pool_3d.append(p)
@@ -200,24 +196,6 @@ func play_world(sound: Sound, position: Vector3, volume_db: float = 0.0, pitch_v
 			p.global_position = position
 			p.play()
 			return
-
-
-# Select the 3D world-sound falloff to match the active camera distance. Replay
-# cameras sit far from the action, where the LIVE falloff leaves recorded events
-# too quiet to carry; the REPLAY_* presets lift the level while keeping
-# stereo/positional cues. Call REPLAY_FAR/NEAR on the matching camera, LIVE to
-# restore. Idempotent.
-func set_world_audio_range(audio_range: AudioRange) -> void:
-	var unit_size: float
-	match audio_range:
-		AudioRange.REPLAY_FAR:
-			unit_size = _REPLAY_FAR_UNIT_SIZE
-		AudioRange.REPLAY_NEAR:
-			unit_size = _REPLAY_NEAR_UNIT_SIZE
-		_:
-			unit_size = _WORLD_UNIT_SIZE
-	for p: AudioStreamPlayer3D in _pool_3d:
-		p.unit_size = unit_size
 
 
 # Connects hover and click sounds to a button. Call after creating each Button node.
