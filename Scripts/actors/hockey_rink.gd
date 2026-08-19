@@ -838,9 +838,9 @@ func _ad_arc_is_reserved(point: Vector2) -> bool:
 	# Rinkside furniture: the benches run along the +X boards and the penalty
 	# boxes along −X, and in each case the gap between the two halves is gate and
 	# staff area rather than a stretch of wall, so the whole span is spoken for.
-	var furniture_span: float = ArenaStands.BENCH_CENTER_Z + ArenaStands.BENCH_HALF_LEN \
+	var furniture_span: float = ArenaRinksideLayout.BENCH_CENTER_Z + ArenaRinksideLayout.BENCH_HALF_LEN \
 			if point.x > 0.0 \
-			else ArenaStands.PENALTY_BOX_CENTER_Z + ArenaStands.PENALTY_BOX_HALF_LEN
+			else ArenaRinksideLayout.PENALTY_BOX_CENTER_Z + ArenaRinksideLayout.PENALTY_BOX_HALF_LEN
 	if abs_z < furniture_span + AD_STRIPE_CLEARANCE:
 		return true
 	# Every gate is reserved explicitly rather than left to the furniture spans
@@ -859,8 +859,8 @@ func _ad_arc_is_reserved(point: Vector2) -> bool:
 func _gate_targets() -> Array[Vector2]:
 	var half_w: float = rink_width / 2.0
 	var half_l: float = rink_length / 2.0
-	var penalty_end: float = ArenaStands.PENALTY_BOX_CENTER_Z \
-			+ ArenaStands.PENALTY_BOX_HALF_LEN - GATE_WIDTH * 0.5
+	var penalty_end: float = ArenaRinksideLayout.PENALTY_BOX_CENTER_Z \
+			+ ArenaRinksideLayout.PENALTY_BOX_HALF_LEN - GATE_WIDTH * 0.5
 	return [
 		Vector2( half_w,  1.55), Vector2( half_w, -1.55),
 		Vector2(-half_w,  penalty_end), Vector2(-half_w, -penalty_end),
