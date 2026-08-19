@@ -36,6 +36,28 @@ When one fails, the question is *"did the behavior change on purpose?"* — not
 *"which assertion do I loosen?"* Re-pin the table only once you have confirmed
 the new numbers are the intended ones, and say so in the commit.
 
+## Ratchets
+
+`test_no_god_class_growth.gd` is not an assertion about behavior — it is a
+one-way gate on the *shape* of `Scripts/`: 800 lines a file, 25 public functions
+a class. Files already over those lines when it went in are grandfathered in a
+table, pinned at the size they were.
+
+When it fires it is saying one of three things, and only the first is about the
+code you just wrote:
+
+- **grew past its allowance** — split it, or bump the number. Bumping is allowed
+  and is not cheating; the ratchet exists to make growth deliberate and visible
+  in the diff, not impossible. Say why in the commit.
+- **shrank well below its allowance** — you won something. Tighten the entry so
+  the space cannot be re-spent quietly. This is the click that makes it a
+  ratchet rather than a cap.
+- **is now under the limit** — the file graduated; delete its entry.
+
+The same shape suits any "this must not get worse" property. What makes it work
+is that the grandfather table is the backlog written down: un-growable rather
+than invisible.
+
 ## Netcode harnesses
 
 Three deterministic simulations under `tests/harness/`. None is a physics
