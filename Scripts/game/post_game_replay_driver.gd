@@ -59,14 +59,11 @@ var _clip_end_ts: float = 0.0
 var _virtual_clock: float = 0.0
 var _gap_elapsed: float = -1.0  # >= 0 while holding the final frame between clips
 
-# Bracket cache — re-decoded only when the virtual clock crosses a frame boundary.
-var _cached_from_snap: Dictionary = {}
-var _cached_to_snap: Dictionary = {}
-var _cached_from_idx: int = -1
-var _cached_to_idx: int = -1
+# Which recorded frames bracket the virtual clock, decoded once per bracket.
+var _cursor := ReplayFrameCursor.new()
 
 var _cam: SpectatorCamera = null
-var _saved_goalie_processing: Array[bool] = []
+var _sim_hold := ReplayLiveSimHold.new()
 
 
 func setup(codec: WorldStateCodec,
@@ -79,6 +76,7 @@ func setup(codec: WorldStateCodec,
 	_goalie_controllers = []
 	for gc: GoalieController in goalie_controllers:
 		_goalie_controllers.append(gc)
+	_cursor.bind(codec)
 
 
 func start(clips: Array[Dictionary]) -> void:
@@ -89,7 +87,7 @@ func start(clips: Array[Dictionary]) -> void:
 
 	_clips = clips
 	_active = true
-	_freeze_live_simulation()
+	_sim_hold.grab(_puck, _goalie_controllers)
 
 	# Single broadcast hard cam, following the puck along the rail. activate()
 	# saves the current camera and restores it in deactivate() on stop().
@@ -127,16 +125,13 @@ func stop() -> void:
 		NetworkManager.stop_replay_mode()
 	else:
 		NetworkManager.set_replay_mode_local(false)
-	_unfreeze_live_simulation()
+	_sim_hold.release()
 
 	_clips = []
 	_clip_idx = -1
 	_frames = []
 	_timestamps = []
-	_cached_from_snap = {}
-	_cached_to_snap = {}
-	_cached_from_idx = -1
-	_cached_to_idx = -1
+	_cursor.reset()
 	_gap_elapsed = -1.0
 	reel_stopped.emit()
 
@@ -152,8 +147,7 @@ func _begin_clip(idx: int) -> void:
 	_timestamps = clip.timestamps
 	_virtual_clock = float(clip.start_ts)
 	_clip_end_ts = float(clip.end_ts)
-	_cached_from_idx = -1
-	_cached_to_idx = -1
+	_cursor.reset()
 	_gap_elapsed = -1.0
 	NetworkManager.set_replay_clock(_virtual_clock)
 	# Re-anchor the cam so the puck teleporting to the next clip's start doesn't
@@ -194,54 +188,9 @@ func _process(delta: float) -> void:
 
 	NetworkManager.set_replay_clock(_virtual_clock)
 
-	var idx: int = _find_frame_idx(_virtual_clock)
-	if idx < 0:
+	if not _cursor.seek(_frames, _timestamps, _virtual_clock):
 		return
-	var idx_next: int = mini(idx + 1, _frames.size() - 1)
-
-	# Re-decode only when the bracket changes (every ~8.3 ms at 120 Hz).
-	if idx != _cached_from_idx or idx_next != _cached_to_idx:
-		_cached_from_snap = _codec.decode_for_replay(_frames[idx])
-		_cached_to_snap = _codec.decode_for_replay(_frames[idx_next])
-		_cached_from_idx = idx
-		_cached_to_idx = idx_next
-
-	if _cached_from_snap.is_empty():
-		return
-
-	var bracket_dt: float = _timestamps[idx_next] - _timestamps[idx]
-	var t: float = clampf((_virtual_clock - _timestamps[idx]) / bracket_dt, 0.0, 1.0) \
-			if bracket_dt > 0.0 else 0.0
 	ReplayPlaybackEngine.apply_interpolated_snapshot(
-			_cached_from_snap, _cached_to_snap, t, bracket_dt,
+			_cursor.from_snap(), _cursor.to_snap(), _cursor.alpha(), _cursor.bracket_dt(),
 			_virtual_clock - prev_clock,
 			_registry.all(), _puck, _goalie_controllers)
-
-
-func _find_frame_idx(t: float) -> int:
-	var best: int = -1
-	for i: int in _timestamps.size():
-		if _timestamps[i] <= t:
-			best = i
-		else:
-			break
-	return best
-
-
-func _freeze_live_simulation() -> void:
-	if _puck != null:
-		# See GoalReplayDriver: the hold flag parks the analytic loose-puck sim.
-		_puck.set_replay_hold(true)
-	_saved_goalie_processing.clear()
-	for gc: GoalieController in _goalie_controllers:
-		_saved_goalie_processing.append(gc.is_physics_processing())
-		gc.set_physics_process(false)
-
-
-func _unfreeze_live_simulation() -> void:
-	if _puck != null:
-		_puck.set_replay_hold(false)
-	for i: int in _goalie_controllers.size():
-		var was: bool = _saved_goalie_processing[i] if i < _saved_goalie_processing.size() else true
-		_goalie_controllers[i].set_physics_process(was)
-	_saved_goalie_processing.clear()

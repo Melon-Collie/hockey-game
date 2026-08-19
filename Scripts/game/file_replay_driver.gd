@@ -65,7 +65,7 @@ var _records: Dictionary = {}
 var _puck: Puck = null
 var _goalie_controllers: Array[GoalieController] = []
 
-# Filtered frame stream — index-aligned arrays keep _find_frame_idx hot
+# Filtered frame stream — index-aligned arrays keep the frame lookup hot
 # without the per-frame Dictionary access cost.
 var _frames: Array[PackedByteArray] = []
 var _timestamps: Array[float] = []
@@ -79,14 +79,9 @@ var _end_ts: float = 0.0
 var _paused: bool = true
 var _last_emitted_game_state: Dictionary = {}
 
-# Bracket cache — re-decoded only when virtual_clock crosses a frame boundary.
-var _cached_from_snap: Dictionary = {}
-var _cached_to_snap: Dictionary = {}
-var _cached_from_idx: int = -1
-var _cached_to_idx: int = -1
-# Forward-scan hint so _find_frame_idx stays O(1) when the clock advances
-# normally; reset on backward seek.
-var _frame_idx_hint: int = 0
+# Which frames bracket the virtual clock, decoded once per bracket. Also holds
+# the forward-scan hint, so a normally-advancing clock costs O(1) per lookup.
+var _cursor := ReplayFrameCursor.new()
 
 # Set by any backward seek; cleared by commit_drag (or by a same-call seek
 # when allow_rebuild=true). The viewer's roster rebuild queue_frees and
@@ -110,6 +105,7 @@ func setup(codec: WorldStateCodec,
 		goalie_controllers: Array,
 		decoded_frames: Array) -> void:
 	_codec = codec
+	_cursor.bind(codec)
 	_records = records
 	_puck = puck
 	_goalie_controllers = []
@@ -178,7 +174,7 @@ func seek(t: float) -> void:
 func step_frame(direction: int) -> void:
 	if _frames.is_empty() or direction == 0:
 		return
-	var idx: int = _find_frame_idx(_virtual_clock)
+	var idx: int = _cursor.find_index(_timestamps, _virtual_clock)
 	if idx < 0:
 		idx = 0
 	# Backward from an in-bracket clock should land on the bracket's FROM
@@ -211,12 +207,11 @@ func commit_drag() -> void:
 func _seek_internal(t: float, allow_rebuild: bool) -> void:
 	var was_backward: bool = t < _virtual_clock
 	if was_backward:
-		_frame_idx_hint = 0  # backward seek invalidates forward scan hint
+		_cursor.reset()  # backward seek invalidates the cached bracket and scan hint
 		_has_pending_rebuild = true
 	_pending_discontinuity = true
 	_virtual_clock = t
-	_cached_from_idx = -1
-	_cached_to_idx = -1
+	_cursor.reset()
 	_next_event_idx = _find_next_event_idx(_virtual_clock)
 	# Refresh the visible frame immediately when paused so the world snaps
 	# to the new clock instead of waiting for the next play. _process is
@@ -291,7 +286,7 @@ func _process(delta: float) -> void:
 # events are still surfaced because _emit_due_events catches anything
 # with host_ts <= the new virtual_clock on the next tick.
 func _skip_recording_gaps() -> void:
-	var idx: int = _find_frame_idx(_virtual_clock)
+	var idx: int = _cursor.find_index(_timestamps, _virtual_clock)
 	if idx < 0 or idx >= _frames.size() - 1:
 		return
 	var bracket_dt: float = _timestamps[idx + 1] - _timestamps[idx]
@@ -312,42 +307,34 @@ func _apply_current_frame(sim_delta: float) -> void:
 	# Mirrors GoalReplayDriver._process. Set every apply (rather than once
 	# per _process tick) so seek-while-paused keeps the clock fresh too.
 	NetworkManager.set_replay_clock(_virtual_clock)
-	var idx: int = _find_frame_idx(_virtual_clock)
-	if idx < 0:
+	if not _cursor.seek(_frames, _timestamps, _virtual_clock):
 		return
-	var idx_next: int = mini(idx + 1, _frames.size() - 1)
-	if idx != _cached_from_idx or idx_next != _cached_to_idx:
-		_cached_from_snap = _codec.decode_for_replay(_frames[idx])
-		_cached_to_snap = _codec.decode_for_replay(_frames[idx_next])
-		_cached_from_idx = idx
-		_cached_to_idx = idx_next
+	if _cursor.bracket_changed():
 		# Advancing onto a FACEOFF_PREP keyframe is the moment the world
 		# teleports to the faceoff layout — a discontinuity even when the
 		# preceding bracket was short (whistle faceoffs: the reset frame
 		# arrives one normal ~33 ms bracket after the last live frame, so
 		# the gap-skip path above never sees it).
-		var from_phase: int = _snap_phase(_cached_from_snap)
+		var from_phase: int = _snap_phase(_cursor.from_snap())
 		if from_phase == GamePhase.Phase.FACEOFF_PREP \
 				and _last_from_phase != GamePhase.Phase.FACEOFF_PREP:
 			_pending_discontinuity = true
 		_last_from_phase = from_phase
-	if _cached_from_snap.is_empty():
-		return
-	var bracket_dt: float = _timestamps[idx_next] - _timestamps[idx]
-	var t: float
-	if bracket_dt > _GAP_THRESHOLD_S:
-		t = 0.0  # hold FROM across the gap; snap when clock reaches TO
-	elif bracket_dt > 0.0 and not _is_faceoff_reset_bracket():
-		t = clampf((_virtual_clock - _timestamps[idx]) / bracket_dt, 0.0, 1.0)
-	else:
-		t = 0.0
+	# The viewer's own tween policy, which is why it doesn't take the cursor's
+	# alpha: hold the FROM frame across a recording gap or a faceoff reset and
+	# let the jump land as a clean cut, rather than sweeping every actor across
+	# the rink in one bracket.
+	var bracket_dt: float = _cursor.bracket_dt()
+	var t: float = 0.0
+	if bracket_dt > 0.0 and bracket_dt <= _GAP_THRESHOLD_S and not _is_faceoff_reset_bracket():
+		t = _cursor.alpha()
 	ReplayPlaybackEngine.apply_interpolated_snapshot(
-			_cached_from_snap, _cached_to_snap, t, bracket_dt, sim_delta,
+			_cursor.from_snap(), _cursor.to_snap(), t, bracket_dt, sim_delta,
 			_records, _puck, _goalie_controllers)
 	# Emit game-state changes (score / phase / period / clock) so the viewer
 	# HUD doesn't have to poll every tick. Compare-and-emit avoids spamming
 	# subscribers with the same dict every frame.
-	var gs: Dictionary = _cached_to_snap.get("game_state", {})
+	var gs: Dictionary = _cursor.to_snap().get("game_state", {})
 	if not gs.is_empty() and gs != _last_emitted_game_state:
 		_last_emitted_game_state = gs
 		game_state_changed.emit(gs)
@@ -362,9 +349,9 @@ func _apply_current_frame(sim_delta: float) -> void:
 # FROM frame instead and let the reset land as a clean cut when the clock
 # reaches the keyframe.
 func _is_faceoff_reset_bracket() -> bool:
-	var to_phase: int = _snap_phase(_cached_to_snap)
+	var to_phase: int = _snap_phase(_cursor.to_snap())
 	return to_phase == GamePhase.Phase.FACEOFF_PREP \
-			and _snap_phase(_cached_from_snap) != to_phase
+			and _snap_phase(_cursor.from_snap()) != to_phase
 
 
 static func _snap_phase(snap: Dictionary) -> int:
@@ -378,25 +365,6 @@ func _emit_due_events() -> void:
 	while _next_event_idx < _events.size() and _events[_next_event_idx].host_ts <= _virtual_clock:
 		event_emitted.emit(_events[_next_event_idx].data)
 		_next_event_idx += 1
-
-
-# Linear scan starting from the last successful index. When the clock
-# advances normally this is O(1) per frame; backward seeks reset the hint
-# so a worst-case seek-to-start is still O(N).
-func _find_frame_idx(t: float) -> int:
-	if _frame_idx_hint > 0 and _timestamps[_frame_idx_hint] > t:
-		_frame_idx_hint = 0
-	var best: int = -1
-	for i: int in range(_frame_idx_hint, _timestamps.size()):
-		if _timestamps[i] <= t:
-			best = i
-		else:
-			break
-	if best >= 0:
-		_frame_idx_hint = best
-	return best
-
-
 func _find_next_event_idx(t: float) -> int:
 	for i: int in _events.size():
 		if _events[i].host_ts > t:

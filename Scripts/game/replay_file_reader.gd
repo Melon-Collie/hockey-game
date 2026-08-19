@@ -100,7 +100,7 @@ static func read(path: String) -> Dictionary:
 			payload = file.get_buffer(payload_size)
 		else:
 			payload = PackedByteArray()
-		# Defensive monotone check: FileReplayDriver._find_frame_idx assumes
+		# Defensive monotone check: ReplayFrameCursor.find_index assumes
 		# timestamps increase. A maliciously-crafted or corrupted file with
 		# out-of-order frames would silently break seek behavior. Warn once
 		# so the issue surfaces in the log.
