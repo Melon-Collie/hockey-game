@@ -258,26 +258,43 @@ white on the first offside and stay white — which is not a hypothetical. It is
 the exact bug the stick shaft already hit, and the twelve-line comment above the
 stick branch in `apply_ghost` is its record.
 
-So the material swap is not one line. It requires either:
-
-- an `alpha` uniform on the flow shader plus a ShaderMaterial branch in the ghost
-  path, alongside the stick's existing one; or better,
-- generalising that branch, since ghosting now has two ShaderMaterial parts and a
-  third would be a third copy of the same special case.
+So the material swap is not one line. The fix follows the stick's own precedent:
+**swap the material while ghosted** rather than fade through an `alpha` uniform.
+A shader that writes `ALPHA` renders on the transparent path for every skater on
+every frame, to buy a fade that is on screen during offside replays only — so the
+ghost gets a translucent `StandardMaterial3D` carrying the same jersey texture,
+and un-ghosting restores the shader material.
 
 Budget this as the real work in Part B. The displacement itself is easy; the
-ghost path is where it bites.
+ghost path is where it bites. `test_jersey_flow.gd` pins it, and that assertion
+was checked against the unfixed code: without the branch, un-ghosting leaves a
+bare `StandardMaterial3D` on the torso and the test fails exactly as designed.
 
 ### B.4 The motion model
 
-Per skater per frame: body-local acceleration, body-local velocity, yaw rate.
-Hem displacement opposes acceleration, ramped from zero at the waist to maximum
-at the hem, through a first-order lag filter so the cloth overshoots and settles
-rather than snapping to a target.
+The model is a **lag**, and it needs no acceleration term at all — which is
+better than the acceleration formulation, because differencing a physics-rate
+velocity at render rate is noisy. Carry one filtered velocity, `flow_lag`, that
+chases the body's actual body-local velocity; the *gap* between them is the
+swing:
 
-The filter has state, so it is integrated **on the CPU** — one `lerp` per skater
-per frame — and pushed as a single packed uniform, `vec4(flow_local, yaw_rate)`.
-One `set_shader_parameter` per skater per frame, not three.
+```
+flow_lag = lerp(flow_lag, local_velocity, RESPONSE * delta)
+swing    = -(local_velocity - flow_lag) * GAIN     # capped
+```
+
+Accelerating opens the gap forward, so the skirt trails. Stopping reverses it, so
+the skirt swings out ahead and settles as the lag closes. The overshoot is the
+filter's, so nothing integrates and nothing accumulates — a dropped frame or a
+teleport cannot leave the hem wound up.
+
+The filter has state, so it lives **on the CPU** — one `lerp` per skater per
+frame — and is pushed as a single packed `vec4`. One `set_shader_parameter` per
+skater per frame, not three, and none at all while the cloth is at rest.
+
+The ramp is expressed in the lathe's **V coordinate**, not in vertex Y. V is
+skinning-independent and is the same coordinate the painters use, so the shader
+never has to assume where in the pipeline Godot applies the bone pose.
 
 Two placement rules from CLAUDE.md apply and are both satisfied by keeping the
 model **body-local**:

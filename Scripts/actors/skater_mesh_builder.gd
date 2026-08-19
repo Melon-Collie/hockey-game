@@ -27,19 +27,31 @@ extends RefCounted
 # spanning the same envelope as the primitive each replaces (heights and radii
 # from Scenes/Skater.tscn) so nothing pokes through ice, boards, or gear that
 # was tuned around the primitive silhouettes.
+# Stations below the waist are denser than the silhouette needs, because
+# jersey_flow.gdshader swings the skirt and a swing needs rings to bend through.
+# The three marked ones sit exactly on the segments between their neighbours, so
+# the surface is unchanged — and, load-bearing, so is every other station's UV:
+# _build_lathe derives V from a station's own height, so an inserted ring lands
+# at the V its height implies and leaves the stripe, name and number where
+# JerseyDecal painted them. test_torso_profile_uvs.gd holds that.
 const _TORSO_PROFILE: Array[Vector2] = [
 	Vector2(0.275, 0.158),   # trap line — stays wide so the deltoid caps emerge from it
 	Vector2(0.245, 0.198),
 	Vector2(0.130, 0.208),   # chest
-	Vector2(0.000, 0.196),   # waist tuck
+	Vector2(0.000, 0.196),   # waist tuck — the hem swing ramps in from here down
+	Vector2(-0.075, 0.200),  # swing station
 	Vector2(-0.150, 0.204),
+	Vector2(-0.190, 0.209),  # swing station
 	Vector2(-0.230, 0.214),
+	Vector2(-0.253, 0.218),  # swing station
 	Vector2(-0.275, 0.222),  # jersey hem flare
 ]
 # Rear (+Z is the back) shift per _TORSO_PROFILE ring — the hockey-butt sway:
 # the seat builds through the lower back and peaks at the hem that drapes
 # over it, while the chest rings stay centered so the belly keeps its line.
-const _TORSO_REAR_SWAY: Array[float] = [0.0, 0.0, 0.0, 0.006, 0.018, 0.028, 0.032]
+const _TORSO_REAR_SWAY: Array[float] = [
+	0.0, 0.0, 0.0, 0.006, 0.012, 0.018, 0.023, 0.028, 0.030, 0.032,
+]
 const _THIGH_PROFILE: Array[Vector2] = [
 	Vector2(0.150, 0.142),
 	Vector2(0.050, 0.139),

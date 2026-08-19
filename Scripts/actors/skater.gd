@@ -864,6 +864,11 @@ func _process(delta: float) -> void:
 			update_stick_mesh()
 			update_arm_mesh()
 			update_bottom_arm_mesh()
+		# Jersey hem swing: one filter step and, while the cloth is off its
+		# resting pose, one uniform write. Velocity-driven rather than
+		# marker-driven, so it sits outside the dirty-flag rebuild above — a
+		# skater gliding in a fixed pose still has a hem that trails.
+		_uniform.update_jersey_flow(delta)
 	_update_stick_flex(delta)
 	# World HUD (ring, name, chevrons, beacon) at RENDER rate: ~10 top_level node
 	# transforms per skater that nothing reads back and no gameplay depends on,
