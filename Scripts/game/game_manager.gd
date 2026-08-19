@@ -3553,11 +3553,16 @@ func _host_release_one_timer(direction: Vector3, power: float, skater: Skater,
 
 
 # Fires a remote human's authoritative shot on the host. Called only from
-# _on_remote_derived_release (the input-stream release) — there is no shot RPC. The
-# direction/power are host-derived; origin is the host's live blade; rtt/interp_delay
-# drive the goalie lag-comp rewind. The carrier guard + sanitize/clamp stay as
-# defense-in-depth even though the host now sources all the params itself.
-func _fire_remote_shot(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float, client_origin: Vector3) -> void:
+# _on_remote_derived_release (the input-stream release) — there is no shot RPC.
+# Every parameter is host-derived; rtt/interp_delay drive the goalie lag-comp
+# rewind. The carrier guard and the sanitize/clamp calls stay as defense-in-depth
+# even though nothing here is client-supplied.
+#
+# The fire POINT is not a parameter: puck.release() seats the puck itself, and it
+# is the only code that knows a slapper's puck sits on its ice pin rather than at
+# the blade lifted over the shoulder. Never reposition the puck after release() —
+# see the note there.
+func _fire_remote_shot(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int, host_timestamp: float, rtt_ms: float, interp_delay_ms: float) -> void:
 	# Sender must be the current carrier on the host.
 	# A `puck.carrier == null` here means a different code path already released the
 	# puck; ignore the duplicate. The shot sound stays below the validation.
@@ -3605,19 +3610,6 @@ func _fire_remote_shot(direction: Vector3, power: float, is_slapper: bool, shoot
 			gc.set_pending_reaction_back_date(release_back_date)
 		var saved_goalie_positions: Array[Vector3] = []
 		var saved_goalie_rotations: Array[float] = []
-		var rewound_origin: Vector3 = Vector3.ZERO
-		var have_rewound_origin: bool = false
-		var origin_anchor: PlayerRecord = _registry.get_record(shooter_peer_id)
-		if rtt_ms > 0.0 and origin_anchor != null and origin_anchor.skater != null:
-			# Shot ORIGIN. The only caller passes the host's OWN blade contact at
-			# the replayed release tick, so nothing here is client-supplied;
-			# clamp_origin survives as defense-in-depth on the one path that still
-			# takes an explicit origin (reach-bounded against the shooter's
-			# host-live body, which is stable while the blade is swinging). This is
-			# the authoritative fire point — the host simulates forward from here,
-			# with no release-time advance.
-			rewound_origin = ShotReleaseRules.clamp_origin(client_origin, origin_anchor.skater.global_position)
-			have_rewound_origin = true
 		if _state_buffer_manager != null and _state_buffer_manager.is_ready() and NetworkManager.is_real_peer(shooter_peer_id) and rtt_ms > 0.0 \
 				and ShotReleaseRules.is_timestamp_fresh(NetworkManager.estimated_host_time(), host_timestamp):
 			# Goalie is REMOTE-view from the shooter — the shooter saw the goalie at
@@ -3636,17 +3628,6 @@ func _fire_remote_shot(direction: Vector3, power: float, is_slapper: bool, shoot
 					gc.goalie.set_goalie_position(gs.position_x, gs.position_z)
 					gc.goalie.set_goalie_rotation_y(gs.rotation_y)
 		puck.release(direction, power)
-		# Reposition to the (client-sent, clamped) origin — no forward advance. The
-		# host is authoritative and simulates forward from here; the shooter
-		# reconciles its prediction to this. puck.release() snaps global_position to
-		# ex_carrier.get_blade_contact_global() (carrier is still set at call time),
-		# so this must run AFTER release(). Rewind only the horizontal origin —
-		# release() set y for the elevation launch (ice_height + lift), keep it.
-		if have_rewound_origin:
-			var origin: Vector3 = puck.get_puck_position()
-			origin.x = rewound_origin.x
-			origin.z = rewound_origin.z
-			puck.set_puck_position(origin)
 		_note_shot_trajectory()
 		if not saved_goalie_positions.is_empty():
 			for i: int in goalie_controllers.size():
@@ -3658,10 +3639,10 @@ func _fire_remote_shot(direction: Vector3, power: float, is_slapper: bool, shoot
 
 # Host-authoritative remote shot. The host's RemoteController reached the shooter's
 # release input and computed its OWN dir/power via _release_wrister, emitting
-# puck_release_requested. Fire the authoritative puck from that — host-derived params,
-# the host's LIVE blade as origin (no client origin), the release input's host_timestamp
-# and an rtt-derived interp_delay for the goalie rewind. This is the only path that
-# fires a remote human's shot (no shot RPC).
+# puck_release_requested. Fire the authoritative puck from that — host-derived
+# params, the release input's host_timestamp, and an rtt-derived interp_delay for
+# the goalie rewind. This is the only path that fires a remote human's shot (no
+# shot RPC).
 func _on_remote_derived_release(direction: Vector3, power: float, is_slapper: bool, shooter_peer_id: int) -> void:
 	if not NetworkManager.is_host:
 		return
@@ -3672,9 +3653,6 @@ func _on_remote_derived_release(direction: Vector3, power: float, is_slapper: bo
 		return
 	if _registry.resolve_peer_id(puck.carrier) != shooter_peer_id:
 		return
-	# Origin: the host's authoritative blade contact at the release tick (not a
-	# client-sent point).
-	var origin: Vector3 = record.skater.get_blade_contact_global()
 	# Timestamp: the instant the SHOOTER perceived the release at, which is one
 	# input lead before the tick the host replays it on — the client applies an
 	# input immediately and stamps it a lead ahead, and the host holds it until
@@ -3693,7 +3671,7 @@ func _on_remote_derived_release(direction: Vector3, power: float, is_slapper: bo
 	var interp_delay_ms: float = clampf(
 			rtt_ms * 0.5 + 1000.0 / float(Constants.STATE_RATE), 16.0, 200.0)
 	_fire_remote_shot(
-			direction, power, is_slapper, shooter_peer_id, release_ts, rtt_ms, interp_delay_ms, origin)
+			direction, power, is_slapper, shooter_peer_id, release_ts, rtt_ms, interp_delay_ms)
 
 
 func _start_pending_shot_from_carrier() -> void:
