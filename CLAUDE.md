@@ -48,7 +48,12 @@ for explicit confirmation before pushing.
 user, not Claude.** Godot's text formats are error-prone to edit when they carry
 node unique IDs, sub-resource references, or editor-enforced property ordering —
 multi-node scenes, themes, shader materials, animations. Describe the change and
-let the user make it in the editor. Trivial single-resource `.tres` files
+let the user make it in the editor. **Deleting a property line from a node block
+is the exception**: it touches no unique ID, no sub-resource reference and no
+ordering, so it is safe to do directly. Prove it is inert first — instantiate the
+scene headless and check the property already equals the code default — then
+reload the scene to confirm it still parses. Adding a node, a property or a
+resource is still an editor job. Trivial single-resource `.tres` files
 (`PhysicsMaterial`, simple `StandardMaterial3D`) are safe to author directly —
 3–5 lines, no cross-references; the UID line is optional.
 

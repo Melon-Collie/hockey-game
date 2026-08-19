@@ -19,9 +19,11 @@ extends GutTest
 # not script state and are not the target — the check only fires on names the
 # script itself declares.
 #
-# `.tscn` files are edited by the user in the Godot editor, not from here, so
-# `_ACCEPTED` carries what is still outstanding. Each entry is a decision
-# someone can argue with; an unlisted one is rot.
+# An override that is provably inert — the property already equals the code
+# default on a fresh instance — can be deleted from the `.tscn` directly, since
+# removing a property line touches no unique ID or sub-resource reference. What
+# lands in `_ACCEPTED` is the rest: an override the scene genuinely has to own,
+# for a reason someone can argue with. An unlisted one is rot.
 
 # "scene.tscn/node/property" -> why it is still there.
 const _ACCEPTED: Dictionary = {
@@ -32,20 +34,6 @@ const _ACCEPTED: Dictionary = {
 	# needs a mechanism first (the arena assigning it, or the goal reading its
 	# end from the rink), which is a design call, not a cleanup.
 	"RinkArena.tscn/GoalTop/facing": "the only thing telling the two nets apart",
-
-	# Inert cruft: 37 of puck.gd's exports serialised with a null value, which
-	# Godot writes when a scene holds a slot for a property but no value. They
-	# set nothing. Delete them in the editor and drop this entry.
-	"Puck.tscn/Puck/*": "37 null-valued exports, inert, pending an editor pass",
-
-	# Redundant as of this commit: hockey_rink.gd's code defaults were changed to
-	# the values the scene was already imposing, so deleting these three in the
-	# editor changes nothing on screen. They are the reason this test exists —
-	# the source said the ice was Color(0.84, 0.91, 1.0) while every frame drew
-	# the scene's value instead. Delete them and drop these entries.
-	"RinkArena.tscn/Rink/ice_color": "now equals the code default; delete in the editor",
-	"RinkArena.tscn/Rink/ice_fog_color": "now equals the code default; delete in the editor",
-	"RinkArena.tscn/Rink/ice_roughness_head_on": "now equals the code default; delete in the editor",
 }
 
 
@@ -110,8 +98,7 @@ func test_no_scene_sets_a_script_property() -> void:
 	var found: Dictionary = _overrides()
 	var unlisted: int = 0
 	for key: String in found:
-		var wildcard: String = "%s/*" % key.substr(0, key.rfind("/"))
-		if _ACCEPTED.has(key) or _ACCEPTED.has(wildcard):
+		if _ACCEPTED.has(key):
 			continue
 		unlisted += 1
 		fail_test(("`%s` is set in a scene to `%s`. The value in the source is then " +

@@ -39,9 +39,6 @@ environment = SubResource("Environment_rxg2q")
 
 [node name="Rink" type="Node3D" parent="." unique_id=450337757]
 script = ExtResource("3_ypjup")
-ice_color = Color(0.92941177, 0.9490196, 0.972549, 1)
-ice_fog_color = Color(0.7490196, 0.80784315, 0.8862745, 1)
-ice_roughness_head_on = 0.35
 
 [node name="GoalBottom" type="Node3D" parent="." unique_id=1191244239]
 script = ExtResource("4_ma1gh")

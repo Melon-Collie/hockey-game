@@ -110,8 +110,10 @@ screen — it uppercases the button's current text, so call it **after** setting
 
 ## Scene files
 
-`.tscn` files and complex `.tres` resources are edited by the user in the Godot
-editor, not by Claude. Describe the change instead of authoring it.
+`.tscn` files and complex `.tres` resources are authored by the user in the Godot
+editor, not by Claude — describe the change instead. Deleting a property line
+from a node block is the one exception; the root `CLAUDE.md` has what must be
+proven first.
 
 ## Cameras run on the render clock
 
