@@ -57,8 +57,8 @@ resource is still an editor job. Trivial single-resource `.tres` files
 (`PhysicsMaterial`, simple `StandardMaterial3D`) are safe to author directly —
 3–5 lines, no cross-references; the UID line is optional.
 
-**You can run the GUT test suite headless, and you can render the arena bowl
-offscreen; you cannot run the game.** Use
+**You can run the GUT test suite headless, and you can render both the arena bowl
+and the skater rig offscreen; you cannot run the game.** Use
 `.claude/hooks/run-gut.sh` (wraps `godot --headless -s res://addons/gut/gut_cmdln.gd`,
 honoring `.gutconfig.json`). Pass `gut_cmdln` flags through, e.g.
 `-gdir=res://tests/unit/state`.
@@ -81,6 +81,22 @@ test can make. It covers the stands only, not a live match.
 MultiMesh's declared `custom_aabb` against the geometry it must contain — the
 check for a suspected mis-cull, and one only a real renderer can make (instance
 transforms read back empty under `--headless`).
+
+**To see a POSE, render it too.** `.claude/hooks/render-poses.sh [--baseline]`
+drives a real `Skater` + `SkaterController` through a list of held poses (the
+gait, an arm-IK reach at its ROM rim, both shot wind-ups and follow-throughs,
+the block, the check commit) and pixel-diffs the set against a recorded
+baseline; pose list and framing in `tools/pose_capture.gd`. Same xvfb/software-GL
+constraint as the arena, and the same argument: articulation is the thing a
+display-less test cannot assert. `tools/skater_matrix.gd` is its sibling for
+proportions and paint across builds — one static pose, five bodies.
+
+A render answers *how it reads*; it does not answer *whether two placements
+agree*. When the question is the second one — does the pad still sit on the arm,
+does the mirrored side land where the near side does — measure it in a test
+(`tests/unit/actors/test_check_stance_rig.gd` builds the live rig and compares
+the two code paths' numbers). Eyeballing a 384 px tile is how a 4 cm
+disagreement gets called fine.
 
 Run the suite after touching domain code and report results. **AI perf changes
 also run the benchmarks** (`bash .claude/hooks/run-gut.sh -gdir=res://benchmarks`
