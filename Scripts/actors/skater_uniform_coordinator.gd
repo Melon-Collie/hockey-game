@@ -109,7 +109,7 @@ func _create_jersey_viewport() -> void:
 
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = _jersey_viewport.get_texture()
-	mat.roughness = _ROUGH_CLOTH
+	mat.roughness = UniformPaint.ROUGH_CLOTH
 	# uv1_offset.x = 0.25 rotates the wrap 90° around the cylinder so the
 	# texture's back-center (texel x=128) lands at the skater's +Z (back).
 	# Godot's CylinderMesh starts U=0 at +Z and increases CCW.
@@ -139,13 +139,13 @@ func _create_shoulder_viewport() -> void:
 	var tex: ViewportTexture = _shoulder_viewport.get_texture()
 	var mat_l := StandardMaterial3D.new()
 	mat_l.albedo_texture = tex
-	mat_l.roughness = _ROUGH_CLOTH
+	mat_l.roughness = UniformPaint.ROUGH_CLOTH
 	mat_l.uv1_offset = Vector3(-0.25, 0.0, 0.0)
 	BodyRim.apply(mat_l)
 	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperSurface.SHOULDER_L, mat_l)
 	var mat_r := StandardMaterial3D.new()
 	mat_r.albedo_texture = tex
-	mat_r.roughness = _ROUGH_CLOTH
+	mat_r.roughness = UniformPaint.ROUGH_CLOTH
 	mat_r.uv1_offset = Vector3(0.25, 0.0, 0.0)
 	BodyRim.apply(mat_r)
 	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperSurface.SHOULDER_R, mat_r)
@@ -185,7 +185,7 @@ func apply_uniform(colors: Dictionary) -> void:
 	# Helmet — glossy hard plastic.
 	# Shell only — the head/neck skin is its own surface of the same bone.
 	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperSurface.HELMET_SHELL,
-			_make_solid_mat(uniform.helmet, _ROUGH_HELMET))
+			UniformPaint.solid(uniform.helmet, UniformPaint.ROUGH_HELMET))
 
 	# Blade — matte black with the player's tape job riding it (palette picks
 	# resolve against colors.primary, so TEAM picks track the kit).
@@ -227,7 +227,7 @@ func apply_uniform(colors: Dictionary) -> void:
 
 	# Elbow spheres — paint as arms.lower.base so they read as the upper
 	# edge of the lower-arm cuff. (Hand spheres above already covered.)
-	var elbow_mat: StandardMaterial3D = _make_solid_mat(arms_lower.base)
+	var elbow_mat: StandardMaterial3D = UniformPaint.solid(arms_lower.base)
 	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperBone.TOP_ELBOW, elbow_mat)
 	_skater.set_upper_surface_material(
 			SkaterMeshBuilder.UpperBone.BOTTOM_ELBOW, elbow_mat.duplicate())
@@ -237,7 +237,7 @@ func apply_uniform(colors: Dictionary) -> void:
 	var pants_block: Dictionary = uniform.pants
 	_paint_pants_thigh(SkaterMeshBuilder.LegSurface.THIGH_L, pants_block, -0.25)
 	_paint_pants_thigh(SkaterMeshBuilder.LegSurface.THIGH_R, pants_block, 0.25)
-	var pants_solid: StandardMaterial3D = _make_solid_mat(pants_block.base)
+	var pants_solid: StandardMaterial3D = UniformPaint.solid(pants_block.base)
 	for surface: int in [SkaterMeshBuilder.LegSurface.HIP_L,
 			SkaterMeshBuilder.LegSurface.HIP_R,
 			SkaterMeshBuilder.LegSurface.KNEE_L,
@@ -291,7 +291,7 @@ func _rebuild_shoulder_texture() -> void:
 
 
 # Arm-vs-sock stripe scale. A stripe's `width` is a fraction of the cylinder's
-# own side length (see _make_h_stripes_texture), and jerseys author arms and
+# own side length (see UniformPaint.h_stripes), and jerseys author arms and
 # socks with the SAME fractions (data/team_colors.json — Dragonfruit/Blueberry
 # use identical arrays). But the arm bones render longer than the socks: the
 # forearm/upper-arm design length is 0.35 m (Skater.forearm_length /
@@ -312,19 +312,19 @@ const _ARM_STRIPE_SCALE: float = _SOCK_DESIGN_LEN / _FOREARM_DESIGN_LEN
 # trivially debuggable in the inspector.
 func _paint_cylinder_h(part: int, segment: Dictionary) -> void:
 	if segment.stripes.is_empty():
-		_skater.set_upper_surface_material(part, _make_solid_mat(segment.base))
+		_skater.set_upper_surface_material(part, UniformPaint.solid(segment.base))
 		return
 	var tex: ImageTexture = make_arm_stripes_texture(segment.base, segment.stripes)
-	_skater.set_upper_surface_material(part, _make_texture_material(tex))
+	_skater.set_upper_surface_material(part, UniformPaint.textured(tex))
 
 
-# Arm variant of make_h_stripes_texture: pre-shrinks the pattern about its
+# Arm variant of UniformPaint.h_stripes: pre-shrinks the pattern about its
 # center by _ARM_STRIPE_SCALE so authored fractions render at the same
 # physical band height on the longer arm bones as on the socks. Public static
-# for the same reason as make_h_stripes_texture — the lobby's bench dummies
-# wear the same arm meshes and must not re-derive the correction.
+# because the lobby's bench dummies wear the same arm meshes and must not
+# re-derive the correction.
 static func make_arm_stripes_texture(base: Color, stripes: Array[Dictionary]) -> ImageTexture:
-	return make_h_stripes_texture(
+	return UniformPaint.h_stripes(
 			base, _scale_stripes_about_center(stripes, _ARM_STRIPE_SCALE))
 
 
@@ -349,7 +349,7 @@ static func _scale_stripes_about_center(
 # U=0.5 by convention) lands on each thigh's outer face.
 func _paint_pants_thigh(surface: int, pants_block: Dictionary, u_offset: float) -> void:
 	if pants_block.stripes.is_empty():
-		_skater.set_leg_surface_material(surface, _make_solid_mat(pants_block.base))
+		_skater.set_leg_surface_material(surface, UniformPaint.solid(pants_block.base))
 		return
 	var tex: ImageTexture = _make_v_stripes_texture(pants_block.base, pants_block.stripes)
 	var mat := StandardMaterial3D.new()
@@ -361,41 +361,8 @@ func _paint_pants_thigh(surface: int, pants_block: Dictionary, u_offset: float) 
 # Returns the sock material — textured if stripes are present, solid otherwise.
 func _socks_material(socks_block: Dictionary) -> StandardMaterial3D:
 	if socks_block.stripes.is_empty():
-		return _make_solid_mat(socks_block.base)
-	return _make_texture_material(make_h_stripes_texture(socks_block.base, socks_block.stripes))
-
-
-# Builds a (4 × height_px) image of horizontal stripe bands over the
-# cylinder's side V range. Godot's CylinderMesh allocates roughly V ∈ [0, 0.5]
-# of the texture to the side surface (cap disks use [0.5, 1.0]); each stripe's
-# pos / width is normalized over that side region. Painted in array order so
-# concentric-shrink stacks (Lime, Watermelon, Pomegranate) overprint correctly.
-const _CYLINDER_SIDE_V_FRACTION: float = 0.5
-const _STRIPE_TEX_HEIGHT_PX: int = 128
-const _STRIPE_TEX_WIDTH_PX: int = 4
-
-# Public static so the lobby's bench dummies can dress in the same stripe
-# convention without duplicating the band math. `top_cap`, when a Color,
-# overpaints the cylinder's NATIVE top-cap UV region (U ∈ [0, 0.5] of the
-# caps' V half) — the dummies' stand-in for JerseyDecal's yoke, which paints
-# the equivalent region on the real torso (shifted by that material's
-# uv1_offset). Meshes whose caps are hidden (socks, arms) leave it null.
-static func make_h_stripes_texture(base: Color, stripes: Array[Dictionary],
-		top_cap: Variant = null) -> ImageTexture:
-	var img := Image.create(_STRIPE_TEX_WIDTH_PX, _STRIPE_TEX_HEIGHT_PX, false, Image.FORMAT_RGBA8)
-	img.fill(base)
-	var side_px: int = int(round(_CYLINDER_SIDE_V_FRACTION * float(_STRIPE_TEX_HEIGHT_PX)))
-	for s: Dictionary in stripes:
-		var center_px: float = float(s.pos) * float(side_px)
-		var half_px:   float = float(s.width) * float(side_px) * 0.5
-		var y0: int = clampi(int(round(center_px - half_px)), 0, side_px)
-		var y1: int = clampi(int(round(center_px + half_px)), 0, side_px)
-		if y1 > y0:
-			img.fill_rect(Rect2i(0, y0, _STRIPE_TEX_WIDTH_PX, y1 - y0), s.color)
-	if top_cap is Color:
-		img.fill_rect(Rect2i(0, side_px, _STRIPE_TEX_WIDTH_PX / 2,
-				_STRIPE_TEX_HEIGHT_PX - side_px), top_cap)
-	return ImageTexture.create_from_image(img)
+		return UniformPaint.solid(socks_block.base)
+	return UniformPaint.textured(UniformPaint.h_stripes(socks_block.base, socks_block.stripes))
 
 
 # Builds a (width_px × 4) image of vertical stripe columns. Used by pants:
@@ -405,7 +372,7 @@ static func make_h_stripes_texture(base: Color, stripes: Array[Dictionary],
 const _PANTS_TEX_WIDTH_PX: int = 128
 
 func _make_v_stripes_texture(base: Color, stripes: Array[Dictionary]) -> ImageTexture:
-	var img := Image.create(_PANTS_TEX_WIDTH_PX, _STRIPE_TEX_WIDTH_PX, false, Image.FORMAT_RGBA8)
+	var img := Image.create(_PANTS_TEX_WIDTH_PX, UniformPaint.STRIPE_TEX_WIDTH_PX, false, Image.FORMAT_RGBA8)
 	img.fill(base)
 	for s: Dictionary in stripes:
 		var center_px: float = float(s.pos) * float(_PANTS_TEX_WIDTH_PX)
@@ -413,7 +380,7 @@ func _make_v_stripes_texture(base: Color, stripes: Array[Dictionary]) -> ImageTe
 		var x0: int = clampi(int(round(center_px - half_px)), 0, _PANTS_TEX_WIDTH_PX)
 		var x1: int = clampi(int(round(center_px + half_px)), 0, _PANTS_TEX_WIDTH_PX)
 		if x1 > x0:
-			img.fill_rect(Rect2i(x0, 0, x1 - x0, _STRIPE_TEX_WIDTH_PX), s.color)
+			img.fill_rect(Rect2i(x0, 0, x1 - x0, UniformPaint.STRIPE_TEX_WIDTH_PX), s.color)
 	return ImageTexture.create_from_image(img)
 
 
@@ -421,35 +388,6 @@ func _make_v_stripes_texture(base: Color, stripes: Array[Dictionary]) -> ImageTe
 # Roughness presets so each material reads as its real surface instead of the
 # uniform default-plastic look. Metallic stays 0 everywhere (all dielectric);
 # the spread in roughness alone separates cloth / plastic / leather / composite.
-const _ROUGH_CLOTH: float = 0.9    # jersey, socks, pants, arms, gloves
-const _ROUGH_HELMET: float = 0.28  # glossy hard plastic
-const _ROUGH_SKATE: float = 0.42   # synthetic boot leather
-# (Stick shaft/blade finishes live in StickStyle / StickModelRegistry with
-# the rest of the design; the ghost stand-ins below reuse the picked model's
-# colors.)
-
-
-# Subtle rim light on every body part (BodyRim, shared with the goalie so both
-# "players" read identically) — a Fresnel edge highlight that makes the rounded
-# primitive forms read as lit volumes rather than flat blobs from the top-down
-# camera. Applied at the two material factories + the inline viewport-textured
-# mats, so it rides every part.
-func _make_texture_material(tex: Texture2D, roughness: float = _ROUGH_CLOTH) -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = tex
-	mat.roughness = roughness
-	BodyRim.apply(mat)
-	return mat
-
-
-func _make_solid_mat(color: Color, roughness: float = _ROUGH_CLOTH) -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	mat.roughness = roughness
-	BodyRim.apply(mat)
-	return mat
-
-
 func _make_stick_shaft_mat() -> ShaderMaterial:
 	# StickStyle owns the design (the picked model's paint + wordmark); the
 	# grip wrap is the player's tape job, layered here.
@@ -492,9 +430,9 @@ func _rebuild_blade() -> void:
 	_blade_tape = MeshInstance3D.new()
 	_blade_tape.name = "BladeTape"
 	_blade_tape.mesh = tape_mesh
-	_blade_tape.material_override = _make_solid_mat(
+	_blade_tape.material_override = UniformPaint.solid(
 			TapeColorRegistry.resolve(_skater.tape_config.blade_color, _team_accent),
-			_ROUGH_CLOTH)
+			UniformPaint.ROUGH_CLOTH)
 	_blade_mesh.add_child(_blade_tape)
 
 
@@ -533,13 +471,13 @@ func _repaint_skates() -> void:
 
 
 func _paint_skate_zone(zone: int, left: int, right: int) -> void:
-	var mat: StandardMaterial3D = _make_solid_mat(_skate_zone_color(zone), _ROUGH_SKATE)
+	var mat: StandardMaterial3D = UniformPaint.solid(_skate_zone_color(zone), UniformPaint.ROUGH_SKATE)
 	_skater.set_leg_surface_material(left, mat)
 	_skater.set_leg_surface_material(right, mat.duplicate())
 
 
 func _repaint_laces() -> void:
-	var lace_mat: StandardMaterial3D = _make_solid_mat(_resolve_lace_color())
+	var lace_mat: StandardMaterial3D = UniformPaint.solid(_resolve_lace_color())
 	_skater.set_leg_surface_material(
 			SkaterMeshBuilder.LegSurface.FOOT_L_LACES, lace_mat.duplicate())
 	_skater.set_leg_surface_material(
@@ -588,7 +526,7 @@ func _rebuild_stick_knob() -> void:
 	var m := MeshInstance3D.new()
 	m.name = "StickKnob"
 	m.mesh = SkaterMeshBuilder.shared_knob()
-	m.material_override = _make_solid_mat(color, _ROUGH_CLOTH)
+	m.material_override = UniformPaint.solid(color, UniformPaint.ROUGH_CLOTH)
 	_skater.stick_knob_mesh = m
 	_skater.upper_body.add_child(m)
 
@@ -598,12 +536,12 @@ func _rebuild_stick_knob() -> void:
 # surface index and its bone index coincide; the FINGERS surfaces sit outside
 # that run and are addressed as surfaces — see the UpperSurface doc block.)
 func _repaint_gloves() -> void:
-	var body_mat: StandardMaterial3D = _make_solid_mat(
+	var body_mat: StandardMaterial3D = UniformPaint.solid(
 			_glove_zone_color(GearModelRegistry.GLOVE_BODY))
 	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperBone.TOP_HAND, body_mat)
 	_skater.set_upper_surface_material(
 			SkaterMeshBuilder.UpperBone.BOTTOM_HAND, body_mat.duplicate())
-	var finger_mat: StandardMaterial3D = _make_solid_mat(
+	var finger_mat: StandardMaterial3D = UniformPaint.solid(
 			_glove_zone_color(GearModelRegistry.GLOVE_FINGERS))
 	_skater.set_upper_surface_material(
 			SkaterMeshBuilder.UpperSurface.TOP_FINGERS, finger_mat)
@@ -635,7 +573,7 @@ func _repaint_face_gear() -> void:
 # free and recreate two MeshInstance3Ds on every uniform apply and every live
 # accent refresh.)
 func _paint_glove_cuffs(gloves_color: Color) -> void:
-	var mat: StandardMaterial3D = _make_solid_mat(gloves_color)
+	var mat: StandardMaterial3D = UniformPaint.solid(gloves_color)
 	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperBone.TOP_CUFF, mat)
 	_skater.set_upper_surface_material(
 			SkaterMeshBuilder.UpperBone.BOTTOM_CUFF, mat.duplicate())
@@ -660,12 +598,12 @@ func apply_ghost(ghost: bool) -> void:
 	# rebuild the real design materials on un-ghost.
 	if ghost:
 		var model: int = _skater.gear_style.stick_model
-		var stick_ghost: StandardMaterial3D = _make_solid_mat(
+		var stick_ghost: StandardMaterial3D = UniformPaint.solid(
 				StickModelRegistry.shaft_color(model), StickStyle.SHAFT_ROUGHNESS)
 		stick_ghost.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		stick_ghost.albedo_color.a = 0.3
 		_skater.stick_mesh.material_override = stick_ghost
-		var blade_ghost: StandardMaterial3D = _make_solid_mat(
+		var blade_ghost: StandardMaterial3D = UniformPaint.solid(
 				StickModelRegistry.blade_base_color(model), 0.5)
 		blade_ghost.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		blade_ghost.albedo_color.a = 0.3

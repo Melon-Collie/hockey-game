@@ -3,7 +3,6 @@ extends Node3D
 
 const TRAIL_MIN_SPEED: float = 0.5    # minimum speed for trail emission
 const SPEED_LINE_MIN_SPEED: float = 5.5  # minimum speed for speed line effect
-const TELEPORT_THRESHOLD: float = 1.0 # skip frame if skater moved this far (reconcile/faceoff guard)
 
 # Hockey stop VFX — two-layer effect (surface marks + airborne spray) per blade side.
 const STOP_MIN_SPEED: float = 2.5        # minimum speed at trigger time
@@ -57,14 +56,12 @@ const _CHECK_PITCH_LIGHT: float = 1.10   # full check — higher, snappier
 const _CHECK_PITCH_HEAVY: float = 0.90   # hardest hits — lower, heavier thud
 
 # Blade trail — same zero-gap GPU approach as puck trail, one system per skate.
-# Two dots per trail (left/right blade) pinned to ICE_Y so marks scrape the ice surface.
+# Two dots per trail (left/right blade) pinned to IceVFX.ICE_Y so marks scrape the ice surface.
 const BLADE_TRAIL_SPACING: float = 0.05   # meters between skate mark dots
 const BLADE_TRAIL_LIFETIME: float = 1.5   # seconds each mark lingers
 const BLADE_TRAIL_AMOUNT: int = 300       # max concurrent marks per blade
 const BLADE_TRAIL_RADIUS: float = 0.025   # dot radius (smaller than puck's 0.055)
-const BLADE_TRAIL_COLOR: Color = Color(0.95, 0.93, 0.88, 0.5)
 const BLADE_X_OFFSET: float = 0.12       # emitter rest offset; per-frame the emitters ride the FOOT bones
-const ICE_Y: float = 0.005              # world Y for trail dots (just above ice)
 # A blade this far above the lower boot is airborne (recovery swing, clearance
 # step) and stops marking — matches IceScratchMap.LIFT_EPS_M so the live trail
 # and the persistent scratch break in the same places.
@@ -105,7 +102,7 @@ func _ready() -> void:
 		_blade_trail_particles.append(sub)
 
 		var emitter: GPUParticles3D = _make_blade_trail_emitter(i)
-		emitter.position = Vector3(side_x, 0.0, 0.0)  # Y updated each frame to ICE_Y
+		emitter.position = Vector3(side_x, 0.0, 0.0)  # Y updated each frame to IceVFX.ICE_Y
 		emitter.sub_emitter = NodePath("../%s" % sub_name)
 		add_child(emitter)
 		_blade_trail_emitters.append(emitter)
@@ -155,7 +152,7 @@ func _process(delta: float) -> void:
 
 	# Reconcile / faceoff teleport guard: skip emission on large position jumps
 	# so reconcile snaps don't trigger false trail marks or stop bursts.
-	if (curr_pos - _prev_pos).length() > TELEPORT_THRESHOLD:
+	if (curr_pos - _prev_pos).length() > IceVFX.TELEPORT_THRESHOLD:
 		_prev_pos = curr_pos
 		_prev_vel = curr_vel
 		_accel_fwd_avg = 0.0
@@ -191,8 +188,8 @@ func _process(delta: float) -> void:
 	# stride's trail into alternating push strokes.
 	var blade_l: Vector3 = skater.blade_mark_position(true)
 	var blade_r: Vector3 = skater.blade_mark_position(false)
-	_blade_trail_emitters[0].global_position = Vector3(blade_l.x, ICE_Y, blade_l.z)
-	_blade_trail_emitters[1].global_position = Vector3(blade_r.x, ICE_Y, blade_r.z)
+	_blade_trail_emitters[0].global_position = Vector3(blade_l.x, IceVFX.ICE_Y, blade_l.z)
+	_blade_trail_emitters[1].global_position = Vector3(blade_r.x, IceVFX.ICE_Y, blade_r.z)
 	var blade_base_y: float = minf(blade_l.y, blade_r.y)
 	var trails_on: bool = speed > TRAIL_MIN_SPEED
 	_blade_trail_emitters[0].emitting = trails_on and blade_l.y - blade_base_y < LIFT_EPS_M
@@ -347,7 +344,7 @@ func _make_blade_trail_sub_emitter(sub_name: String) -> GPUParticles3D:
 	mat.initial_velocity_min = 0.0
 	mat.initial_velocity_max = 0.0
 	mat.gravity = Vector3.ZERO
-	mat.color = BLADE_TRAIL_COLOR
+	mat.color = IceVFX.snow(0.5)  # blade marks: the faintest snow on the ice
 	var grad := Gradient.new()
 	grad.set_color(0, Color(1.0, 1.0, 1.0, 0.5))
 	grad.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
@@ -399,7 +396,7 @@ func _emit_accel_spray(skater: Skater, flat_vel: Vector3,
 	var blade: Vector3 = blade_l if use_left else blade_r
 	var backward: Vector3 = -flat_vel.normalized()
 	var world_dir: Vector3 = (backward + Vector3(0.0, 0.5, 0.0)).normalized()
-	_accel_spray_emitter.global_position = Vector3(blade.x, ICE_Y, blade.z)
+	_accel_spray_emitter.global_position = Vector3(blade.x, IceVFX.ICE_Y, blade.z)
 	_accel_spray_emitter.direction = \
 			_accel_spray_emitter.global_transform.basis.inverse() * world_dir
 	_accel_spray_emitter.emitting = true
@@ -421,7 +418,7 @@ func _make_accel_spray_emitter() -> CPUParticles3D:
 	e.gravity = Vector3(0.0, -25.0, 0.0)
 	e.scale_amount_min = 0.02
 	e.scale_amount_max = 0.045
-	e.mesh = _make_sphere_mesh(Color(0.95, 0.93, 0.88, 0.7))
+	e.mesh = IceVFX.blob(IceVFX.snow(0.7))
 	return e
 
 
@@ -441,7 +438,7 @@ func _make_stop_spray_emitter() -> CPUParticles3D:
 	e.gravity = Vector3(0.0, -25.0, 0.0)
 	e.scale_amount_min = 0.03
 	e.scale_amount_max = 0.06
-	e.mesh = _make_sphere_mesh(Color(0.95, 0.93, 0.88, 0.85))
+	e.mesh = IceVFX.blob(IceVFX.snow(0.85))
 	return e
 
 func _make_speed_lines_emitter() -> CPUParticles3D:
@@ -460,7 +457,7 @@ func _make_speed_lines_emitter() -> CPUParticles3D:
 	e.gravity = Vector3.ZERO
 	e.scale_amount_min = 0.015
 	e.scale_amount_max = 0.03
-	e.mesh = _make_sphere_mesh(Color(0.85, 0.92, 1.0, 0.5))
+	e.mesh = IceVFX.blob(Color(0.85, 0.92, 1.0, 0.5))
 	return e
 
 func _make_body_check_emitter() -> CPUParticles3D:
@@ -479,18 +476,5 @@ func _make_body_check_emitter() -> CPUParticles3D:
 	e.gravity = Vector3(0.0, -25.0, 0.0)
 	e.scale_amount_min = 0.04
 	e.scale_amount_max = 0.08
-	e.mesh = _make_sphere_mesh(Color(0.9, 0.95, 1.0, 0.9))
+	e.mesh = IceVFX.blob(Color(0.9, 0.95, 1.0, 0.9))
 	return e
-
-func _make_sphere_mesh(color: Color) -> Mesh:
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.5
-	sphere.height = 1.0
-	sphere.radial_segments = 4
-	sphere.rings = 2
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = color
-	sphere.material = mat
-	return sphere

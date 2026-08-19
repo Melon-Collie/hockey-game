@@ -51,18 +51,7 @@ func _ready() -> void:
 	process_mat.color_ramp = grad_tex
 	_particles.process_material = process_mat
 
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.5
-	sphere.height = 1.0
-	sphere.radial_segments = 4
-	sphere.rings = 2
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.vertex_color_use_as_albedo = true
-	mat.albedo_color = Color.WHITE
-	sphere.material = mat
-	_particles.draw_pass_1 = sphere
+	_particles.draw_pass_1 = IceVFX.vertex_colored_blob()
 	add_child(_particles)
 
 	_light = OmniLight3D.new()

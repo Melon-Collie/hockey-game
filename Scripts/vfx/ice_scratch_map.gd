@@ -13,7 +13,6 @@ extends Node3D
 # Match SkaterVFX gating constants so visual trails and persistent scratches
 # react to the same situations.
 const TRAIL_MIN_SPEED: float = 0.5
-const TELEPORT_THRESHOLD: float = 1.0
 # A blade this far above the lower of the two boots is airborne (the recovery
 # swing, the crossover clearance step) and leaves no mark. Relative to the
 # other boot rather than an absolute ice height, so crouch depth and body drop
@@ -235,7 +234,7 @@ func _process(_delta: float) -> void:
 
 		if skater.is_ghost or not had_prev:
 			continue
-		if (pos - prev_pos).length() > TELEPORT_THRESHOLD:
+		if (pos - prev_pos).length() > IceVFX.TELEPORT_THRESHOLD:
 			continue
 		var flat_vel: Vector3 = Vector3(skater.velocity.x, 0.0, skater.velocity.z)
 		if flat_vel.length() < TRAIL_MIN_SPEED:

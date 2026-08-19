@@ -1,7 +1,6 @@
 class_name PuckVFX
 extends Node3D
 
-const ICE_Y: float = 0.005               # world Y for grounded trail dots (just above ice to avoid z-fighting)
 
 # Trail uses two GPUParticles3D nodes:
 #   _trail_emitter  — runs the gap-filling particles shader (amount=1, lives forever).
@@ -16,7 +15,7 @@ const TRAIL_LIFETIME: float = 0.25  # seconds each dot lingers
 const TRAIL_AMOUNT: int = 150       # max concurrent trail dots (covers ~25 m/s at 60 fps with 0.25 s lifetime)
 
 # Speed-reactive color: cream at slow, hot orange at fast.
-const TRAIL_COLOR_SLOW: Color = Color(0.95, 0.93, 0.88, 1.0)
+const TRAIL_COLOR_SLOW: Color = IceVFX.SNOW_RGB
 const TRAIL_COLOR_FAST: Color = Color(1.0, 0.45, 0.05, 1.0)
 const TRAIL_SPEED_MIN: float = 3.0   # m/s — at or below this, full slow color
 const TRAIL_SPEED_MAX: float = 18.0  # m/s — at or above this, full fast color
@@ -123,7 +122,7 @@ func _process(delta: float) -> void:
 
 	# When grounded, pin the emitter to ice level so trail dots scrape the ice surface.
 	# When airborne, follow the puck's actual Y so the trail goes with it.
-	var target_y: float = curr_pos.y if _puck.is_airborne() else ICE_Y
+	var target_y: float = curr_pos.y if _puck.is_airborne() else IceVFX.ICE_Y
 	var offset_y: float = target_y - curr_pos.y  # local offset relative to PuckVFX parent
 	if absf(_trail_emitter.position.y - offset_y) > _WRITE_EPSILON:
 		_trail_emitter.position.y = offset_y
@@ -263,17 +262,7 @@ func _make_board_puff_emitter() -> CPUParticles3D:
 	e.gravity = Vector3(0.0, -14.0, 0.0)
 	e.scale_amount_min = 0.02
 	e.scale_amount_max = 0.05
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.5
-	sphere.height = 1.0
-	sphere.radial_segments = 4
-	sphere.rings = 2
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = Color(0.97, 0.98, 1.0, 0.85)
-	sphere.material = mat
-	e.mesh = sphere
+	e.mesh = IceVFX.blob(Color(0.97, 0.98, 1.0, 0.85))
 	return e
 
 
@@ -296,17 +285,7 @@ func _make_post_ping_emitter() -> CPUParticles3D:
 	e.gravity = Vector3(0.0, -10.0, 0.0)
 	e.scale_amount_min = 0.015
 	e.scale_amount_max = 0.03
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.5
-	sphere.height = 1.0
-	sphere.radial_segments = 4
-	sphere.rings = 2
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = Color(1.0, 0.95, 0.75, 0.95)
-	sphere.material = mat
-	e.mesh = sphere
+	e.mesh = IceVFX.blob(Color(1.0, 0.95, 0.75, 0.95))
 	return e
 
 
@@ -329,15 +308,5 @@ func _make_stick_lift_emitter() -> CPUParticles3D:
 	e.gravity = Vector3(0.0, -18.0, 0.0)
 	e.scale_amount_min = 0.02
 	e.scale_amount_max = 0.045
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.5
-	sphere.height = 1.0
-	sphere.radial_segments = 4
-	sphere.rings = 2
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = Color(1.0, 0.97, 0.85, 0.9)
-	sphere.material = mat
-	e.mesh = sphere
+	e.mesh = IceVFX.blob(Color(1.0, 0.97, 0.85, 0.9))
 	return e

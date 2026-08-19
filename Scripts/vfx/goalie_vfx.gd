@@ -32,9 +32,6 @@ const SLIDE_LOW_BODY_Y: float = 0.70
 const SLIDE_MIN_SPEED: float = 1.5
 const SLIDE_LEAD_M: float = 0.55          # spray from the leading pad edge, not the body centre
 
-const TELEPORT_THRESHOLD: float = 1.0     # faceoff/reset snap guard, same as SkaterVFX
-const ICE_Y: float = 0.005                # world Y for ground-level emission
-const SNOW_COLOR: Color = Color(0.95, 0.93, 0.88, 0.85)  # matches SkaterVFX spray
 
 var _pad_bursts: Array[CPUParticles3D] = []   # index 0 = left pad, 1 = right pad
 var _slide_spray: CPUParticles3D = null
@@ -75,7 +72,7 @@ func _process(delta: float) -> void:
 
 	# Reset/faceoff teleport guard: a snapped goalie must not read as a
 	# lightning-fast slide or drop.
-	if (root_pos - _prev_root_pos).length() > TELEPORT_THRESHOLD:
+	if (root_pos - _prev_root_pos).length() > IceVFX.TELEPORT_THRESHOLD:
 		_prev_root_pos = root_pos
 		_prev_body_y = body_y
 		_slide_spray.emitting = false
@@ -116,7 +113,7 @@ func _fire_pad_bursts(goalie: Goalie, fall_speed: float) -> void:
 	for i: int in 2:
 		var burst: CPUParticles3D = _pad_bursts[i]
 		var pad_world: Vector3 = goalie.to_global(pad_locals[i])
-		burst.global_position = Vector3(pad_world.x, ICE_Y, pad_world.z)
+		burst.global_position = Vector3(pad_world.x, IceVFX.ICE_Y, pad_world.z)
 		burst.amount = amount
 		burst.initial_velocity_min = vel_max * 0.4
 		burst.initial_velocity_max = vel_max
@@ -134,7 +131,7 @@ func _emit_slide_spray(root_pos: Vector3, flat_vel: Vector3) -> void:
 	var travel: Vector3 = flat_vel.normalized()
 	var world_dir: Vector3 = (travel + Vector3(0.0, 0.4, 0.0)).normalized()
 	_slide_spray.global_position = root_pos + travel * SLIDE_LEAD_M \
-			+ Vector3(0.0, ICE_Y, 0.0)
+			+ Vector3(0.0, IceVFX.ICE_Y, 0.0)
 	_slide_spray.direction = _slide_spray.global_transform.basis.inverse() * world_dir
 	_slide_spray.emitting = true
 
@@ -153,7 +150,7 @@ func _make_pad_burst() -> CPUParticles3D:
 	e.gravity = Vector3(0.0, -25.0, 0.0)
 	e.scale_amount_min = 0.025
 	e.scale_amount_max = 0.05
-	e.mesh = _make_snow_mesh()
+	e.mesh = IceVFX.blob(IceVFX.snow(0.85))
 	return e
 
 
@@ -173,19 +170,5 @@ func _make_slide_spray() -> CPUParticles3D:
 	e.gravity = Vector3(0.0, -25.0, 0.0)
 	e.scale_amount_min = 0.03
 	e.scale_amount_max = 0.06
-	e.mesh = _make_snow_mesh()
+	e.mesh = IceVFX.blob(IceVFX.snow(0.85))
 	return e
-
-
-func _make_snow_mesh() -> Mesh:
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.5
-	sphere.height = 1.0
-	sphere.radial_segments = 4
-	sphere.rings = 2
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = SNOW_COLOR
-	sphere.material = mat
-	return sphere

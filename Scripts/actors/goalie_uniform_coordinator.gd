@@ -14,9 +14,7 @@ extends RefCounted
 #   apply_uniform(colors)           — full v2 colors dict → body shader + all meshes
 #   apply_jersey_info(name, number) — repaint text decal only (cached colors reused)
 
-const _ROUGH_HELMET: float = 0.28
-const _ROUGH_PADS: float = 0.75
-const _ROUGH_CLOTH: float = 0.9
+const _ROUGH_PADS: float = 0.75  # leather-and-nylon pad face, between cloth and helmet
 const _MAX_STRIPES: int = 5
 
 const _JERSEY_SHADER: Shader = preload("res://Assets/Shaders/goalie_jersey.gdshader")
@@ -27,9 +25,6 @@ const _JERSEY_SHADER: Shader = preload("res://Assets/Shaders/goalie_jersey.gdsha
 # the silhouette split.
 const _PANTS_START_NORM_Y: float = 0.72
 
-const _CYLINDER_SIDE_V_FRACTION: float = 0.5
-const _STRIPE_TEX_HEIGHT_PX: int = 128
-const _STRIPE_TEX_WIDTH_PX: int = 4
 
 var _goalie: Goalie
 var _jersey_mat: ShaderMaterial
@@ -69,11 +64,11 @@ func apply_uniform(colors: Dictionary) -> void:
 
 	# The mask mesh bakes its cage as a dark per-facet vertex tint
 	# (GoalieMeshBuilder._bake_cage_tint) — multiply it under the kit paint.
-	var mask_mat: StandardMaterial3D = _make_solid_mat(uniform.helmet, _ROUGH_HELMET)
+	var mask_mat: StandardMaterial3D = UniformPaint.solid(uniform.helmet, UniformPaint.ROUGH_HELMET)
 	mask_mat.vertex_color_use_as_albedo = true
 	_goalie.head_mesh.material_override = mask_mat
 
-	var pads_mat: StandardMaterial3D = _make_solid_mat(colors.goalie_pads, _ROUGH_PADS)
+	var pads_mat: StandardMaterial3D = UniformPaint.solid(colors.goalie_pads, _ROUGH_PADS)
 	_goalie.left_pad_mesh.material_override = pads_mat
 	_goalie.right_pad_mesh.material_override = pads_mat.duplicate()
 	# The glove (rim + pocket + cuff) and the blocker (board + hand) are each one
@@ -93,7 +88,7 @@ func apply_uniform(colors: Dictionary) -> void:
 	_shoulder_outline_color = uniform.shoulders.outline
 	_rebuild_shoulder_texture()
 
-	var elbow_mat: StandardMaterial3D = _make_solid_mat(arms.lower.base)
+	var elbow_mat: StandardMaterial3D = UniformPaint.solid(arms.lower.base)
 	_goalie.glove_elbow_sphere.material_override = elbow_mat
 	_goalie.blocker_elbow_sphere.material_override = elbow_mat.duplicate()
 
@@ -169,13 +164,13 @@ func _create_shoulder_viewport() -> void:
 	var tex: ViewportTexture = _shoulder_viewport.get_texture()
 	var mat_glove := StandardMaterial3D.new()
 	mat_glove.albedo_texture = tex
-	mat_glove.roughness = _ROUGH_CLOTH
+	mat_glove.roughness = UniformPaint.ROUGH_CLOTH
 	mat_glove.uv1_offset = Vector3(-0.25, 0.0, 0.0)
 	BodyRim.apply(mat_glove)
 	_goalie.glove_shoulder_sphere.material_override = mat_glove
 	var mat_blocker := StandardMaterial3D.new()
 	mat_blocker.albedo_texture = tex
-	mat_blocker.roughness = _ROUGH_CLOTH
+	mat_blocker.roughness = UniformPaint.ROUGH_CLOTH
 	mat_blocker.uv1_offset = Vector3(0.25, 0.0, 0.0)
 	BodyRim.apply(mat_blocker)
 	_goalie.blocker_shoulder_sphere.material_override = mat_blocker
@@ -232,41 +227,7 @@ func _paint_mesh_h(visual: MeshInstance3D, segment: Dictionary) -> void:
 		return
 	var stripes: Array = segment.get("stripes", []) as Array
 	if stripes.is_empty():
-		visual.material_override = _make_solid_mat(segment.base)
+		visual.material_override = UniformPaint.solid(segment.base)
 		return
-	var tex: ImageTexture = _make_h_stripes_texture(segment.base, stripes)
-	visual.material_override = _make_texture_material(tex)
-
-
-func _make_h_stripes_texture(base: Color, stripes: Array) -> ImageTexture:
-	var img := Image.create(_STRIPE_TEX_WIDTH_PX, _STRIPE_TEX_HEIGHT_PX, false, Image.FORMAT_RGBA8)
-	img.fill(base)
-	var side_px: int = int(round(_CYLINDER_SIDE_V_FRACTION * float(_STRIPE_TEX_HEIGHT_PX)))
-	for s: Dictionary in stripes:
-		var center_px: float = float(s.pos) * float(side_px)
-		var half_px: float = float(s.width) * float(side_px) * 0.5
-		var y0: int = clampi(int(round(center_px - half_px)), 0, side_px)
-		var y1: int = clampi(int(round(center_px + half_px)), 0, side_px)
-		if y1 > y0:
-			img.fill_rect(Rect2i(0, y0, _STRIPE_TEX_WIDTH_PX, y1 - y0), s.color)
-	return ImageTexture.create_from_image(img)
-
-
-# Rim light (BodyRim, shared with the skater so both "players" read identically)
-# on every goalie part — head, pads, gloves, blocker, elbows. Applied at the two
-# factories + the inline shoulder mats; the jersey box body carries a matching
-# Fresnel term in goalie_jersey.gdshader (a ShaderMaterial can't use this rim).
-func _make_texture_material(tex: Texture2D) -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = tex
-	mat.roughness = _ROUGH_CLOTH
-	BodyRim.apply(mat)
-	return mat
-
-
-func _make_solid_mat(color: Color, roughness: float = _ROUGH_CLOTH) -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	mat.roughness = roughness
-	BodyRim.apply(mat)
-	return mat
+	var tex: ImageTexture = UniformPaint.h_stripes(segment.base, stripes)
+	visual.material_override = UniformPaint.textured(tex)
