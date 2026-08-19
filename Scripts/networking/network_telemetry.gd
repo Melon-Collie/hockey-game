@@ -1000,25 +1000,46 @@ func recent_samples() -> Array[Dictionary]:
 const _BROADCAST_GAP_MARKER_MS: float = 500.0
 const _INPUT_BACKLOG_MARKER_MS: float = 500.0
 
+# ── Health bands ─────────────────────────────────────────────────────────────
+# The F3 overlay colours these metrics and the tripwires below fire on them, so
+# both sides read the same numbers from here. They were duplicated as literals in
+# NetworkDebugOverlay's _band() calls, held together only by a "keep the two in
+# sync" comment. Values are tabulated in docs/telemetry_dictionary.md.
+const RECONCILE_WARN_PER_SEC: float = 1.0
+const RECONCILE_BAD_PER_SEC: float = 5.0
+const EXTRAPOLATION_WARN_PCT: float = 25.0
+const EXTRAPOLATION_BAD_PCT: float = 60.0
+const STALL_WARN_MS: float = 33.0
+const STALL_BAD_MS: float = 66.0
+const STARVATION_WARN_PER_SEC: float = 0.5
+const STARVATION_BAD_PER_SEC: float = 5.0
+const PUCK_SNAP_WARN_PER_SEC: float = 2.0
+const PUCK_SNAP_BAD_PER_SEC: float = 10.0
+# The one tripwire that deliberately fires at WARN rather than BAD: a hard snap
+# on a moving puck is rare enough that the trace is worth capturing before the
+# rate goes red. Counted per window rather than per second — at the one-second
+# window this is PUCK_SNAP_WARN_PER_SEC, and shorter windows fire sooner.
+const PUCK_SNAP_MARKER_COUNT: int = 2
+
 
 # Objective anomaly markers — the same mechanism as a tester's F4 press, fired
 # automatically when a window crosses a tripwire, so rare bugs land with a
-# timestamp and a pre-history trace even when nobody reacted. Most thresholds
-# mirror the F3 overlay's BAD bands (keep in sync with network_debug_overlay.gd
-# and docs/telemetry_dictionary.md); the freeze tripwires (broadcast_gap /
-# input_backlog) instead use the suspension-scale thresholds above. Rarity is
+# timestamp and a pre-history trace even when nobody reacted. Most fire on the
+# shared BAD band above, so the overlay's red and a marker mean the same thing;
+# the freeze tripwires (broadcast_gap / input_backlog) use the suspension-scale
+# thresholds instead, and puck_hard_snaps fires at WARN. Rarity is
 # enforced by the summary's per-trigger cooldown + session cap, so a broken
 # session records the onset, not spam.
 func _check_auto_markers() -> void:
-	if _puck_hard_snap_count >= 2:
+	if _puck_hard_snap_count >= PUCK_SNAP_MARKER_COUNT:
 		_auto_marker("puck_hard_snaps")
-	if reconcile_per_sec >= 5.0:
+	if reconcile_per_sec >= RECONCILE_BAD_PER_SEC:
 		_auto_marker("reconcile_storm")
-	if extrapolation_pct >= 60.0:
+	if extrapolation_pct >= EXTRAPOLATION_BAD_PCT:
 		_auto_marker("extrapolation")
-	if host_physics_tick_max_ms >= 66.0:
+	if host_physics_tick_max_ms >= STALL_BAD_MS:
 		_auto_marker("host_stall")
-	if input_starvations_per_sec >= 5.0:
+	if input_starvations_per_sec >= STARVATION_BAD_PER_SEC:
 		_auto_marker("input_starvation")
 	if broadcast_interval_p95_ms >= _BROADCAST_GAP_MARKER_MS:
 		_auto_marker("broadcast_gap")
