@@ -23,6 +23,17 @@ execute; they never reach up. Goalie *math* is pure and lives in
 | `domain/rules/goalie_depth_solver.gd` | depth constraint composition |
 | `domain/rules/goalie_stick_rules.gd` | stick geometry and coverage |
 
+### Delete the copy, don't correct the number
+
+Nothing connects a literal to the collider it was copied from, so every
+hand-built replica of the keeper in the planner — pad splay, glove reach, torso
+size, the depth chart, the band harness — drifts off the body that actually makes
+the saves, silently and without anyone being wrong on purpose. `GoalieAnatomy`
+(his dimensions) and `GoalieStickRules` (his stick, split out because the blade
+also owns an aim solve) are the single source: anything the planner believes
+about the keeper's SHAPE derives from them, so changing the body moves the
+planner for free.
+
 ## What kills a collaborator extraction
 
 **A collaborator may accept any number of inputs written from outside. It must
@@ -200,6 +211,44 @@ and recomputes from those baselines every time, so repeated applies (the
 free-play picker) never compound. Config objects built from `@export`s are cached
 here and rebuilt on apply — do not restore per-tick rebuilds for live tuning,
 which is not a workflow on this project.
+
+## The gait publishes channels; it never writes body rotations
+
+`SkaterSkatingCoordinator` is the whole procedural gait — no skeleton, no
+animation clips, everything derived from replicated velocity plus the intent
+byte, so it costs zero network state and a wire-fed remote animates identically
+to a locally-simulated one. It runs at RENDER rate (`Skater._process`,
+visibility-gated) and is guarded by `not is_replaying` so reconcile replay never
+over-spins the phase — which also means it can own no timer, and is why the
+celebration window is aged by its callers at physics rate instead.
+
+**It writes leg swing, foot eversion, edge loads and the crouch drop directly
+onto `Skater`, and never a torso or lower-body rotation.** Everything rotational
+is *published* as a field for `SkaterPoseCoordinator` to sum into one write:
+`trunk_pitch_add` / `trunk_roll_add` (torso texture), `stop_yaw_offset` (hockey
+stop), `travel_align_yaw` (hip-to-travel alignment, which the pivot also drives
+while engaged), `shot_hip_yaw` (shot coil and uncoil), and `pivot_hold`
+(authority, which fades the generic facing-lag pump out of the sum). Two writers
+tracking one rotation on different clocks is a wobble, not a pose — hence one
+summing site rather than five writers. The trunk texture in particular goes onto
+the cosmetic torso, helmet and shoulder BONES, never onto the `UpperBody` node,
+whose rotation carries the blade markers and is therefore gameplay geometry.
+
+## Build once, fill scratch
+
+A per-tick collaborator that produces a compound result should own ONE
+long-lived scratch instance and fill it, rather than returning a fresh
+`Dictionary` / `Array` / `RefCounted` per call. It is safe exactly when the
+consumer reads the result and never stores the reference: `GoalieBodyConfig` is
+read and lerped into the parts by `Goalie.apply_body_config`, so one instance
+serves both goalies forever and keeps ~150 lines of `Vector3` literals off the
+heap per goalie per physics tick.
+
+Where two consumers can interleave, give each its own scratch instead of sharing
+one — `RemoteController` keeps `_sample_bracket` separate from `_scratch_bracket`
+so a reconcile-time sample cannot clobber the live render bracket. Document the
+"consume before the next call" lifetime at the returning function, since that is
+the one thing a caller can get wrong.
 
 ## Hot path
 

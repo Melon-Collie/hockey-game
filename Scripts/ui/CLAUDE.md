@@ -81,3 +81,57 @@ screen — it uppercases the button's current text, so call it **after** setting
 
 `.tscn` files and complex `.tres` resources are edited by the user in the Godot
 editor, not by Claude. Describe the change instead of authoring it.
+
+## Cameras run on the render clock
+
+**Every player-perspective camera is driven at render rate and opts OUT of
+physics interpolation** — `GameCamera`, `ChaseCamera`, `POVCamera`, `FreeCamera`,
+`SpectatorCamera`. Their framing is recomputed from scratch each rendered frame,
+so it is already continuous; handing it to the interpolator would only lerp it
+toward a tick-old pose and add a frame of lag.
+
+That is sound only because the actors are interpolated up to render time
+(`physics/common/physics_interpolation`). A camera sliding between ticks past
+tick-rate actors sawtooths their screen position by one tick of travel — the rule
+in the root `CLAUDE.md`, "render rate is a clock, and clocks must not be mixed".
+The F3 overlay measures the tick/frame pattern that causes it directly
+(`NetworkDebugOverlay._render_sim_phase`, "Sim / render phase").
+
+Two consequences that look contradictory and are not:
+
+- The camera's framing **target** is the RAW tick pose
+  (`skater.global_position`), because it feeds an exponential smoother that
+  attenuates a one-tick oscillation to well under a millimetre.
+- Anything drawn ONTO an actor — nameplates, arrows parked on the puck,
+  ice-shader uniforms — reads `Skater.render_transform()` instead, and must opt
+  out of interpolation itself. See the pair rule in
+  `Scripts/networking/CLAUDE.md`. `OffScreenPlayerIndicators` is the worked
+  example: the puck-hover arrow reads the interpolated pose; the border-clamped
+  player arrows do not need to, because a tick is sub-pixel at the screen edge.
+
+`GameCamera.process_priority = -1` exists for the same clock reason:
+`LocalInputGatherer` unprojects the aim cursor through this camera's transform in
+its own `_process`, so the camera has to move first or a fast pan drifts the aim
+point behind the view.
+
+## Controller focus rings are one shared stylebox
+
+`InputDeviceTracker` (an autoload) owns a single `StyleBoxFlat` handed to every
+controller-focusable control via `MenuStyle`, and restyles it **in place** — teal
+border while the pad drives, zero border width while the mouse does. So a mouse
+player never sees a focus ring even though the controls are focusable, and every
+menu's rings flip together with no per-menu wiring. The same `is_gamepad_active()`
+flag drives prompts, tutorial copy and gameplay control, which is why rings,
+prompts and control never disagree.
+
+A new focusable menu control takes its ring from
+`InputDeviceTracker.focus_ring()` through `MenuStyle`. One that builds its own
+focus stylebox will be the single control on screen showing a ring to a mouse
+player.
+
+## Debug surfaces are exempt from the locale seam
+
+`NetworkDebugOverlay` (F3/F4) and `ShapeDebugOverlay` (F6) deliberately do not
+route their strings through `tr()`, and are built in code with no `.tscn`. They
+are developer instrumentation, not user-facing UI — do not "fix" them into the
+translation catalogue.

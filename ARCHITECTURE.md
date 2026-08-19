@@ -385,6 +385,44 @@ The `GameStateMachine` exposes `is_movement_locked()` — true during `GOAL_SCOR
 
 ---
 
+## Puck contact signals are queued, not fanned out inside the tick
+
+Every contact the analytic drive detects (boards, post, net, goalie touch, goalie
+catch) and every interaction `PuckController` drives (blade deflect, body block)
+is latched into a fixed-size queue on `Puck` rather than emitted where it is
+detected. Each `emit` reaches sounds, VFX, RPC sends, stat tracking and replay
+recording, and those emission sites sit inside the 120 Hz timed physics section.
+
+`GameManager` drains the queue (`Puck.drain_contact_events`) at physics priority
+2, in emission order, in the SAME physics frame, immediately BEFORE the snapshot
+capture and broadcast — so clients observe exactly the event-vs-state ordering a
+synchronous emit would have given them.
+
+Overflow policy is drop-newest with a `push_warning`: the capacity covers every
+emitter's per-tick maximum several times over, so an overflow means a runaway
+emitter, and dropping the newest preserves the older events and their order.
+
+`puck_stripped` and `puck_released` are the two exceptions and stay synchronous
+everywhere, because their listeners read call-scoped transient state off the same
+stack — `PuckController.is_processing_stick_lift`, the queued release velocity
+read by the dump-release check, and the goalie reaction back-date consumed by
+`_on_puck_released`.
+
+## The goalie is deliberately not skinned
+
+His moving parts are `StaticBody3D`s carrying real colliders: the puck bounces
+off the pads, the glove and the stick, and the poke geometry reads the blade
+collider's world position. `apply_body_config` moves six of them per tick and
+their meshes are children that ride along for free — bones would not replace
+those writes, since the bodies still have to move for collision; they would add
+one write per mesh.
+
+What does apply is the rigid merge the boot and helmet already use: several
+meshes that never move relative to each other and share a material collapse to
+one node, one mesh, one draw call. The absorbed nodes are resolved by path and
+freed, so anything that must stay addressable has to stay OUT of its merge — the
+goalie stick blade is the standing example (`GoalieMeshBuilder._merge_stick`).
+
 ## The skater body is two skinned meshes, not a node tree
 
 `SkaterMeshBuilder` assembles `shared_upper_skin_mesh` (fourteen `UpperBone`s,

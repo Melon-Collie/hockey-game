@@ -160,8 +160,3 @@ static func compute(
 			state = State.TRANS_DEFENSE
 
 	return Result.make(state, carrier_team)
-
-
-# True for either TRANS state.
-static func is_transition(state: State) -> bool:
-	return state == State.TRANS_OFFENSE or state == State.TRANS_DEFENSE

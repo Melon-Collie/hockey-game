@@ -41,6 +41,42 @@ intents); the state machine only consumes it. `CARRIER` is the exception —
 `_state_carry` dispatches the carrier directly, because it needs its own
 steering rules (hold vs. drift during pre-aim) and its own press transitions.
 
+## How the brain hands out work
+
+`TeamBrain` is one node per team, ticked by `GameManager._physics_process` on the
+host at ~6 Hz. Each tick it publishes a blackboard the agents read: `state` (the
+`AIPossessionState` shape), `slot_assignments` (peer id → `AIRoleSlots.Slot`),
+`threat_assignments` (the man-on-threat partition), and `rush_read` (the shared
+transition-defence perception).
+
+**Nothing is locked or sticky.** Every slot is re-elected each tick by a
+momentum-aware soonest-to-arrive race; roles "stick" only because the body
+already in the right place keeps winning, and hysteresis damps the ties.
+
+**Two brains, two cadences.** Team 1's natural tick runs half a period out of
+phase with team 0's so the two computes never land on the same physics frame —
+the host's FPS is set by its worst tick, and two ~250 µs brain ticks stacking is
+a recurring spike for free. Possession events force-retick BOTH brains together,
+so the phase offset has to be re-applied at every forced-tick accumulator reset,
+not just at construction.
+
+**The agents do not read the live brain.** `TeamBrain.build_view()` freezes the
+blackboard into a `TeamBrainView` once per host frame, after the tick, and
+dispatch reads that — `TeamStrategyView` is the interface both implement. It is
+refilled, never reallocated, and main only refills it after the worker has
+finished reading last frame's copy, which is why no mutex is needed. Unit tests
+hand the live brain in directly, which is legal because `TeamBrain` *is a*
+`TeamStrategyView`.
+
+## The blade cursor leaves the agent untouched
+
+`SkaterAgent.tick` returns the state machine's blade cursor as-is. Its slew — the
+bot's real Hands blade speed — is the one motion limit on it, exactly the limit a
+human's blade plays under. A second smoothing stage in the agent is a trap:
+straight-line world blending chord-cuts the state machine's shaped cursor paths
+(the arc, the reach-cone clamp) across the body on big flips, and can trip the
+pose IK gate's facing freeze.
+
 ## Reception doctrine
 
 **A fast loose puck is a reception, not a race.** The catch is decided by blade
