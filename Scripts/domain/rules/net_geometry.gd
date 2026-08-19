@@ -86,6 +86,26 @@ static func interior_or_mouth(p: Vector3) -> bool:
 		return false
 	return absf(p.x) < cavity_half_width()
 
+# Outward unit normal of whichever twine surface `p` lies nearest — the back
+# mesh, one of the two sides, or the roof. This is the direction a body at `p`
+# pushes the netting, and it is what the net shader displaces along.
+#
+# Deliberately a function of POSITION rather than of which panel a vertex belongs
+# to. Panels meet at ~90° seams, so a bulge that pushed each panel along its own
+# face normal would move the two sides of a shared edge apart — a puck buried in
+# the back corner would tear a visible hole in the twine, worst exactly where a
+# goal is most likely to be scored. One direction per impact cannot do that.
+static func nearest_surface_normal(p: Vector3) -> Vector3:
+	var d_back: float = absf(back_plane_distance(p))
+	var d_side: float = absf(cavity_half_width() - absf(p.x))
+	var d_roof: float = absf(GameRules.NET_HEIGHT - p.y)
+	if d_back <= d_side and d_back <= d_roof:
+		return back_plane_normal(1.0 if p.z >= 0.0 else -1.0)
+	if d_side <= d_roof:
+		return Vector3(1.0 if p.x >= 0.0 else -1.0, 0.0, 0.0)
+	return Vector3(0.0, 1.0, 0.0)
+
+
 # Height the straight post reaches before the mouth-corner bend takes over. Above
 # this the frame is the bend, not the pipe — modelling the post as a full-height
 # cylinder to the crossbar both over-blocked (a straight pipe standing where the

@@ -53,14 +53,24 @@ That is the entire design constraint, and Part A is shaped around it:
 - The puck's response is analytic in `PuckGeometryCollision.resolve_net_panels`
   and `resolve_top_net`, at `NET_RESTITUTION` = 0.05.
 
-The contact event already exists and is already correctly shaped for this:
-`Puck.puck_hit_goal_body` (`Scripts/actors/puck.gd:16`) is emitted on net-panel
-contact above 1 m/s, **edge-gated** so sustained contact fires once on entry
-rather than 120×/s, and **deferred until after the tick commits** so a listener
-reads the committed post-contact position and velocity rather than last tick's.
+The contact event already exists, and not once but three times — the net-contact
+*cue* is already fanned out to every peer, because the thump is:
 
-That last property is what makes A.2 cheap: a listener does not need a payload.
-It reads the puck.
+| peer | source | when |
+|---|---|---|
+| host | `Puck.puck_hit_goal_body` (`puck.gd:16`) | its own authoritative sim |
+| client | `PuckController.predicted_net_contact` (`puck_controller.gd:243`) | its own local prediction, immediately |
+| either | `NetworkManager.goal_body_hit_received` | the host's broadcast, ~RTT later, echo-suppressed against the local cue |
+
+All three are edge-gated (sustained contact fires once on entry, not 120×/s),
+all three carry a position and a speed, and `game_manager.gd` already hangs both
+a sound *and* a visual off the equivalent sites for boards and posts
+(`puck.fire_board_impact_vfx`, `fire_post_ping_vfx`).
+
+So A.2 needs no new signal at all: the bulge rides the existing cue beside the
+sound. It also inherits the property that matters most — a client bulges its own
+net the instant its prediction says the puck arrived, rather than waiting a
+round trip to be told.
 
 ### A.2 Geometry — tessellated panels
 
@@ -96,21 +106,36 @@ An impact record is what the twine actually received:
 | field | source |
 |---|---|
 | origin | puck position at contact, read from the puck at emit time |
-| normal | panel normal at the contact point |
-| energy | normal-component of incoming velocity (the analytic puck carries no mass — the constant folds into the amplitude tunable) |
-| start | `TIME` at emit |
+| direction | outward normal of the twine surface nearest the contact, negated when the puck is pressing from outside |
+| energy | speed at contact (the analytic puck carries no mass — the constant folds into the amplitude tunable; the broadcast path carries no velocity vector to take a normal component of) |
+| start | the goal's own `net_time` at emit |
 
-Four of them in a ring buffer, oldest evicted, passed as two `vec4` arrays
-(`impact_origin_energy[4]`, `impact_normal_time[4]`) so the whole state is eight
-uniform writes per impact and the shader loop is fixed-length.
+Four in a ring buffer, oldest evicted, as three `vec4` arrays so the shader loop
+is fixed-length and one impact is three uniform writes.
 
 Displacement in `vertex()` is a damped spring in time and a gaussian in space:
 
 ```
-amp   = energy * exp(-t / TAU) * cos(OMEGA * t)
+amp     = energy * exp(-t / DECAY_TAU) * cos(SWING_OMEGA * t)
 falloff = exp(-(d / RADIUS)^2)          // d = distance from impact origin
-VERTEX += NORMAL * amp * falloff
+VERTEX += dir * amp * falloff
 ```
+
+**`dir` is one direction for the whole cage, not each panel's own normal**, and
+that is the non-obvious part. The panels meet at right angles, so displacing
+each along its own face normal moves the two sides of a shared seam apart — at
+the 0.20 m bulge cap, a ~0.28 m hole torn in the twine, worst in the back corner,
+which is exactly where a puck ends up on a goal. One direction per impact cannot
+do that, and it is also the more faithful picture: a puck jammed into the corner
+pushes that whole corner of the bag the way it was travelling.
+
+This artifact is not new — the shipping `ripple_amount` shader displaces along
+`NORMAL` at the same 0.22 m peak and tears the same seams on every goal
+celebration. It is simply invisible in a 0.6 s flourish behind a goal horn. The
+celebration therefore moves to a **radial** mode (`normalize(VERTEX -
+cavity_center)`), which billows the whole cage and is continuous across seams for
+the same reason; a single direction there would shove the net sideways instead of
+swelling it.
 
 The first swing dominates, which is what a struck net does — it takes the puck,
 bulges once, and settles. `TAU`, `OMEGA` and `RADIUS` are feel tunables and are
