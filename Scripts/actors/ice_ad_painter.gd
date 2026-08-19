@@ -6,7 +6,8 @@ extends Node2D
 # baked into the albedo — so an ad reads as printed into the ice rather than
 # laid on top of it. Only the lettering is painted: an in-ice ad is a mark
 # frozen into the sheet, so a panel field or border would read as a decal
-# sitting on it.
+# sitting on it. That is also why the board palette cannot be reused verbatim
+# here — see MAX_INK_LUMINANCE.
 #
 # One cell per slot, packed in a row. The alternative — one rink-sized image the
 # shader indexes with the rink UV directly — spends ~94% of its pixels on the
@@ -42,6 +43,25 @@ const TEXT_ALPHA: float = 0.92
 const NAME_HEIGHT_FRACTION: float = 0.42
 const TAG_HEIGHT_FRACTION: float = 0.19
 const TEXT_INSET_FRACTION: float = 0.06
+
+# The ice IS the field here, and it is white. A board panel's `fg` is the wordmark
+# chosen to sit on that panel's dark `bg`, so reading it in-ice paints near-white
+# lettering onto near-white ice — invisible at any alpha, and more so after the
+# Beer-Lambert fade washes it further toward the ice colour. In-ice lettering
+# therefore takes the brand's OWN dark colour: `bg` for the wordmark (dark by
+# construction, since the boards behind the panels are white and every field had
+# to carry a white mark), and the `accent` tagline darkened into the same band.
+const MAX_INK_LUMINANCE: float = 0.45
+
+
+# `color` darkened until it is dark enough to read against white ice. Below the
+# ceiling it passes through, so a brand that already owns a deep colour keeps it
+# exactly.
+static func ice_ink(color: Color) -> Color:
+	var lum: float = color.get_luminance()
+	if lum <= MAX_INK_LUMINANCE:
+		return color
+	return color.darkened(1.0 - MAX_INK_LUMINANCE / lum)
 
 # AdBrands.ICE_SLOTS entries, with the brand already resolved into `brand`.
 var slots: Array[Dictionary] = []
@@ -114,8 +134,10 @@ func _draw_cell(index: int) -> void:
 	var name_baseline: float = -block * 0.5 + name_h
 	var tag_baseline: float = name_baseline + gap + tag_h
 
-	_draw_centred(name_text, name_size, name_baseline, Color(brand.fg as Color, TEXT_ALPHA))
-	_draw_centred(tag_text, tag_size, tag_baseline, Color(brand.accent as Color, TEXT_ALPHA))
+	_draw_centred(name_text, name_size, name_baseline,
+			Color(ice_ink(brand.bg as Color), TEXT_ALPHA))
+	_draw_centred(tag_text, tag_size, tag_baseline,
+			Color(ice_ink(brand.accent as Color), TEXT_ALPHA))
 
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 

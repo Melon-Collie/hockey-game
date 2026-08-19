@@ -1,7 +1,7 @@
 class_name CareerStatsScreen extends Control
 
 # Two-tab career screen:
-#   Career Totals — lifetime aggregates + the career shot map, Supabase-backed
+#   Career Totals — lifetime aggregates + the career goal map, Supabase-backed
 #     and gated on share_gameplay_stats, sliceable by roster size (All/5v5/3v3).
 #   Games — one chronological list merging backend game history with the
 #     .mreplay files on THIS machine, joined on game_id (a replay file is named
@@ -43,6 +43,8 @@ var _heat_rows: Array = []
 # The shell is full-bleed for the Career tab's sake; the Games tab's cards read
 # better at their own narrower measure than stretched across the screen.
 const _NARROW_TAB_WIDTH: float = 660.0
+
+const _MAP_NOTE: String = "offensive zone · brighter = more goals"
 
 # Fallback palette for a game whose colours can't be recovered (a backend row
 # with no local .mreplay). Matches PostGameAnalytics' own defaults.
@@ -307,7 +309,7 @@ func _build_totals_tab() -> Control:
 	left.add_child(_totals_content)
 	body.add_child(left)
 
-	# Right: the career shot map.
+	# Right: the career goal map.
 	var right := _broadcast_panel()
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	right.size_flags_stretch_ratio = 1.0
@@ -315,11 +317,11 @@ func _build_totals_tab() -> Control:
 	right_col.add_theme_constant_override("separation", 8)
 	right.add_child(right_col)
 	var map_head := HBoxContainer.new()
-	map_head.add_child(_section_title("Shot Map"))
+	map_head.add_child(_section_title("Goal Map"))
 	var map_spacer := Control.new()
 	map_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	map_head.add_child(map_spacer)
-	_map_note = _ui_label("offensive zone · brighter = more shots", 11, MenuStyle.TEXT_MUTED)
+	_map_note = _ui_label(_MAP_NOTE, 11, MenuStyle.TEXT_MUTED)
 	map_head.add_child(_map_note)
 	right_col.add_child(map_head)
 	_heat_map = CareerHeatMap.new()
@@ -339,12 +341,7 @@ func _build_heat_legend() -> Control:
 	ramp.custom_minimum_size = Vector2(110, 10)
 	ramp.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(ramp)
-	row.add_child(_ui_label("shot volume", 11, MenuStyle.TEXT_MUTED))
-	var goal_dot := GoalDot.new()
-	goal_dot.custom_minimum_size = Vector2(12, 12)
-	goal_dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	row.add_child(goal_dot)
-	row.add_child(_ui_label("goals scored", 11, MenuStyle.TEXT_MUTED))
+	row.add_child(_ui_label("goal density", 11, MenuStyle.TEXT_MUTED))
 	return row
 
 
@@ -399,16 +396,12 @@ func _merged_buckets(rows: Array) -> Array:
 		var key: String = "%d,%d" % [int(d.get("bucket_x", 0)), int(d.get("bucket_z", 0))]
 		if by_cell.has(key):
 			var acc: Dictionary = by_cell[key]
-			acc["shots"] = int(acc["shots"]) + int(d.get("shots", 0))
 			acc["goals"] = int(acc["goals"]) + int(d.get("goals", 0))
-			acc["xg"] = float(acc["xg"]) + float(d.get("xg", 0.0))
 		else:
 			by_cell[key] = {
 				"bucket_x": int(d.get("bucket_x", 0)),
 				"bucket_z": int(d.get("bucket_z", 0)),
-				"shots": int(d.get("shots", 0)),
 				"goals": int(d.get("goals", 0)),
-				"xg": float(d.get("xg", 0.0)),
 			}
 	return by_cell.values()
 
@@ -426,13 +419,13 @@ func _apply_heatmap_filter() -> void:
 	else:
 		rows = _merged_buckets(_heat_rows)
 	_heat_map.configure(rows)
-	# Shots taken from outside the offensive zone aren't drawn (clamping them to
+	# Goals scored from outside the offensive zone aren't drawn (clamping them to
 	# the top row would invent a hot band on the blue line), so say so rather
 	# than quietly losing them from the total.
 	if _map_note != null:
-		var outside: int = _heat_map.outside_zone_shots()
-		_map_note.text = "offensive zone · brighter = more shots" if outside == 0 \
-				else "offensive zone · brighter = more shots · %d outside" % outside
+		var outside: int = _heat_map.outside_zone_goals()
+		_map_note.text = _MAP_NOTE if outside == 0 \
+				else "%s · %d outside" % [_MAP_NOTE, outside]
 
 
 func _on_totals_received(totals: Dictionary) -> void:
@@ -1119,9 +1112,12 @@ static func _format_toi(seconds: Variant) -> String:
 	return "%d:%02d" % [minutes, s % 60]
 
 
-# ── Career shot map ──────────────────────────────────────────────────────────
+# ── Career goal map ──────────────────────────────────────────────────────────
 
-# Attacking-end shot density over a player's whole career. The buckets arrive
+# Attacking-end GOAL density over a player's whole career. Attempts are not drawn:
+# the map answers "where do I score from", and a shot-volume field with goals
+# marked on top made the answer something you had to read off two channels at
+# once. The buckets arrive
 # already normalised to one attacking end by the shot_heatmap view (team 1's
 # shots are rotated 180°), so a player who has skated both ends still reads as
 # one coherent map — and their off-wing tendency survives the fold rather than
@@ -1152,7 +1148,7 @@ class CareerHeatMap extends Control:
 	var _peak: float = 1.0
 	var _scale: float = 1.0
 	var _origin := Vector2.ZERO
-	# Shots from outside the zone are counted rather than drawn — clamping them
+	# Goals from outside the zone are counted rather than drawn — clamping them
 	# to the top row would invent a hot band along the blue line.
 	var _outside: int = 0
 
@@ -1163,12 +1159,12 @@ class CareerHeatMap extends Control:
 		for b: Variant in buckets:
 			var d: Dictionary = b as Dictionary
 			if float(d.get("bucket_z", 0)) > _top_z():
-				_outside += int(d.get("shots", 0))
+				_outside += int(d.get("goals", 0))
 				continue
-			_peak = maxf(_peak, float(d.get("shots", 0)))
+			_peak = maxf(_peak, float(d.get("goals", 0)))
 		queue_redraw()
 
-	func outside_zone_shots() -> int:
+	func outside_zone_goals() -> int:
 		return _outside
 
 	static func _top_z() -> float:
@@ -1237,8 +1233,8 @@ class CareerHeatMap extends Control:
 		var cell: float = _scale  # buckets are 1 m
 		for b: Variant in _buckets:
 			var d: Dictionary = b as Dictionary
-			var shots: float = float(d.get("shots", 0))
-			if shots <= 0.0:
+			var goals: float = float(d.get("goals", 0))
+			if goals <= 0.0:
 				continue
 			var bx: float = float(d.get("bucket_x", 0))
 			var bz: float = float(d.get("bucket_z", 0))
@@ -1246,23 +1242,19 @@ class CareerHeatMap extends Control:
 			# wrong end entirely) — counted in _outside, not drawn.
 			if bz > _top_z():
 				continue
-			var t: float = clampf(shots / _peak, 0.0, 1.0)
-			# sqrt keeps the low end visible — most buckets are one or two shots,
+			var t: float = clampf(goals / _peak, 0.0, 1.0)
+			# sqrt keeps the low end visible — most buckets are one or two goals,
 			# and a linear ramp renders them almost invisible next to a hot slot.
 			var col: Color = _HEAT_LOW.lerp(_HEAT_HIGH, sqrt(t))
 			col.a = 0.30 + 0.65 * sqrt(t)
 			var top_left: Vector2 = _p(bx - 0.5, bz + 0.5)
 			draw_rect(Rect2(top_left, Vector2(cell, cell)), col, true)
-			var goals: int = int(d.get("goals", 0))
-			if goals > 0:
-				var centre: Vector2 = _p(bx, bz)
-				draw_circle(centre, maxf(2.0, cell * 0.28), _GOAL)
 
 	func _draw_empty_note(w: float, h: float) -> void:
 		var font: Font = MenuStyle.UI_FONT
 		if font == null:
 			return
-		draw_string(font, Vector2(0.0, h * 0.5), "No shots recorded yet",
+		draw_string(font, Vector2(0.0, h * 0.5), "No goals recorded yet",
 				HORIZONTAL_ALIGNMENT_CENTER, w, 13, MenuStyle.TEXT_MUTED)
 
 
@@ -1277,9 +1269,3 @@ class HeatRamp extends Control:
 			col.a = 0.30 + 0.65 * t
 			draw_rect(Rect2(Vector2(float(i) * step_w, 0.0),
 					Vector2(step_w + 1.0, size.y)), col, true)
-
-
-# Legend swatch: a goal marker.
-class GoalDot extends Control:
-	func _draw() -> void:
-		draw_circle(Vector2(size.x * 0.5, size.y * 0.5), 4.0, CareerHeatMap._GOAL)

@@ -2612,7 +2612,8 @@ func _start_stick_whip(amp: float) -> void:
 
 # ── Arm Mesh ──────────────────────────────────────────────────────────────────
 func update_arm_mesh() -> void:
-	var shoulder_w: Vector3 = upper_body.to_global(shoulder.position)
+	var shoulder_l: Vector3 = _textured_shoulder(shoulder.position)
+	var shoulder_w: Vector3 = upper_body.to_global(shoulder_l)
 	var hand_w: Vector3 = upper_body.to_global(top_hand.position)
 	var pole_local: Vector3 = arm_pole_local
 	pole_local.x *= 1.0 if is_left_handed else -1.0
@@ -2624,12 +2625,13 @@ func update_arm_mesh() -> void:
 	_pose_arm_cuff(SkaterMeshBuilder.UpperBone.TOP_CUFF, elbow_w, hand_w)
 	_pose_arm_ball(SkaterMeshBuilder.UpperBone.TOP_ELBOW, elbow_w)
 	_pose_arm_glove(SkaterMeshBuilder.UpperBone.TOP_HAND, elbow_w, hand_w)
-	_orient_shoulder_cap(shoulder.position, elbow_w)
+	_orient_shoulder_cap(shoulder.position, shoulder_l, elbow_w)
 
 
 # ── Bottom Arm Mesh ───────────────────────────────────────────────────────────
 func update_bottom_arm_mesh() -> void:
-	var shoulder_w: Vector3 = upper_body.to_global(bottom_shoulder.position)
+	var shoulder_l: Vector3 = _textured_shoulder(bottom_shoulder.position)
+	var shoulder_w: Vector3 = upper_body.to_global(shoulder_l)
 	var hand_w: Vector3 = upper_body.to_global(bottom_hand.position)
 	var pole_local: Vector3 = arm_pole_local
 	pole_local.x *= -1.0 if is_left_handed else 1.0
@@ -2641,7 +2643,22 @@ func update_bottom_arm_mesh() -> void:
 	_pose_arm_cuff(SkaterMeshBuilder.UpperBone.BOTTOM_CUFF, elbow_w, hand_w)
 	_pose_arm_ball(SkaterMeshBuilder.UpperBone.BOTTOM_ELBOW, elbow_w)
 	_pose_arm_glove(SkaterMeshBuilder.UpperBone.BOTTOM_HAND, elbow_w, hand_w)
-	_orient_shoulder_cap(bottom_shoulder.position, elbow_w)
+	_orient_shoulder_cap(bottom_shoulder.position, shoulder_l, elbow_w)
+
+
+# Where a shoulder MARKER actually sits once the trunk texture has rolled the
+# upper-body shell (see _repose_upper_bone, which rotates the torso and shoulder
+# caps about the trunk pivot but deliberately not the arms).
+#
+# The arm has to be rooted here, not at the marker: the marker is gameplay
+# geometry and never moves with the texture, so an arm grown from it stayed put
+# while the shoulder pad it emerges from rolled away — a visible gap at every
+# large texture value, worst in the check-commit stance (24 deg of pitch and 19
+# of shoulder drop, which walks the pad ~0.2 m off the arm). The HAND is
+# untouched, so the blade keeps the position the IK solved and only the elbow
+# re-solves; nothing gameplay reads changes.
+func _textured_shoulder(marker_local: Vector3) -> Vector3:
+	return _trunk_texture * marker_local
 
 
 # One pose write per part, each a whole Transform3D built in upper-body space —
@@ -2729,11 +2746,16 @@ const _SHOULDER_CAP_REST_POLE := Vector3(0.32, -0.93, -0.17)
 #     +X outboard per side turns the left cap's number to the inside.
 # Writes rotation only — the caps' scale is SkaterAppearanceCoordinator's
 # (quaternion assignment preserves it) and their position is the scene's.
-func _orient_shoulder_cap(anchor_local: Vector3, elbow_w: Vector3) -> void:
-	var side: float = signf(anchor_local.x)
+func _orient_shoulder_cap(marker_local: Vector3, anchor_local: Vector3,
+		elbow_w: Vector3) -> void:
+	var side: float = signf(marker_local.x)
 	var bone: int = SkaterMeshBuilder.UpperBone.SHOULDER_L if side < 0.0 \
 			else SkaterMeshBuilder.UpperBone.SHOULDER_R
-	var arm_dir: Vector3 = upper_body.to_local(elbow_w) - anchor_local
+	# _repose_upper_bone premultiplies this basis by the trunk texture, so the arm
+	# direction has to come back to the UNTEXTURED frame the basis is built in —
+	# transposed is the inverse of that pure rotation.
+	var arm_dir: Vector3 = _trunk_texture.transposed() \
+			* (upper_body.to_local(elbow_w) - anchor_local)
 	if arm_dir.length_squared() < 0.0001:
 		return
 	var rest: Vector3 = _SHOULDER_CAP_REST_POLE.normalized()

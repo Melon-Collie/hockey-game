@@ -11,6 +11,12 @@ const _SKATE_MAX_PITCH: float = 1.15
 
 const _BRAKE_MIN_SPEED: float = 1.5        # must be moving this fast for brake sound
 
+# No distance cutoff (Godot reads 0.0 as unlimited), matching SoundManager's world
+# pool: a far skater's stride gets quiet, never switched off. A cutoff makes an
+# event's audibility a step function of camera pull-back, which is what made the
+# rink's sounds read as inconsistent from one camera height to the next.
+const _NO_DISTANCE_CUTOFF: float = 0.0
+
 # Last skate-loop blend factor pushed to the player (see _update_skate_loop).
 # -1 forces the first write.
 const _LEVEL_EPSILON: float = 0.002
@@ -29,7 +35,7 @@ func setup(skater: Skater) -> void:
 func _make_loop_player(path: String) -> AudioStreamPlayer3D:
 	var p := AudioStreamPlayer3D.new()
 	p.bus = "Master"
-	p.max_distance = 35.0
+	p.max_distance = _NO_DISTANCE_CUTOFF
 	p.unit_size = 5.0
 	p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 	if ResourceLoader.exists(path):
@@ -41,7 +47,7 @@ func _make_loop_player(path: String) -> AudioStreamPlayer3D:
 func _make_oneshot_player(path: String) -> AudioStreamPlayer3D:
 	var p := AudioStreamPlayer3D.new()
 	p.bus = "Master"
-	p.max_distance = 35.0
+	p.max_distance = _NO_DISTANCE_CUTOFF
 	p.unit_size = 5.0
 	p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 	if ResourceLoader.exists(path):

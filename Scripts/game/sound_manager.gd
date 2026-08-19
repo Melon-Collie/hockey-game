@@ -74,15 +74,17 @@ const _SFX_3D_POOL_SIZE: int = 12
 # period buzzer can overlap.
 const _CROWD_POOL_SIZE: int = 4
 
-# 3D world-sound falloff presets, selected via set_world_audio_range.
+# 3D world-sound falloff presets, selected via set_world_audio_range. A preset is
+# only how STEEPLY a sound falls off — no preset cuts one off, see the cutoff note
+# below — so a far-side event is always at least faintly present.
 #
 # LIVE — live play frames the puck closely (game cam ~15 m up), so the tight
-#   defaults keep events spatial without bleeding across the rink.
+#   curve keeps events spatial without bleeding across the rink.
 # REPLAY_FAR — replay cameras parked far from the action: the offline viewer's
 #   broadcast/chase/POV/free cams and the goal replay's press-box hard cam sit
-#   ~10–38 m from the puck, where the LIVE falloff attenuates recorded events
-#   to near-silence (far-side events hit the 40 m cutoff entirely). Widen the
-#   curve so the cinematic distance stays audible while keeping stereo cues.
+#   ~10–38 m from the puck, where the LIVE curve leaves recorded events too
+#   quiet to carry. Widen it so the cinematic distance reads while keeping
+#   stereo cues.
 # REPLAY_NEAR — the goal replay's behind-the-net cam (~4.5–10 m from the puck).
 #   Already in the audible regime, so only a gentle lift: REPLAY_FAR's wide
 #   curve would over-amplify (the close cam would be +13 dB and blow out the
@@ -90,11 +92,16 @@ const _CROWD_POOL_SIZE: int = 4
 enum AudioRange { LIVE, REPLAY_NEAR, REPLAY_FAR }
 
 const _WORLD_UNIT_SIZE: float = 6.0
-const _WORLD_MAX_DISTANCE: float = 40.0
 const _REPLAY_FAR_UNIT_SIZE: float = 20.0
-const _REPLAY_FAR_MAX_DISTANCE: float = 80.0
 const _REPLAY_NEAR_UNIT_SIZE: float = 10.0
-const _REPLAY_NEAR_MAX_DISTANCE: float = 60.0
+
+# NO distance cutoff (Godot reads 0.0 as unlimited). The rink is 60 x 26 m and the
+# camera pulls back off it, so listener-to-event distances past 40 m are ordinary
+# rather than exceptional — a cutoff there silenced far-side play outright instead
+# of merely quieting it. The inverse-distance curve keeps falling on its own
+# (about -17 dB at 40 m, -21 dB at 65 m on the LIVE unit size), which is the
+# "audible but clearly over there" the cutoff was destroying.
+const _NO_DISTANCE_CUTOFF: float = 0.0
 
 var _streams: Dictionary = {}
 var _pool_ui: Array[AudioStreamPlayer] = []      # UI bus — hover, click
@@ -143,7 +150,7 @@ func _build_pools() -> void:
 	for i: int in _SFX_3D_POOL_SIZE:
 		var p := AudioStreamPlayer3D.new()
 		p.bus = "SFX"
-		p.max_distance = _WORLD_MAX_DISTANCE
+		p.max_distance = _NO_DISTANCE_CUTOFF
 		p.unit_size = _WORLD_UNIT_SIZE
 		p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 		add_child(p)
@@ -196,26 +203,21 @@ func play_world(sound: Sound, position: Vector3, volume_db: float = 0.0, pitch_v
 
 
 # Select the 3D world-sound falloff to match the active camera distance. Replay
-# cameras sit far from the action, where the LIVE falloff attenuates recorded
-# events to silence; the REPLAY_* presets lift the level while keeping
+# cameras sit far from the action, where the LIVE falloff leaves recorded events
+# too quiet to carry; the REPLAY_* presets lift the level while keeping
 # stereo/positional cues. Call REPLAY_FAR/NEAR on the matching camera, LIVE to
 # restore. Idempotent.
 func set_world_audio_range(audio_range: AudioRange) -> void:
 	var unit_size: float
-	var max_distance: float
 	match audio_range:
 		AudioRange.REPLAY_FAR:
 			unit_size = _REPLAY_FAR_UNIT_SIZE
-			max_distance = _REPLAY_FAR_MAX_DISTANCE
 		AudioRange.REPLAY_NEAR:
 			unit_size = _REPLAY_NEAR_UNIT_SIZE
-			max_distance = _REPLAY_NEAR_MAX_DISTANCE
 		_:
 			unit_size = _WORLD_UNIT_SIZE
-			max_distance = _WORLD_MAX_DISTANCE
 	for p: AudioStreamPlayer3D in _pool_3d:
 		p.unit_size = unit_size
-		p.max_distance = max_distance
 
 
 # Connects hover and click sounds to a button. Call after creating each Button node.

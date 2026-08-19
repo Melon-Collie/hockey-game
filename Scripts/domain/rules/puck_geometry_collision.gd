@@ -161,10 +161,17 @@ static func resolve_crossbar_bends(
 
 
 # Resolve a puck against the TOP NET PANEL — a horizontal mesh plane at y = NET_HEIGHT over
-# the net roof (|x| <= NET_CROWN_HALF_WIDTH, |z| in [GOAL_LINE_Z, GOAL_LINE_Z + NET_TOP_DEPTH]).
+# the net roof (|x| <= the cavity half-width, |z| in [GOAL_LINE_Z, GOAL_LINE_Z + NET_TOP_DEPTH]).
 # The twine is two-sided; the vertical channel rebounds at NET_RESTITUTION (absorbs), keeping
 # horizontal motion. Reachable in live play by a hard deflection / goalie rebound kicked up
 # under the roof from inside the cage.
+#
+# The roof runs out to the SIDE twine, not to the narrower crown: the crossbar and
+# crown rails are inset by NET_MOUTH_CORNER_RADIUS, and HockeyGoal closes the 10 cm
+# strip between each crown rail and its side panel with a gusset quad. Bounding this
+# face at the crown instead left that strip open along the whole top depth — a scored
+# puck bouncing up off the back mesh drifted into it and flew out through visible
+# twine, which is the one place the cage must be closed.
 #
 # SWEPT, not a thin-band snapshot: the face is chosen from the side the segment START (`prev`)
 # was on, and a puck approaching from below is caught the instant its disc top reaches the
@@ -177,7 +184,7 @@ static func resolve_top_net(prev: Vector3, pos: Vector3, vel: Vector3, result: R
 	result.hit = false
 	result.position = pos
 	result.velocity = vel
-	if absf(pos.x) > GameRules.NET_CROWN_HALF_WIDTH:
+	if absf(pos.x) > NetGeometry.cavity_half_width():
 		return false
 	var az: float = absf(pos.z)
 	if az < GameRules.GOAL_LINE_Z or az > GameRules.GOAL_LINE_Z + GameRules.NET_TOP_DEPTH:
