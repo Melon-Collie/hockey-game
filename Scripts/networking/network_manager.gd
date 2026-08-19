@@ -1532,12 +1532,14 @@ func _apply_world_state(s: PackedByteArray) -> void:
 		# from smooth path/relay jitter (spread around the 8.3ms interval).
 		NetworkTelemetry.record_ws_arrival_gap(gap * 1000.0)
 	_last_ws_arrival_time = now
-	# PDV delay vs the synced host clock (header host_capture_time at bytes
-	# 2..5, u32 0.1ms units). Clumping barely moves this, unlike the gap above.
-	if is_clock_ready() and s.size() >= 6:
-		_record_packet_delay(estimated_host_time() - float(s.decode_u32(2)) / Constants.TIME_WIRE_SCALE)
-	if s.size() >= 2:
-		_on_ws_sequence_received(s.decode_u16(0))
+	# PDV delay vs the synced host clock, off the world-state header's
+	# host_capture_time. Clumping barely moves this, unlike the gap above.
+	if is_clock_ready() and s.size() >= WorldStateCodec.WS_HOST_TIME_OFFSET + 4:
+		_record_packet_delay(estimated_host_time()
+				- float(s.decode_u32(WorldStateCodec.WS_HOST_TIME_OFFSET))
+				/ Constants.TIME_WIRE_SCALE)
+	if s.size() >= WorldStateCodec.WS_SEQUENCE_OFFSET + 2:
+		_on_ws_sequence_received(s.decode_u16(WorldStateCodec.WS_SEQUENCE_OFFSET))
 	# Advance the shared interpolation delay once per packet, before the
 	# decode applies state to actors — so every interpolator this frame
 	# reads the same freshly-adapted value.

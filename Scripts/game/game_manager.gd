@@ -4014,10 +4014,10 @@ func _on_input_batch_received(peer_id: int, inputs: Array[InputState]) -> void:
 func _on_world_state_received(data: PackedByteArray) -> void:
 	if _codec != null:
 		_codec.decode_world_state(data)  # updates _state_machine.current_phase
-	if data.size() < 6:
+	if data.size() < WorldStateCodec.WS_HOST_TIME_OFFSET + 4:
 		return
-	# u32 0.1ms wire units — must match WorldStateCodec's header encoding.
-	var host_ts: float = float(data.decode_u32(2)) / Constants.TIME_WIRE_SCALE
+	var host_ts: float = float(data.decode_u32(WorldStateCodec.WS_HOST_TIME_OFFSET)) \
+			/ Constants.TIME_WIRE_SCALE
 	# Feed the in-memory ring buffer so this peer's GoalReplayDriver has a
 	# clip to extract when a goal fires. Skipped during the cinematic itself
 	# (NetworkManager.is_replay_mode is mirrored to clients) so we don't

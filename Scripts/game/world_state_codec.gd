@@ -61,7 +61,16 @@ signal clock_updated(time_remaining: float)
 signal shots_on_goal_changed(sog_0: int, sog_1: int)
 signal queue_depth_feedback(depth: int)
 
-const WS_HEADER_SIZE: int = 7      # u16 ws_seq (2) + u32 host_capture_time in 0.1ms units (4) + u8 num_skaters (1)
+# World-state header layout. Named because three files outside this one read
+# fields out of it by byte offset — NetworkManager (sequence, and host time for
+# the PDV sample) and GameManager (host time for the recorder). Reordering the
+# header while those literals stayed put would not fail to decode; it would
+# decode the wrong field and carry on.
+# Units are u32 0.1 ms (Constants.TIME_WIRE_SCALE) — see Scripts/networking/CLAUDE.md.
+const WS_SEQUENCE_OFFSET: int = 0     # u16
+const WS_HOST_TIME_OFFSET: int = 2    # u32, 0.1 ms units
+const WS_SKATER_COUNT_OFFSET: int = 6  # u8
+const WS_HEADER_SIZE: int = 7
 const SKATER_STATE_BYTES: int = 41  # inner skater state block (was hardcoded 39 at two
                                     # decode sites and silently truncated on the v15 grow;
                                     # 40->41 adds knockdown_timer u8@0.01s)
@@ -140,10 +149,11 @@ func encode_world_state() -> PackedByteArray:
 			+ PUCK_BLOCK_SIZE + 1 + num_goalies * GOALIE_BLOCK_SIZE
 			+ GAME_STATE_BLOCK_SIZE)
 	# Header: u16 sequence + u32 host_capture_time (0.1ms units) + u8 skater count
-	b.encode_u16(0, _ws_sequence)
+	b.encode_u16(WS_SEQUENCE_OFFSET, _ws_sequence)
 	_ws_sequence = (_ws_sequence + 1) & 0xFFFF
-	b.encode_u32(2, roundi(maxf(NetworkManager.local_time(), 0.0) * Constants.TIME_WIRE_SCALE))
-	b.encode_u8(6, num_skaters)
+	b.encode_u32(WS_HOST_TIME_OFFSET,
+			roundi(maxf(NetworkManager.local_time(), 0.0) * Constants.TIME_WIRE_SCALE))
+	b.encode_u8(WS_SKATER_COUNT_OFFSET, num_skaters)
 	var o: int = WS_HEADER_SIZE
 	# Skaters: u32 peer_id + SKATER_STATE_BYTES state + u8 queue_depth
 	for peer_id: int in _peers_scratch:
