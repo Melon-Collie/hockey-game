@@ -70,6 +70,37 @@ Use it wherever a row reacts to being reached (the locker's camera framing).
 `PaletteDropdown` has the same shape and no accessor yet — add one the same way
 if something needs to watch it.
 
+## The HUD is a coordinator over panels
+
+`hud.gd` builds only the chrome nobody else wants (version tag, bug icon,
+spectator banner) and owns the overlays and dialogs. Everything else is a panel
+under `Scripts/ui/hud/` that owns its widgets **and** its state — `HudScorebug`,
+`HudGoalChyron`, `HudPrompts`, `HudGhostBanner`, plus `HudStatFeed` and
+`HudRematchVotes`, which own no widgets at all. `HudChrome` holds the widget
+factories, team colors and period/clock text they share.
+
+- **The HUD never writes a panel's field** — it calls a method. Assigning a
+  field is deciding *when* it changes, which is the panel's own lifecycle; once
+  the coordinator owns that, the panel's updater is dead code waiting to happen.
+  Same rule, same evidence as `GoalieCreaseClear` in
+  `Scripts/controllers/CLAUDE.md`.
+- **Upward flow is a signal.** A panel that needs a toast, an overlay or a
+  `GameManager` call emits one (`HudScorebug.warning_toast`,
+  `HudGoalChyron.matchup_intro_requested`, `HudRematchVotes.resolved`) and the
+  HUD listens. Panels never reach for each other or for the overlays.
+- **Build order IS z-order.** `build(scale_root)` adds a panel's widgets to
+  `_scale_root` at the moment it is called, so the sequence in `_ready` is the
+  layering. That is why the scorebug's clock warning and the chyron's goal wash
+  are separate `build_*` calls — they belong at different depths.
+
+A panel is a `Node` when it owns widgets or needs a tween, `RefCounted` when it
+owns neither. It takes `scale_root` as a parameter rather than holding it.
+
+Where a panel is the whole handler, the session signal connects straight to its
+method (`GameManager.clock_updated.connect(_scorebug.update_clock)`). An arity
+that stops matching is a runtime error no headless run would otherwise reach,
+so `test_hud_panel_wiring.gd` instantiates the HUD and emits every one of them.
+
 ## Menu styling
 
 `MenuStyle` owns the shared look. `apply_primary_cta` is the one loud button per

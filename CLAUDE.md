@@ -239,6 +239,7 @@ that file can't tell you:
 | New bot AI evaluator | `domain/ai/action_scoring.gd` (shot, pass, dump, and the shared clocks) or `domain/ai/carry_space.gd` (the carrier's room to operate: evasion, controlled space, deke, brake) + GUT calibration test — build it as a grounded model (see `Scripts/domain/ai/CLAUDE.md`) |
 | Port a hot kernel to C++ | `native/src/` + seeded parity fuzz test + micro-bench row; GDScript original stays as the reference (see `native/README.md`) |
 | New "body dial X scales Y" rule | `PlayerAttributes` (see `Scripts/domain/state/CLAUDE.md`) |
+| New HUD panel | Class in `Scripts/ui/hud/` owning its widgets and its state; `HUD` holds a reference, calls methods and never writes its fields — upward flow is a signal. `test_hud_panel_wiring.gd` holds both (see `Scripts/ui/CLAUDE.md`) |
 | New user-facing UI string | `KEY,en,es` row in `locale/translations.csv`, then `tr("KEY")` at the display seam (see `Scripts/ui/CLAUDE.md`) |
 
 ## Code Conventions
