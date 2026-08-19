@@ -317,7 +317,8 @@ bool NativePuckStep::resolve_crossbar(Vector3 &p, Vector3 &v, double puck_radius
 }
 
 bool NativePuckStep::resolve_top_net(const Vector3 &prev, Vector3 &p, Vector3 &v) const {
-	if (Math::abs((double)p.x) > net_crown_half_width) {
+	// Out to the SIDE twine, not the inset crown — see PuckGeometryCollision.resolve_top_net.
+	if (Math::abs((double)p.x) > net_half_width) {
 		return false;
 	}
 	const double az = Math::abs((double)p.z);

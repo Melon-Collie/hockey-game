@@ -153,6 +153,23 @@ func test_top_net_misses_in_front_of_the_goal_line() -> void:
 	assert_false(PuckGeometryCollision.resolve_top_net(prev, pos, Vector3(0, 5, 0), res))
 
 
+func test_top_net_closes_the_crown_to_side_gusset_strip() -> void:
+	# The roof runs to the SIDE twine, not the inset crown. HockeyGoal paints a
+	# gusset quad over the 10 cm strip between each crown rail and its side panel,
+	# so a scored puck kicked up off the back mesh in that strip must die on twine
+	# instead of flying out through it. Sampled at the widest interior x a puck
+	# centre can reach (the side clamp), which sits inside the strip.
+	var x: float = NetGeometry.cavity_half_width() - R
+	assert_gt(x, GameRules.NET_CROWN_HALF_WIDTH,
+			"the sampled x is in the gusset strip, outside the crown")
+	var prev := Vector3(x, GameRules.NET_HEIGHT - 0.06, GameRules.GOAL_LINE_Z + 0.3)
+	var pos := Vector3(x, GameRules.NET_HEIGHT - 0.01, GameRules.GOAL_LINE_Z + 0.3)
+	var res := PuckGeometryCollision.Result.new()
+	assert_true(PuckGeometryCollision.resolve_top_net(prev, pos, Vector3(0, 8, 0), res),
+			"a puck rising in the gusset strip contacts the roof")
+	assert_lt(res.velocity.y, 0.0, "driven back down into the cage")
+
+
 func test_top_net_ignores_a_low_puck() -> void:
 	var prev := Vector3(0.0, 0.28, GameRules.GOAL_LINE_Z + 0.3)
 	var pos := Vector3(0.0, 0.3, GameRules.GOAL_LINE_Z + 0.3)

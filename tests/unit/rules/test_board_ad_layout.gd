@@ -247,6 +247,26 @@ func test_ice_atlas_cells_are_disjoint_and_inside_the_atlas() -> void:
 					"cell %d keeps its gutter from the cells before it" % i)
 		placed.append(uv)
 
+# ── In-ice ink ───────────────────────────────────────────────────────────
+# An in-ice ad has no panel field — it is lettering printed straight into white
+# ice — so every colour that reaches it has to be dark enough to read there. The
+# board palette is the opposite (light marks on dark fields), which is what makes
+# this worth a test rather than a convention.
+
+func test_every_brand_inks_dark_enough_for_white_ice() -> void:
+	for i: int in AdBrands.BRANDS.size():
+		var brand: Dictionary = AdBrands.BRANDS[i]
+		for role: String in ["bg", "accent"]:
+			var ink: Color = IceAdPainter.ice_ink(brand[role] as Color)
+			assert_lte(ink.get_luminance(), IceAdPainter.MAX_INK_LUMINANCE + 0.001,
+					"%s's %s reads on the ice" % [brand.name, role])
+
+func test_a_colour_already_dark_enough_is_left_alone() -> void:
+	# The ceiling is not a flattening pass: a brand that owns a deep colour keeps
+	# it exactly, so the sheet still shows a range of sponsor hues.
+	var deep := Color(0.09, 0.09, 0.10)
+	assert_eq(IceAdPainter.ice_ink(deep), deep, "an already-dark colour passes through")
+
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 # The reservations the shipping rink produces: centre and blue stripes on both

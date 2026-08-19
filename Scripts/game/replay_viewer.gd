@@ -74,12 +74,6 @@ func _ready() -> void:
 	# The driver writes positions via apply_replay_state directly.
 	NetworkManager.start_replay_mode(0.0)
 
-	# The viewer's cameras (broadcast booth, chase, free) sit far from the
-	# action; widen the 3D sound falloff so recorded puck/shot/check events
-	# stay audible from the cinematic distance instead of attenuating to
-	# silence. Restored in _exit_tree.
-	SoundManager.set_world_audio_range(SoundManager.AudioRange.REPLAY_FAR)
-
 	_spawner = ActorSpawner.new()
 	_spawner.setup(self)
 	_spawn_actors_from_header(read_result.header)
@@ -92,8 +86,6 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	# Restore the global flag so a subsequent live game / lobby session works.
 	NetworkManager.stop_replay_mode()
-	# Restore the live 3D sound falloff (widened on entry for the far cameras).
-	SoundManager.set_world_audio_range(SoundManager.AudioRange.LIVE)
 	# Restore mouse mode if the user left free-cam with RMB captured — the
 	# next scene's UI needs a visible cursor. Director.teardown() handles
 	# this via FreeCamera.deactivate() when free is the active mode.

@@ -21,8 +21,8 @@ func test_game_over_popup_compiles() -> void:
 
 
 func test_career_stats_screen_compiles() -> void:
-	# Same shape: nested CareerHeatMap / HeatRamp / GoalDot Controls with _draw
-	# overrides, and the legend swatches reach across into the map's ramp
-	# constants — all runtime-only failures otherwise.
+	# Same shape: nested CareerHeatMap / HeatRamp Controls with _draw overrides,
+	# and the legend swatch reaches across into the map's ramp constants — all
+	# runtime-only failures otherwise.
 	var gd: GDScript = load("res://Scripts/ui/career_stats_screen.gd")
 	assert_not_null(gd, "career_stats_screen.gd failed to compile")

@@ -31,14 +31,24 @@ class DeadenConfig:
 	# scramble chance. It is anchored to that distribution, so it moves whenever
 	# the wrister/slapper maxes move (GameRules.DEFAULT_*_POWER_MAX_M_S).
 	var pad_max_incoming_speed: float = 28.0
-	# Deadened exit-speed ceiling (m/s) for the ABSORBING surfaces. A chest or
-	# glove save leaves the puck crawling so the crease sweep can whisk it away.
+	# Deadened exit-speed ceiling (m/s) for the ABSORBING surfaces — the whole exit
+	# vector, not one channel of it. A chest or glove save leaves the puck crawling
+	# so the crease sweep can whisk it away.
 	var drop_speed: float = 1.2
 	# Fraction of the incoming LATERAL speed retained by the absorbing surfaces.
 	# Goalward (z) and vertical (y) motion are always killed so a deadened puck
 	# settles in front of the goalie instead of trickling into the net.
 	var glove_retain: float = 0.0    # a catch kills it dead
 	var chest_retain: float = 0.12
+	# Out-of-crease pace a chest save leaves on the puck. A chest protector's face
+	# is angled down AND OUT, so a smothered shot lands in FRONT of the pads —
+	# roughly half a metre out over the fall from chest height. Dropping it dead at
+	# the contact point instead put it on the goalie's own skate line, where his
+	# next shuffle or stick swing shoves it goalward: the "he beat himself off a
+	# chest save" own goal. Under drop_speed, so this is still a drop rather than a
+	# rebound the shooter can play. The GLOVE has none of this — a catch closes on
+	# the puck rather than deflecting it.
+	var chest_out_speed: float = 1.0
 	# Controlled PAD / BLOCKER saves are STEERED, not killed (modern "active
 	# rebounds" doctrine — realism audit F12): pads and blockers are built to
 	# fire the puck to the CORNER on the side it arrived at, at a firm but
@@ -148,9 +158,11 @@ static func is_controlled_save(incoming_speed: float, part: int, cfg: DeadenConf
 			return incoming_speed <= cfg.pad_max_incoming_speed
 
 # Exit velocity for a controlled save. Two families (audit F12):
-#   CHEST / GLOVE — absorb: keep only a clamped fraction of the incoming
-#     lateral drift; goalward (z) and vertical (y) motion are zeroed so the
-#     puck settles dead in front (the real "no rebound" surfaces).
+#   CHEST / GLOVE — absorb: keep only a fraction of the incoming lateral drift;
+#     the incoming goalward (z) and vertical (y) motion are killed outright, so
+#     nothing of the shot survives (the real "no rebound" surfaces). The chest
+#     then adds its own out-of-crease drop (`chest_out_speed`), and the whole
+#     exit is clamped to `drop_speed`.
 #   PAD / BLOCKER — steer: fire the puck cornerward on `contact_side` (the
 #     side of the goalie the puck arrived at, world-x sign) with an
 #     out-of-crease forward bias, at `pad_steer_speed` — the modern active
@@ -165,10 +177,14 @@ static func deadened_velocity(
 		contact_side: float, direction_sign: int, cfg: DeadenConfig) -> Vector3:
 	if part == SavePart.GLOVE or part == SavePart.CHEST:
 		var retain: float = cfg.glove_retain if part == SavePart.GLOVE else cfg.chest_retain
-		var lateral: float = incoming_velocity.x * retain
-		if absf(lateral) > cfg.drop_speed:
-			lateral = signf(lateral) * cfg.drop_speed
-		return Vector3(lateral, 0.0, 0.0)
+		var out_speed: float = 0.0 if part == SavePart.GLOVE else cfg.chest_out_speed
+		var exit := Vector3(incoming_velocity.x * retain, 0.0,
+				float(direction_sign) * out_speed)
+		# drop_speed bounds the WHOLE exit, not one channel of it — otherwise the
+		# ceiling that makes these the "no rebound" surfaces isn't one.
+		if exit.length() > cfg.drop_speed:
+			exit = exit.normalized() * cfg.drop_speed
+		return exit
 	# PAD / BLOCKER — steered cornerward exit.
 	var side: float = signf(contact_side)
 	if side == 0.0:

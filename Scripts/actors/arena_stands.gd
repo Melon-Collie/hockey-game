@@ -1275,7 +1275,8 @@ func _append_spectator_row(transforms: Array[Transform3D], anim_data: Array[Colo
 	var away_section: int = _away_section_id()
 	var samples: PackedVector2Array = _sample_offset_path(spectator_off)
 	var resampled: PackedVector2Array = _resample_uniform(samples, spectator_spacing)
-	for p: Vector2 in resampled:
+	for i: int in resampled.size():
+		var p: Vector2 = resampled[i]
 		if bench_row >= 0 and _in_bench_zone(bench_row, p):
 			continue
 		# Vacancy roll first (before any jitter rolls) so the occupied seats'
@@ -1286,10 +1287,9 @@ func _append_spectator_row(transforms: Array[Transform3D], anim_data: Array[Colo
 		if _in_aisle(arc_s):
 			continue
 		var pos: Vector3 = Vector3(p.x, y + rng.randf_range(-spectator_y_jitter, spectator_y_jitter), p.y)
-		# Face the rink: local forward (-Z) should point from p toward XZ
-		# origin. With Basis(Y, yaw), forward_world = (-sin yaw, 0, -cos yaw);
-		# solving for that to equal -p.normalized() yields yaw = atan2(p.x, p.z).
-		var yaw: float = atan2(p.x, p.y) \
+		# Square to the row, like the seat under them — the jitter is what breaks
+		# up the rank, not a per-fan bearing to centre ice.
+		var yaw: float = _row_facing_yaw(resampled, i) \
 				+ deg_to_rad(rng.randf_range(-spectator_yaw_jitter_deg, spectator_yaw_jitter_deg))
 		# Uniform, so the head rides the body without the two needing separate
 		# transforms. Heads therefore vary a little with stature, which is not
@@ -1916,12 +1916,13 @@ func _append_seat_row(transforms: Array[Transform3D], shades: PackedFloat32Array
 		rng: RandomNumberGenerator, seat_off: float, y: float, bench_row: int) -> void:
 	var samples: PackedVector2Array = _sample_offset_path(seat_off)
 	var resampled: PackedVector2Array = _resample_uniform(samples, spectator_spacing)
-	for p: Vector2 in resampled:
+	for i: int in resampled.size():
+		var p: Vector2 = resampled[i]
 		if bench_row >= 0 and _in_bench_zone(bench_row, p):
 			continue
 		if _in_aisle(_base_path_s(p)):
 			continue
-		transforms.append(Transform3D(Basis(Vector3.UP, atan2(p.x, p.y)),
+		transforms.append(Transform3D(Basis(Vector3.UP, _row_facing_yaw(resampled, i)),
 				Vector3(p.x, y, p.y)))
 		shades.append(1.0 - rng.randf() * seat_shade_variation)
 
@@ -2303,6 +2304,30 @@ func _resample_uniform(samples: PackedVector2Array, spacing: float) -> PackedVec
 			next_t += spacing
 		cum += seg_len
 	return out
+
+
+# Yaw that squares a seat (and its occupant) to the ice at `points[i]`, where
+# `points` is one resampled row as a closed loop.
+#
+# The heading is the ROW'S OWN inward normal, not the bearing to centre ice.
+# Seats are bolted in ranks: down a straight side every seat in a row faces the
+# same way — perpendicular to the boards — and the heading only swings around the
+# corner arcs. Aiming each seat at the origin instead splays a straight rank into
+# a fan, ~20 deg off square by the ends of the long sides.
+#
+# Tangent from a central difference so a seat on a corner blends its two
+# neighbours instead of inheriting one segment's normal. This path winds bottom →
+# left → top → right, which makes the −90 deg rotation of the tangent the one
+# pointing at the rink — the opposite of `_path_stations`, which reverses the
+# traversal first (see its note). With Basis(Y, yaw) the local forward is
+# (−sin yaw, −cos yaw), so facing `inward` is atan2(−inward.x, −inward.y).
+static func _row_facing_yaw(points: PackedVector2Array, i: int) -> float:
+	var n: int = points.size()
+	var tangent: Vector2 = points[(i + 1) % n] - points[(i - 1 + n) % n]
+	if tangent.length_squared() < 0.000001:
+		return atan2(points[i].x, points[i].y)  # degenerate row: face centre ice
+	var inward := Vector2(tangent.y, -tangent.x)
+	return atan2(-inward.x, -inward.y)
 
 
 # Away-fan share inside the designated visiting block. A feel constant: real

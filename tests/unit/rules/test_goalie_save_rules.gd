@@ -11,6 +11,7 @@ func _cfg() -> GoalieSaveRules.DeadenConfig:
 	cfg.pad_steer_speed = 5.0
 	cfg.steer_lateral_weight = 1.0
 	cfg.steer_forward_weight = 0.35
+	cfg.chest_out_speed = 1.0
 	return cfg
 
 # ── is_controlled_save ────────────────────────────────────────────────────────
@@ -42,28 +43,56 @@ func test_blocker_controlled_only_under_threshold() -> void:
 
 func test_glove_deadens_to_zero() -> void:
 	# Glove retain 0 → the puck dies dead in the paint (a catch, minus the hold).
+	# The chest's out-of-crease drop is deliberately NOT shared: a glove closes on
+	# the puck, it does not deflect it.
 	var v := GoalieSaveRules.deadened_velocity(
 			Vector3(10.0, 4.0, -18.0), GoalieSaveRules.SavePart.GLOVE, 1.0, 1, _cfg())
 	assert_almost_eq(v.length(), 0.0, 0.0001)
 
-func test_chest_absorb_kills_goalward_and_vertical() -> void:
-	# Absorbing surfaces zero z (goalward) and y so the puck can't trickle in or pop.
+func test_chest_absorb_kills_the_shot_and_drops_it_out_front() -> void:
+	# None of the incoming goalward or vertical motion survives; the puck leaves
+	# with only the chest protector's own out-of-crease drop, so it cannot trickle
+	# in or pop. Direction sign +1 = away from this goalie's goal line.
 	var v := GoalieSaveRules.deadened_velocity(
 			Vector3(2.0, 5.0, -20.0), GoalieSaveRules.SavePart.CHEST, 1.0, 1, _cfg())
-	assert_almost_eq(v.z, 0.0, 0.0001)
 	assert_almost_eq(v.y, 0.0, 0.0001)
+	assert_almost_eq(v.z, 1.0, 0.0001)
+
+func test_the_chest_drop_is_always_away_from_the_goal_line() -> void:
+	# The whole point: a smothered puck lands in FRONT of the pads rather than on
+	# the goalie's own skate line, where his next shuffle shoves it over the line.
+	# Both ends, since direction_sign is what carries "forward" for each net.
+	for dir_sign: int in [-1, 1]:
+		var v := GoalieSaveRules.deadened_velocity(
+				Vector3(0.0, 0.0, -20.0), GoalieSaveRules.SavePart.CHEST, 1.0, dir_sign, _cfg())
+		assert_almost_eq(v.z, float(dir_sign) * 1.0, 0.0001,
+				"the drop is out of the crease at direction_sign %d" % dir_sign)
+
+func test_the_chest_drop_stays_a_drop_not_a_rebound() -> void:
+	# Bounded by drop_speed, so a chest save never hands the shooter a playable
+	# puck — the surface's defining property.
+	var cfg := _cfg()
+	var v := GoalieSaveRules.deadened_velocity(
+			Vector3(20.0, 6.0, -35.0), GoalieSaveRules.SavePart.CHEST, 1.0, 1, cfg)
+	assert_lte(v.length(), cfg.drop_speed + 0.0001,
+			"the exit never exceeds the deadened ceiling")
 
 func test_chest_retains_clamped_lateral() -> void:
-	# Chest retain 0.12 of 2 m/s lateral = 0.24, under the 1.2 clamp → kept.
+	# Chest retain 0.12 of 2 m/s lateral = 0.24; with the 1.0 drop that is a 1.03
+	# exit, under the 1.2 clamp → the drift is kept whole.
 	var v := GoalieSaveRules.deadened_velocity(
 			Vector3(2.0, 0.0, -20.0), GoalieSaveRules.SavePart.CHEST, 1.0, 1, _cfg())
 	assert_almost_eq(v.x, 0.24, 0.0001)
 
-func test_chest_clamps_lateral_to_drop_speed() -> void:
-	# 0.12 of 20 m/s lateral = 2.4, clamped down to drop_speed 1.2 (sign preserved).
+func test_chest_clamps_the_whole_exit_to_drop_speed() -> void:
+	# 0.12 of 20 m/s lateral = 2.4, well past drop_speed 1.2. The ceiling is on the
+	# exit VECTOR, so the drift scales down with the drop rather than the lateral
+	# channel alone being capped and the drop sneaking past on top of it.
 	var v := GoalieSaveRules.deadened_velocity(
 			Vector3(-20.0, 0.0, -20.0), GoalieSaveRules.SavePart.CHEST, 1.0, 1, _cfg())
-	assert_almost_eq(v.x, -1.2, 0.0001)
+	assert_almost_eq(v.length(), 1.2, 0.0001, "bounded by drop_speed")
+	assert_lt(v.x, 0.0, "still drifting the way the shot came in")
+	assert_gt(v.z, 0.0, "and still out of the crease")
 
 # Steered pad/blocker saves — modern active-rebound doctrine (audit F12):
 # controlled pad saves fire the puck cornerward on the contact side, with an

@@ -455,7 +455,7 @@ var stride_skew: float = 0.3              # push/recovery asymmetry of the strok
 var stride_rear_bias: float = 0.45
 var stride_abduction_deg: float = 10.0    # outward flare of the extending leg (the skating "V" push)
 var stride_bob_m: float = 0.02            # vertical body bob per half-stride (weight transfer)
-var stride_sway_deg: float = 3.0          # torso weight-shift roll oscillating with the stride
+var stride_sway_deg: float = 2.1          # torso weight-shift roll oscillating with the stride
 var stride_dig_lean_deg: float = 8.0      # extra trunk pitch from effort: forward driving, back braking
 # Trunk inertia at the texture seam: the trunk texture sums many reads and
 # each carries residual step/noise from its input; the trunk — the body's
@@ -579,7 +579,7 @@ var backpedal_pitch_fade: float = 0.4    # fore/aft pump removed at full C-cut (
 var backpedal_chest_deg: float = 4.0     # chest-up trunk pitch over the C-cuts
 # Glide enrichment: coasting (no keys) sways weight edge-to-edge, and a carve
 # released into a glide exits the turn on its edges (one-foot-glide read).
-var glide_sway_deg: float = 2.5          # lazy edge-to-edge roll amplitude
+var glide_sway_deg: float = 1.8          # lazy edge-to-edge roll amplitude
 var glide_sway_hz: float = 0.4           # sway frequency — far below stride cadence
 var glide_carve_lean_deg: float = 10.0   # legs lean into the arc gliding out of a turn
 var glide_inside_tuck_deg: float = 10.0  # inside-leg knee tuck — weight on the outside edge
@@ -605,7 +605,7 @@ var cadence_glide_stance_gain: float = 0.12 # extra sit depth at sustained top s
 # the lateral weight shift behind the stride so the body rides over the loaded
 # leg and settles with follow-through instead of rolling rigidly with it. Adds
 # "weight" for almost nothing. weight_shift_deg 0 restores the prior gait.
-var weight_shift_deg: float = 2.5           # amplitude of the springy lateral body lean
+var weight_shift_deg: float = 1.7           # amplitude of the springy lateral body lean
 var weight_spring_stiffness: float = 90.0   # spring constant (higher = snappier follow)
 var weight_spring_damping: float = 14.0     # damping (near-critical — a clean settle with slight overshoot)
 

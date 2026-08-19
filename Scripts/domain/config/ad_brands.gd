@@ -16,7 +16,9 @@ extends RefCounted
 #
 # `bg` is the panel field, `fg` the wordmark, `accent` the tagline and the rule
 # under it. Fields are chosen dark enough that a white wordmark carries at a
-# distance, since the boards behind them are white.
+# distance, since the boards behind them are white. That darkness is load-bearing
+# twice over: the in-ice ads have no field to sit on, so they letter in `bg`
+# instead of `fg` (see IceAdPainter.ice_ink).
 
 const BRANDS: Array[Dictionary] = [
 	{"name": "TOP SHELF", "tag": "LAGER",
