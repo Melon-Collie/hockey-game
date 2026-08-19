@@ -8,8 +8,6 @@ extends CanvasLayer
 # revert action is supplied by the caller (OptionsPanel) as a Callable; this
 # dialog only owns the countdown and the choice. Frees itself on resolution.
 
-signal kept
-signal reverted
 
 const _REVERT_DEFAULT_SECONDS: float = 15.0
 
@@ -115,7 +113,6 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _on_keep() -> void:
 	_close()
-	kept.emit()
 	queue_free()
 
 
@@ -123,7 +120,6 @@ func _do_revert() -> void:
 	_close()
 	if _on_revert.is_valid():
 		_on_revert.call()
-	reverted.emit()
 	queue_free()
 
 

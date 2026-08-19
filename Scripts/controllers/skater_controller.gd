@@ -711,7 +711,6 @@ var _sm: SkaterStateMachine = SkaterStateMachine.new()
 @export var max_slapper_charge_time: float = 0.7
 @export var slapper_blade_x: float = 1.0
 @export var slapper_blade_z: float = -0.5
-@export var slapper_aim_arc: float = 45.0
 # Wind-up coil: layered on top of the aim-tracking torso angle. Rotates the
 # back shoulder away from the target (for RHS that's CW from above, i.e. left
 # shoulder points at the puck) while pulling the top hand up and across the

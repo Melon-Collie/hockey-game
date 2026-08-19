@@ -10,7 +10,6 @@ extends Node
 # to broadcast). On teardown(), restores whichever camera was current before
 # the director took over.
 
-signal mode_changed(label: String)
 
 enum Mode { BROADCAST, CHASE, POV, FREE }
 
@@ -74,14 +73,11 @@ func set_preferred_target(skater: Skater) -> void:
 	# takes effect.
 	if current_target() == null:
 		_refresh_targets()
-		if _mode == Mode.CHASE or _mode == Mode.POV:
-			mode_changed.emit(get_mode_label())
 
 
 func activate_initial() -> void:
 	_mode = Mode.BROADCAST
 	_broadcast.activate()
-	mode_changed.emit(get_mode_label())
 
 
 func teardown() -> void:
@@ -93,10 +89,6 @@ func teardown() -> void:
 		Mode.POV: _pov.deactivate()
 		Mode.FREE: _free.deactivate()
 	queue_free()
-
-
-func get_mode() -> int:
-	return _mode
 
 
 func get_mode_label() -> String:
@@ -158,7 +150,6 @@ func cycle_chase_target(direction: int) -> void:
 		_chase.snap_to_target()
 	else:
 		_pov.snap_to_target()
-	mode_changed.emit(get_mode_label())
 
 
 func _set_mode(new_mode: int) -> void:
@@ -183,7 +174,6 @@ func _set_mode(new_mode: int) -> void:
 		Mode.FREE:
 			# Inherit the previous camera's pose so the swap doesn't snap.
 			_free.activate(prev_xform)
-	mode_changed.emit(get_mode_label())
 
 
 func _current_transform() -> Transform3D:
