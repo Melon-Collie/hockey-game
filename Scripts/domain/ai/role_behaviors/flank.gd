@@ -4,38 +4,20 @@ class_name AIRoleFlank
 # peers during loose-puck play. Job: stand off to either side of
 # the puck, slightly defensive, ready to support whoever gets it.
 #
-# Trivial. Target = puck position offset by FLANK_LATERAL_M to the
-# assigned side and FLANK_DEPTH_M back toward our own net. The
-# left/right split is handled by the brain (X-axis assignment with
-# hysteresis); each role behavior just receives the lateral sign
-# and computes the target.
+# Target = puck position offset by FLANK_LATERAL_M to the assigned side and
+# FLANK_DEPTH_M back toward our own net. The left/right split is the brain's
+# (X-axis assignment with hysteresis); this receives the lateral sign.
 #
-# Not quite "no utility AI": the shape above is pure PUCKWATCHING — the
-# target is a rigid offset off the puck, so both flanks follow the puck
-# wherever it goes, including up-ice past everyone. That is what produced the
-# last man back stepping to his own blue line while an opponent lurked behind
-# him: a stand nobody can recover from is not a stand, and NEUTRAL was the one
-# game state whose off-puck shape never asked the question. So the flank stand
-# is bounded by the shared numbers read (AIRoleHelpers.neutral_station_target).
-#
-# That bound has TWO halves, and for a long time only the first existed.
-#
-#   A MAN HAS GOT BEHIND ME with nobody covering — give up exactly the ice that
-#     restores the layer. Reactive by nature, and correctly so: it refuses a
-#     guaranteed-breakaway geometry that is already on the ice.
-#   IS ANYBODY HOME BEHIND ME — the numbers half, asked BEFORE the turnover.
-#     This is the one the shape needed. In a neutral-zone puck race nobody is
-#     behind anybody yet, so the reactive half reads clear for every station,
-#     both flanks hold a stand two metres off the puck, and the man gets behind
-#     them because they all stepped up. Measured: 66% of the following threat
-#     window with nobody between the opposing carrier and our net, and the
-#     elected RUSH_D1 already up-ice of the puck when the state flipped. The read
-#     is antisymmetric (AIRoleHelpers.home_layer_behind_me), so exactly one flank
-#     draws the layer — one on the puck, one in support, one home, which is the
-#     shape three players actually hold.
-#
-# Nobody behind AND a body home leaves the stand untouched, so ordinary
-# loose-puck play with a layer already back is unchanged.
+# That shape alone is pure PUCKWATCHING — a rigid offset off the puck, so both
+# flanks follow it wherever it goes, including up-ice past everyone, and the last
+# man steps to his own blue line while an opponent lurks behind him. So the stand
+# is bounded by the shared numbers read, which asks BOTH halves: has a man got
+# behind me with nobody covering, AND is anybody home behind me. The second is
+# what a puck race needs — nobody is behind anybody yet, so the reactive half
+# alone reads clear for every station and the whole shape steps up together.
+# The read is antisymmetric, so exactly one flank draws the layer: one on the
+# puck, one in support, one home. Nobody behind AND a body home leaves the stand
+# untouched, so ordinary loose-puck play is unchanged.
 
 # Lateral offset from puck X axis. Sampling parameter — the
 # defensive "shape" the team holds during loose-puck play.
@@ -59,14 +41,13 @@ static func decide(ctx: RoleContext, lateral_sign: float) -> RoleDecision:
 			puck_pos.x + lateral_sign * FLANK_LATERAL_M,
 			0.0,
 			puck_pos.z + ctx.own_goal_dir * FLANK_DEPTH_M)
-	# Last-man bound (see the header doc). The LAYER's stand — where this body goes
-	# when it is the one that has to stay back — is the defensive post at our own
-	# blue line, which is exactly the stand 5v5's back pair holds in this same
-	# state (AIRoleDefenseman's DBACK). The two team sizes therefore hold the same
-	# neutral-zone structure, and the layer is somewhere that is still a layer once
-	# the puck is won: a puck-relative floor is not, because every candidate it can
-	# name sits a couple of metres off a loose puck at centre ice and is skated
-	# through the moment anybody picks it up.
+	# The LAYER's stand — where this body goes when it is the one that has to stay
+	# back — is the defensive post at our own blue line, the same stand 5v5's back
+	# pair holds in this state, so both team sizes hold one neutral-zone structure.
+	# It must be a spot that is still a layer once the puck is won: a puck-relative
+	# floor is not, because every candidate it can name sits a couple of metres off
+	# a loose puck at centre ice and is skated through the moment anybody picks it
+	# up.
 	d.target_position = AIRoleHelpers.neutral_station_target(
 			ctx, stand, ctx.prev_held_forward_stand,
 			AIZoneCoverage.defensive_anchor(

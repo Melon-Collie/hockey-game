@@ -23,8 +23,8 @@ extends RefCounted
 # harvested batch and the next kick), never while it is being written.
 #
 # The TeamBrain tick runs on the worker too, at the head of each batch (tick →
-# build_view → decide), preserving the order those three had when the first two
-# were on main. Brains are only 6 Hz, but force_retick() fires them off-cadence
+# build_view → decide), the order those three must keep. Brains are only 6 Hz,
+# but force_retick() fires them off-cadence
 # on every carrier flip, so their spikes cluster in scrums — exactly the worst
 # ticks. That makes them worth moving even though their mean is small.
 #
@@ -34,8 +34,8 @@ extends RefCounted
 #   • Every host-raised brain mutation (pings, carrier-flip re-ticks, tutorial
 #     spawn/despawn) is parked in the queues below and applied BY THE MAIN THREAD
 #     in the idle window just before the next kick. Nothing is written across the
-#     thread boundary; the only cost is a deferral of a frame or two, which is
-#     the staleness Model A already accepts.
+#     thread boundary; the only cost is a deferral of a frame or two, the same
+#     staleness a harvested decision already carries.
 #   • The two live brain fields main still reads every frame — the ping-elected
 #     chaser and the possession state / coverage flag — are published into plain
 #     mirrors at kick time and read from there.
@@ -250,8 +250,9 @@ func await_idle() -> void:
 
 
 # ── Deferred brain mutation API (host, main thread) ──────────────────────────
-# Mirrors the TeamBrain methods the host used to call directly. Each takes
-# effect at the next kick; see the queue declarations for why that is sound.
+# Mirrors the TeamBrain methods, which the host must not call directly while the
+# worker owns the brains. Each takes effect at the next kick; see the queue
+# declarations for why that is sound.
 
 func queue_ping(team_id: int, type: int, pinger_peer: int, target_peer: int,
 		obeyer_peer: int, world_pos: Vector3) -> void:
@@ -278,8 +279,8 @@ func queue_include_skater(team_id: int, peer_id: int) -> void:
 
 
 # Last published value of a field the host reads off a live brain every frame.
-# Defaults match what a missing/unticked brain returned before: no ping-elected
-# chaser, and the brain's own DZONE / not-downgraded starting state.
+# Defaults match a missing / unticked brain: no ping-elected chaser, and the
+# brain's own DZONE / not-downgraded starting state.
 func ping_chase_peer(team_id: int) -> int:
 	if team_id < 0 or team_id >= _ping_chase_by_team.size():
 		return -1
@@ -432,9 +433,8 @@ func _worker_loop() -> void:
 		var snap: WorldSnapshot = _worker_snapshot
 		var d: float = _worker_delta
 		# Team strategy first, then freeze it, then the agents that read the
-		# frozen view — the order these three ran in when the first two were on
-		# main, so cross-agent effects (one-timer readiness, slot assignment)
-		# resolve exactly as before.
+		# frozen view. Cross-agent effects (one-timer readiness, slot assignment)
+		# resolve correctly only in that order.
 		for brain: TeamBrain in _worker_brains:
 			brain.tick(d, snap)
 		for brain: TeamBrain in _worker_brains:

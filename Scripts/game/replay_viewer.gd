@@ -14,7 +14,7 @@ extends Node
 #   - The rink visuals + goals (HockeyGoal nodes for the net meshes)
 #   - WorldEnvironment + DirectionalLight3D for lighting
 #   - No Camera3D (CameraDirector mounts broadcast / chase / POV / free cams at runtime)
-#   - No HUD (added in a follow-up commit)
+#   - No HUD (ReplayViewerHUD is mounted at runtime)
 
 var _spawner: ActorSpawner = null
 var _puck: Puck = null
@@ -113,7 +113,7 @@ func _spawn_actors_from_header(header: Dictionary) -> void:
 	_puck_controller.set_physics_process(false)
 
 	var goalie_result: Dictionary = _spawner.spawn_goalie_pair(_puck, false)
-	# Order must match GameManager._spawn_goalies (game_manager.gd:592) —
+	# Order must match GameManager._spawn_goalies —
 	# WorldStateCodec encodes per-goalie state by goalie_controllers index, so
 	# a different order here would apply top-goalie state to the bottom goalie
 	# (visible as goalies appearing in each other's net wearing the wrong
@@ -176,8 +176,8 @@ func _spawn_skater_from_roster(entry: Dictionary) -> void:
 	# Re-apply the recorded build (height / weight / gear) so the skater's mesh,
 	# reach, and re-derived lean match the host's — without it the replay skater
 	# sits at the neutral frame and the host's lean-compensated blade positions
-	# leave the stick floating off the ice. Missing "build" (legacy .mreplay) →
-	# from_dict returns the neutral build, matching the old behavior.
+	# leave the stick floating off the ice. Missing "build" (a .mreplay recorded
+	# before builds were written into the header) → the neutral build.
 	var attrs: PlayerAttributes = PlayerAttributes.from_dict(entry.get("build", {}) as Dictionary)
 	var spawned: Dictionary = _spawner.spawn_remote_player(
 			PlayerRules.faceoff_position(team_id, team_slot),
@@ -341,8 +341,8 @@ func _on_replay_game_state(gs: Dictionary) -> void:
 
 
 # Dispatch on event kind so the viewer stays in sync with mid-game roster
-# changes (player_joined / player_left). Goal events are forwarded to the
-# HUD if it cares (currently no-op; future goal banner work consumes them).
+# changes (player_joined / player_left); everything else is an audio / VFX
+# event replayed onto the actors.
 func _on_replay_event(event: Dictionary) -> void:
 	var kind: String = event.get("kind", "")
 	if kind == "player_joined":
@@ -351,10 +351,7 @@ func _on_replay_event(event: Dictionary) -> void:
 		_despawn_skater(int(event.get("peer_id", -1)))
 	else:
 		# Audio + body-check VFX events. Goal events flow through too — the
-		# replayer ignores unknown kinds, and goal-horn playback can be
-		# wired by a future HUD listener if desired (live games already
-		# play it on goal_received; offline replays don't have NetworkManager
-		# delivering anything).
+		# replayer ignores kinds it has no handler for.
 		ReplayEventReplayer.dispatch_with_records(event, _records)
 		# Crowd cheer + ambient duck on replayed goals — the live
 		# GameManager.goal_scored that drives this in a real game doesn't

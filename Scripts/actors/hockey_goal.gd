@@ -29,7 +29,7 @@ const CROWN_HALF_WIDTH: float   = POST_HALF_WIDTH - MOUTH_CORNER_RADIUS  # 0.815
 const BEND_SEGMENTS: int        = 6       # curve tessellation per quarter bend
 const PIPE_RADIAL_SEGMENTS: int = 8
 
-# Net mesh texture: seamless diamond grid. Place the PNG at this path in your project.
+# Net mesh texture: seamless diamond grid.
 # Each tile of the texture covers NET_TEXTURE_TILE_SIZE x NET_TEXTURE_TILE_SIZE metres
 # of world space. The texture is 4 diamonds wide per tile, so each diamond is
 # NET_TEXTURE_TILE_SIZE / 4 metres across — currently 0.041 m (NHL regulation mesh).
@@ -93,10 +93,8 @@ func _ready() -> void:
 	_rebuild()
 
 func _rebuild() -> void:
-	# Guard against Nil color values from older scene files that stored
-	# properties with names that have since been renamed (e.g. base_frame_color
-	# was renamed to crown_color). If a color comes back as Nil, fall back to
-	# the intended default.
+	# A saved scene carrying a property under a name this script no longer
+	# declares reads back Nil rather than a Color; fall back to the default.
 	if typeof(crown_color) != TYPE_COLOR:
 		crown_color = Color(0.95, 0.95, 0.95)
 	if typeof(post_color) != TYPE_COLOR:
@@ -293,11 +291,10 @@ func _build_back_support(goal_z: float) -> void:
 
 # --------------------------------------------------------------------------
 # NET PANELS — four translucent faces approximated as thin rotated boxes.
-# All four have collision so pucks stop when they enter.
+# Mesh only; the puck's carom off them is analytic (PuckGeometryCollision).
 #
-# Per user decision (option 1a): we simplify by using POST_HALF_WIDTH for the
-# side panels' X position even though the crown is inset by MOUTH_CORNER_RADIUS
-# at the top. This means the side panels run straight vertically at the post
+# The side panels take their X from POST_HALF_WIDTH even though the crown is inset
+# by MOUTH_CORNER_RADIUS at the top, so they run straight vertically at the post
 # line; the small inset at the top-back corner is accepted as visual slack.
 #
 # The four panels:
@@ -464,8 +461,6 @@ func _basis_from_up(up_dir: Vector3) -> Basis:
 
 # Build a triangular net panel (3 corners in world space). For small gap-filler
 # panels where a quad would degenerate. Same flat visual as _add_net_quad.
-# Collision uses the AABB of the three corners padded to POST_RADIUS on the
-# thin axis.
 func _add_net_tri(a: Vector3, b: Vector3, c: Vector3) -> void:
 	var verts := PackedVector3Array([a, b, c])
 	var normal: Vector3 = (b - a).cross(c - a).normalized()
@@ -498,7 +493,6 @@ func _add_net_tri(a: Vector3, b: Vector3, c: Vector3) -> void:
 # Mesh only: the puck's carom off the panels is analytic (PuckGeometryCollision),
 # and the skater is held out of the pocket by GameRules.push_out_of_net.
 func _add_net_quad(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
-	# --- Mesh ---
 	var verts := PackedVector3Array([a, b, c, a, c, d])  # two triangles (ABC, ACD)
 	var normal: Vector3 = (b - a).cross(d - a).normalized()
 	var normals := PackedVector3Array([normal, normal, normal, normal, normal, normal])
@@ -527,19 +521,14 @@ func _add_net_quad(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	_apply_mat_net(mesh_inst)
 	add_child(mesh_inst)
 
-	# --- Collision ---
-	# Cheap BoxShape3D matching the quad's bounding region. For a right
-	# trapezoid panel this is slightly larger than the visual mesh where the
-	# slant is, but the back panel covers that overlap region, so the extra
-	# collision is functionally redundant and keeps physics cheap.
 
 # Host-only swept goal test, driven once per physics tick by GameManager (which
 # owns the authoritative puck and its previous position). Emits `goal_scored` the
-# tick the WHOLE puck crosses the goal line inside the mouth. Replaces the old
-# Area3D `body_entered` sensor: an Area3D fires on shape-edge overlap from any
-# face and never accounted for the puck's radius, so post grazes and side-net
-# entries scored. The center-based swept crossing here (see GoalDetectionRules)
-# rejects both and reliably catches fast shots the sensor could tunnel through.
+# tick the WHOLE puck crosses the goal line inside the mouth. Never replace this
+# with an Area3D sensor: an Area3D fires on shape-edge overlap from any face and
+# cannot account for the puck's radius, so post grazes and side-net entries score
+# and a fast shot tunnels straight through. The center-based swept crossing here
+# (GoalDetectionRules) rejects all three.
 func check_goal_crossing(prev_center: Vector3, curr_center: Vector3) -> void:
 	if GoalDetectionRules.crossed_into_net(
 			prev_center,

@@ -12,8 +12,7 @@ extends Node3D
 # tight AABB, so the renderer frustum-culls off-screen crowd wholesale
 # instead of vertex-processing every spectator every frame. The walkway /
 # upper deck / shell exist so every camera sightline that clears the crowd
-# lands on building rather than the bare background color — the bowl used to
-# just end in the void.
+# lands on building rather than the bare background color.
 #
 # Seating sections: the bowl is divided into `num_aisles` seating sections by
 # radial aisle gaps (stair corridors cleared of spectators), aligned across
@@ -101,11 +100,10 @@ extends Node3D
 # fascia wall the lower bowl's back rows sit against spans exactly this height.
 #
 # This is the number that makes the building read as two decks rather than one
-# long bank of seats. At the 1.1 m it shipped with, the upper deck began a step
-# above the walkway: geometrically a concourse, visually a continuation. A real
-# second tier is cantilevered a storey up, so the level under it is a room you
-# could stand in — and that headroom is also what the lower bowl's portals need
-# somewhere to be.
+# long bank of seats. A real second tier is cantilevered a storey up, so the
+# level under it is a room you could stand in — and that headroom is also where
+# the lower bowl's portals go. Anything near a single step (~1 m) is
+# geometrically a concourse and visually a continuation of the lower bowl.
 @export var upper_deck_rise: float = 4.0:
 	set(v):
 		upper_deck_rise = v
@@ -391,8 +389,8 @@ const _SEAT_PAN_DEPTH: float = 0.34
 const _SEAT_PAN_THICKNESS: float = 0.05
 const _SEAT_BACK_HEIGHT: float = 0.38
 const _SEAT_BACK_THICKNESS: float = 0.05
-# Nudged back from 0.20 once spectators grew: the tallest stature roll is also
-# the deepest body, and at 0.20 the backrest passed through it.
+# Clears the deepest body a stature roll can produce (the tallest roll is also
+# the deepest); at 0.20 the backrest passes through it.
 const _SEAT_BACK_OFFSET: float = 0.23
 # Same trick as _BODY_Y_LIFT, for the same reason: the pan's underside would
 # otherwise be coplanar with the tread it rests on.
@@ -994,10 +992,9 @@ func _emit_riser(st: SurfaceTool, inner: PackedVector2Array, y_bot: float, y_top
 		var bb: Vector3 = Vector3(inner[j].x, y_bot, inner[j].y)
 		var tb: Vector3 = Vector3(inner[j].x, y_top, inner[j].y)
 		# Wind so the wall's front face points toward the rink interior —
-		# load-bearing now that the terrace/shell materials cull back faces.
-		# (The mirror image of this winding fronts outward and gets culled from
-		# every in-bowl camera, which hid all the risers, the fascia, and the
-		# shell wall behind them.)
+		# load-bearing, since the terrace/shell materials cull back faces. The
+		# mirror winding fronts outward and is culled from every in-bowl camera,
+		# taking the risers, the fascia and the shell wall with it.
 		st.add_vertex(ba)
 		st.add_vertex(bb)
 		st.add_vertex(tb)
@@ -1481,10 +1478,10 @@ func _add_vomitory_tunnels() -> void:
 	walls.generate_normals()
 	backs.generate_normals()
 	# From a lit bowl a portal reads as a DARK hole with a hint of warmth deep in
-	# it — not as a bright panel, which is what the first pass painted and which
-	# reads as something stuck ON the wall rather than cut into it. The back is a
-	# little lighter than the sides on purpose: that gradient from dark edges to
-	# a warmer centre is the only depth cue a 2.6 m recess gets at this distance.
+	# it. A bright panel reads as something stuck ON the wall rather than cut into
+	# it. The back is a little lighter than the sides on purpose: that gradient
+	# from dark edges to a warmer centre is the only depth cue a 2.6 m recess gets
+	# at this distance.
 	_add_tunnel_instance(walls.commit(), "VomitoryTunnels", Color(0.055, 0.055, 0.065))
 	_add_tunnel_instance(backs.commit(), "VomitoryLightSpill", Color(0.20, 0.16, 0.12))
 
@@ -1495,8 +1492,8 @@ func _add_vomitory_tunnels() -> void:
 # each aisle's centre. An opening is cut by arc on the BASE path while the wall
 # it is cut into stands metres further out, so the same arc span is a WIDER hole
 # out there — wider still through a corner, and by a different amount for the
-# fascia than for the shell. A box sized to the nominal width left daylight down
-# both sides of every portal. Following the cut segments makes each tunnel
+# fascia than for the shell. A box sized to the nominal width leaves daylight
+# down both sides of every portal; following the cut segments makes each tunnel
 # exactly as wide as its own hole, whatever that ring's radius did to it.
 func _emit_vomitory_ring(walls: SurfaceTool, backs: SurfaceTool, offset: float,
 		base_y: float, head_y: float) -> void:
@@ -1604,10 +1601,9 @@ func _add_tunnel_instance(mesh: ArrayMesh, node_name: String, color: Color) -> v
 
 # ── Rinkside staff ───────────────────────────────────────────────────────────
 
-# The benches, the penalty boxes, and the timekeeper's table were all furniture
-# with nobody at it — a table with no timekeeper reads emptier than no table.
-# Nine figures fix that: two coaches behind each bench, an attendant at each
-# penalty box door, and three of the off-ice crew at the table.
+# Nine figures at the rinkside furniture: two coaches behind each bench, an
+# attendant at each penalty box door, and three of the off-ice crew at the
+# table. A table with no timekeeper reads emptier than no table.
 #
 # One MultiMesh pair for the lot, same body and head meshes the crowd uses, but
 # with a plain material: the crowd shader sways and hops off per-instance custom
@@ -1654,12 +1650,10 @@ func _build_staff() -> void:
 		add_child(mmi)
 
 
-# Explicit bounds for the same reason the crowd sections have them: Godot's
-# auto-AABB is unreliable when transforms are pushed one at a time rather than as
-# a single buffer write, and an under-sized one gets the whole MultiMesh
-# frustum-culled from angles where it should be visible. The seed box covers
-# instance ORIGINS (their feet) only, so it has to grow by the tallest figure's
-# own reach — sideways by a rotated body's half-diagonal, up by a full stature.
+# Explicit bounds for the same reason the crowd sections have them (see
+# _grow_section_aabb). The seed box covers instance ORIGINS (their feet) only, so
+# it has to grow by the tallest figure's own reach — sideways by a rotated body's
+# half-diagonal, up by a full stature.
 func _grow_staff_aabb(seed_aabb: AABB) -> AABB:
 	var reach: float = maxf(_BODY_SIZE.x, _BODY_SIZE.z) \
 			* _staff_girth_scale(_STANDING_STATURE_MAX)
@@ -1833,9 +1827,8 @@ func _add_rafter_banners() -> void:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = atlas_vp.get_texture()
 	# Unshaded: nothing lights the roof space, so a lit banner is a black
-	# rectangle. Double-sided per surface, since BoardAdBandBuilder's winding
-	# does not survive culling the way the geometry suggests (see
-	# HockeyRink._rebuild) — the two surfaces, not the culling, make the sides.
+	# rectangle. Double-sided per surface, like the ribbon board's band — the two
+	# surfaces, not the culling, make the two sides.
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_banner_material = mat
@@ -1970,10 +1963,7 @@ func _add_seats(layout: Dictionary) -> void:
 		mmi.multimesh = seat_mms[k]
 		mmi.name = "Seats%d" % k
 		mmi.material_override = mat
-		# Shadows off for the same reason the crowd's are (see _add_spectators):
-		# thousands of instances across the eight shadow-casting ceiling lights
-		# is the arena's biggest shadow-map cost, and seat shadows up in the
-		# stands are invisible from a rink-focused camera.
+		# Shadows off for the same reason the crowd's are (see _add_spectators).
 		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		# And out of the GI probe: SDFGI voxelizes static geometry, which is
 		# exactly what these are and exactly the volume it charges for. Seats
@@ -2038,15 +2028,13 @@ func _build_head_mesh() -> ArrayMesh:
 	return st.commit()
 
 
-# Shared material — crowd.gdshader reads the per-instance MultiMesh color
-# for albedo (matching the old vertex_color_use_as_albedo look) and animates
-# sway/hop from INSTANCE_CUSTOM + the excitement uniform. One material across
-# both MultiMeshes and across rebuilds, so excitement state persists and a
-# single uniform write drives the whole bowl. Cull disabled matches the
-# terrace material: back-face culling on individual spectators was leaving
-# rink-facing faces invisible at certain camera angles (the boxes looked
-# hollow), and the extra triangles are cheap on a few thousand instances of
-# an 8-vert mesh.
+# Shared material — crowd.gdshader reads the per-instance MultiMesh color for
+# albedo and animates sway/hop from INSTANCE_CUSTOM + the excitement uniform. One
+# material across both MultiMeshes and across rebuilds, so excitement state
+# persists and a single uniform write drives the whole bowl. Cull disabled like
+# the terrace material: culling back faces on individual spectators leaves
+# rink-facing faces invisible at some camera angles (the boxes look hollow), and
+# the extra triangles are cheap on a few thousand instances of an 8-vert mesh.
 func _spectator_material() -> ShaderMaterial:
 	if _crowd_material == null:
 		_crowd_material = ShaderMaterial.new()

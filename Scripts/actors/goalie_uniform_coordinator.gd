@@ -72,8 +72,7 @@ func apply_uniform(colors: Dictionary) -> void:
 	_goalie.left_pad_mesh.material_override = pads_mat
 	_goalie.right_pad_mesh.material_override = pads_mat.duplicate()
 	# The glove (rim + pocket + cuff) and the blocker (board + hand) are each one
-	# merged mesh now — they always wore one material, so the merge gave each a
-	# single paint target.
+	# merged mesh wearing one material, so each is a single paint target.
 	_goalie.glove_main_mesh.material_override = pads_mat.duplicate()
 	_goalie.blocker_mesh.material_override = pads_mat.duplicate()
 
@@ -212,8 +211,8 @@ func _rebuild_text_decal() -> void:
 	_text_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 
-# Paints an arm bone. The bone IS the MeshInstance3D now (Goalie._make_arm_bone);
-# it used to be a wrapper with a "Cylinder" child.
+# Paints an arm bone. The bone IS the MeshInstance3D (Goalie._make_arm_bone), not
+# a wrapper around a child mesh.
 func _paint_cylinder_h(bone: Node3D, segment: Dictionary) -> void:
 	var visual: MeshInstance3D = bone as MeshInstance3D
 	if visual == null:

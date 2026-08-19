@@ -149,8 +149,8 @@ func _build_tracker() -> void:
 func _build_flash() -> void:
 	# A broadcast-style verdict card in the same visual language as the faceoff
 	# "2 → 1 → DROP!" countdown chyron: a BROADCAST_BG panel with 4px rounded
-	# corners, sat in the lower-centre so it doesn't cover the net. Replaces the
-	# old bare floating word so a result reads as HUD chrome, not stray text.
+	# corners, sat in the lower-centre so it doesn't cover the net — a result
+	# reads as HUD chrome, not stray text.
 	var style := StyleBoxFlat.new()
 	style.bg_color = MenuStyle.BROADCAST_BG
 	style.set_corner_radius_all(4)

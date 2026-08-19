@@ -3,11 +3,11 @@ extends RefCounted
 
 # Coalesces high-frequency stat-sync requests into at most one flush per
 # broadcast interval. The 120 Hz contact paths (goalie touches, deflections,
-# blocked shots, possession establishment, credited hits) used to call
-# GameManager._sync_stats_to_clients directly — a full-roster
+# blocked shots, possession establishment, credited hits) must not call
+# GameManager._sync_stats_to_clients directly — that is a full-roster
 # WorldStateCodec.encode_stats + reliable RPC per contact, paid inside the
-# physics tick. Those paths now mark_dirty(); GameManager's end-of-tick hook
-# asks should_flush() on the broadcast cadence and runs the one real sync.
+# physics tick. They mark_dirty() instead; GameManager's end-of-tick hook asks
+# should_flush() on the broadcast cadence and runs the one real sync.
 # Game-phase transitions (goals, period ends, game over, roster changes) still
 # sync immediately — an immediate sync calls clear() so the pending
 # contact-path flush it supersedes doesn't fire a redundant second encode.

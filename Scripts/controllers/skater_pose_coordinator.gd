@@ -105,8 +105,8 @@ static func compute_velocity_lean_target(
 
 
 # Directional reach lean: the torso tips TOWARD the hand's reach direction
-# (pitch AND roll), the way a real player leans into a poke or a wide dangle,
-# instead of the old forward-only fold that wasted the lean on side reaches.
+# (pitch AND roll), the way a real player leans into a poke or a wide dangle —
+# a forward-only fold wastes the lean on side reaches.
 # Magnitude ramps with reach fraction through engage_power (>1 keeps the
 # torso quiet mid-ROM and commits the lean near the rim, where a real player
 # actually leans). Returns Vector2(pitch = rotation.x, roll = rotation.z):
@@ -424,9 +424,9 @@ func apply_upper_body(delta: float) -> void:
 	if hand_reach > 0.01:
 		# Drive twist from the blade's world direction in the skater body frame.
 		# Using skater-local (not upper-body-local) gives a stable target that
-		# doesn't shrink as the body rotates — the old hand-angle approach had a
-		# dampening feedback loop that capped steady-state rotation at ~43% of the
-		# world angle. Now the body tracks 1:1 up to upper_body_max_twist_deg.
+		# doesn't shrink as the body rotates: driving it from the HAND angle closes
+		# a dampening feedback loop that caps steady-state rotation at ~43% of the
+		# world angle. This way the body tracks 1:1 up to upper_body_max_twist_deg.
 		# FREEZE: the coil normally faces the blade (which tracks the cursor), but a
 		# FROZEN blade can't lead the wind-up — so face the CURSOR directly, keeping
 		# the shoulders rotating toward the aim while the puck sits still.

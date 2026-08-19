@@ -11,7 +11,7 @@ extends MeshInstance3D
 # the puck's rendered global_position — never gameplay state, never _physics_process.
 
 const ICE_Y: float = 0.004            # just above the ice plane (y=0) to avoid z-fighting
-const BASE_RADIUS: float = 0.11       # grounded blob radius — meaningfully wider than the puck disc so it reads as a pool of shadow you can track (not a tight rim that hides under the puck)
+const BASE_RADIUS: float = 0.11       # grounded blob radius — wider than the puck disc, so it reads as a pool you can track rather than a rim hiding under the puck
 const BASE_ALPHA: float = 0.42        # grounded darkness
 const AIR_GROW_PER_M: float = 0.55    # extra scale per meter of puck height
 const AIR_MAX_SCALE: float = 2.2      # cap so a high pop doesn't balloon the blob
@@ -78,8 +78,8 @@ func _process(_delta: float) -> void:
 	# the puck only yaws (angular X/Z axis-locked), so local Y maps to world Y and
 	# local X/Z=0 keeps the blob on the puck's vertical axis.
 	# A grounded puck holds every value below constant, so the writes are guarded
-	# rather than re-pushed each rendered frame (scale and albedo go through to
-	# the servers; position dirties the transform).
+	# rather than re-pushed each rendered frame (scale and albedo are
+	# RenderingServer pushes; position dirties the transform).
 	var offset_y: float = ICE_Y - puck_pos.y
 	if absf(position.y - offset_y) > _WRITE_EPSILON:
 		position = Vector3(0.0, offset_y, 0.0)

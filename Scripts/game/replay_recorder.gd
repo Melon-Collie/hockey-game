@@ -12,8 +12,8 @@ extends RefCounted
 # don't fire while physics is frozen.
 
 # ~9 s at the 120 Hz broadcast rate (covers the 8 s clip + 0.5 s post-goal
-# window). Was 360 from the 40 Hz era — at 120 Hz that held only 3 s, so goal
-# replays were silently truncated to the last ~3 seconds.
+# window). Sized in FRAMES, so it has to be re-derived whenever the broadcast
+# rate changes — an undersized ring truncates a goal replay silently.
 const MEMORY_SIZE: int = 1080
 const EVENT_MEMORY_SIZE: int = 720  # bursty (shots, body checks, deflections); size for headroom
 

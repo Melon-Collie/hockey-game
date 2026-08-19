@@ -1,7 +1,7 @@
 class_name SweptDiscOBB
 
 # Swept-disc (treated as a sphere of `radius`) vs oriented box (OBB) contact test — the
-# atom of the Phase-2 goalie-collision prototype (docs/netcode-phase2-goalie-collision-
+# atom of the analytic goalie collision (docs/netcode-phase2-goalie-collision-
 # spec.md). Every goalie collision part is a BoxShape3D, so puck-vs-goalie is
 # swept-sphere-vs-N-OBBs. Method: transform the swept segment into the box's LOCAL space
 # (box becomes an axis-aligned box centred at the origin), expand the box by the sphere
@@ -10,7 +10,7 @@ class_name SweptDiscOBB
 # face normal.
 #
 # Edge/corner contacts approximate to the dominant entry-slab axis — fine for the
-# DETECTION + rebound-direction agreement this prototype measures; the actual response
+# DETECTION + rebound-direction agreement this provides; the actual response
 # is GoalieSaveRules, which re-steers. Pure value-type math, no allocation (fills a
 # caller-owned Result).
 

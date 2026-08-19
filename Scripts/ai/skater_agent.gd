@@ -2,10 +2,8 @@ class_name SkaterAgent
 extends RefCounted
 
 # Per-bot decision loop. Owned by AIController. Owns the InputState scratch
-# buffer and forwards to a SkaterAgentStateMachine that holds the actual
-# transition logic + per-state behavior. Mirrors the SkaterController /
-# SkaterStateMachine pairing — controller does glue, state machine owns
-# the decision graph.
+# buffer and forwards to a SkaterAgentStateMachine that holds the transition
+# logic and per-state behavior.
 
 var _scratch_input: InputState = InputState.new()
 var _sm: SkaterAgentStateMachine = SkaterAgentStateMachine.new()
@@ -47,12 +45,12 @@ func push_one_timer_ready() -> void:
 
 # Returns the InputState for this physics tick. Caller must not retain a
 # reference past the next tick — same scratch buffer is reused.
-# The SM's cursor goes out untouched: its slew (the bot's real Hands blade
+#
+# The SM's cursor goes out UNTOUCHED: its slew (the bot's real Hands blade
 # speed) is the one motion limit, exactly the limit a human's blade plays
-# under. An old second-stage exponential lerp here was removed — it added
-# only milliseconds of lag but its straight-line world blending chord-cut
-# the SM's carefully shaped cursor paths (arc / reach-cone clamp) across the
-# body on big flips, which could trip the pose IK gate's facing freeze.
+# under. Never add a second smoothing stage here — straight-line world blending
+# chord-cuts the SM's shaped cursor paths (arc / reach-cone clamp) across the
+# body on big flips, which can trip the pose IK gate's facing freeze.
 func tick(snapshot: WorldSnapshot, delta: float, host_timestamp: float) -> InputState:
 	_zero_input(_scratch_input, delta, host_timestamp)
 	_sm.dispatch(_scratch_input, snapshot)
@@ -76,7 +74,7 @@ func debug_last_decision() -> String:
 
 
 func debug_shoot_score() -> float:
-	# The wrister is the only shot type now.
+	# The wrister is the only shot type.
 	return _sm.debug_shoot_score
 
 

@@ -8,8 +8,8 @@ class_name BodyCheckRules
 # snapped to the host baseline at replay start, and decays deterministically.
 #
 # "How hard" is the victim's transfer-impulse magnitude — the m/s velocity delta
-# the hit imparts (= approach x weight_ratio x effective_transfer, so Size and
-# Physical and the closing Speed all feed it) — normalized to 0..1 between
+# the hit imparts (= approach x weight_ratio x effective_transfer, so both
+# bodies' mass and the closing speed feed it) — normalized to 0..1 between
 # min_impulse (below which a bump inflicts nothing) and ref_impulse (a
 # full-strength check).
 #
@@ -109,10 +109,9 @@ static func thrust_mult(stagger_timer: float, cfg: Config) -> float:
 # then the delivery is the collision resolver's OWN function
 # (SkaterCollisionRules.victim_kick — the exact inelastic reduced-mass kick
 # resolve() applies), with the brace folded into the transfer the same way the
-# resolver call site does. Delegating rather than mirroring is the point: the
-# pre-inelastic weight-ratio reconstruction here went silently stale when the
-# resolver was rewritten (~2× the real kick at equal masses, wrong Size curve);
-# now a delivery-model change propagates here in the same edit.
+# resolver call site does. Delegating rather than mirroring is the point: a
+# reconstruction of the kick here goes silently stale the moment the resolver
+# changes, while delegation propagates a delivery-model change in the same edit.
 # test_body_check_rules locks the identity against a live resolve() contact.
 static func puck_strip_impulse(
 		impact_force: float,

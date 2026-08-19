@@ -18,8 +18,8 @@ func report(record: PlayerRecord, goals_for: int, goals_against: int, outcome: S
 		team_size: int, rule_set: int, period_seconds: int) -> void:
 	var body: Dictionary = record.stats.to_dict()
 	# steam_id is the career identity (cross-machine). Offline matches upload too,
-	# so this is no longer guaranteed by the session type — the caller drops the
-	# row when Steam isn't signed in, since an unattributed row is unreadable.
+	# so the session type does not guarantee one — the caller drops the row when
+	# Steam isn't signed in, since an unattributed row is unreadable.
 	body["steam_id"] = SteamManager.steam_id
 	body["player_name"] = record.display_name()
 	body["game_version"] = BuildInfo.VERSION
@@ -53,8 +53,8 @@ func report(record: PlayerRecord, goals_for: int, goals_against: int, outcome: S
 	# shots, and real blocks — so pooling them makes every rate stat meaningless.
 	# rule_set and period length confound the same way (offsides/icing change how
 	# play flows; a 3-minute period and a 10-minute one aren't comparable per-game),
-	# and num_periods was already stored without its duration, which is only half
-	# the clock. Recorded so any query can slice by format.
+	# and num_periods without its duration is only half the clock. Recorded so any
+	# query can slice by format.
 	body["team_size"] = team_size
 	body["rule_set"] = rule_set_key(rule_set)
 	body["period_seconds"] = period_seconds

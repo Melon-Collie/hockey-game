@@ -4,12 +4,12 @@ extends CanvasLayer
 # Opening-faceoff matchup screen, scrim-first: the pre-game camera sweep and
 # bench skate-on stay visible through a medium dim wash while the two rosters
 # read on top — team columns (color stripe + HOME/AWAY header, then per player
-# jersey number + name) around a center VS. Deliberately no build readout:
-# the v4 attribute system is all-lateral (two body dials + gear leans, no
-# build is "better"), and every summary tried so far — a six-axis hex radar
-# of the resolved multipliers, then scouting archetype tags — either implied
-# a power ranking or editorialized; the bodies on the ice during the sweep
-# are the honest preview. Pure presentation, no buttons; shown for the front
+# jersey number + name) around a center VS. Deliberately no build readout: the
+# attribute system is all-lateral (two body dials + gear leans, no build is
+# "better"), so any summary — a hex radar of the resolved multipliers, scouting
+# archetype tags — either implies a power ranking or editorializes; the bodies
+# on the ice during the sweep are the honest preview. Pure presentation, no
+# buttons; shown for the front
 # of the PREGAME_INTRO_DURATION hold and dismissed before the faceoff
 # countdown takes the banner.
 #

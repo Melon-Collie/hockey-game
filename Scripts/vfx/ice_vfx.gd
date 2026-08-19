@@ -1,10 +1,7 @@
 class_name IceVFX
 
-# Primitives every on-ice cosmetic is built from. Each was written out where it
-# was used — the low-poly particle blob six times across four files, the snow
-# tint five times, the ground plane and the teleport guard three times each,
-# with one of the guards carrying the comment "same as SkaterVFX" instead of
-# saying so in code.
+# Primitives every on-ice cosmetic is built from: the shared particle blob, the
+# snow tint, the ground plane, the teleport guard.
 #
 # What does NOT belong here is the emitters. Their amounts, lifetimes, spreads
 # and velocities are hand-picked per effect — a shared builder would take a

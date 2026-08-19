@@ -1,15 +1,10 @@
 class_name UniformPaint
 extends Object
 
-# Shared paint for player-body materials — the sibling of BodyRim, which already
-# holds the rim tuning "so the two can't drift." Skater and goalie were building
-# the same three things separately: a solid material, a textured one, and the
-# horizontal stripe texture that every cylindrical part wears.
-#
-# Drift had already happened. The stripe painter grew a top-cap fill on the
-# skater side (the flat end of a cylinder, painted in its own colour) and the
-# goalie's copy never got it — so a goalie part could not have been given a
-# capped stripe pattern without someone first noticing there were two painters.
+# Shared paint for player-body materials — the sibling of BodyRim. The skater and
+# the goalie coordinators both build their solid materials, their textured ones,
+# and the horizontal stripe texture every cylindrical part wears through here, so
+# a change to any of the three reaches both bodies.
 
 # Surface roughness by material, so a jersey and a helmet catch the arena lights
 # the way cloth and hard plastic do.

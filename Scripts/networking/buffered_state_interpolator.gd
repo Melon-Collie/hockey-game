@@ -75,8 +75,6 @@ static func hermite_angle(a0: float, av0: float, a1: float, av1: float, t: float
 	# the circle. Without this, a turn that crosses the ±π wrap (e.g. a0 = 3.1
 	# ≈ 179°, a1 = -3.1 ≈ -179°) interpolates through 0° — a visible
 	# half-rotation jump in one bracket instead of the intended tiny nudge.
-	# Surfaced as a one-frame "weird rotation" hitch in goal replays and in
-	# live remote skater rendering whenever a player turns past 180°.
 	var diff: float = a1 - a0
 	if diff > PI:
 		a1 -= TAU

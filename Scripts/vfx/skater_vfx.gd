@@ -1,11 +1,11 @@
 class_name SkaterVFX
 extends Node3D
 
-const TRAIL_MIN_SPEED: float = 0.5    # minimum speed for trail emission
-const SPEED_LINE_MIN_SPEED: float = 5.5  # minimum speed for speed line effect
+const TRAIL_MIN_SPEED: float = 0.5
+const SPEED_LINE_MIN_SPEED: float = 5.5
 
-# Hockey stop VFX — two-layer effect (surface marks + airborne spray) per blade side.
-const STOP_MIN_SPEED: float = 2.5        # minimum speed at trigger time
+# Hockey stop: a forward snowplow fan, thrown while braking above this speed.
+const STOP_MIN_SPEED: float = 2.5
 
 # Acceleration chips — a hard forward push bites the ice and kicks chips back
 # off the loaded blade. Thrust tops out at ~10.5 m/s²
@@ -30,22 +30,15 @@ const _CHECK_BURST_VEL_MIN: float = 2.5   # initial_velocity_max at a light hit
 const _CHECK_BURST_VEL_MAX: float = 9.0   # initial_velocity_max at a full hit
 
 # --- Body-check SOUND: reserved for hits with real weight behind them ---------
-# The impact BURST fires for every credited check (it scales with force via
-# check_intensity above), but the THUD is gated harder and rides its OWN curve:
-# an incidental bump or a board rub — two committed bodies grinding without a
-# real collision behind them — should make NO sound, or the hit audio
-# machine-guns through every scrum.
-#
-# The gate is in impact_force (weight x closing-speed) units — the scale whose
-# landmarks HitRules owns (MIN_HIT_IMPULSE / FULL_CHECK_IMPULSE / KNOCKDOWN_IMPULSE).
-# Sound starts AT the full-check landmark: below it the contact is a bump or a
-# board rub, and it stays silent.
-#
-# The full-volume point is deliberately NOT a landmark — it sits ABOVE the
-# knockdown landmark so the loudest thud is reserved for the hardest hits rather
-# than every knockdown-class check. It is a FEEL tunable (how hard a hit must
-# land before you hear it at all / at full), not an evaluator constant, so it is
-# hand-set on purpose and free to move without tracking the hit scale.
+# The impact BURST fires for every credited check; the THUD is gated harder and
+# rides its OWN curve, so an incidental bump or a board rub — two committed
+# bodies grinding without a real collision behind them — makes no sound at all
+# and the hit audio can't machine-gun through a scrum. Both ends are in
+# impact_force (weight × closing-speed) units, the scale HitRules' landmarks own.
+# The full-volume point is deliberately NOT one of those landmarks: it sits above
+# knockdown so the loudest thud is reserved for the hardest hits, and it is a
+# FEEL tunable (how hard a hit must land to be heard at all / at full) rather
+# than an evaluator constant, so it is free to move without tracking that scale.
 const _CHECK_SOUND_MIN_FORCE: float = HitRules.FULL_CHECK_IMPULSE  # below this: silent
 const _CHECK_SOUND_FULL_FORCE: float = 6.5   # at/above this the thud is at full volume
 # Sound: louder + lower-pitched across the audible band (full-check landmark up
@@ -70,10 +63,9 @@ const LIFT_EPS_M: float = 0.03
 # marks emit in world space but the visibility AABB is measured local to the node,
 # i.e. centred on the skater, and defaults to ~±4 m. A blade trail lingers 1.5 s and
 # streaks BLADE_TRAIL_LIFETIME × skate_speed (~18 m at a hard stride) behind the
-# skater — so when the skater rides the frame edge the whole trail is culled by its
-# skater-centred box, and a culled GPUParticles3D pauses processing, making the
-# gap-fill emitter emit a backward streak on re-entry. A generous skater-centred AABB
-# keeps it live whenever any mark could be on-screen. Half-extents (m) cover ~16 m/s.
+# skater, so a skater riding the frame edge has the whole trail culled by that box
+# — and a culled GPUParticles3D pauses processing, which makes the gap-fill emitter
+# lay a backward streak on re-entry. Half-extents (m) cover ~16 m/s of streak.
 const BLADE_TRAIL_AABB_HALF_XZ: float = 24.0
 const BLADE_TRAIL_AABB_HALF_Y: float = 6.0
 
@@ -119,11 +111,6 @@ func _ready() -> void:
 
 	_body_check_burst = _make_body_check_emitter()
 	add_child(_body_check_burst)
-
-	# Body-check burst + sound are driven by the host-authoritative broadcast
-	# (GameManager._on_body_check_landed → fire_body_check_burst), not by the local
-	# body_checked_player signal — so the impact reads identically on every client
-	# instead of firing off each machine's non-authoritative local collision.
 
 	_prev_pos = global_position
 
@@ -254,11 +241,13 @@ static func check_sound_pitch_scale(force: float) -> float:
 	return lerpf(_CHECK_PITCH_LIGHT, _CHECK_PITCH_HEAVY, check_sound_intensity(force))
 
 
-# Public so ReplayEventReplayer can fire the burst during replay without
-# routing through body_checked_player — re-emitting the signal would also
-# re-trigger GameManager's hit-landed / replay-record closures, which is wrong
-# during playback (and recursive for the recorder). Burst size + velocity scale
-# with hit strength (the impact_force) so a big check throws more, faster debris.
+# Driven by the host-authoritative broadcast (GameManager._on_body_check_landed),
+# never by the local body_checked_player signal, so the impact reads identically
+# on every client instead of off each machine's non-authoritative collision.
+# Public for the same reason on the replay side: ReplayEventReplayer fires the
+# burst directly, because re-emitting the signal would re-trigger GameManager's
+# hit-landed / replay-record closures — wrong during playback, recursive for the
+# recorder. Burst size + velocity scale with the impact_force.
 func fire_body_check_burst(victim: Skater, force: float, hit_dir: Vector3) -> void:
 	if victim == null:
 		return
@@ -280,10 +269,8 @@ func _set_blade_trails_emitting(active: bool) -> void:
 	for emitter: GPUParticles3D in _blade_trail_emitters:
 		emitter.emitting = active
 
-# Skater-centred visibility box, generous enough that it always overlaps the frustum
-# whenever a live blade mark could be on-screen — so the world-space trail is never
-# culled (nor its processing paused) as the skater rides the frame edge. See the
-# BLADE_TRAIL_AABB_HALF_* doc-block for why the default AABB is too small.
+# Skater-centred visibility box, generous enough to overlap the frustum whenever
+# a live blade mark could be on-screen (see the BLADE_TRAIL_AABB_HALF_* block).
 func _blade_trail_visibility_aabb() -> AABB:
 	return AABB(
 			Vector3(-BLADE_TRAIL_AABB_HALF_XZ, -BLADE_TRAIL_AABB_HALF_Y, -BLADE_TRAIL_AABB_HALF_XZ),

@@ -4,10 +4,10 @@ class_name GoalieNetworkState
 # node body-part transforms and broadcast as part of the world snapshot.
 #
 # Two layers of fields:
-#   - Root: position_x/z + rotation_y carry the Goalie node's world placement,
-#     state_enum/five_hole_openness/velocity_x/z carry AI sync metadata that
-#     drive client soft-correction (until clients swap to rendering broadcast
-#     pose directly).
+#   - Root: position_x/z + rotation_y carry the Goalie node's world placement;
+#     velocity_x/z feed the client's dead-reckon past the newest sample, and
+#     state_enum + five_hole_openness are read back through the accessors below
+#     (the bot shot model's stance read). Clients run no goalie AI of their own.
 #   - Pose: socket transforms for each body part, in goalie-local space.
 #     Rotations are radians. Body root has pitch + roll for shoulder-save lean
 #     (yaw is the existing rotation_y field).

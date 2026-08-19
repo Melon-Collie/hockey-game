@@ -3,17 +3,11 @@ class_name GoalieAnatomy
 # The goalie's BODY, as one source of truth.
 #
 # ── Why this exists ──────────────────────────────────────────────────────────
-# The bot planner contained a hand-built replica of the goalie: a set of loose
-# numbers in action_scoring.gd describing how wide his pads splay, how far his
-# glove reaches, how big his torso is. None of them were WRONG on purpose —
-# they were copied from the real body at some point and then left to drift,
-# because nothing connects a literal to the collider it was copied from.
-#
-# Every confirmed defect in the goalie audit is an instance of that: the depth
-# chart (planner kept its own copy), the band harness (a third copy), the stick
-# (no copy at all). The fix that keeps working is not "correct the number", it
-# is "delete the copy" — derive the planner's read from the same geometry the
-# live goalie is built out of, so changing the body moves the planner for free.
+# Nothing connects a literal to the collider it was copied from, so a planner
+# holding its own numbers for how wide the pads splay or how far the glove
+# reaches drifts silently off the body that actually makes the saves. Every
+# read of the keeper's shape is derived from here instead, so changing the body
+# moves the planner for free.
 #
 # This file is the goalie's dimensions. GoalieStickRules is his stick (same
 # pattern, split out because the blade also owns an aim solve). Between them,

@@ -3,46 +3,16 @@ extends RefCounted
 
 # PlayerAttributes
 # ----------------
-# Per-skater build on the v4 BODY + GEAR model (docs/attributes-v4-plan.md).
-# A build is:
+# Per-skater build on the v4 BODY + GEAR model: two continuous body dials
+# (HEIGHT in inches, WEIGHT in pounds) plus four discrete gear slots (skate
+# profile, blade curve, stick flex, stick length — 0/1/2, 1 = balanced). Every
+# axis is lateral, so there is no legality beyond range coercion: validation
+# clamps (coerce_height / coerce_weight / _clamp_gear) and never rejects.
+# Neutral is 6'1" / 201 lbs / all-balanced, where every multiplier is 1.0 and
+# the build behaves exactly as the shipped @export defaults do.
 #
-#   • HEIGHT — a free CONTINUOUS dial in inches (every inch 5'7"..6'8"). Tables
-#     are authored at 5 anchor heights and interpolate. Height decides reach,
-#     the speed↔agility baseline fork (speed hump peaks at 6'1", agility
-#     small-favored) and the shot-power baseline (big-favored).
-#   • WEIGHT — a free CONTINUOUS dial in pounds, bounded per height by an
-#     authored BMI band (22.5 LEAN .. 29.0 HEAVY, neutral 26.5) floored by an
-#     absolute playable mass (160 lb): together they generate a plausible
-#     pounds range at every inch, so implausible bodies (6'6"/160) are
-#     unrepresentable by construction. Weight decides mass (linearly — mass IS
-#     the physical/checking system now), the
-#     accel↔momentum fork (lean = first-step burst; momentum is mass-emergent),
-#     an agility bite (F = mv²/r — heavy turns wide and stops long, the
-#     counterweight that makes the dial a real seesaw; glide is exempt so the
-#     tank still coasts), hitbox width (tracks the visual frame bulk) and the
-#     stamina metabolism fork (lean = shallow pool / fast regen).
-#   • GEAR — four discrete slots, three options each, ALL LIVE and all
-#     LATERAL (no net power): SKATE PROFILE (top-end/glide ↔ first-step/
-#     cornering incl. grip), BLADE CURVE (loft-ladder steepness ↔
-#     backhand honesty, + runway lean), STICK FLEX (shot ceiling ↔ load
-#     time + runway), STICK LENGTH (reach/sweep ↔ snap/inner-circle — the
-#     blade-cap lever).
-#
-# There is NO power economy: no tiers, no strong/weak shape, no legality
-# beyond range coercion. Body dials are lateral; gear is lateral; validation
-# is a clamp (coerce_height / coerce_weight / gear clamps), never a rejection.
-#
-# THE CONSTITUTION (see the plan doc §1) — categories a lever may scale:
-#   outputs (body physics) and geometry (reach/lever/workspace) — fair game;
-#   FIDELITY (how faithfully the blade tracks the cursor) — never. There is
-#   deliberately no hands table of any kind: hands_blade_mult() is 1.0 for
-#   every build. Hands differentiation arrives as lever GEOMETRY (stick
-#   length → tip speed vs inertia) in a later stage, never as a multiplier.
-#
-# Neutral reference is 6'1" / 201 lbs / all-balanced gear: every gameplay
-# multiplier is 1.0 there, so a neutral build plays and looks identical to
-# the shipped @export defaults. (201 lbs = BMI 26.5 at 73" — the real
-# NHL-average frame.)
+# What each dial routes to, and why, is Scripts/domain/state/CLAUDE.md; the
+# design of record is docs/attributes-v4-plan.md.
 #
 # All tuning tables live in this file as private consts, consumed via the
 # named accessors below — never index a `_*` table outside this file.
@@ -56,7 +26,7 @@ extends RefCounted
 #
 # Persistence: PlayerPrefs (attr_scale_version 5; older saves migrate via
 # migrate_tiers / migrate_legacy), BotIdentityRegistry (bot picks),
-# NetworkManager peer table (6 ints replicated at join, PROTOCOL v36).
+# NetworkManager peer table (6 ints replicated at join).
 
 # Height is stored in INCHES and is a free CONTINUOUS dial: every inch from
 # 5'7" (67) to 6'8" (80) is playable. Tables are authored at 5 anchor heights
@@ -68,19 +38,17 @@ const HEIGHT_MAX: int = 80     # 6'8"
 # The 5 height table rows sit at these heights (inches). 5'10" (row 1) is the
 # mesh-native anchor where the reach/height multiplier is exactly 1.0.
 #
-# BOTH END ANCHORS MOVED when the range was extended (6'7"→6'8" at the top,
-# 5'8"→5'7" at the bottom) rather than adding sixth/seventh rows, which would
-# have left anchors one inch apart at the ends. Each end row was rebalanced so
-# the outermost segment's line still passes through the OLD end value — i.e.
-# that segment's per-inch slope simply continues for one more inch:
+# The two OUTER rows are extensions of the curve, not free anchors: each end
+# segment's per-inch slope simply continues to the end height —
 #
 #     V80 = V79 + (V79 − V76)/3        V67 = V68 − (V70 − V68)/2
 #
-# So every previously-playable height (5'8"–6'7") keeps the values it had (the
-# bottom end exactly; the top end within 0.00025, pure constant-rounding), and
-# the two new heights are real extensions of each curve rather than copies of
-# their neighbours. The four 4-decimal constants below are the bottom-row
-# halvings — carried to 4 places precisely so 5'8" and 5'9" stay bit-exact.
+# — so every height from 5'8" to 6'7" reads the value a table anchored at
+# 5'8"/6'7" would give it, and the two outer inches genuinely extend each curve
+# instead of copying their neighbours. Rebalance both end rows by that rule if
+# the range ever moves again. The 4-decimal constants in the tables below are
+# the bottom-row halvings, carried to 4 places precisely so 5'8" and 5'9" stay
+# bit-exact.
 const ANCHOR_INCHES: Array[int] = [67, 70, 73, 76, 80]  # 5'7"..6'8"
 
 # The legacy 1..5 height STEP mapping is frozen at the v3 height set, which
@@ -100,17 +68,16 @@ const LEGACY_HEIGHT_STEPS: Array[int] = [68, 70, 73, 76, 79]
 #     usable drift with height (+0.007 BMI/inch). So the band is a horizontal
 #     interval, NOT a height-tilted one: mean BMI 26.05, SD 1.61.
 #
-#   • The LEAN edge was the bug, and it bit tall builds hardest. A flat 24.0
-#     floor is set by what SHORT players can get away with, because their lower
-#     tail is truncated by an ABSOLUTE mass floor (~160 lb — Lane Hutson at
-#     5'9"/162 is the lightest body in the league) rather than by a ratio: you
-#     have to survive contact against 200-lb bodies, and that bound is in
-#     pounds, not in BMI. Tall players are nowhere near that floor, so their
-#     real lower tail runs much leaner — and a flat 24.0 forbade it. At 6'4"
-#     the old floor was 197 lb, which excludes two actual 6'4" NHL defensemen
-#     (Noah Dobson 195, Sam Rinzel 194). The model now says the same thing the
-#     bodies do: a RATIO ceiling (carrying fat costs skating) and an ABSOLUTE
-#     floor (you cannot be too light to play), and the band is their overlap.
+#   • The LEAN edge cannot be one ratio. A single BMI floor gets set by what
+#     SHORT players can get away with, because their lower tail is truncated by
+#     an ABSOLUTE mass floor (Lane Hutson at 5'9"/162 is the lightest body in
+#     the league) rather than by a ratio: you have to survive contact against
+#     200-lb bodies, and that bound is in pounds, not in BMI. Tall players are
+#     nowhere near that floor, so their real lower tail runs much leaner — a
+#     flat 24.0 puts 6'4" at 197 lb and forbids two actual 6'4" NHL defensemen
+#     (Noah Dobson 195, Sam Rinzel 194). So the model says what the bodies say:
+#     a RATIO ceiling (carrying fat costs skating) and an ABSOLUTE floor (you
+#     cannot be too light to play), and the band is their overlap.
 #
 # WHERE THE TWO FLOORS SIT. They are independent levers covering different
 # heights, and each is fitted to the tail it actually governs:
@@ -129,15 +96,6 @@ const LEGACY_HEIGHT_STEPS: Array[int] = [68, 70, 73, 76, 79]
 # The band edge landing exactly on one player is the shape of a fitted edge,
 # not a defect: the 29.0 ceiling lands exactly on Kaprizov (5'10"/202) the
 # same way.
-#
-# Two earlier passes got the lean edge wrong in the same direction. 22.5 was
-# chasing a stale card — Elias Pettersson's 6'2"/176 (BMI 22.59) looked like a
-# lone outlier, but that is his draft era (he measured 164 lb at the 2017
-# combine) and he is listed 185 today, BMI 23.75, comfortably inside. 23.5
-# then over-corrected past Reichel and Ehlers. The lesson both times: fit the
-# edge to the tail's SHAPE, and when the short heights misbehave reach for the
-# absolute floor rather than bending the ratio, because the thing that bounds
-# a small player is pounds, not a ratio.
 #
 # The band is deliberately ASYMMETRIC about MEDIUM (3.0 BMI lean-side vs 2.5
 # heavy-side): the empirical center sits at 26.05, but MEDIUM is pinned to the
@@ -170,7 +128,7 @@ const MIN_PLAYABLE_LBS: int = 162
 # magnitude.
 const NEUTRAL_WEIGHT_LBS: float = 201.0
 
-# ── Gear slots (step 1: stored + replicated, ZERO gameplay effect) ───────────
+# ── Gear slots ───────────────────────────────────────────────────────────────
 # Every slot is 0/1/2 with 1 = the balanced/neutral option. Options are
 # discrete and chunky by design (the loft-level pattern) — never sliders.
 const GEAR_BALANCED: int = 1
@@ -204,10 +162,8 @@ const LENGTH_STANDARD: int = 1
 const LENGTH_LONG: int = 2       # +reach / tip speed / contest momentum, +inertia
 
 # ── Gameplay tables — height-indexed (5 rows at ANCHOR_INCHES) ────────────────
-# Values are the v3 average-tier column: the v4 body plane is authored around
-# the old no-strength-no-weakness builds, so a v4 body reproduces the exact
-# behavior a v3 all-average build of the same height had. Gear (later stages)
-# re-widens the spread laterally.
+# The body plane is deliberately narrow — height alone moves a multiplier by a
+# few percent. The gear leans below are what re-widen the spread laterally.
 
 # Speed baseline (max_speed). The hump: top speed peaks at medium height.
 const _SPEED_H: Array[float] = [0.9875, 0.995, 1.000, 0.995, 0.988]
@@ -231,9 +187,9 @@ const _HEIGHT: Array[float] = [0.9565, 1.000, 1.043, 1.086, 1.143]
 # Stick length — equipment, ~0.65× the height deviation from mesh-native 5'10".
 # Height sets the BAND CENTER (real sticks are cut to the body)…
 const _STICK_LEN: Array[float] = [0.9715, 1.000, 1.028, 1.056, 1.093]
-# …and the LENGTH gear slot leans it — THE FIRST LIVE GEAR SLOT. A lean on
-# your height's stick, not an absolute pick, so max-height + LONG can't stack
-# reach beyond the tuned corner. Symmetric ±4% to start (whether LONG should
+# …and the LENGTH gear slot leans it: a lean on your height's stick, not an
+# absolute pick, so max-height + LONG can't stack reach beyond the tuned
+# corner. Symmetric ±4% (whether LONG should
 # lean more conservatively than SHORT is an open tuning call — reach is the
 # closest thing the game has to raw power, but the lever-derived inertia and
 # tip-speed tradeoffs are what price it honestly). Everything downstream of
@@ -242,12 +198,12 @@ const _STICK_LEN: Array[float] = [0.9715, 1.000, 1.028, 1.056, 1.093]
 const _LENGTH_LEAN: Array[float] = [0.960, 1.000, 1.040]  # SHORT / STANDARD / LONG
 
 # ── Gear-lean tables — 3-vec, indexed by the slot option (0/1/2) ─────────────
-# SKATE PROFILE — top-end ↔ burst (the last slot to land). POWER (long flat
+# SKATE PROFILE — top-end ↔ burst. POWER (long flat
 # grind) = +top speed and +glide, −agility (turn/brake/grip — it multiplies
 # the full agility lever, lateral_grip included); AGILITY (rockered) = +first
 # step and +cornering, −top speed. The speed lean is what re-widens the
 # sprint band the body plane deliberately compressed (~20.5–24 mph across
-# profiles, approaching the v3 20–25 target). STACKED AGILITY CORNERS
+# profiles). STACKED AGILITY CORNERS
 # (body × gear, pinned by test): best 5'7"-lean-agility ≈ 1.15, worst
 # 6'8"-heavy-power ≈ 0.84 — a self-chosen extreme, deliberately outside the
 # involuntary body floor/ceiling (~0.88 / ~1.10).
@@ -260,9 +216,8 @@ const _PROFILE_GLIDE_LEAN: Array[float] = [1.03, 1.00, 0.96]    # drag mult: low
 # pays a slower load (longer slapper wind-up AND longer wrister runway);
 # whippy is the snap release at a softer ceiling. NOTE the charge lean goes
 # WITH the power lean, deliberately breaking from the height coupling
-# (2 − power, where a harder shooter also threatens sooner — a double
-# benefit the v3 tier price policed): a lateral slot must trade, never
-# stack. Real-hockey sign convention: high flex number = stiffer.
+# (2 − power, where a harder shooter also threatens sooner): a lateral slot
+# must trade, never stack. Real-hockey sign convention: high flex number = stiffer.
 const _FLEX_SHOT_LEAN: Array[float] = [0.94, 1.00, 1.06]    # whippy / medium / stiff
 const _FLEX_CHARGE_LEAN: Array[float] = [0.92, 1.00, 1.10]  # wind-up time, with power
 const _FLEX_RUNWAY_LEAN: Array[float] = [0.90, 1.00, 1.12]  # wrister full-stroke travel
@@ -302,10 +257,9 @@ const _FLEX_RUNWAY_LEAN: Array[float] = [0.90, 1.00, 1.12]  # wrister full-strok
 # and both are load-bearing:
 #   · BUILD TOLERANCE. Build variance lives entirely in the gravity drop
 #     (~d²/v²), so the ±17% shot-power spread moves arrival by only ±3–12 cm
-#     at these home ranges instead of the ±60 cm it moved when bands sat at
-#     15–22 m. Every build keeps its full menu at home; the lone casualty is a
-#     weak build's M88 LOW, which lands under the pad. No normalization needed
-#     — the anchoring dissolved the problem.
+#     at these home ranges — a fan anchored at 15–22 m instead would spread it
+#     ±60 cm and need normalizing. Every build keeps its full menu at home; the
+#     lone casualty is a weak build's M88 LOW, which lands under the pad.
 #   · THE SLAPPER NEEDS NO SEPARATE LADDER. Its extra pace costs ~5 cm of drop
 #     at home range, so the same rungs ride about one notch higher. Real, and
 #     small enough that the level still means what it means.
@@ -346,9 +300,9 @@ const _ACCEL_F: Array[float] = [1.080, 1.040, 1.000, 0.980, 0.970]
 # a longer stop. This is the counterweight that makes the weight dial a real
 # seesaw (mass 1.28 is a big buy; without this its only tax was mild accel).
 # CORNER BUDGET (body-only): best 5'7"-lean 1.065·1.03 ≈ 1.10, worst 6'8"-heavy
-# 0.92·0.96 ≈ 0.88 — pinned just under the v3 "feels bad but playable" floor;
-# the skate-profile gear lean stacks on top later, so re-check the stacked
-# corners when that slot lands. Deliberately NOT applied to edge glide — see
+# 0.92·0.96 ≈ 0.88 — the involuntary floor a body alone can reach; the
+# skate-profile lean stacks on top of it (stacked corners pinned by test).
+# Deliberately NOT applied to edge glide — see
 # agility_glide_mult.
 const _AGILITY_F: Array[float] = [1.030, 1.015, 1.000, 0.980, 0.960]
 
@@ -370,11 +324,9 @@ const _STAMINA_REGEN_F: Array[float] = [1.25, 1.12, 1.00, 0.90, 0.82]
 const _HEAD_BULK: Array[float] = [0.935, 0.98, 1.00, 1.03, 1.07]   # height
 
 # ── Sprint / carry constants ──────────────────────────────────────────────────
-# The normalization span is the FULL v3 speed-lever span (weak-small .. strong-
-# medium), retained so v4 body-only builds land on the same sprint ceilings
-# their v3 all-average counterparts had (neutral identity at every height).
-# Body-only speed occupies the middle of the span; the skate-profile gear slot
-# re-widens it laterally in a later stage.
+# The normalization span is wider than the body plane's own speed range, so
+# body-only builds sit in the middle of the sprint band and the skate-profile
+# lean is what reaches either end of it.
 const _SPEED_MULT_MIN: float = 0.955
 const _SPEED_MULT_MAX: float = 1.060
 # Sprint top-speed multiplier, interpolated across the speed span — grounded
@@ -382,10 +334,9 @@ const _SPEED_MULT_MAX: float = 1.060
 const SPRINT_CEIL_MIN: float = 1.07
 const SPRINT_CEIL_MAX: float = 1.164
 # Carry speed = how much of your speed survives carrying (higher = less
-# penalty). v3 eased this by Hands (primary) + Speed; v4 has no hands lever
-# (constitution), so the v3 neutral hands contribution is folded into the
-# base — CARRY_BASE = 0.92 + 0.07·(0.15/0.39), exactly the v3 H3-average
-# value — leaving Speed as the only easing term.
+# penalty). Speed is the only easing term — there is no hands lever, by
+# constitution — and the base is written as the sum it derives from so the
+# neutral value stays exact.
 const CARRY_BASE: float = 0.92 + 0.07 * (0.15 / 0.39)
 const CARRY_SPEED_GAIN: float = 0.025
 const CARRY_FLOOR: float = 0.85
@@ -411,8 +362,8 @@ func _init(p_height: int = HEIGHT_MEDIUM, p_weight: int = 0,
 	length = _clamp_gear(p_length)
 
 
-# The neutral build (6'1"/201, all-balanced). Name kept from the tier era —
-# every "give me a default build" call site reads it.
+# The neutral build (6'1"/201, all-balanced) — what every "give me a default
+# build" call site reads.
 static func all_average() -> PlayerAttributes:
 	return PlayerAttributes.new()
 
@@ -538,9 +489,10 @@ func stamina_regen_mult() -> float: return _f(_STAMINA_REGEN_F)
 func mass_mult() -> float:          return float(weight) / NEUTRAL_WEIGHT_LBS
 
 # Hands — CONSTITUTION: no fidelity scaling, ever. The blade tracks every
-# player's cursor identically; hands differentiation arrives as lever geometry
-# (stick length → tip speed vs inertia) in a later stage. Accessors kept so
-# apply_attributes stays table-agnostic.
+# player's cursor identically; hands differentiation is lever GEOMETRY instead
+# (stick length → blade tip speed vs the inertia cap, derived in
+# SkaterController.apply_attributes). Accessors kept at 1.0 so apply_attributes
+# stays table-agnostic.
 func hands_blade_mult() -> float:    return 1.0
 func hands_backhand_mult() -> float: return 1.0
 
@@ -634,8 +586,7 @@ func sprint_ceiling_mult() -> float:
 	return lerpf(SPRINT_CEIL_MIN, SPRINT_CEIL_MAX, n)
 
 
-# Carry speed retention — speed-eased (see CARRY_BASE for where the v3 hands
-# term went). Higher = less penalty.
+# Carry speed retention — speed-eased (see CARRY_BASE). Higher = less penalty.
 func carry_speed_mult() -> float:
 	var sn: float = clampf((speed_mult() - _SPEED_MULT_MIN)
 			/ (_SPEED_MULT_MAX - _SPEED_MULT_MIN), 0.0, 1.0)
@@ -705,8 +656,8 @@ static func from_dict(d: Dictionary) -> PlayerAttributes:
 #   length   — strong Checking ran the defenseman's stick → LONG; strong
 #              Skill on a small frame was the dangler → SHORT.
 #   flex     — always MEDIUM (no tier expressed release speed).
-# Gear has no gameplay effect in step 1, so this mapping only shapes what the
-# picker shows a migrated player — they lose nothing by re-picking.
+# The result is a starting build, not a promise: every slot is re-pickable in
+# the locker.
 static func migrate_tiers(p_height: int, skating: int, skill: int,
 		checking: int) -> PlayerAttributes:
 	var h: int = coerce_height(p_height)

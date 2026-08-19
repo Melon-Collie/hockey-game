@@ -9,11 +9,9 @@
 # There is NO opt-in flag: the pad works the moment it's used and yields the moment
 # the mouse is. `is_gamepad_active()` is the single source of truth every device-
 # facing surface reads — gameplay control (the gatherer's cursor synthesis, the
-# free cam), the on-screen prompts / tutorial copy, AND the menu focus rings (the
-# tracker owns a shared ring stylebox that goes teal while the pad drives and
-# invisible the instant the mouse does, so a mouse player never sees a ring even
-# though the controls are focusable). Rings, prompts, and control stay linked
-# because they all key off this one flag.
+# free cam), the on-screen prompts / tutorial copy, and the menu focus rings (see
+# _focus_ring). Rings, prompts, and control stay linked because they all key off
+# this one flag.
 #
 # This is a purely LOCAL, presentation-time concern — it only decides how the local
 # player's InputState gets populated (OS mouse vs. synthesized-from-stick), not

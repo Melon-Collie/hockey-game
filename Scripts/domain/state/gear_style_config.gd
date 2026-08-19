@@ -20,9 +20,8 @@ extends RefCounted
 # forged code lands on a legal look instead of being rejected.
 #
 # Defaults — skate model 0 (all-black boot), glove model 0 (kit-colored body
-# and cuff), laces WHITE, stick model 0 (the house MITTS stick), face 0
-# (bare) — render the exact look every skater wore before gear cosmetics
-# existed.
+# and cuff), laces WHITE, stick model 0 (the house MITTS stick), face 0 (bare)
+# — are the stock look an untouched player wears.
 
 # 5 bits per field, matching StickTapeConfig's palette headroom.
 const _FIELD_BITS: int = 5

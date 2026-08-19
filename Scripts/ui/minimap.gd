@@ -8,7 +8,7 @@ extends Control
 # Orientation MATCHES the game camera. The camera renders the rink with world +X
 # to screen-right and world +Z toward screen-bottom, and flips 180° (yaw) only
 # when the "Always Attack Up" pref is on AND the local player is on team 1 (see
-# GameCamera._physics_process step 5b). The minimap reproduces exactly that flip
+# GameCamera._process step 5b). The minimap reproduces exactly that flip
 # via the same boolean, so the direction the local player attacks is always the
 # same on the map as it is on screen — up-screen when attack-up is on, absolute
 # otherwise. Because the transform is derived from the camera's own rule rather
@@ -20,14 +20,12 @@ extends Control
 #
 # TWO LAYERS, redrawn on different clocks. The rink itself — bed, boards,
 # creases, faceoff spots, zone lines, nets — cannot change except when the attack
-# flip or the ends swap, but it was being rebuilt every frame alongside the dots:
-# two rounded style boxes, two re-tessellated crease polygons (each allocating a
-# fresh PackedVector2Array), a dozen circles and five lines, all to produce the
-# identical image. The profiler had Minimap._draw at 0.47 ms of a ~9.8 ms frame.
-# Godot keeps each CanvasItem's recorded command list and replays it for free
-# until something calls queue_redraw(), so the fix is structural rather than an
-# optimisation of the drawing: put the static half in its own CanvasItem and stop
-# queueing it. Only the dots redraw per frame now.
+# flip or the ends swap, and redrawing it with the dots costs ~0.5 ms of a frame
+# to produce the identical image (two rounded style boxes, two re-tessellated
+# crease polygons each allocating a fresh PackedVector2Array, a dozen circles,
+# five lines). Godot keeps each CanvasItem's recorded command list and replays it
+# for free until something calls queue_redraw(), so the static half lives in its
+# own CanvasItem that is NOT queued per frame. Only the dots redraw every frame.
 #
 # The layers are children (not this node) because siblings draw in tree order and
 # children draw over their parent — the rink has to be UNDER the dots, so it

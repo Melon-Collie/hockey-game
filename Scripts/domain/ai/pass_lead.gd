@@ -2,10 +2,9 @@ class_name AIPassLead
 
 # Pass-leading for AI passers — the single source of truth shared by the
 # carrier role's pass scoring (`AIRoleCarrier._compute_best_pass`) and the
-# state machine's firing aim (`SkaterAgentStateMachine._pass_aim_point`).
-# Both used to carry byte-for-byte copies of this; unifying them keeps the
-# scored lead and the fired lead identical, so a pass can't be evaluated at
-# one aim point and released at another.
+# state machine's firing aim (`SkaterAgentStateMachine._pass_aim_point`). Both
+# go through here so the scored lead and the fired lead are identical — a pass
+# must never be evaluated at one aim point and released at another.
 #
 # Two refinements over a naive `pos + vel·t` lead:
 #
@@ -23,15 +22,14 @@ class_name AIPassLead
 #
 # The lead is measured from the receiver's BODY, not its current blade.
 #
-# Aiming at `blade_contact_world` and then extrapolating it by the body's
-# velocity stacks two unrelated things: where the stick happens to be pointing
-# right now, plus the travel the body will do in flight. The first is not a
-# prediction. An off-puck bot's cursor is its ready stance, which points the
-# stick along its travel direction whenever it is skating to its anchor — so the
-# stance offset and the travel lead always ADD, never cancel, and the aim lands a
-# full stick reach past where the receiver will be. Measured at a flat 1.60 m at
-# every speed, with stick pose alone swinging the aim point 3.43 m for an
-# identical body state (tests/unit/ai/test_pass_lead_blade_base.gd).
+# Never aim at `blade_contact_world` and extrapolate THAT by the body's
+# velocity: it stacks where the stick happens to point right now (not a
+# prediction) onto the travel the body will do in flight. An off-puck bot's
+# cursor is its ready stance, which points the stick along its travel direction
+# whenever it is skating to its anchor, so the stance offset and the travel lead
+# always ADD and the aim lands a full stick reach — a flat 1.60 m at every speed
+# — past where the receiver will be
+# (tests/unit/ai/test_pass_lead_blade_base.gd).
 #
 # "Pass to the stick, not the chest" is still right — it is just not answerable
 # from the CURRENT pose, because the receiver does not hold it. On an incoming

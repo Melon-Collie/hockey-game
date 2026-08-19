@@ -2,13 +2,11 @@ class_name NetGeometry
 
 # Where the net IS — one definition, read by everything that collides with it.
 #
-# This file exists because there used to be two. `PuckGeometryCollision` modelled
-# the real cage (pipes at their true radius, side twine at the post line, a back
-# mesh leaning ~21°), while the blade and the carried puck were clamped out of a
-# flat axis-aligned box 10 cm wider and — at height — up to 33 cm deeper. A
-# player crossing between a loose puck and a carried one crossed between two
-# different nets, which is what made the area feel broken rather than merely
-# hard. See `docs/net-play-plan.md` §1.
+# There must be exactly ONE net: a loose puck, a carried puck and the blade all
+# solve against these surfaces. Two descriptions of the cage (a real one for the
+# puck, a padded box for the blade) means a player crossing between a loose puck
+# and a carried one crosses between two different nets, which is what makes the
+# area feel broken rather than merely hard. See `docs/net-play-plan.md` §1.
 #
 # Nothing here knows about restitution, pucks, or sticks. Consumers bring their
 # own clearance (a puck's radius, a blade's half-thickness) and their own
@@ -25,8 +23,8 @@ static func near_end_z(z: float) -> float:
 
 # Half-width of the cavity's SIDE twine. The visible side panels are straight
 # vertical planes at the post line, so this is constant with depth — the cage
-# does NOT flare out to NET_BACK_HALF_WIDTH. An earlier model that did let a
-# corner-driven puck settle ~10 cm outside the visible mesh.
+# does NOT flare out to NET_BACK_HALF_WIDTH, which would let a corner-driven
+# puck settle ~10 cm outside the visible mesh.
 static func cavity_half_width() -> float:
 	return GameRules.NET_HALF_WIDTH
 

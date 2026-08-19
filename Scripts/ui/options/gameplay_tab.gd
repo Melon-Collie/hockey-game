@@ -169,10 +169,10 @@ func read_controls() -> Dictionary:
 		"share_gameplay_stats": _share_stats_check.button_pressed,
 	}
 
-# Note: the language dropdown is intentionally NOT reverted here — matching the
-# original panel, Cancel/Defaults leave the visible language selection as the
-# player set it (the actual pref only ever changes on Apply). `locale` is absent
-# from OptionsPanel._defaults() for the same reason.
+# The language dropdown is deliberately NOT reverted here: Cancel/Defaults leave
+# the visible language selection as the player set it, and the pref itself only
+# ever changes on Apply. `locale` is absent from OptionsPanel._defaults() for the
+# same reason.
 func apply_values(v: Dictionary) -> void:
 	_attack_up_check.set_pressed_no_signal(v.attack_up)
 	_self_beacon_mode_btn.selected = v.self_beacon_mode

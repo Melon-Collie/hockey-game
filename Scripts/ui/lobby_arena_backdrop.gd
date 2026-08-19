@@ -2,8 +2,8 @@ class_name LobbyArenaBackdrop
 extends Node3D
 
 # Live 3D arena behind the lobby panel: the real RinkArena scene (rink,
-# stands, crowd, lights) with a slowly drifting camera, replacing the old
-# static ice-texture background. The crowd's fan mix re-tints as the lobby's
+# stands, crowd, lights) with a slowly drifting camera. The crowd's fan mix
+# re-tints as the lobby's
 # team colors resolve (set_team_color_slots), so color votes repaint the
 # bowl live, and the roster sits on the benches as kit-dressed dummies
 # (set_bench_counts). PlayerPrefs.apply_video() is re-applied once the arena

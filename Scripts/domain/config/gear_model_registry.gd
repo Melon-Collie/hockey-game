@@ -44,12 +44,11 @@ extends RefCounted
 # re-equips every player who had picked it.
 #
 # Index 0 of each list is the stock design (all-black skate, kit-colored
-# glove), which is what an untouched player wears. The one deliberate
-# departure from the pre-models look is the blade HOLDER: it used to render
-# steel along with the runner, which read as one gray lump under the boot.
-# Real holders are molded plastic and essentially always white, so every row
-# including Blackout wears one — which makes the stock skate a black boot on a
-# white holder, the median NHL skate rather than a stealth colorway.
+# glove), which is what an untouched player wears. The blade HOLDER is the one
+# piece no row paints: real holders are molded plastic and essentially always
+# white, so every row including Blackout wears a white one — which makes the
+# stock skate a black boot on a white holder, the median NHL skate rather than
+# a stealth colorway.
 
 enum Paint { BLACK, LIGHT, TEAM, ACCENT }
 
@@ -66,8 +65,8 @@ const GLOVE_FINGERS: int = 1
 const GLOVE_CUFF: int = 2
 const GLOVE_ZONE_COUNT: int = 3
 
-# Synthetic-leather black — the boot dark every skater wore before models
-# existed. The other three slots have no constant here: they are the kit's.
+# Synthetic-leather black — the stock boot dark. The other three slots have no
+# constant here: they are the kit's.
 const BLACK := Color(0.08, 0.08, 0.08)
 
 # Named rows, so callers that mean a specific design (the pre-models save
@@ -92,10 +91,9 @@ const SKATE_NAME_KEYS: Array[StringName] = [
 # SKATE_NAME_KEYS. The quarter and toe only ever take BLACK or LIGHT: a boot is
 # leather, and a boot in a team's secondary would stop reading as a skate.
 #
-# The HOLDER is LIGHT on every row. Holders are conventionally molded white —
-# black was the early default, back when it matched the boot, and white
-# displaced it — and on the ice they are white essentially without exception,
-# so no design gets to depart from it, not even the blackout. It stays a zone
+# The HOLDER is LIGHT on every row. Holders are conventionally molded white, and
+# on the ice they are white essentially without exception, so no design gets to
+# depart from it, not even the blackout. It stays a zone
 # rather than a constant only because the rows are where a future design would
 # reach for a black or team-colored holder; nothing today does.
 #

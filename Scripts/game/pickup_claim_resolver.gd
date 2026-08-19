@@ -1,14 +1,13 @@
 class_name PickupClaimResolver
 extends RefCounted
 
-# Host-only resolver for client-initiated pickup claims with lag compensation.
-# Pulled out of GameManager so the validation flow (age check, blade/puck
-# rewind, contest-window arbitration) lives in one testable place.
+# Host-only resolver for client-initiated pickup claims with lag compensation:
+# age check, blade/puck rewind, contest-window arbitration.
 #
 # The claimant's blade is CLIENT-AUTHORITATIVE (the client's precise "aim", sent
-# in the claim), exactly as AAA FPS lag-comp takes the shooter's aim from the
-# usercmd rather than re-deriving it. The host reconstructing the blade from its
-# lossy self-view snapshot was the grab-then-lose bug. The host still owns the
+# in the claim). The host must not reconstruct it from its own lossy self-view
+# snapshot — that reconstruction diverges from what the client saw, and the
+# claimant watches the puck stick and then come loose. The host still owns the
 # BODY: the puck is rewound as remote-view, the claimant's body position is read
 # from the self-view snapshot, and the client blade is reach-clamped to that body
 # (LagCompRewind.clamp_client_blade) so a modified client can't teleport its blade.
@@ -49,9 +48,9 @@ var _pending_timer: float = 0.0
 # lead), NOT the raw claim stamp. Both arbitration paths below compare it against
 # another reach instant — the host's live blade at `now`, or a contender's own
 # self-view — and the raw stamp is a lead earlier than the moment the claimant
-# actually reached. Comparing a stamp to a reach instant skewed every present-time
+# actually reached. Comparing a stamp to a reach instant skews every present-time
 # verdict by a full lead (25-75 ms against a 50 ms window), and against a
-# contender it skewed by the DIFFERENCE of two per-client servo leads.
+# contender by the DIFFERENCE of two per-client servo leads.
 var _pending_view_time: float = 0.0
 # The pending claimant's client-sent blade geometry (already reach-clamped), kept
 # so a subsequent contest resolves the prior claimant's squirt from the blade IT
@@ -129,14 +128,14 @@ func clear_for_grant(granted_peer_id: int) -> void:
 
 
 # ── Claim-vs-present-time arbitration ────────────────────────────────────────
-# The host's present-time pickup tick (PuckController._check_interactions) used
-# to grant unconditionally and the grant path then cleared any pending claim —
-# so a lag-comp claim sitting in its contest window ALWAYS lost to a host-live
-# blade (the host player's own, or a remote's replayed one), no matter how much
-# earlier it was stamped. In tight scrambles that read as "the host wins every
-# 50/50". This entry point runs at the present-time grant moment and applies
-# the same stamp-fairness rule the claim-vs-claim path uses, treating the live
-# grab as a claim stamped `now`.
+# The host's present-time pickup tick (PuckController._check_interactions) must
+# route through here rather than granting unconditionally: an unconditional grant
+# clears the pending claim, so a lag-comp claim sitting in its contest window
+# always loses to a host-live blade (the host player's own, or a remote's
+# replayed one) however much earlier it was stamped — "the host wins every 50/50"
+# in a scramble. This entry point runs at the present-time grant moment and
+# applies the same stamp-fairness rule the claim-vs-claim path uses, treating the
+# live grab as a claim stamped `now`.
 #
 # Pure decision half, pinned by GUT. Both arguments are instants on the host
 # timeline at which a blade reached the puck: `pending_view_time` is when the
@@ -280,11 +279,9 @@ func receive_claim(peer_id: int, host_timestamp: float, _interp_delay_ms: float,
 	if skater_snap.hit_committed:
 		NetworkManager.send_pickup_claim_nack(peer_id)
 		return
-	# Client-authoritative blade ("aim"): the claim carries the blade geometry the
-	# client actually reached with, instead of the host reconstructing it from its
-	# lossy self-view snapshot (the reconstruction diverged from what the client
-	# saw — the grab-then-lose bug). The host still owns the BODY, and ClaimantView
-	# is what pins the client's points to it.
+	# Client-authoritative blade ("aim") — the claim carries the geometry the
+	# client actually reached with (see the header). The host still owns the BODY,
+	# and ClaimantView is what pins the client's points to it.
 	if not _claimant.resolve(_registry, peer_id, skater_snap,
 			record.controller as SkaterController,
 			blade_rewind_time, _state_buffer.newest_host_timestamp()):

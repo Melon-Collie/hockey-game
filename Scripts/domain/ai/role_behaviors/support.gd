@@ -1,78 +1,42 @@
 class_name AIRoleSupport
 
-# SUPPORT role behavior — OZONE + TRANS_OFFENSE. The off-puck teammate
-# whose job is "be a pass option AND be in a recoverable position."
-# In the OZ that means the THIRD MAN HIGH of the 3v3 F1-F2-1 shape:
-# stationed at the top of the zone (see HIGH_POST_INSET_M), a point
-# outlet who keeps squirting pucks in and is the first man back on a
-# turnover. In transition it trails the carrier (goal-side orbit).
+# SUPPORT role behavior — OZONE + TRANS_OFFENSE. The off-puck teammate whose job
+# is "be a pass option AND be in a recoverable position". In the OZ that is the
+# THIRD MAN HIGH of the 3v3 F1-F2-1 shape: a point outlet who keeps squirting
+# pucks in and is the first man back on a turnover. In transition it trails the
+# carrier.
 #
-# Algorithm: argmax over a candidate set of
-#
-#     score_pass(carrier, candidate) − counter_cost(candidate)
-#
-# `score_pass` (existing AIActionScoring primitive) handles
-# "available for a pass + good shot if I receive": it factors lane
-# clearance from carrier through projected opponents and recursively
-# evaluates the candidate's own future-action value via score_at.
+# Argmax over `score_pass(carrier, candidate) − counter_cost(candidate)`.
 #
 # `counter_cost` is the COVERING-SET exposure (AIActionScoring.
-# counter_rush_cost — the same grounded model the carrier's transition-
-# exposure term runs): IF possession flips at the carrier, the fastest
-# opponent collects the loss and drives the counter point, and the threat
-# he generates there survives only the bodies that beat him home with time
-# to set — teammates, and SUPPORT ITSELF racing back from the candidate
-# being priced. Standing somewhere recoverable literally erases the
-# counter (self joins the covering set → the counter shot is a blocked
-# look); standing somewhere deep leaves it live. The whole thing is
-# weighted by a REAL turnover probability: the CARRIER's live stand
-# safety (1 − carry_safety at his spot) — a pressured cycle carrier makes
-# recoverability worth paying for, an unpressured rush frees the trailer
-# to play offense. This replaced a frozen body-ETA time ramp
-# (my_time/safe_time − 1) whose canonical failure was the crease-lurker: a
-# beaten forechecker parked at our crease zeroed every up-ice spot, paying
-# SUPPORT to strand home — under the covering-set read that lurker must
-# skate all the way UP to collect a loss and all the way BACK, so the
-# covering set beats him trivially and the trailer joins the rush.
-#
-# Search center is derived from in-game references (the carrier's
-# position). Polar samples around the carrier
-# feed the score function; the counter cost penalizes candidates that
-# leave the counter uncovered, biasing toward recoverable depth.
-#
-# On top of that soft bias, SUPPORT enforces a HARD goal-side
-# constraint (GOAL_SIDE_TOLERANCE_M): candidates up-ice of the carrier
-# are rejected outright. SUPPORT is the conservative trailer / safety
-# valve — the carrier must never be the last man back, so if they're
-# stripped SUPPORT is already the recovery layer. The up-ice stretch
-# option is OUTLET's job, not SUPPORT's. Without the hard constraint
-# the pass-quality term would sometimes pull SUPPORT even with or ahead
-# of the carrier on a clean breakout, leaving no one home.
+# counter_rush_cost): if possession flips at the carrier, the fastest opponent
+# collects the loss and drives the counter point, and the threat he generates
+# there survives only the bodies that beat him home with time to set —
+# teammates, and SUPPORT ITSELF racing back from the candidate being priced. So
+# standing somewhere recoverable erases the counter and standing deep leaves it
+# live, weighted by a real turnover probability (the CARRIER's live stand
+# safety): a pressured cycle carrier makes recoverability worth paying for, an
+# unpressured rush frees the trailer to play offense.
 
-# Polar sampling radius around the search center. Same scale as
-# AIRoleCarrier.CARRY_SEARCH_STEP_M (3.0 m) — sampling parameter,
-# not a behavioral knob. The carrier itself is excluded by the
-# anti-crowding filter; samples at the rim of the circle remain.
+# Polar sampling radius around the carrier in transition — a sampling parameter,
+# not a behavioral knob. The carrier's own spot is excluded by the anti-crowding
+# filter; the rim samples remain.
 const SEARCH_RADIUS_M: float = 5.0
 
 # The third man's OZ station: this far inside the attacking blue line. Close
 # enough to the line to hold the zone (a squirting puck is kept in) and to be
 # the first man back the instant possession flips; inside enough to stay
-# comfortably onside and be a real point outlet. The 3v3 F1-F2-1 shape: puck
-# man, net man (FINISHER), third man HIGH. Sampling the third man around the
-# CARRIER instead (the old set) glued him to within SEARCH_RADIUS_M of the
-# play by construction — the "third man pinches" failure: no high candidate
-# ever existed to choose.
+# comfortably onside and be a real point outlet. Sampling the third man around
+# the CARRIER instead glues him to within SEARCH_RADIUS_M of the play by
+# construction, so no high candidate ever exists to choose.
 const HIGH_POST_INSET_M: float = 3.0
 
-# Safety-valve constraint. SUPPORT is the conservative trailer: it stays
-# goal-side of (no further toward the opp net than) the carrier so the
-# carrier is never the last man back — if the carrier is stripped,
-# SUPPORT is already the recovery layer for the rush the other way. The
-# tolerance lets SUPPORT sit roughly EVEN with the carrier (a weak-side
-# option even with the puck) without drifting into a true stretch
-# position ahead of it; ~one stick-length of slack, not a behavioral
-# knob to open up the offense. Raise OUTLET's role for the up-ice option.
+# Safety-valve slack — about one stick length, and not a knob for opening up the
+# offense. SUPPORT stays goal-side of the carrier so the carrier is never the
+# last man back; this much lets it sit roughly EVEN with him (a weak-side option)
+# without drifting into a true stretch position ahead. The up-ice stretch is
+# OUTLET's job. A soft counter-cost bias alone is not enough — the pass-quality
+# term pulls SUPPORT past the carrier on a clean breakout, leaving nobody home.
 const GOAL_SIDE_TOLERANCE_M: float = 1.5
 
 # Scratch buffers for the covering-set exposure (caller-owned pattern —
@@ -88,9 +52,9 @@ static var _scratch_threat_by_cover: Array[float] = []
 static func decide(ctx: RoleContext) -> RoleDecision:
 	var d := RoleDecision.new()
 
-	# No live teammate carrier (loose puck / pass in flight) — orient
-	# off the puck instead of freezing, so SUPPORT keeps flowing into
-	# the developing play. Only truly stand still if there's no puck.
+	# No live teammate carrier (loose puck / pass in flight) — the read orients off
+	# the puck, so SUPPORT keeps flowing into the developing play. Stand still only
+	# when there is no puck at all.
 	var carrier_pos: Vector3 = AIRoleHelpers.resolve_offensive_play_ref(ctx)
 	if not carrier_pos.is_finite():
 		d.target_position = ctx.self_pos
@@ -106,13 +70,10 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	var teammate_positions: Array[Vector3] = ctx.scratch_teammates
 	AIRoleHelpers.collect_teammates_excluding_self(ctx, teammate_positions)
 
-	# Covering-set exposure inputs — all candidate-invariant, computed once
-	# (see the header): the turnover prior is the CARRIER's live stand
-	# safety, the counter collects at the carrier, and each teammate's race
-	# to the counter point is pre-solved. Only SUPPORT's own recovery race
-	# (self from the candidate) varies per candidate, inside
-	# counter_rush_cost. An unpressured carrier → prior 0 → the cost
-	# short-circuits and the argmax is pure pass value.
+	# Covering-set exposure inputs, all candidate-invariant so they are computed
+	# once. Only SUPPORT's own recovery race (self from the candidate) varies per
+	# candidate, inside counter_rush_cost. An unpressured carrier → prior 0 → the
+	# cost short-circuits and the argmax is pure pass value.
 	_scratch_opp_vels.clear()
 	_scratch_opp_stamina.clear()
 	for s: SkaterNetworkState in opp_states:
@@ -130,11 +91,10 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		_scratch_threat_by_cover.append(-1.0)
 	var our_goalie: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
 
-	# Far from the station, skate at the CALCULATED post directly — the
-	# openness argmax refines a read that will be re-taken from closer before
-	# arrival (see STATION_ARGMAX_LOD_M). In the OZ the station is the high
-	# post; in transit it's the goal-side trail a step behind the carrier
-	# (always passes the goal-side valve by construction).
+	# Far from the station, skate at the CALCULATED post directly — the openness
+	# argmax refines a read that will be re-taken from closer before arrival (see
+	# STATION_ARGMAX_LOD_M). In transit the station is the goal-side trail a step
+	# behind the carrier, which passes the goal-side valve by construction.
 	var station: Vector3
 	if AIActionScoring.in_offensive_zone(carrier_pos, ctx.attacking_goal_pos):
 		station = Vector3(
@@ -148,11 +108,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		d.target_position = station
 		return d
 
-	# Search around the carrier. Polar samples cover the cycle space;
-	# anti-crowd filter rejects the carrier-overlap candidate.
 	var candidates: Array[Vector3] = _generate_candidates(ctx, carrier_pos)
-	# Switch-hysteresis: hold the chosen station unless a fresh spot is clearly
-	# better, so the cursor (which snaps to this target) stays steady.
 	AIRoleHelpers.append_incumbent(ctx, candidates)
 
 	var best_pos: Vector3 = ctx.self_pos
@@ -162,13 +118,8 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 			continue
 		if AIRoleHelpers.too_close_to_teammate(c, teammate_positions):
 			continue
-		# Safety-valve: reject candidates up-ice of the carrier so
-		# SUPPORT stays the goal-side recovery layer (see
-		# GOAL_SIDE_TOLERANCE_M). Carrier never the last man back.
 		if not _is_goal_side_of_carrier(c, carrier_pos, ctx.own_goal_dir):
 			continue
-		# Match the speed our carrier would actually fire at (see
-		# finisher.gd for rationale).
 		var pass_speed: float = AIActionScoring.expected_pass_speed(carrier_pos, c)
 		# Pre-armed feed keeper (backdoor_depth_cap on v3's predicted pose):
 		# a candidate the keeper can pre-arm against prices merely-strong
@@ -199,11 +150,9 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 	return d
 
 
-# True if candidate `c` is goal-side of (or roughly even with) the
-# carrier on the rink's depth axis — i.e., no further toward the opp
-# net than the carrier, within GOAL_SIDE_TOLERANCE_M. own_goal_dir is
-# +1 when our net is at +Z and -1 when at -Z, so own_goal_dir * z grows
-# toward our net; a larger value is "deeper / more goal-side".
+# The safety valve: true when `c` is no further toward the opp net than the
+# carrier, within GOAL_SIDE_TOLERANCE_M. own_goal_dir is +1 when our net is at
+# +Z, so own_goal_dir * z grows toward our net — larger is more goal-side.
 static func _is_goal_side_of_carrier(c: Vector3, carrier_pos: Vector3,
 		own_goal_dir: float) -> bool:
 	return own_goal_dir * c.z >= own_goal_dir * carrier_pos.z - GOAL_SIDE_TOLERANCE_M
@@ -211,24 +160,17 @@ static func _is_goal_side_of_carrier(c: Vector3, carrier_pos: Vector3,
 
 # ── Candidate generation (in-game-ref) ──────────────────────────────────────
 
-# Zone-dependent station:
-#   Carrier IN the offensive zone → sample around the HIGH POST (top of the
-#     zone, x shaded to the carrier's side — the same strong-side read F2 uses
-#     on the forecheck), plus the half-wall midpoint toward the carrier (the
-#     classic cycle bump spot) and self. The third man plays HIGH: point
-#     outlet, zone-keeper, first man back.
-#   Carrier still in transit (TRANS_OFFENSE / NZ) → the old carrier-orbit samples;
-#     the high post would be AHEAD of the play there and the goal-side filter
-#     would reject the whole set (SUPPORT is the trailer in transition).
-# The score function (pass value × recoverability) picks within the station.
+# Zone-dependent candidate set. Carrier IN the offensive zone → the named
+# third-man-high stations below. Carrier still in transit → carrier-orbit
+# samples, because the high post would be AHEAD of the play there and the
+# goal-side filter would reject the whole set.
 static func _generate_candidates(ctx: RoleContext, carrier_pos: Vector3) -> Array[Vector3]:
 	var result: Array[Vector3] = []
 	result.append(ctx.self_pos)
 	if AIActionScoring.in_offensive_zone(carrier_pos, ctx.attacking_goal_pos):
 		# NAMED third-man-high stations — the OZ zone-keeper geography, not a
-		# blind ring around one center (same conversion as the finisher's
-		# one-timer stations). Each is a structural cycle spot; the scoring
-		# (pass value × recoverability) arbitrates per the live coverage:
+		# blind ring around one centre. Each is a structural cycle spot; the
+		# scoring (pass value × recoverability) arbitrates per live coverage.
 		var blue_z: float = -ctx.own_goal_dir * GameRules.BLUE_LINE_Z
 		var post_z: float = blue_z - ctx.own_goal_dir * HIGH_POST_INSET_M
 		var wall_sign: float = signf(carrier_pos.x) if absf(carrier_pos.x) > 0.1 \

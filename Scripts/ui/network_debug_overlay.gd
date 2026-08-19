@@ -4,15 +4,11 @@ extends CanvasLayer
 # F3 network debug overlay. Reads NetworkTelemetry + NetworkManager and renders a
 # role-aware, color-coded health readout. Design notes:
 #   • Each metric is colored green / yellow / red by comparing the live value to
-#     the healthy ranges documented in network_telemetry.gd. The colored dot is
-#     the at-a-glance "expected vs unexpected" signal the raw numbers never gave.
+#     the healthy ranges documented in network_telemetry.gd — the at-a-glance
+#     "expected vs unexpected" signal the raw numbers do not carry.
 #   • The header verdict (OK / WATCH / PROBLEM) must mean "something is actually
-#     WRONG" — so only ACTUAL-PROBLEM metrics drive it (via _metric). Connection
-#     FACTS (ping, jitter, delay spread) are colored for context but verdict-
-#     neutral (via _context): a far/jittery link is expected and compensated, so
-#     it shows red on its own line while the header stays green. The real damage a
-#     bad link does surfaces through its own driving metrics (loss, Guessing
-#     ahead, Corrections). Glance at the header to know if anything's wrong.
+#     WRONG", so only ACTUAL-PROBLEM metrics drive it (via _metric); connection
+#     FACTS are colored for context but verdict-neutral (via _context, see there).
 #   • Every line carries an inline plain-English hint (what it means + the target
 #     range) so the overlay is self-explanatory without a separate cheat sheet.
 #   • Sections are gated by role (SOLO / HOST / CLIENT): a client never sees
@@ -36,11 +32,9 @@ const COL_DIM := "8a93a0"
 const COL_VAL := "ececec"
 const DOT := "●"
 
-# Two pages behind one key. The netcode readout is the reason this overlay
-# exists and it has to stay glanceable; the frame-cost breakdown grew to rival it
-# in length while answering an unrelated question, and stacking them made neither
-# readable. P swaps between them. The COPIED DIGEST always carries both, so which
-# page happens to be up never decides what a bug report contains.
+# Two pages behind one key: the netcode readout has to stay glanceable, and the
+# frame-cost breakdown answers an unrelated question at a comparable length, so
+# stacking them makes neither readable. P swaps between them.
 enum Page { NET, PERF }
 
 var _rt: RichTextLabel
@@ -68,9 +62,9 @@ var _dot: Label
 var _fps_label: Label
 var _dot_timer: float = 0.0
 const DOT_REFRESH_SECONDS: float = 0.5
-# Panel text rebuild rate. Rebuilding ~40 BBCode lines every frame cost ~1.25 ms
-# on a 5v5 frame — the overlay was a measurable slice of the very frame it exists
-# to measure, and it inflated the main-thread residual by its own cost. Nothing
+# Panel text rebuild rate. Rebuilding ~40 BBCode lines every frame costs ~1.25 ms
+# on a 5v5 frame — the overlay would be a measurable slice of the very frame it
+# exists to measure, inflating the main-thread residual by its own cost. Nothing
 # on the panel needs frame cadence: telemetry refreshes at 1 Hz, the frame-cost
 # EMAs are smoothed over ~0.3 s, and the peak monitors publish at 1 Hz. Sampling
 # still runs every frame — only the string building is throttled.
@@ -112,12 +106,13 @@ var _peak_process_ms: float = 0.0
 var _peak_physics_ms: float = 0.0
 
 # ── Sim / render phase ───────────────────────────────────────────────────────
-# The sim integrates at a fixed Constants.PHYSICS_TICK and nothing interpolates
-# the result to the render rate, so an actor's RENDERED position is quantized to
-# the tick — while GameCamera, which smooths in _process, moves continuously at
-# the render rate. Within one tick the camera slides a full step and the skater
-# does not, then the skater jumps the whole step at once: a sawtooth in the
-# skater's SCREEN position, one tick of travel from end to end.
+# The sim integrates at a fixed Constants.PHYSICS_TICK while GameCamera, which
+# smooths in _process, moves continuously at the render rate. Without physics
+# interpolation an actor's RENDERED position is quantized to the tick: within one
+# tick the camera slides a full step and the skater does not, then the skater
+# jumps the whole step at once — a sawtooth in the skater's SCREEN position, one
+# tick of travel from end to end. The panel reports the interpolation state
+# alongside the pattern, since that is what decides whether it matters.
 #
 # Whether that sawtooth is visible is purely a sampling question. Rendered motion
 # is smooth only when every frame advances the sim by the same whole number of
@@ -615,8 +610,7 @@ func _render_host(t: NetworkTelemetry) -> void:
 	_frame_health(t)
 	# Judge the gap against the live target interval (state_delta) rather than
 	# a hardcoded 120Hz, so a future runtime rate change (congestion response)
-	# doesn't read red by default. The per-phase dead-puck downshift is gone —
-	# the rate is constant across stoppages now.
+	# doesn't read red by default.
 	var bcast_target_ms := NetworkManager.state_delta * 1000.0
 	_metric(_band(t.broadcast_interval_p95_ms, bcast_target_ms * 1.4, bcast_target_ms * 2.0),
 		"Broadcast gap", "p95 %.1f ms (target ~%.0f)" % [t.broadcast_interval_p95_ms, bcast_target_ms],
@@ -755,14 +749,6 @@ func _render_host_ai_cost() -> void:
 		"share of ticks that could not kick a fresh AI batch because the previous one was still running; bots coast on their last decision through these, and the ticks that CAN kick are the expensive ones")
 
 
-# Main-thread cost, derived rather than measured: the part of the frame that
-# neither the GPU nor the render thread explains. The three run concurrently
-# (Godot's render thread and the GPU each trail the main thread by a frame), so
-# the frame length is set by the LARGEST of them, not their sum — which makes
-# `frame - max(render terms)` a sound lower bound on what the main thread cost.
-# It is a lower bound, not an exact figure: when the frame rate is capped, the
-# idle wait is charged here too, which is why the verdict rules the cap out
-# before naming this.
 # The fixed-timestep aliasing check (see the _PHASE_* field doc-block). Verdict-
 # neutral throughout: an uneven tick/frame pattern is a local display and pacing
 # fact, not a network problem.
@@ -809,6 +795,13 @@ func _phase_hist_dict() -> Dictionary:
 	return out
 
 
+# Derived rather than measured: the part of the frame that neither the GPU nor
+# the render thread explains. The three run concurrently (Godot's render thread
+# and the GPU each trail the main thread by a frame), so the frame length is set
+# by the LARGEST of them, not their sum — which makes `frame - max(render terms)`
+# a sound lower bound on what the main thread cost. A lower bound, not an exact
+# figure: on a capped frame rate the idle wait is charged here too, which is why
+# the verdict rules the cap out before naming this.
 func _main_thread_ms(frame_ms: float) -> float:
 	return maxf(frame_ms - maxf(_ema_gpu_ms, _ema_cpu_render_ms), 0.0)
 

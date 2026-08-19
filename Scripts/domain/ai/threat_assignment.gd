@@ -1,11 +1,10 @@
 class_name AIThreatAssignment
 
 # Pure "man-on-threat" partition: assigns each backline defender to a
-# DISTINCT opponent it should cover. One central partition (computed once
-# per brain tick in TeamBrain) replaces each defensive role independently
-# minimizing the global-MAX threat — which made every defender gravitate to
-# the single most dangerous opponent and stack in the slot, leaving the
-# others open (the "crowded slot, open men" failure).
+# DISTINCT opponent it should cover, computed once per brain tick in TeamBrain.
+# Distinctness is the point — defensive roles each minimizing the global-MAX
+# threat all gravitate to the single most dangerous opponent and stack in the
+# slot, leaving the others open.
 #
 # The puck CARRIER is handled separately (PRESSURE / gap-control), so this
 # partitions only the off-puck opponents (the carrier's potential receivers)
@@ -270,10 +269,10 @@ static func _restrict_prev(prev: Dictionary, reward: Dictionary) -> Dictionary:
 # Goal-side cover point for a man: a stick into the man→our-net lane. Clamped
 # so a man already at the net doesn't push the anchor past the goal line, and
 # held in front of the line outright for a man AT/BEHIND it (corner lurker,
-# wraparound walker): min(depth, dist) only stops the anchor overshooting the
-# net CENTER, so a behind-the-line man used to station his marker behind the
-# goal line with him — you front that man from the post, you don't chase him
-# behind your own net (the goalie's RVH owns the wrap).
+# wraparound walker). min(depth, dist) alone only stops the anchor overshooting
+# the net CENTER, which would station a marker behind the goal line with his
+# man — you front that man from the post, you don't chase him behind your own
+# net (the goalie's RVH owns the wrap).
 static func cover_anchor(man: Vector3, our_net: Vector3) -> Vector3:
 	var to_net: Vector3 = our_net - man
 	var dist: float = to_net.length()

@@ -1,11 +1,9 @@
 class_name PuckHandoffRules
 
-# Pure math for the client loose puck's render-target seams. (The render-time
-# SLEW that used to live here — timeline_lead, easing the old trajectory-mode
-# → interpolation handoff — was deleted with Phase 4b: every loose-puck target
-# now sits at ~host present via the shared prediction, so there is no
-# cross-timeline handoff left to slew. What remains is the snap decision the
-# position smoother runs every frame.)
+# Pure math for the client loose puck's render-target seams. Every loose-puck
+# target sits at ~host present via the shared prediction, so there is no
+# cross-timeline handoff to slew — what remains is the snap decision the
+# position smoother runs every frame.
 
 # Velocity-aware snap decision for the render-position smoother. A moving
 # puck's error toward its render target decomposes into an ALONG-TRACK part

@@ -9,10 +9,8 @@ extends RefCounted
 #                          so the worker never touches the live brain while the
 #                          main thread mutates it (pings / retick / spawns).
 #
-# RoleContext.team_brain holds one of these. Existing tests set the live brain
-# (it is-a TeamStrategyView), so nothing in the test path changes; production
-# dispatch reads the frozen view. Defaults below are the "no strategy" neutral,
-# matching an unwired context.
+# RoleContext.team_brain holds one of these. Defaults below are the "no
+# strategy" neutral, matching an unwired context.
 
 func get_slot(_peer_id: int) -> int:
 	return AIRoleSlots.Slot.NONE

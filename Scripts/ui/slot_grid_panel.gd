@@ -408,16 +408,15 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 
 	# Right column: position letter pinned to top, status (ping or AI)
 	# pinned to bottom. The middle spacer eats any leftover height so the
-	# two anchors don't shift up/down with the status visibility — empty
-	# slots (status hidden) used to drift the position letter upward
-	# because ALIGNMENT_CENTER recentered it.
+	# two anchors don't shift up/down with the status visibility: under
+	# ALIGNMENT_CENTER an empty slot (status hidden) recenters, drifting the
+	# position letter upward.
 	var right_col := VBoxContainer.new()
 	right_col.alignment = BoxContainer.ALIGNMENT_BEGIN
 	right_col.add_theme_constant_override("separation", 0)
-	# Reserve only what the position letter / ping ("###ms ●") actually need.
-	# This used to be 72, which stranded whitespace next to a single-char
-	# position letter and squeezed the name; 56 fits the ping comfortably
-	# (~42px) while handing the freed width to the name column.
+	# Reserve only what the position letter / ping ("###ms ●") actually need:
+	# 56 fits the ping comfortably (~42px) and hands the rest to the name column.
+	# Wider strands whitespace next to a single-char position letter.
 	right_col.custom_minimum_size = Vector2(56, 0)
 	right_col.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	main_row.add_child(right_col)

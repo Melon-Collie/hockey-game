@@ -18,7 +18,7 @@ class_name AIShotAim
 # pattern — a goalie sliding right will drift further right by the
 # time the shot arrives, leaving the LEFT arc disproportionately
 # open. The arc-size comparison naturally picks the recovery side.
-# Default 0.0 keeps legacy behavior for callers without goalie
+# Default 0.0 keeps the static-shadow read for callers without goalie
 # velocity in scope (e.g. the lane-clear segment check in
 # action_scoring.gd, where the small aim divergence doesn't matter).
 #

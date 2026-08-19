@@ -119,7 +119,7 @@ const SHADOW_QUALITY_LABELS: Array[String] = [
 # Indices are into the SpotLight3D..SpotLight3D8 rig sorted by name; idx 0..3 are
 # the x=-6 row (z = -22/-7/7/22), idx 4..7 the x=6 row. The sets interleave both
 # sides and the rink length so the reduced count still lights the whole ice.
-# High keeps them all, so it needs no set. Tweak in-editor to taste.
+# High keeps them all, so it needs no set.
 const SHADOW_LIGHTS_MEDIUM: PackedInt32Array = [0, 2, 5, 7]
 const SHADOW_LIGHTS_LOW: PackedInt32Array = [1, 6]
 
@@ -421,10 +421,9 @@ const REPLAY_KEEP_MAX: int = 100
 # requires a schema change. Value is currently a bool; can grow to a small
 # per-tutorial dict (timestamps, highest step reached) without migration —
 # _load() defensive-casts whatever ConfigFile returns.
-# TUTORIAL_COURSE_VERSION gates a completion wipe on load: bump it whenever the
-# course is restructured enough that everyone should replay it (v2 = the
-# six-part Movement→Rules course; v3 = the loft ladder's fourth rung, which
-# added the doorstep wave and re-cut the shooting course's elevation lessons).
+# Bump TUTORIAL_COURSE_VERSION whenever the course is restructured enough that
+# everyone should replay it: _load() wipes saved completion below the current
+# version, and boot.gd routes an untouched course into its first part.
 const TUTORIAL_COURSE_VERSION: int = 3
 var tutorial_completion: Dictionary = {}
 
@@ -437,10 +436,10 @@ func _get_save_path() -> String:
 func _ready() -> void:
 	_load()
 	_ensure_joypad_ui_bindings()
-	# Steam Cloud reconcile is deferred: PlayerPrefs is autoload #1 and
-	# SteamManager #7, so Steam isn't initialised yet during the _load() above.
-	# A deferred call runs after every autoload's (synchronous) _ready, by which
-	# point Cloud availability is known. See _sync_from_cloud.
+	# Steam Cloud reconcile is deferred because SteamManager is a later autoload
+	# and isn't initialised yet during the _load() above. A deferred call runs
+	# after every autoload's (synchronous) _ready, by which point Cloud
+	# availability is known.
 	_sync_from_cloud.call_deferred()
 
 
@@ -577,8 +576,7 @@ func save() -> void:
 	cfg.set_value("game", "bot_difficulty_scale_version", 1)
 	cfg.set_value("game", "goalie_difficulty", goalie_difficulty)
 	cfg.set_value("game", "freeplay_goalie_difficulty", freeplay_goalie_difficulty)
-	# Marks goalie_difficulty as already on the 3-tier (Easy/Normal/Hard) scale so
-	# _load() doesn't re-run the 2-tier → 3-tier remap on a re-saved file.
+	# Same marker for the goalie scale.
 	cfg.set_value("game", "goalie_difficulty_scale_version", 1)
 	cfg.set_value("game", "hud_scale", hud_scale)
 	cfg.set_value("game", "share_gameplay_stats", share_gameplay_stats)
@@ -637,8 +635,8 @@ func _sync_from_cloud() -> void:
 		return
 	# Subscribe once to Dynamic Cloud Sync: on Deck suspend→resume Steam pulls a
 	# newer copy into the local cache mid-session, and re-running this reconcile
-	# adopts it. Connected here rather than in _ready because SteamManager is a
-	# later autoload and isn't constructed yet during _ready.
+	# adopts it. Connected here rather than in _ready — SteamManager isn't
+	# constructed yet at that point.
 	if not SteamManager.cloud_files_changed.is_connected(_sync_from_cloud):
 		SteamManager.cloud_files_changed.connect(_sync_from_cloud)
 	var cloud_name: String = _cloud_save_name()
@@ -996,11 +994,10 @@ func _apply_anti_aliasing(root: Viewport) -> void:
 	root.msaa_3d = Viewport.MSAA_DISABLED
 	root.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 	root.use_taa = false
-	# FSR2 has its own temporal reconstruction and Godot rejects TAA on top
-	# of it (renderer_viewport.cpp:210). Mirror that check here so we don't
-	# emit the engine warning every Apply when the user has picked the
-	# incompatible combo — FSR2's reconstruction already provides
-	# TAA-equivalent sub-pixel AA.
+	# FSR2 has its own temporal reconstruction and Godot rejects TAA on top of
+	# it. Mirror that check here so we don't emit the engine warning every Apply
+	# when the user has picked the incompatible combo — FSR2's reconstruction
+	# already provides TAA-equivalent sub-pixel AA.
 	var fsr2_active: bool = scaling_3d_mode == SCALING_3D_FSR2
 	match anti_aliasing_mode:
 		AA_FXAA:
@@ -1091,9 +1088,6 @@ func _load() -> void:
 		var stored_size: int = int(cfg.get_value(
 				"player", "preferred_team_size", GameRules.DEFAULT_TEAM_SIZE))
 		preferred_team_size = 5 if stored_size == 5 else GameRules.DEFAULT_TEAM_SIZE
-		# Reads as int; any legacy fruit-name string under the old "preferred_color_id"
-		# key is ignored — hard break, no migration. -1 falls back to the default at
-		# next lobby join.
 		preferred_color_slot = int(cfg.get_value("player", "preferred_color_slot", -1))
 		# Round-trip through the config type so a hand-edited or future-version
 		# code coerces to a legal tape job instead of riding raw into the wire.
@@ -1112,8 +1106,7 @@ func _load() -> void:
 				"player", "skin_tone", SkinToneRegistry.DEFAULT_INDEX)))
 		var attr_ver: int = int(cfg.get_value("player", "attr_scale_version", 1))
 		if attr_ver >= 5:
-			# Native v4 body+gear model. Funnel through set_player_attributes so
-			# every axis coerces (weight into the height's band, gear into 0..2).
+			# Native v4 body+gear model — the constructor coerces every axis.
 			set_player_attributes(PlayerAttributes.new(
 					int(cfg.get_value("player", "attr_height", PlayerAttributes.HEIGHT_MEDIUM)),
 					int(cfg.get_value("player", "attr_weight", 0)),
@@ -1166,10 +1159,9 @@ func _load() -> void:
 				sh = sk
 			set_player_attributes(PlayerAttributes.migrate_legacy(sp, ag, ha, sz, ph, sh))
 		# One choke point: whichever branch ran above, the flat build re-coerces
-		# through the constructor (weight into the height's band, gear into range)
-		# before anything reads it. (A preset-era save is covered too: its flat
+		# before anything reads it. A preset-era save is covered too — its flat
 		# attr_*/stick_tape keys always mirrored the active preset, so loading
-		# just the flat fields IS the presets→single-build migration.)
+		# just the flat fields IS the presets→single-build migration.
 		_enforce_attr_legal()
 		master_volume = clampf(cfg.get_value("audio", "master_volume", 0.5), 0.0, 1.0)
 		sfx_volume = clampf(cfg.get_value("audio", "sfx_volume", 1.0), 0.0, 1.0)
@@ -1223,21 +1215,17 @@ func _load() -> void:
 		camera_distance = clampf(cfg.get_value("game", "camera_distance", 1.0), CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
 		camera_mode = clampi(int(cfg.get_value("game", "camera_mode", CAMERA_MODE_DYNAMIC)), 0, CAMERA_MODE_LABELS.size() - 1)
 		bot_difficulty = int(cfg.get_value("game", "bot_difficulty", BotSkillProfile.Difficulty.NORMAL))
-		# Easy was inserted at index 0, shifting the old 2-tier values up one
-		# (old 0=Normal → new 1=Normal, old 1=Hard → new 2=Hard). Remap once, but
-		# only a value actually persisted under the old scale (has the key, no
-		# version marker) — mirrors the goalie_difficulty remap above so a config
-		# predating bot_difficulty keeps the new default instead of bumping to Hard.
+		# Easy sits at index 0, so the 2-tier values shift up one (old 0=Normal →
+		# new 1=Normal, old 1=Hard → new 2=Hard). Remap once, and only a value
+		# actually persisted under the old scale (has the key, no version marker)
+		# — a config predating bot_difficulty must keep the new default rather
+		# than being bumped to Hard.
 		if cfg.has_section_key("game", "bot_difficulty") \
 				and int(cfg.get_value("game", "bot_difficulty_scale_version", 0)) < 1:
 			bot_difficulty += 1
 		bot_difficulty = clampi(bot_difficulty, 0, BOT_DIFFICULTY_LABELS.size() - 1)
 		goalie_difficulty = int(cfg.get_value("game", "goalie_difficulty", GoalieSkillProfile.Difficulty.NORMAL))
-		# Easy was inserted at index 0, shifting the old 2-tier values up one
-		# (old 0=Normal → new 1=Normal, old 1=Hard → new 2=Hard). Remap once, but
-		# only a value that was actually persisted under the old scale (has the key,
-		# no version marker) — a config predating goalie_difficulty keeps the new
-		# default rather than being spuriously bumped to Hard.
+		# Same 2-tier → 3-tier remap as bot_difficulty above, gated the same way.
 		if cfg.has_section_key("game", "goalie_difficulty") \
 				and int(cfg.get_value("game", "goalie_difficulty_scale_version", 0)) < 1:
 			goalie_difficulty += 1
@@ -1251,10 +1239,7 @@ func _load() -> void:
 		replay_keep_count = clampi(cfg.get_value("replay", "keep_count", 20), REPLAY_KEEP_MIN, REPLAY_KEEP_MAX)
 		var raw_completion: Variant = cfg.get_value("tutorials", "completion", {})
 		tutorial_completion = raw_completion if raw_completion is Dictionary else {}
-		# Course-version gate: when the tutorial course is restructured (new
-		# parts, new mechanics taught), bump TUTORIAL_COURSE_VERSION to wipe
-		# saved completion so every player is routed back through the new
-		# course on next boot (see boot.gd's first-incomplete routing).
+		# Course-version gate (see TUTORIAL_COURSE_VERSION).
 		if int(cfg.get_value("tutorials", "course_version", 1)) < TUTORIAL_COURSE_VERSION:
 			tutorial_completion = {}
 		for action: String in REBINDABLE_ACTIONS:
@@ -1269,11 +1254,10 @@ func _load() -> void:
 		for action: String in PAD_REBINDABLE_ACTIONS:
 			if cfg.has_section_key("pad_bindings", action):
 				pad_bindings[action] = int(cfg.get_value("pad_bindings", action, -1))
-		# Action rename (quick_shot → quick_pass): the quick-pass action was renamed
-		# off "quick_shot" so it stops reading as a shot. A config predating the
-		# rename stored the bind under the old key — adopt it so a player's custom
-		# quick-pass key survives the rename instead of resetting to the E default.
-		# (The old key is left in the file; it's simply never read again.)
+		# Action rename (quick_shot → quick_pass): a config predating the rename
+		# stored the bind under the old key — adopt it so a player's custom
+		# quick-pass key survives instead of resetting to the E default. (The old
+		# key is left in the file; it's simply never read again.)
 		if not bindings.has("quick_pass"):
 			var old_qp_type: String = cfg.get_value("bindings", "quick_shot_type", "")
 			if old_qp_type == "key":
@@ -1281,12 +1265,11 @@ func _load() -> void:
 			elif old_qp_type == "mouse":
 				bindings["quick_pass"] = {"type": "mouse", "button_index": cfg.get_value("bindings", "quick_shot_code", 0)}
 		# Control-scheme swap (scheme_version 1): Hit takes Ctrl, Block moves to C.
-		# Block was moved off Ctrl to free it for the new Hit button. A config
-		# predating the swap that still has Block on its old Ctrl default is
-		# remapped to C so the new layout takes effect; a player who deliberately
-		# rebound Block elsewhere is left alone. Hit is new — erased here so the
-		# default-fill below seeds it from the fresh project default (Ctrl). Runs
-		# once, gated like the difficulty-scale remaps above.
+		# A config predating the swap that still has Block on its old Ctrl default
+		# is remapped to C; a player who deliberately rebound Block elsewhere is
+		# left alone. Hit is erased here so the default-fill below seeds it from
+		# the project default (Ctrl). Runs once, gated like the difficulty-scale
+		# remaps above.
 		if int(cfg.get_value("bindings", "scheme_version", 0)) < 1:
 			var old_block: Dictionary = bindings.get("block", {})
 			if old_block.get("type") == "key" \
@@ -1313,10 +1296,9 @@ func _load() -> void:
 
 
 func get_player_attributes() -> PlayerAttributes:
-	# Mirror the host-side joiner validation (NetworkManager.request_join): the
-	# constructor coerces every axis (weight into the height's band, gear into
-	# range), so a hand-edited or corrupt flat build lands on the nearest legal
-	# body instead of leaking out-of-band values into the sim.
+	# Constructing rather than caching mirrors the host-side joiner validation
+	# (NetworkManager.request_join): a hand-edited or corrupt flat build lands on
+	# the nearest legal body instead of leaking out-of-band values into the sim.
 	return PlayerAttributes.new(attr_height, attr_weight,
 			attr_profile, attr_curve, attr_flex, attr_length)
 

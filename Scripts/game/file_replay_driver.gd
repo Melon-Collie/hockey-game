@@ -13,14 +13,10 @@ extends Node
 # "player_joined", "player_left", …) replay through event_emitted at their
 # host_ts so the viewer can update HUD banners and roster on the fly.
 #
-# Testing: no headless unit test — this extends Node and drives LIVE scene
-# actors through the actor-driven ReplayPlaybackEngine in the offline
-# ReplayViewer scene, so it's integration-only (poor headless ROI). The
-# unit-testable pieces it composes ARE covered: the .mreplay reader/format and
-# index (test_replay_file_format, test_replay_file_index) and the codec's
-# decode_for_replay (test_world_state_codec). Consciously accepted as
-# integration-only — see the closed GH issue on agent-SM / replay-driver
-# coverage gaps.
+# Testing: integration-only. This drives LIVE scene actors through the
+# actor-driven ReplayPlaybackEngine, so there is no headless unit test; the
+# pieces it composes are covered instead (test_replay_file_format,
+# test_replay_file_index, test_world_state_codec).
 
 @export var playback_speed: float = 1.0
 

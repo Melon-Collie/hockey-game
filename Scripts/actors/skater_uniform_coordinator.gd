@@ -77,11 +77,10 @@ func setup(skater: Skater) -> void:
 	# the Skating Stride block in skater.gd for the full hierarchy.
 	# MERGED MESHES: the boot carries its quarter, its toe cap, the blade holder,
 	# the steel runner and the laces as five surfaces; the skate collar carries
-	# its shell and the accent stripe;
-	# the helmet carries its shell and the head/neck skin. Each of those parts
-	# used to be a child node, and each is painted through its own surface
-	# override — NEVER material_override, which overrides every surface at once
-	# and would erase the others (see SkaterMeshBuilder's merge note).
+	# its shell and the accent stripe; the helmet carries its shell and the
+	# head/neck skin. Each is painted through its own surface override — NEVER
+	# material_override, which overrides every surface at once and would erase
+	# the others (see SkaterMeshBuilder's merge note).
 	_create_jersey_viewport()
 	_create_shoulder_viewport()
 
@@ -569,9 +568,8 @@ func _repaint_face_gear() -> void:
 
 
 # The cuff rings are surfaces of the arm rig's shared mesh, so a gear-colour
-# change is a repaint and a resize — the geometry is permanent. (This used to
-# free and recreate two MeshInstance3Ds on every uniform apply and every live
-# accent refresh.)
+# change is a repaint and a resize — the geometry is permanent, and nothing here
+# frees or recreates a MeshInstance3D.
 func _paint_glove_cuffs(gloves_color: Color) -> void:
 	var mat: StandardMaterial3D = UniformPaint.solid(gloves_color)
 	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperBone.TOP_CUFF, mat)

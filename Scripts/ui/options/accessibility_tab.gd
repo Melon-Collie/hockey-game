@@ -1,9 +1,8 @@
 class_name OptionsAccessibilityTab
 extends OptionsTab
 
-# Accessibility tab — the colorblind / motion-comfort / readability settings that
-# were previously scattered across the Game and Input tabs, gathered into one
-# home: flash & shake toggles, HUD scale, on-ice ring colors, and cursor look.
+# Accessibility tab — the colorblind / motion-comfort / readability settings in
+# one home: flash & shake toggles, HUD scale, on-ice ring colors, and cursor look.
 
 var _screen_flash_check: CheckButton = null
 var _screen_shake_check: CheckButton = null

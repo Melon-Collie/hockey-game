@@ -53,11 +53,12 @@ var _board_puff: CPUParticles3D = null
 var _post_ping: CPUParticles3D = null
 var _last_board_puff_ms: int = 0
 var _prev_pos: Vector3 = Vector3.ZERO
-# Last trail-colour lerp factor pushed to the material. The trail colour is
-# constant below TRAIL_SPEED_MIN and above TRAIL_SPEED_MAX, so a resting or
-# steady puck re-pushed the identical colour every rendered frame.
+# Last trail-colour lerp factor pushed to the material. The colour is constant
+# below TRAIL_SPEED_MIN and above TRAIL_SPEED_MAX, so without this a resting or
+# steady puck pushes the identical colour every rendered frame.
 var _trail_color_t: float = -1.0
-# Below this, a per-frame write is invisible and not worth the servers-side push.
+# Below this a per-frame write is invisible, and a material write is a
+# RenderingServer push rather than a field assignment.
 const _WRITE_EPSILON: float = 0.001
 
 func _ready() -> void:
@@ -130,27 +131,21 @@ func _process(delta: float) -> void:
 	# Speed-reactive color: lerp from cream (slow) to hot orange (fast).
 	var flat_speed: float = Vector3(vel.x, 0.0, vel.z).length()
 	var t: float = clampf((flat_speed - TRAIL_SPEED_MIN) / (TRAIL_SPEED_MAX - TRAIL_SPEED_MIN), 0.0, 1.0)
-	# Guarded on `t` rather than the resulting Color: below TRAIL_SPEED_MIN it
-	# pins at 0 (a resting or slow puck writes nothing at all), and a material
-	# write is a servers-side push, not a field assignment.
+	# Guarded on `t` rather than the resulting Color, which pins at 0 below
+	# TRAIL_SPEED_MIN — so a resting or slow puck writes nothing at all.
 	if absf(t - _trail_color_t) > _WRITE_EPSILON:
 		_trail_color_t = t
 		_trail_mat.color = TRAIL_COLOR_SLOW.lerp(TRAIL_COLOR_FAST, t)
 
-# Puck-centred visibility box, generous enough that it always overlaps the frustum
-# whenever a live trail dot could be on-screen — so the world-space trail is never
-# culled (nor its processing paused) as the puck rides the frame edge. See the
-# TRAIL_AABB_HALF_* doc-block for why the default AABB is too small.
+# Puck-centred visibility box, generous enough to overlap the frustum whenever a
+# live trail dot could be on-screen (see the TRAIL_AABB_HALF_* block).
 func _trail_visibility_aabb() -> AABB:
 	return AABB(
 			Vector3(-TRAIL_AABB_HALF_XZ, -TRAIL_AABB_HALF_Y, -TRAIL_AABB_HALF_XZ),
 			Vector3(TRAIL_AABB_HALF_XZ * 2.0, TRAIL_AABB_HALF_Y * 2.0, TRAIL_AABB_HALF_XZ * 2.0))
 
-# The gap-filling parent emitter. One particle lives for the whole game session and
-# tracks the puck's world position in CUSTOM.xyz each frame. When the puck moves more
-# than TRAIL_SPACING meters since the last recorded position, it emits a sub-particle
-# at each spacing interval along that path — filling the gap that would otherwise
-# appear at high speeds.
+# The gap-filling parent emitter (see the file header). Its single particle keeps
+# the puck's last-recorded world position in CUSTOM.xyz.
 func _make_trail_emitter() -> GPUParticles3D:
 	var e := GPUParticles3D.new()
 	e.name = "TrailEmitter"
@@ -189,8 +184,7 @@ void process() {
 
 	return e
 
-# The sub-emitter that renders each trail dot placed by the gap-filling shader.
-# Receives world-space positions only (no velocity). Color is driven each frame
+# Receives world-space positions only (no velocity). Colour is driven each frame
 # by speed via _trail_mat.color; the ramp handles the age-based alpha fade.
 func _make_trail_sub_emitter() -> GPUParticles3D:
 	var e := GPUParticles3D.new()

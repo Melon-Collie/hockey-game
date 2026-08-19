@@ -324,8 +324,7 @@ func present(home_score: int, away_score: int,
 
 
 # One star row's landing: quick fade with a spring settle from a slight
-# overscale — the same pop the old single-star card had, scaled up for the
-# first star.
+# overscale, scaled up for the first star.
 func _append_star_reveal(rank: int) -> void:
 	var row: Control = _star_rows[rank]
 	var overscale: float = 1.14 if rank == 0 else 1.08

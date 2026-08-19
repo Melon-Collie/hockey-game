@@ -319,8 +319,8 @@ func apply_slapper_follow_through() -> void:
 # net, make it rigid again. They differ in how they GET here — the wrister's is a
 # whip from the hands out along the shot line (rigid by construction, so the
 # first pass is inert), the slapper's a swing whose blade arcs from the contact
-# point (which is not, and never was: it drew 2.00 m of a 1.30 m stick at the
-# peak of the finish, so the arc now costs the reach it cannot afford).
+# point and is NOT rigid — ungoverned it draws 2.00 m of a 1.30 m stick at the
+# peak of the finish, so the arc has to cost the reach it cannot afford.
 #
 # The clamps sit BETWEEN the two passes on purpose. Correcting first means the
 # boards and the net see the pose the body can actually hold, rather than one

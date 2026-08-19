@@ -54,8 +54,8 @@ static func nearest(goalies: Array, prev: Vector3, curr: Vector3, radius: float,
 		if goalie == null:
 			continue
 		# Real goalies serve cached part lists (the subtree is static after _ready;
-		# a fresh recursive gather per query allocated hundreds of arrays/tick in a
-		# crease scramble, and the owning-body walk + box-size read cost engine
+		# a fresh recursive gather per query would allocate hundreds of arrays/tick
+		# in a crease scramble, and the owning-body walk + box-size read cost engine
 		# calls per part per query). Non-Goalie roots (test fixtures) fall back to
 		# a live gather + per-part resolution.
 		var real: Goalie = goalie as Goalie

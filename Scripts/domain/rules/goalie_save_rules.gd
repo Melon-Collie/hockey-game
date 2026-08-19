@@ -28,8 +28,8 @@ class DeadenConfig:
 	# Grounded in the shot-speed distribution: ~28 m/s (≈63 mph) sits above a solid
 	# wrister but below hard wristers / slappers, so pads control the medium stuff
 	# and kick live rebounds only on genuinely hard shots — the beatable-realism
-	# scramble chance. Re-anchored up from 22 when the wrister/slapper maxes rose
-	# (24→33 / 34→40 m/s); at 22 nearly every shot was now beating the pad.
+	# scramble chance. It is anchored to that distribution, so it moves whenever
+	# the wrister/slapper maxes move (GameRules.DEFAULT_*_POWER_MAX_M_S).
 	var pad_max_incoming_speed: float = 28.0
 	# Deadened exit-speed ceiling (m/s) for the ABSORBING surfaces. A chest or
 	# glove save leaves the puck crawling so the crease sweep can whisk it away.
@@ -104,21 +104,21 @@ static func resolve_contact(
 # a normal aligned with the direction he FACES was struck on his front, and one
 # pointing behind him was struck on his back.
 #
-# Facing, not the net. The first cut of this tested the normal against
-# `direction_sign` — is the contact on the play-side hemisphere — which is wrong
-# for exactly the plays that produce the bug: a goalie tracking a wraparound or
-# out playing a rim is turned, so the surface nearest his own goal can be the one
-# his chest is pointed at, and the surface facing up-ice can be his shoulder.
-# What he can absorb is what he is looking at.
+# Facing, not the net. Testing the normal against `direction_sign` — is the
+# contact on the play-side hemisphere — is wrong for exactly the plays that
+# matter: a goalie tracking a wraparound or out playing a rim is turned, so the
+# surface nearest his own goal can be the one his chest is pointed at, and the
+# surface facing up-ice can be his shoulder. What he can absorb is what he is
+# looking at.
 #
 # Why it gates the controlled save. Absorbing a puck dead into the chest or
 # gloving it are things a goalie DOES, and he has to be facing the puck to do
-# them. Without this the classification was orientation-blind — the torso collider
-# reads as CHEST from any direction — so a puck into his back was a "chest save":
-# deadened, goalward velocity zeroed, stopped on his spine. Reported from play as
-# looking absolutely bizarre, and it was a free save on exactly the plays he
-# should be beaten on. Same for a pad struck from behind, which got the
-# cornerward steer and was actively pushed away from the net.
+# them. Without this gate the classification is orientation-blind — the torso
+# collider reads as CHEST from any direction — so a puck into his back is a
+# "chest save": deadened, goalward velocity zeroed, stopped on his spine, a free
+# save on exactly the plays he should be beaten on. Same for a pad struck from
+# behind, which would get the cornerward steer and be actively pushed away from
+# the net.
 #
 # Not presented -> fall through to the live-rebound reflection, which is already
 # the right physics for a puck caroming off a body. A gate, not new behaviour.
@@ -126,7 +126,7 @@ static func resolve_contact(
 # is not — you cannot smother with your shoulder either.
 #
 # A zero `goalie_forward` means the caller has no facing to offer, in which case
-# every face counts as presented and behaviour is exactly as it was before.
+# every face counts as presented.
 static func is_face_presented(contact_normal: Vector3, goalie_forward: Vector3) -> bool:
 	if goalie_forward.length_squared() < 0.000001:
 		return true

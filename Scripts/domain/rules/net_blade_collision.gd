@@ -10,7 +10,7 @@ class_name NetBladeCollision
 #     the mesh and stops there. It is NOT teleported to a face, and touching
 #     twine does NOT strip the puck: a stick buried in the side mesh simply
 #     cannot do anything, which is what physically happens and what reads
-#     correctly. The old flat-box clamp confiscated the puck instead.
+#     correctly.
 #
 # There is no legality concept here — no "did you enter through the mouth", no
 # mouth column, no `allow_front`. This is a surface. A puck ends up in the net
@@ -20,9 +20,8 @@ class_name NetBladeCollision
 # The blade is a SEGMENT (heel → toe), not a point. It has to be: a post is 3 cm
 # across and a blade ~30 cm long, so a stick sweeping across the post with both
 # ends clear is the case that decides wraparound goals, and it is invisible to
-# any point sample. (The boards have always tested heel and toe —
-# `Skater.clamp_blade_to_walls`. The net, where the difference actually decides
-# goals, did not.)
+# any point sample. (The boards test the same two ends —
+# `Skater.clamp_blade_to_walls`.)
 #
 # Pure and allocation-free: fills a caller-owned Result.
 

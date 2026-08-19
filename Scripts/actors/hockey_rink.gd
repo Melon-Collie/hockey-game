@@ -108,10 +108,10 @@ extends Node3D
 		ice_specular = v
 		_rebuild()
 # Head-on roughness governs how sharp screen-space reflections read when you
-# look down at the ice (grazing stays the mirror streak). Nudged 0.20 → 0.15
-# so skater/goal reflections hold together once SSR is enabled in the
-# WorldEnvironment (see docs/arena-atmosphere-spec.md); still short of a full
-# mirror, so the ice keeps its slightly-diffuse-head-on read.
+# look down at the ice (grazing stays the mirror streak). Low enough that
+# skater/goal reflections hold together under the WorldEnvironment's SSR (see
+# docs/arena-atmosphere-spec.md), high enough that the ice keeps its
+# slightly-diffuse head-on read rather than becoming a mirror.
 @export_range(0.0, 1.0) var ice_roughness_head_on: float = 0.15:
 	set(v):
 		ice_roughness_head_on = v
@@ -189,7 +189,7 @@ const AD_RESERVE_STEP: float = 0.1
 # ── Gates ────────────────────────────────────────────────────────────────────
 # Doors cut into the boards: one at the inner end of each player bench, one at
 # the outer end of each penalty box, and one per end board for the resurfacer
-# crew — which until now drove in through a solid wall.
+# crew.
 #
 # Drawn as an outline with a transparent interior, so the door is the board's
 # own white with a frame around it rather than a differently-coloured patch that
@@ -211,9 +211,9 @@ const GATE_RESURFACER_X: float = 3.4
 # panel across it.
 const NET_EDGE_Z: float = 14.0
 const NET_HEIGHT: float = 4.5
-# World size of one diamond in Assets/textures/net_diamond.png. The band's UVs
-# are scaled by this so the mesh keeps a constant physical gauge whether it is
-# crossing a straight or a corner, instead of stretching with the arc.
+# World size of one diamond in the procedural lattice cell (_make_net_cell). The
+# band's UVs are scaled by this so the mesh keeps a constant physical gauge
+# whether it is crossing a straight or a corner, instead of stretching with the arc.
 const NET_TILE_M: float = 0.14
 
 # Texture resolution: pixels per meter
@@ -412,11 +412,8 @@ func _get_or_build_products() -> Dictionary:
 	if _build_cache.size() >= 4:
 		_build_cache.clear()
 
-	# Perimeter geometry. Previously the four straight walls were BoxMesh /
-	# BoxShape3D and the four corners were separate ArrayMesh /
-	# ConcavePolygonShape3D rings. The seam between them produced both visual
-	# (flat-vs-smooth shading) and physical (contact-normal kink) artifacts.
-	# Merging into one continuous loop per band eliminates every seam.
+	# One continuous loop per band, straights and corners together — never a
+	# per-section mesh (see _build_perimeter_stations for why the seam matters).
 	var stations: Array = _build_perimeter_stations(corner_segments)
 	var board_top: float = wall_height - CAP_RAIL_HEIGHT
 	var rail_top: float = wall_height
@@ -1401,12 +1398,10 @@ func _add_corner_stripe(center: Vector3, a0: float, a1: float, stripe: Dictionar
 	var sz: float = stripe["z"]
 	var color: Color = stripe["color"]
 	var r_face: float = corner_radius - wall_thickness / 2.0
-	# Use r_face (inner face radius) instead of corner_radius when finding the
-	# crossing angle: the stripe sits ON the inner face, not on the centerline,
-	# so the angle where r_face·sin(a) reaches sz is what we want. With the
-	# previous corner_radius-based formula, the base point ended up at a radius
-	# slightly larger than r_face (i.e. embedded inside the wall) and was
-	# occluded by the inner face from inside the rink.
+	# r_face (inner face radius), not corner_radius: the stripe sits ON the inner
+	# face, not on the centerline, so the crossing angle is where r_face·sin(a)
+	# reaches sz. Solving on the centerline radius puts the base point outside
+	# r_face — embedded in the wall, and occluded from inside the rink.
 	var s_arg: float = (sz - center.z) / r_face
 	if absf(s_arg) >= 1.0:
 		return
@@ -1439,18 +1434,14 @@ func _add_corner_stripe(center: Vector3, a0: float, a1: float, stripe: Dictionar
 	base_pt.z += board_stripe_z_nudge * signf(sz)
 	var tangent: Vector3 = Vector3(-sa, 0.0, ca)
 	var inward: Vector3 = Vector3(-ca, 0.0, -sa)
-	# Match the ice goal line's Z extent. The ice line uses `thin_line` = 4 px
-	# at 80 px/m, and _draw_h_line spans `half_t + half_t + 1` = 5 px, which
-	# is 0.0625 m. The arc tangent at a_cross is not aligned with Z, so a
-	# stripe of total tangent width W projects to a Z width of W · |cos(a)|.
-	# Scale the tangent width up by 1/|cos(a)| so the wall stripe's Z extent
-	# matches the ice line's. (Guarded against the tangent-perpendicular-to-Z
-	# extreme at the corner's far end, but a_cross is well inside ±60° here.)
-	# Tuned to match the perceived width of the ice goal line. The ice line
-	# is nominally 6.25 cm but reads wider thanks to the ice shader's
-	# parallax + subsurface fade softening its edges; a 6 cm wall stripe
-	# looks too thin next to it. ~15 cm Z extent feels right.
-	# (0.075 / |cos(a)| keeps Z extent constant across different a_cross.)
+	# Half the stripe's Z extent, divided out of the arc tangent. The tangent at
+	# a_cross is not aligned with Z, so a stripe of total tangent width W projects
+	# to a Z width of W·|cos(a)|; the 1/|cos(a)| holds the Z extent constant across
+	# a_cross (clamped against the tangent-perpendicular extreme at the corner's far
+	# end, though a_cross is well inside ±60° here). 0.075 gives ~15 cm, not the ice
+	# goal line's nominal 6.25 cm: the ice line reads wider than it measures because
+	# the ice shader's parallax + subsurface fade soften its edges, and a matched
+	# 6 cm wall stripe looks too thin beside it.
 	var half_sw: float = 0.075 / maxf(absf(ca), 0.1)
 	var y_bot: float = kickplate_height
 	var y_top: float = wall_height - CAP_RAIL_HEIGHT

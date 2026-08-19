@@ -33,9 +33,9 @@ class_name TurnoverTracker extends RefCounted
 # possession often bounces loose for a while between the event and the recovery,
 # and a strip is additionally CONSUMED on the next establishment (below) so the
 # wide window can't bleed a stale strip into a later, unrelated pickup. The strip
-# window was widened from 1.5s so a poke whose loose puck skitters a beat before
-# the recovery still credits the defender a takeaway instead of charging the
-# stripped victim a giveaway. The dump window covers the chase to a dumped puck.
+# window has to cover a poke whose loose puck skitters a beat before the
+# recovery, or the defender loses the takeaway and the stripped victim is
+# charged a giveaway. The dump window covers the chase to a dumped puck.
 const STRIP_WINDOW_S: float = 3.0
 const SHOT_WINDOW_S: float = 2.0
 const DUMP_WINDOW_S: float = 3.0
@@ -118,8 +118,7 @@ func on_carrier_gained(peer_id: int, was_faceoff: bool) -> void:
 	_candidate_carrier_peer = peer_id
 	match _candidate_type:
 		TurnoverRules.TAKEAWAY:
-			# Credit the defender who made the strip, not this recoverer — a poke
-			# to a teammate is the poker's takeaway. -1 (goalie strip) credits none.
+			# The stripper, not this recoverer (-1 on a goalie strip credits none).
 			_candidate_credit_peer = _strip_stripper_peer
 		TurnoverRules.GIVEAWAY:
 			_candidate_credit_peer = _last_established_peer
@@ -144,8 +143,7 @@ func on_possession_established(peer_id: int) -> bool:
 	elif _candidate_carrier_peer == peer_id:
 		match _candidate_type:
 			TurnoverRules.TAKEAWAY:
-				# Credit the stripper (the defender who made the play), which may
-				# be this recoverer or a teammate they fed. -1 = goalie strip → none.
+				# The stripper, who may be this recoverer or a teammate they fed.
 				var taker: PlayerRecord = _registry.get_record(_candidate_credit_peer)
 				if taker != null and taker.stats != null:
 					taker.stats.takeaways += 1

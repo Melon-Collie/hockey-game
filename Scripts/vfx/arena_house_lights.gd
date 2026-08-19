@@ -4,11 +4,10 @@ extends Node3D
 # The building's own lighting: visible housings for the ceiling rig, and the
 # cue that takes the house down for a skate-on and brings it back up.
 #
-# Both halves belong together because they are the same eight lights. The rig in
-# RinkArena.tscn is eight SpotLight3Ds hanging at ~22 m with no geometry at all,
-# so the ice is lit from nothing; and nothing in the project has ever animated
-# them, so a period has always started at full house. Housings alone would leave
-# a lit fixture over a dark bowl during the cue, which is worse than either.
+# Both halves belong together because they are the same eight lights: the rig in
+# RinkArena.tscn is eight SpotLight3Ds hanging at ~22 m with no geometry of their
+# own, and a lit fixture over a dark bowl during the cue reads worse than either
+# half missing.
 #
 # The cue takes the whole house, not just the ceiling: the rig is eight overhead
 # spots, six rinkside dashers, and four bowl omnis, and dimming only the first

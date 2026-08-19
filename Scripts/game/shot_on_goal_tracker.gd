@@ -1,35 +1,14 @@
 class_name ShotOnGoalTracker
 extends RefCounted
 
-# Host-only tracker for shot-on-goal + assist crediting. Pulled out of
-# GameManager so the shot-tracking state machine (pending shot → goalie save or
-# goal → credit) can be reasoned about and unit-tested in isolation.
-#
-# Flow:
-#   on_pickup(peer_id)              → records toucher, clears any pending shot
-#   on_possession_established(peer_id) → upgrades the toucher to ESTABLISHED
-#                                     possession (breaks opposing assist chains)
-#   on_poke_check(peer_id)          → records the poke-checker as the last toucher
-#                                     (so a puck poked into the net is the poker's
-#                                     goal, and a poke that feeds a scoring teammate
-#                                     earns the poker an assist — a defensive strip
-#                                     that sets up the goal is a play, NHL-style)
-#   on_deflection(peer_id)          → records toucher in carrier history, keeps pending shot alive
-#   on_shot_started(peer_id)        → arms pending-shot timer (on net until told otherwise)
-#   note_trajectory(on_net)         → live ballistic read (ShotOnNetRules) after
-#                                     the release and after each deflection
-#   on_post_hit()                   → pipes = a miss; pending shot no longer on net
-#   on_goalie_touch(defending_tid)  → confirms SOG if eligible AND the shot was on net
-#   on_goal_confirmed(scorer_id, origin) → confirms SOG (non-own-goal only) and
-#                                     settles the shot's outcome as GOAL, even if
-#                                     it already resolved as a save
-#   on_block(blocker_peer_id)       → credits shots_blocked if defender intercepts a pending ON-NET shot
-#   credit_assists(scorer_id)       → reads recent_carriers for 2 assists
-#   tick(delta)                     → clears pending after timeout
+# Host-only tracker for shot-on-goal + assist crediting: one pending shot at a
+# time, resolved into a save, goal, block or miss. The `on_*` handlers below are
+# the event surface; the `note_*` setters carry the caller's release-tick reads
+# onto the live pending shot.
 #
 # Nothing here reaches into Godot nodes. Writes stats through the injected
-# `PlayerRegistry` (for per-player stats) and `GameStateMachine` (for team
-# shots counter). Emits `shots_on_goal_changed(sog_0, sog_1)` for UI.
+# `PlayerRegistry` (per-player stats) and `GameStateMachine` (team shots
+# counter).
 
 signal shots_on_goal_changed(sog_0: int, sog_1: int)
 # Fires once per counted shot on goal, carrying the shooter. TurnoverTracker uses
@@ -342,8 +321,8 @@ func on_block(blocker_peer_id: int) -> bool:
 		return false
 	# ...and it must have been RELEASED as a shot. On-net geometry alone can't
 	# say: a feed at a teammate in the crease projects straight through the
-	# mouth, so a defender stepping into it read as blocking a shot rather than
-	# picking off a pass. Same intent read _resolve_pending_miss uses; returning
+	# mouth, so a defender stepping into it would otherwise read as blocking a
+	# shot rather than picking off a pass. Same intent read _resolve_pending_miss uses; returning
 	# false here drops through to on_deflection, which records the touch without
 	# crediting the block — exactly what an off-net pass deflection already did.
 	if not _pending_is_shot:
@@ -608,8 +587,8 @@ func _build_event(credit_peer: int, outcome: int) -> ShotEvent:
 		shot_type = ShotEvent.ShotType.ONE_TIMER
 	elif _shooter_peer_id != -1 and credit_peer != _shooter_peer_id:
 		# A redirect is the credited peer differing from a REAL shooter. Without
-		# the -1 guard a goal with no tracked release (carry-in / jam-in) read as
-		# a tip off nobody.
+		# the -1 guard a goal with no tracked release (carry-in / jam-in) would
+		# read as a tip off nobody.
 		shot_type = ShotEvent.ShotType.TIP
 	var period: int = _state_machine.current_period if _state_machine != null else 1
 	var clock_s: float = _state_machine.time_remaining if _state_machine != null else 0.0

@@ -7,9 +7,9 @@ extends RefCounted
 # uses. Beyond the leg swing it owns the skating STANCE: a speed-engaged crouch
 # (hip + knee flex with a matching whole-body drop via Skater.set_skating_crouch_drop
 # so the skates stay planted), a per-stride body bob, and the trunk texture the
-# pose coordinator layers into the torso lean (trunk_pitch_add / trunk_roll_add —
-# effort dig and weight-shift sway; this class never writes torso rotations
-# itself). Purely cosmetic and derived entirely from the skater's velocity, so it
+# pose coordinator layers into the torso lean (trunk_pitch_add / trunk_roll_add
+# — effort dig and weight-shift sway). Purely cosmetic and derived entirely from
+# the skater's velocity, so it
 # costs zero network state: remote skaters animate identically from the velocity
 # that interpolation already hands them.
 #
@@ -121,16 +121,13 @@ var _fd_carve: float = 0.0
 # Smoothed faceoff ready-stance engagement, so the crouch eases in over the
 # countdown and releases into the draw instead of popping on the phase flip.
 var _faceoff_blend: float = 0.0
-# Hockey-stop state (see the Hockey stop block in apply()). stop_yaw_offset
-# (radians, lower-body rotation.y) is PUBLISHED for SkaterPoseCoordinator's
-# lower-body write — this class never writes body rotations itself, same
-# contract as the trunk texture.
+# Hockey-stop state (see the Hockey stop block in apply()). stop_yaw_offset is
+# radians of lower-body rotation.y.
 var stop_yaw_offset: float = 0.0
 var _stop_engaged: bool = false
 var _stop_side: float = 1.0
 var _stop_blend: float = 0.0
-# Hip-to-travel alignment (see the block in apply()). Published for the pose
-# coordinator's lower-body write, same contract as stop_yaw_offset.
+# Hip-to-travel alignment (see the block in apply()).
 var travel_align_yaw: float = 0.0
 var _hip_align_yaw: float = 0.0
 # Pivot read (PivotRules; the pivot block in apply()). The ψ finite difference
@@ -190,9 +187,8 @@ var _weight_shift_vel: float = 0.0
 # load tracks the wind-up through the charge states, and the transition into
 # FOLLOW_THROUGH latches the smoothed load as the release kick's power (the
 # raw charge may already be zeroed by then), with the kick's amplitude set
-# picked by which charge it came from. shot_hip_yaw (radians, lower-body
-# rotation.y) is PUBLISHED for the pose coordinator's lower-body write — same
-# contract as stop_yaw_offset.
+# picked by which charge it came from. shot_hip_yaw is radians of lower-body
+# rotation.y.
 var shot_hip_yaw: float = 0.0
 var _shot_prev_state: int = 0
 var _wrister_load: float = 0.0      # smoothed 0..1 drag-charge engagement
@@ -408,7 +404,7 @@ func apply(delta: float) -> void:
 	# to them. (Velocity lean, the carve/faceoff/stop stance floors, and the
 	# glide stance floor below keep the posture alive while coasting.) Read off
 	# the REPLICATED shot state, not the state machine — a wire-fed remote's
-	# state machine is never ticked, so its blocks previously didn't plant.
+	# state machine is never ticked, so it would never see the block.
 	var planted: bool = _skater.current_shot_state == State.SHOT_BLOCKING
 	var has_move_intent: bool = _skater.move_intent.length_squared() > 0.0025
 
@@ -471,13 +467,12 @@ func apply(delta: float) -> void:
 			if _shot_kick_is_slap:
 				_shot_kick_power = maxf(_slap_load, _controller.slapper_kick_min_power)
 			else:
-				# ALSO latch from the release charge, not just the smoothed aim load:
+				# Latch from the release charge as well as the smoothed aim load:
 				# the frozen wrister is a quick flick, so _wrister_load never builds
-				# over the brief coil and the kick was stuck at the min-power floor
-				# (a barely-there leg follow-through). shot_charge holds the release
-				# power through the follow-through, so a hard flick now drives a hard
-				# leg kick. The non-frozen path (where _wrister_load did build ≈
-				# shot_charge) is unchanged by the max.
+				# over the brief coil and would pin the kick at the min-power floor.
+				# shot_charge holds the release power through the follow-through, so
+				# a hard flick drives a hard leg kick; on the non-frozen path
+				# _wrister_load ≈ shot_charge and the max changes nothing.
 				_shot_kick_power = maxf(
 						maxf(_wrister_load, _skater.shot_charge),
 						_controller.wrister_kick_min_power)
@@ -524,11 +519,10 @@ func apply(delta: float) -> void:
 	# either way the body reacts).
 	_lift_blend = lerpf(_lift_blend, 1.0 if _skater.blade_up else 0.0,
 			minf(_controller.stick_lift_blend_speed * delta, 1.0))
-	# Celebration window: the gait now runs at RENDER rate (Skater._process) and
-	# is visibility-gated, so it can no longer own aging the timer — the callers
-	# age it at physics rate (SkaterController._process_input / RemoteController.
+	# Celebration window: this pass runs at RENDER rate (Skater._process) and is
+	# visibility-gated, so it only READS the progress — the callers age the timer
+	# at physics rate (SkaterController._process_input / RemoteController.
 	# _physics_process) so it stays deterministic and never freezes off-screen.
-	# This pass only READS the progress, to suppress the stride during the raise.
 	var celebr_p: float = _controller.celebration_progress()
 	# Combined engagement, for the stride suppression below — shooting is a
 	# glide (the feet set through the load and drive through the release), and
@@ -579,8 +573,7 @@ func apply(delta: float) -> void:
 	# through the smoothing, same as the stop/reversal reads below). It eases the
 	# stride rate down here, deepens the sit and lengthens the glide dwell (extra
 	# stroke skew) further down — all zero while accelerating/digging, so the
-	# start and chop feel is unchanged. Set the tunables to 0 to restore the
-	# prior cadence exactly.
+	# start and chop feel is unchanged.
 	var cruise_gear: float = speed_t * (1.0 - clampf(_effort, 0.0, 1.0))
 	phase_rate *= 1.0 - _controller.cadence_cruise_falloff * cruise_gear
 	# Crossover cadence: while the path is actually bending (curvature-only
@@ -783,7 +776,7 @@ func apply(delta: float) -> void:
 	# clamp's ±hip_align_max pull fades out geometrically across the band's
 	# back half. The intent suppression above covers the deliberate backpedal;
 	# this covers the same geometry when no intent is held — most visibly the
-	# pivot's release tail, which previously handed the hips from the
+	# pivot's release tail, which would otherwise hand the hips from the
 	# step-around straight to a ±50° yank toward a behind-the-back travel line.
 	align_target *= 1.0 - clampf(
 			(abs_psi - PI * 0.5) / maxf(band_hi - PI * 0.5, 0.001), 0.0, 1.0)
@@ -1090,13 +1083,12 @@ func apply(delta: float) -> void:
 	# forward: a CONSTANT offset shifts the whole swing rearward — the back
 	# extension reaches (1+bias)·amp while the recovery lands only
 	# (1−bias)·amp ahead, so the returning skate settles under the hips the
-	# way a real stride does. A constant is load-bearing here: the earlier
-	# s − bias·s² warp had the same endpoints but amplified the stroke SPEED
-	# across the rear half in both directions, so the leg snapped forward out
-	# of the push just as hard as it drove in — reading as a quick FORWARD
-	# kick, the exact opposite of a real stride's explosive push / relaxed
-	# recovery. An offset has zero effect on timing, leaving the stroke speed
-	# purely to stride_skew (fast backswing, gentle return). Pitch channel
+	# way a real stride does. A constant is load-bearing: never make the bias a
+	# warp of the phase (s − bias·s²) — same endpoints, but it speeds the stroke
+	# across the rear half in BOTH directions, so the leg snaps forward out of
+	# the push as hard as it drove in and reads as a quick FORWARD kick. An
+	# offset has zero effect on timing, leaving the stroke speed purely to
+	# stride_skew (fast backswing, gentle return). Pitch channel
 	# only; the edge-rock roll and the abduction gate keep the symmetric
 	# wave. For the backward gait push_amp is negated, which flips the bias
 	# toward the forward reach — the C-cut's long pull happens out front,
@@ -1106,9 +1098,9 @@ func apply(delta: float) -> void:
 	r_pitch += fb_w * (s_opp - bias) * push_amp
 	# A committed carve HOLDS its lean — fade the shared edge rock, the V-flare
 	# abduction, and the strafe scissor as the crossover overlay takes over
-	# their roll channels. At partial blends all three kept writing against the
-	# overlay's fixed-role over/under rolls, which read as leg flail at odd
-	# travel angles. Forward-gated like the overlay itself.
+	# their roll channels — without the fade all three write against the
+	# overlay's fixed-role over/under rolls at partial blends, which reads as
+	# leg flail at odd travel angles. Forward-gated like the overlay itself.
 	var rock_fade: float = 1.0 - absf(_carve) * carve_fwd_gate * _controller.carve_rock_fade
 	l_roll += fb_w * s * roll_amp * rock_fade
 	r_roll += fb_w * s * roll_amp * rock_fade
@@ -1136,8 +1128,8 @@ func apply(delta: float) -> void:
 	var strafe_sign: float = signf(_shuffle) if absf(_shuffle) > 0.3 else signf(lat)
 	var lean: float = strafe_sign * deg_to_rad(_controller.crossover_lean_deg) * _intensity * gait_scale
 	var scissor: float = deg_to_rad(_controller.crossover_scissor_deg) * _intensity * push_scale * gait_scale
-	# rock_fade: on diagonal travel the residual lr_w double-fired the scissor
-	# against the carve overlay — turning at speed, the crossovers win.
+	# rock_fade: on diagonal travel the residual lr_w would double-fire the
+	# scissor against the carve overlay — turning at speed, the crossovers win.
 	l_roll += lr_w * (lean + s * scissor) * rock_fade
 	r_roll += lr_w * (lean + s_opp * scissor) * rock_fade
 
@@ -1244,10 +1236,10 @@ func apply(delta: float) -> void:
 	# ── Knee fore-aft compensation ────────────────────────────────────────────
 	# The dynamic knee layers (push extension, recovery tuck, carve clearance)
 	# exist for LIFT and leg-length texture, but each also drags the FOOT
-	# fore-aft: unfolding mid-push shoved the skate forward against the
-	# thigh's backward sweep, and the tuck's mid-recovery release added to the
-	# forward swing — measured at the skate, the stride's fast phase came out
-	# FORWARD (recovery), the inverse of a real push (test_gait_stroke_profile
+	# fore-aft: uncompensated, unfolding mid-push shoves the skate forward
+	# against the thigh's backward sweep and the tuck's release adds to the
+	# forward swing, so measured AT THE SKATE the stride's fast phase comes out
+	# FORWARD (recovery) — the inverse of a real push (test_gait_stroke_profile
 	# pins the corrected profile). Counter-pitch the thigh by the small-angle
 	# FK term (Δpitch = −Δknee · L_shin / L_leg) so the foot tracks the
 	# thigh-design curve — slow recovery, fast push — while the knee keeps its
@@ -1269,8 +1261,8 @@ func apply(delta: float) -> void:
 	# Both roll channels sample the stride FUNDAMENTAL (the unwarped sine), not
 	# the skewed stroke waveform `s`: stride_skew models the leg's fast-release
 	# snap, but the trunk is the body's most massive segment and its weight
-	# transfers over the gliding leg smoothly — riding `s` put the stroke's snap
-	# harmonics on the torso, which read as trunk jitter at cruise (where the
+	# transfers over the gliding leg smoothly — riding `s` puts the stroke's snap
+	# harmonics on the torso, which reads as trunk jitter at cruise (where the
 	# glide_hold_skew warp is deepest). The legs keep the skew.
 	var s_fund: float = sin(stride_phase)
 	trunk_pitch_add = -deg_to_rad(_controller.stride_dig_lean_deg) * _effort
@@ -1280,7 +1272,6 @@ func apply(delta: float) -> void:
 	# loaded leg with follow-through instead of the roll tracking the leg rigidly.
 	# Semi-implicit Euler (update velocity, then position) for stability; local
 	# integrator state, advanced only on real ticks like the rest of the gait.
-	# weight_shift_deg 0 restores the prior gait.
 	var shift_target: float = fb_w * s_fund * _intensity * gait_scale
 	var shift_accel: float = _controller.weight_spring_stiffness * (shift_target - _weight_shift) \
 			- _controller.weight_spring_damping * _weight_shift_vel
@@ -1354,19 +1345,12 @@ func apply(delta: float) -> void:
 		trunk_pitch_add += bank_mag * centri_z
 		trunk_roll_add += -bank_mag * centri_x
 
-	# Stagger stumble: a checked player visibly fights for balance. The wobble
-	# phase is derived FROM stagger_timer (a uniform countdown), so every
-	# machine — and reconcile replay, which snaps the timer from the host —
-	# renders the identical stumble with zero new network state. Amplitude
-	# tracks the time left, so the wobble eases out with the recovery window;
-	# the two axes run at incommensurate frequencies so it reads as a stumble,
-	# not a metronome.
 	# Knockdown pose factor: holds full while more than knockdown_getup_seconds
 	# remains on the timer, then eases to 0 over that tail (the get-up). Derived FROM
 	# the replicated knockdown_timer, so it renders identically everywhere and through
 	# reconcile — same discipline as the stagger stumble below. The entry end is
 	# ramped over the buckle window (KnockdownFallRules.entry_ramp — kd_t alone
-	# is 1 on the first down frame, which landed the whole crumple in one frame);
+	# is 1 on the first down frame, landing the whole crumple in one frame);
 	# the smoothstep is inlined here because the native port mirrors this body.
 	var kd_t: float = clampf(
 			_controller.knockdown_timer / maxf(_controller.knockdown_getup_seconds, 0.001), 0.0, 1.0)
@@ -1375,9 +1359,15 @@ func apply(delta: float) -> void:
 				/ maxf(_controller.knockdown_fall_buckle_seconds, 0.001), 0.0, 1.0)
 		kd_t *= buckle_t * buckle_t * (3.0 - 2.0 * buckle_t)
 
-	# The wobble is kept OUT of the summed texture and added after the inertia
-	# filter at the publish tail — a stumble is supposed to shake, and the
-	# filter would blunt exactly the frequencies that sell it.
+	# Stagger stumble: a checked player visibly fights for balance. The wobble
+	# phase is derived FROM stagger_timer (a uniform countdown), so every
+	# machine — and reconcile replay, which snaps the timer from the host —
+	# renders the identical stumble with zero new network state. Amplitude
+	# tracks the time left, so the wobble eases out with the recovery window;
+	# the two axes run at incommensurate frequencies so it reads as a stumble,
+	# not a metronome. It is kept OUT of the summed texture and added after the
+	# inertia filter at the publish tail — a stumble is supposed to shake, and
+	# the filter would blunt exactly the frequencies that sell it.
 	var stagger_pitch: float = 0.0
 	var stagger_roll: float = 0.0
 	var stagger_t: float = clampf(

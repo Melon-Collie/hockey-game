@@ -164,8 +164,8 @@ func _build_content() -> void:
 	_conflict_label.text = ""
 	add_child(_conflict_label)
 
-# Leaving the tab mid-rebind cancels the pending key-listen (replaces the old
-# panel's leave-Input-tab check). The tab is shown/hidden via its scroll-wrapper
+# Leaving the tab mid-rebind cancels the pending key-listen. The tab is
+# shown/hidden via its scroll-wrapper
 # ancestor, so its own `visible` stays true — test visibility in the tree.
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_VISIBILITY_CHANGED and not is_visible_in_tree() \

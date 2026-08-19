@@ -15,30 +15,18 @@ class_name AIBodyCheck
 #
 # Committing is a real risk — miss and you're out of the play — so the gate is
 # deliberately conservative and only fired by pressurers WITH support behind
-# them (PRESSURE / FORECHECK F1), never the last-man gap defender. Three checks:
+# them (PRESSURE / FORECHECK F1), never the last-man gap defender. The three
+# checks are commented at their call sites in evaluate().
 #
-#   1. Range — the carrier is within CHECK_RANGE_M (don't hunt from afar).
-#   2. Reachable intercept — solving the lead (AITrajectory.intercept_time), can
-#      I actually get my body there before the carrier skates past? A carrier
-#      fleeing faster than me saturates the solve and is rejected.
-#   3. Real hit — the PREDICTED victim impulse clears COMMIT_IMPULSE_M_S.
-#      Predicted via SkaterCollisionRules.victim_kick — the same delivery
-#      function the contact resolver itself applies, so the prediction and
-#      the physics are one formula by construction: a soft bump that won't
-#      separate man from puck isn't worth leaving position for.
+# Build expression falls out of the impulse check: a heavy bot's predicted
+# impulse clears the bar at lower closing speeds, so it hunts hits; a light one
+# rarely clears it and won't whiff checks it'd bounce off. A carrier skating
+# TOWARD the checker raises the closing speed, one skating away lowers it. No
+# RNG — replay-safe.
 #
-# Build expression falls out of (3): a heavy bot's predicted impulse clears the
-# bar at lower closing speeds, so it hunts hits; a light one rarely clears it and
-# won't whiff checks it'd bounce off.
-# A carrier skating TOWARD the checker raises the closing speed (bigger hit, more
-# likely to commit); one skating away lowers it. No RNG — replay-safe.
-#
-# Victim weight is the CARRIER's real mass (weight-derived) when its build is known — a
-# light checker won't leave its feet for a hit it'd bounce off a heavy target
-# with. Defaults to the league baseline when unwired. (The victim's active BRACE
-# — Physical, now on the Hit button — only bites when the victim is committing a
-# check of their own, which a puck carrier rarely is, so it's not modeled in this
-# carrier-check gate.)
+# The victim's active BRACE (Physical, on the Hit button) is deliberately NOT
+# modeled here: it only bites when the victim is committing a check of its own,
+# which a puck carrier rarely is.
 
 # Only hunt a hit when the carrier is this close — beyond it, contain instead.
 const CHECK_RANGE_M: float = 6.0
@@ -56,9 +44,7 @@ const MAX_LEAD_S: float = 0.6
 # demand one. At the inelastic scale (a medium drive is ~0.325 × closing, a heavy
 # build more) this means a baseline bot commits when it can bring ~5 m/s closing
 # (a real skate-in), a heavy build clears it sooner off its own drive, and a light
-# build correctly declines checks it'd bounce off a bigger target. (Was 2.5 against
-# a transfer of 0.45 — a bar needing ~11 m/s closing at a medium build, so bots
-# almost never committed; the 0.65 transfer + this bar restore aggressive hitting.)
+# build correctly declines checks it'd bounce off a bigger target.
 const COMMIT_IMPULSE_M_S: float = 1.6
 
 # League-average victim mass (Skater.weight default) — the weight_ratio
@@ -113,9 +99,9 @@ static func evaluate(
 
 	# 3. Real hit. Predict the victim impulse from the closing velocity I'd
 	# bring driving at the intercept, through the resolver's OWN delivery
-	# function (SkaterCollisionRules.victim_kick — the same code path
-	# resolve() applies on contact, so this prediction can never drift from
-	# the physics again). The victim's REAL mass is in the reduced-mass
+	# function (SkaterCollisionRules.victim_kick — the same code path resolve()
+	# applies on contact, so prediction and physics are one formula by
+	# construction). The victim's REAL mass is in the reduced-mass
 	# denominator, so a heavy carrier moves less for the same hit and a light
 	# checker correctly predicts bouncing off — it won't leave its feet for it.
 	var approach: float = _predicted_approach(self_pos, self_max_speed, intercept, carrier_vel)

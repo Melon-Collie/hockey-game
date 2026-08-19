@@ -17,11 +17,10 @@ extends RefCounted
 # ── Boundary ─────────────────────────────────────────────────────────────────
 # GEOMETRY AND PREDICATES ONLY. This answers questions and owns the timer FIELDS
 # those answers read; the controller advances every timer and makes every
-# transition. #519 shipped a full lifecycle API here — begin_cover,
-# tick_cover_reach, end_cover and fourteen more — that the controller never
-# called, having already written the same logic inline against these fields.
-# Those methods and the tuning pushed in for them are gone; see
-# Scripts/controllers/CLAUDE.md for the rule that predicts it.
+# transition. Do NOT add a lifecycle API here (begin_cover / tick_cover_reach /
+# end_cover and friends): the controller writes these fields itself, so any such
+# method is unreachable the moment it is written. See
+# Scripts/controllers/CLAUDE.md → "What kills a collaborator extraction".
 
 # ── Tuning (pushed in by GoalieController._configure_collaborators) ───────────
 var reach: float = 1.4                  # m — goalie-to-puck distance the stick can sweep

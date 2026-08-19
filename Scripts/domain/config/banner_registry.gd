@@ -3,12 +3,9 @@ extends RefCounted
 
 # What hangs from the rafters: a banner for each playtester.
 #
-# The arena had always had a hole here. ArenaStands' shell comment notes that
-# "whatever sliver of void remains visible above it reads as dark rafters", and
-# the Jumbotron's column "runs up into the dark above the shell wall so it reads
-# as hung from unseen rafters" — two places where the geometry stops and the
-# fiction takes over. A real building fills that volume with the people it owes
-# something to, and so does this one.
+# The roof volume is where the arena geometry stops and the fiction takes over
+# (ArenaStands' shell, the Jumbotron's column). A real building fills that
+# volume with the people it owes something to, and so does this one.
 #
 # Four banners for four names, repeated around the ring (see ArenaStands'
 # _BANNER_RING_REPEATS) so every camera angle sees some without the roof turning

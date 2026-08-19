@@ -17,14 +17,10 @@ extends Node
 #
 # Owned by GameManager (host only). start() / stop() called from there.
 #
-# Testing: no headless unit test — this extends Node and drives LIVE scene
-# actors (Skater / Puck / Goalie nodes) via the actor-driven
-# ReplayPlaybackEngine, so it's integration-only (a live scene, poor headless
-# ROI). The unit-testable pieces it composes ARE covered: the codec's
-# side-effect-free decode_for_replay (test_world_state_codec), ReplayRecorder
-# (test_replay_recorder), and GoalReplayStore (test_goal_replay_store).
-# Consciously accepted as integration-only — see the closed GH issue on
-# agent-SM / replay-driver coverage gaps.
+# Testing: integration-only. This drives LIVE scene actors (Skater / Puck /
+# Goalie nodes) via the actor-driven ReplayPlaybackEngine, so there is no
+# headless unit test; the pieces it composes are covered instead
+# (test_world_state_codec, test_replay_recorder, test_goal_replay_store).
 
 const CLIP_DURATION: float = 8.0  # seconds of history to replay
 

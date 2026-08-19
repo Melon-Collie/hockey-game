@@ -24,9 +24,7 @@ class_name AILoosePuckChase
 # AIRoleSlots.HYSTERESIS_PENALTY_S — re-derived with the phase-model
 # time_to_arrive). Enough to kill frame-to-frame swapping between
 # geometrically-similar bots without making the role stale when a
-# genuinely better-placed teammate appears. Tuning: raise toward 0.35
-# if chasers still trade off mid-pursuit; lower toward 0.1 if a closer
-# teammate takes too long to take over.
+# genuinely better-placed teammate appears.
 const HYSTERESIS_S: float = 0.2
 
 # ── Path race ────────────────────────────────────────────────────────────────
@@ -37,14 +35,10 @@ const HYSTERESIS_S: float = 0.2
 # outruns him in, while the skater the puck is travelling TOWARD, whose true
 # intercept is where it comes to him, reads as hopeless and declines.
 #
-# This used to be gated to pucks above 4 m/s, on the theory that a slow puck's
-# path is approximately its position. On this ice it is not: ICE_FRICTION 0.05
-# decelerates a puck at 0.49 m/s², so a 3.9 m/s roller — a hair under that old
-# gate — travels 9.5 m inside the race horizon and takes 8 s to settle. The
-# bounded-lead read it fell back to led the puck by at most 0.5 s (≤1.95 m),
-# along a straight line that runs THROUGH the boards. Both halves of that are
-# exactly the reported failure: bots late to slow pucks rolling at them, and
-# worse on the wall, where the phantom straight line leaves the rink entirely.
+# NO speed gate on the walk. A slow puck's path is not approximately its
+# position: ICE_FRICTION 0.05 decelerates a puck at 0.49 m/s², so a 3.9 m/s
+# roller travels 9.5 m inside the race horizon and takes 8 s to settle, and a
+# bounded straight-line lead standing in for it runs through the boards.
 const RACE_LOOKAHEAD_S: float = 3.0
 # 0.25 s steps. The race read interpolates within the step it crosses in
 # (path_intercept_time), so this is the resolution of the PATH, not of the
@@ -63,13 +57,12 @@ const FAST_PUCK_SPEED_M_S: float = 4.0
 # First-stride floor: a skater actually running a race for a loose puck
 # exceeds this closing speed toward it within his first strides; below it
 # the body is standing or skating elsewhere — not a collector, whatever his
-# hypothetical ETA says. Two consumers, both fixing a "puck sits there while
-# everyone stares" freeze:
+# hypothetical ETA says. Two consumers:
 #   - the election (below): a HUMAN teammate can't be assigned by election,
 #     so he only suppresses the bots while demonstrably playing the puck;
 #   - the chase decline (AIRoleHelpers.loose_puck_race_lost): an opponent
-#     who is NOT running the race must not talk our chaser out of it — with
-#     both teams declining on hypothetical winners, nobody ever went.
+#     who is NOT running the race must not talk our chaser out of it, or both
+#     teams decline on hypothetical winners and nobody goes.
 const RACE_COMMIT_MIN_CLOSING_M_S: float = 1.0
 
 
@@ -90,14 +83,11 @@ static func committed_to_race(s: SkaterNetworkState, puck_pos: Vector3) -> bool:
 	return committed_to_point(s, puck_pos)
 # Arrival slack a fast-puck intercept must clear: the reception setup time
 # (swing the blade to the gate on the puck's line and get set — a body
-# arriving dead-even with a rim at pace corrals nothing). A zero-slack
-# intercept read fed steering aims the body where it meets the puck exactly,
-# so any execution slop missed by a hair, re-solved to a new zero-slack
-# point further along, and missed again — the sliding-intercept treadmill
-# the breakout traces showed (kill reads hovering 1-2 s for three straight
-# seconds while the rim stayed ahead). Requiring the margin picks the point
-# far enough along the path that the skater genuinely arrives EARLY and
-# sets — the real wall-kill stance.
+# arriving dead-even with a rim at pace corrals nothing). Zero slack is a
+# treadmill: steering aims the body where it meets the puck exactly, execution
+# slop misses by a hair, and the read re-solves to a new zero-slack point
+# further along. The margin picks the point far enough along the path that the
+# skater genuinely arrives EARLY and sets — the real wall-kill stance.
 const KILL_SETUP_MARGIN_S: float = 0.25
 
 
@@ -118,9 +108,9 @@ static func setup_margin(puck_vel: Vector3) -> float:
 # and sprint ceiling from caps (league defaults when unset — a league body
 # sprints), pool and lockout from the replicated skater state, race length
 # approximated by the straight distance to the puck's current spot. THE seam
-# through which Speed's sprint separation reaches every race read — election,
-# and the race-lost decline both price with it, so they
-# can't disagree about who has the extra gear.
+# through which Speed's sprint separation reaches every race read: the election
+# and the race-lost decline both price with it, so they cannot disagree about
+# who has the extra gear.
 static func race_vmax(s: SkaterNetworkState, caps: AISkaterCaps,
 		puck_pos: Vector3) -> float:
 	var cruise: float = caps.max_speed if caps != null \
@@ -154,10 +144,10 @@ static func race_vmax(s: SkaterNetworkState, caps: AISkaterCaps,
 
 
 # The shared predicted path for one race — memoized on the exact puck state,
-# because every consumer in one AI tick (both teams' elections, the brain's
-# each chaser's race-lost decline) races the SAME puck: one
-# walk per tick, not one per caller. Callers must treat the returned array
-# as read-only.
+# because every consumer in one AI tick (both teams' elections, each chaser's
+# race-lost decline, every reach-band read) races the SAME puck: one walk per
+# tick, not one per caller. Callers must treat the returned array as
+# read-only.
 static var _traj_cache_pos: Vector3 = Vector3.INF
 static var _traj_cache_vel: Vector3 = Vector3.INF
 static var _traj_cache: Array[Vector3] = []
@@ -211,14 +201,12 @@ static func path_intercept_time(traj: Array[Vector3], step_dt: float,
 		if eta > t_set:
 			continue
 		# Crossing found — now solve WHERE in the step it happens. Returning
-		# t_step quantizes every race read to the walk's grid, and at 0.25 s
-		# that is ~2 m of skating: bots separated by less than a step read as
-		# exactly tied, so the election resolved them by peer id instead of by
-		# who actually gets there, and the race-lost decline could not see a
-		# margin narrower than the grid. Linear-interpolate the arrival slack
-		# s(t) = (t − margin) − ETA(t) across the step it changes sign in.
-		# Exact for a settled puck: s is then linear in t, so the crossing IS
-		# the skater's ETA.
+		# t_step would quantize every race read to the walk's grid, ~2 m of
+		# skating at 0.25 s, so bots separated by less than a step read as tied
+		# and the election falls through to its peer-id tie-break.
+		# Linear-interpolate the arrival slack s(t) = (t − margin) − ETA(t)
+		# across the step it changes sign in. Exact for a settled puck: s is
+		# then linear in t, so the crossing IS the skater's ETA.
 		var prev_t: float = i * step_dt
 		var prev_point: Vector3 = traj[i - 1] if i > 0 else puck_pos
 		var prev_slack: float = (prev_t - margin) - _reach_eta(
@@ -278,13 +266,9 @@ static func path_intercept_point(traj: Array[Vector3], step_dt: float,
 
 
 # ── Incidental reach (a free puck at your feet is yours) ─────────────────────
-# One stride beyond the blade. The election answers "who runs the RACE", which
-# is the right question for a puck 15 m away and the wrong one for a puck
-# rolling past a defenceman's skates: he watched it go by because a teammate
-# owned a better ETA to it, and nobody plays a puck they could have reached
-# without moving. This is the band inside which the election doesn't apply —
-# whoever the puck comes to plays it. Bounded to reach + a stride so it stays
-# "extend the stick", never a second chaser abandoning his job.
+# One stride beyond the blade — the band inside which the election does not
+# apply, because whoever the puck comes to plays it. Bounded to reach + a stride
+# so it stays "extend the stick", never a second chaser abandoning his job.
 const INCIDENTAL_STRIDE_M: float = 1.5
 
 
@@ -324,18 +308,9 @@ static func puck_comes_to_reach(
 
 
 # ── Teammate yield (don't stab at your own teammate's puck) ──────────────────
-# A contested pickup is a possession FIGHT, and it is symmetric by design: two
-# blades on the same loose puck, nobody awarded it, the puck squirting free
-# biased toward the stronger blade. That is right for opponents and right for a
-# genuine jam — three sticks whacking at a puck in the crease SHOULD leave it
-# loose. What it is not right for is our own two bots converging and mutually
-# denying each other: that isn't a jam, it's a coordination failure, and it read
-# in-game as two players arriving together and both missing.
-#
-# So the fix belongs upstream of the contest, not in it. Don't put your blade in
-# when a teammate's blade is already first to the puck — he takes it, you
-# support, which is what the players would do. The contest rule is untouched and
-# still fires on every real jam, faceoff draws included.
+# The contested-pickup rule stays symmetric — two blades on one loose puck means
+# nobody is awarded it — so a bot keeps its blade OUT when a teammate's is
+# already first to the puck, upstream of the contest rather than inside it.
 #
 # Deadlock-free by construction: yielding requires the OTHER blade to be nearer
 # the puck by more than YIELD_MARGIN_M, and that relation cannot hold in both
@@ -419,17 +394,14 @@ static func _segment_meet_fraction(a: Vector3, b: Vector3, pos: Vector3) -> floa
 #                    defense resets for the release instead of hovering over a
 #                    puck they can't touch.
 #   human_ids      — teammate_ids under HUMAN control. Election can't make a
-#                    human skate: he suppresses the bots only while he is
-#                    demonstrably playing the puck (committed_to_race) — a
-#                    human standing over a loose puck ignoring it used to
-#                    freeze every bot out of the pickup.
+#                    human skate, so he suppresses the bots only while he is
+#                    demonstrably playing the puck (committed_to_race).
 #   camped_ids     — teammates opted out of loose-puck work (the one-timer
-#                    camp veto). Electing one anyway froze the whole team:
-#                    the camper refused the chase and nobody else was
-#                    elected. Skipped so the next-best teammate goes; if the
-#                    filters exclude EVERYONE the raw election runs instead
-#                    (someone must own the read — the camper's own veto
-#                    still governs its behavior, exactly as before).
+#                    camp veto). Skipped, so the next-best teammate goes and
+#                    a camper cannot be elected into a chase it will refuse.
+#                    If the filters exclude EVERYONE the raw election runs
+#                    instead — someone must own the read, and the camper's
+#                    own veto still governs its behavior.
 static func elect(
 		skater_states: Dictionary,
 		teammate_ids: Array,
@@ -482,10 +454,9 @@ static func elect(
 
 # Raw best intercept time (seconds) among `ids` to the loose puck — the
 # race-read half of the election, with no hysteresis and no winner identity.
-# A team's best intercept time for a loose puck
-# to compare OUR best against THEIRS with the same intercept model the
-# chase election runs, so "who wins the race" and "who is elected to run
-# it" can never disagree. INF when no eligible skater.
+# Lets a caller compare OUR best against THEIRS through the same intercept model
+# the election runs, so "who wins the race" and "who is elected to run it" can
+# never disagree. INF when no eligible skater.
 static func best_intercept_time(
 		skater_states: Dictionary,
 		ids: Array,

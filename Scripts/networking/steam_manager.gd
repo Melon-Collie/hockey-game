@@ -16,8 +16,7 @@ extends Node
 ## pumps nothing, and every lobby call is a no-op. Offline / free-play /
 ## tutorial never reference this autoload, so they are wholly unaffected.
 
-# Mitts' Steamworks App ID. (Dev builds historically used 480 = Valve's
-# SpaceWar example before the real App ID was registered.)
+# Mitts' Steamworks App ID.
 const APP_ID: int = 4892600
 
 # How long to wait for an async Steam lobby create/join callback before giving
@@ -333,9 +332,8 @@ func lobby_member_steam_ids() -> Array[int]:
 # follow the player across machines. All ISteamRemoteStorage access funnels
 # through here to keep the GodotSteam dependency confined to this file.
 #
-# Cloud is the cross-machine backup that retired the old per-install uuid sidecar
-# in PlayerPrefs. PlayerPrefs owns the reconcile policy (read at boot, push on
-# save); these are the thin transport wrappers.
+# PlayerPrefs owns the reconcile policy (read at boot, push on save); these are
+# the thin transport wrappers.
 
 # Cloud writes silently no-op unless Cloud is enabled BOTH for the app (Steamworks
 # backend config) and the user's account (Steam → Settings → Cloud), so gate on

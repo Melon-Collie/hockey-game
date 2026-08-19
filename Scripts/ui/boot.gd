@@ -36,9 +36,9 @@ func _build_ui() -> void:
 	theme = MenuStyle.ui_theme()
 
 	# Scratched-ice texture (same asset as the lobby) under a heavy navy tint.
-	# The tint is what makes this work: an earlier full-brightness ice photo
-	# washed out the menu text, so the texture sits behind PANEL_BG at high
-	# alpha — subtle surface interest, same dark world as the rest of the UI.
+	# The tint is what makes this work: at full brightness the ice photo washes
+	# out the menu text, so the texture sits behind PANEL_BG at high alpha —
+	# subtle surface interest, same dark world as the rest of the UI.
 	var bg := TextureRect.new()
 	bg.texture = load("res://Assets/Mitts_ice_background.png")
 	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE

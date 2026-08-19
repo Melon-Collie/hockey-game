@@ -8,10 +8,6 @@ extends RefCounted
 #   - icing state + last carrier tracking
 #   - ghost computation (uses InfractionRules + dead-puck check)
 #
-# GameManager still owns infrastructure: references to actors, the PlayerRecord
-# with node refs, RPC sending, signal emission. It calls state-machine methods
-# and reacts to the outcomes (what phase are we in? did something transition?).
-#
 # The state machine exists on both host and client. On the host, GameManager
 # drives it with tick(delta). On the client, apply_remote_state() syncs it
 # from world-state broadcasts.
@@ -169,9 +165,9 @@ func on_faceoff_puck_picked_up() -> bool:
 
 # Any OTHER host-side puck engagement during FACEOFF — a deflect, body redirect,
 # or a one-timer release — also makes the puck live and ends the faceoff. Without
-# this, a goal off a possession-less faceoff play (win the draw and one-time it, a
-# contested-draw squirt into the net) was VOIDED: on_goal_scored gates on PLAYING
-# and only a clean pickup advanced the phase, so the puck sat un-awarded in the net.
+# it a goal off a possession-less faceoff play (win the draw and one-time it, a
+# contested-draw squirt into the net) is VOIDED: on_goal_scored gates on PLAYING,
+# so the puck sits un-awarded in the net.
 func on_faceoff_puck_touched() -> bool:
 	return _end_faceoff_if_active()
 
@@ -311,23 +307,18 @@ func compute_ghost_state(
 		# NOTE: icing does NOT ghost the offending team. `icing_team_id` is set in
 		# check_icing_for_loose_puck and drives the whistle + faceoff via
 		# pending_faceoff_dot/reason, but begin_faceoff_prep clears it in the SAME
-		# host tick the icing is called — before this ghost pass runs — so the old
-		# `if icing_team_id == slot.team_id: ghost = true` here never fired. Icing is
-		# a whistle-and-faceoff rule (NHL only), not a ghost. (`_icing_timer` stays as
-		# a fallback clear and is unit-tested at the SM level.)
-		# Crease protection — ARCADE-only anti-camp mechanic, not a real NHL rule.
-		# Real goaltender interference is contact-based (Rule 69) and screening
-		# (standing in the crease with no contact) is legal, so a dwell-timer
-		# ghost has no NHL equivalent — dropped from NHL until a real contact-based
-		# interference system exists. No field skater may camp in a goalie crease
-		# in ARCADE. The puck CARRIER is exempt: net drives, wraparounds, and jam
-		# plays are the point of carrying the puck to the net, so a carrier never
-		# draws crease interference (their dwell is held at zero so they aren't
-		# ghosted the instant they release). Dwell-timed for everyone else: a
-		# brief net drive passes through; lingering past CREASE_DWELL_DURATION
-		# ghosts you until you leave the paint (exit resets the timer, which
-		# un-ghosts next tick — the crease is the tag-up line). Independent of
-		# offside/icing so it stacks.
+		# host tick the icing is called — before this ghost pass runs — so a ghost
+		# branch keyed on it here could never fire. Icing is a whistle-and-faceoff
+		# rule (NHL only), not a ghost. (`_icing_timer` stays as a fallback clear
+		# and is unit-tested at the SM level.)
+		# Crease protection (ARCADE only — see GameRules.CREASE_DWELL_DURATION).
+		# The puck CARRIER is exempt: net drives, wraparounds, and jam plays are
+		# the point of carrying the puck to the net, so a carrier never draws
+		# crease interference, and their dwell is held at zero so they aren't
+		# ghosted the instant they release. For everyone else the dwell runs:
+		# lingering past CREASE_DWELL_DURATION ghosts you until you leave the
+		# paint (exit resets the timer, which un-ghosts next tick — the crease is
+		# the tag-up line). Independent of offside/icing, so it stacks.
 		var crease_protection_active: bool = rule_set == GameRules.RuleSet.ARCADE
 		var pos: Vector3 = player_positions[peer_id]
 		if crease_protection_active and not is_carrier and CreaseRules.is_in_crease(Vector2(pos.x, pos.z)):
@@ -690,11 +681,11 @@ func apply_remote_goal(scoring_team_id: int, score0: int, score1: int) -> void:
 
 # Called on clients when they receive the reliable faceoff-positions RPC. The
 # faceoff RPC is the authoritative, reliable trigger for the prep phase — world
-# state (unreliable) is only a correction channel. Without this the client's
-# phase advanced into the faceoff sequence solely via the WS phase byte, so a
-# lost FACEOFF_PREP/FACEOFF packet right after a goal replay could collapse the
-# client straight from GOAL_CELEBRATION into a later PLAYING packet — dropping
-# them into live play with no faceoff prep ("spawned in as the game started").
+# state (unreliable) is only a correction channel. Without it the client's phase
+# would advance into the faceoff sequence solely via the WS phase byte, so a lost
+# FACEOFF_PREP/FACEOFF packet right after a goal replay could collapse the client
+# straight from GOAL_CELEBRATION into a later PLAYING packet — dropping them into
+# live play with no faceoff prep ("spawned in as the game started").
 # Guarded so a very-late RPC can't regress a client that WS already advanced to
 # FACEOFF. Returns true if the phase changed (caller emits phase_changed).
 func apply_remote_faceoff_prep() -> bool:

@@ -1,17 +1,11 @@
 class_name PhaseCoordinator
 extends RefCounted
 
-# Owns all side effects that fire on phase transitions. Pulled out of
-# GameManager because the phase-entry flow (puck lock/unlock/reset, goalie
-# reset, faceoff teleport, goal scoring) is one coherent piece of game logic
-# that reads better in its own file.
-#
-# Host vs client:
-#   - handle_phase_entered()   : host-side, called after GameStateMachine.tick
-#                                transitions (puck reset, faceoff, game-over)
-#   - on_goal_scored_into()    : host-side, fired by the goal sensor
-#   - on_goal_received()       : clients apply the authoritative goal RPC
-#   - on_faceoff_positions()   : clients teleport to their new faceoff slot
+# Owns every side effect that fires on a phase transition: puck lock / unlock /
+# reset, goalie reset, faceoff placement, the goal pipeline, the goal-replay
+# cinematic. The host drives them from its own state-machine transitions
+# (handle_phase_entered, on_goal_scored_into); clients apply the authoritative
+# RPCs instead (on_goal_received, on_faceoff_positions).
 #
 # Collaborators talk back via signals (`phase_changed`, `goal_scored`, etc.)
 # and via three injected Callables for puck drop / goal broadcast / faceoff
@@ -242,9 +236,9 @@ func _enter_faceoff_prep(puck: Puck) -> void:
 	var positions: Array = []
 	for peer_id: int in _registry.all():
 		var record: PlayerRecord = _registry.get_record(peer_id)
-		# Centers spawn at their own reach-derived distance from the dot
-		# (Size scales stick + arms, so the fixed 1.5 m offset left small
-		# builds unable to touch the puck). Wingers ignore the argument.
+		# Centers spawn at their own reach-derived distance from the dot — Size
+		# scales stick + arms, so a fixed offset puts the puck out of a small
+		# build's reach. Wingers ignore the argument.
 		var reach: float = -1.0
 		if record.team_slot == 0 and record.controller != null:
 			reach = record.controller.faceoff_center_distance()

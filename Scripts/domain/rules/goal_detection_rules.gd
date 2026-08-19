@@ -76,19 +76,17 @@ static func crossed_into_net(
 	# center finished this tick fully inside the net CAVITY, the only
 	# continuous route there from in front of the line is through the mouth —
 	# the posts, bar, side/top netting and back mesh are all solid — so award
-	# the goal on the endpoint. Without this, a deflected entry was rejected
-	# once and then permanently locked out by the prev_depth freshness guard:
-	# the puck sat visibly in the net with no goal.
+	# the goal on the endpoint. Without it a deflected entry is rejected once and
+	# then permanently locked out by the prev_depth freshness guard, leaving the
+	# puck visibly in the net with no goal.
 	#
-	# This applies to a CARRIED puck too, now that the pin is a collider in its own
+	# This applies to a CARRIED puck too, because the pin is a collider in its own
 	# right (SkaterController._collide_pinned_puck_with_net) rather than a point
-	# teleported to a blade offset. It used to be excluded, because a pin that no
-	# surface constrained could be placed into the cavity from a side or behind-the-
-	# net angle without ever crossing the mouth, and the endpoint-only test then
-	# scored it ("in from the back, on the stick"). With the pin colliding, the
-	# premise holds for it exactly as for a free puck — and the exclusion had a real
-	# cost: a legitimate carried tuck DEFLECTED in off the post could not score,
-	# since a bent path is precisely what this fallback exists to catch.
+	# teleported to a blade offset: the premise — no route into the cavity except
+	# through the mouth — holds for it exactly as for a free puck, and a carried
+	# tuck DEFLECTED in off the post is precisely the bent path this catches. An
+	# unconstrained pin would break that premise, since it could be placed into
+	# the cavity from the side without ever crossing the mouth.
 	#
 	# The endpoint-only test still trusts that "the only route into the cavity is
 	# through the mouth", and the STRAIGHT segment we sample can straddle the

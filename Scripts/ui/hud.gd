@@ -5,9 +5,7 @@ extends CanvasLayer
 # "SHOT · 74 MPH · 89%". The % is of the shot family's own attribute-scaled
 # ceiling (wrister/quick → max_wrister_power, slapper → max_slapper_power),
 # so it reads as "where in my band did that release land" — the feedback loop
-# for learning to hit in-between wrister speeds. DEBUG-BUILD ONLY: the hook
-# below also gates on OS.is_debug_build(), so it never appears in a shipped
-# (release-export) build. Flip this off to silence it in the editor too.
+# for learning to hit in-between wrister speeds. Off silences it in the editor.
 @export var debug_shot_speed_toast: bool = true
 var _shot_toast_controller: SkaterController = null
 
@@ -76,18 +74,14 @@ var _skip_vote_current: int = 0
 var _skip_vote_total: int = 0
 var _spectator_banner: PanelContainer = null
 var _spectator_wrapper: Control = null
-# Parent of all scalable HUD chrome — see _update_hud_scale. Popups/menus (own
-# CanvasLayers) and the off-screen indicators live outside it.
+# Parent of all scalable HUD chrome — see _update_hud_scale.
 var _scale_root: Control = null
 var _ghost_banner_root: Control = null
 var _ghost_reason_label: Label = null
 var _ghost_instr_label: Label = null
 var _ghost_pulse_t: float = 0.0
-# HUD-local mirror of the offside hold: set when the local skater is observed
-# offside during the current ghost spell, cleared when they tag up or the ghost
-# lifts. Lets the banner distinguish an offside (held until tag-up, even after
-# the puck enters the zone) from a pure crease violation deep in the attacking
-# zone, where no offside ever occurred.
+# Lets the banner distinguish an offside from a pure crease violation deep in
+# the attacking zone, where no offside ever occurred.
 var _ghost_was_offside: bool = false
 
 const _WARN_AMBER := Color(0.95, 0.65, 0.20, 1.0)            # clock-warning toast tint
@@ -170,9 +164,8 @@ func _ready() -> void:
 	_toast_stack = ToastStack.new()
 	_scale_root.add_child(_toast_stack)
 	# Surface the connection error from whatever session dumped us back here
-	# (host quit, join failed, timed out, kicked). pending_error is written
-	# right before return_to_free_play() and was previously read by nothing —
-	# every connection failure was a silent teleport to free play.
+	# (host quit, join failed, timed out, kicked); pending_error is written
+	# right before return_to_free_play(). Without this the failure is silent.
 	if not NetworkManager.pending_error.is_empty():
 		_toast_stack.push(NetworkManager.pending_error, Color(0.95, 0.55, 0.5))
 		NetworkManager.pending_error = ""
@@ -345,7 +338,7 @@ func _build_scorebug() -> void:
 
 	# === Teams column ===
 	# Each team row is [stripe | abbr label | score]. Stripes carry the team
-	# color the way a chyron lower-third does, replacing the old badge.
+	# color the way a chyron lower-third does.
 	var teams_outer := MarginContainer.new()
 	teams_outer.add_theme_constant_override("margin_top", 4)
 	teams_outer.add_theme_constant_override("margin_bottom", 4)
@@ -422,8 +415,7 @@ func _build_scorebug_team_row(team_id: int, abbr: String) -> HBoxContainer:
 	stripe_style.bg_color = _scorebug_stripe(team_id)
 	# Placeholder reserves the 6px column in the HBox; the visible stripe
 	# is anchored inside it so the caller can bleed it past the row bounds
-	# (offset_top / offset_bottom) to hug the scorebug panel's true edges
-	# — same pattern slot_grid_panel.gd uses for the lobby card stripes.
+	# (offset_top / offset_bottom) to hug the scorebug panel's true edges.
 	var stripe_slot := Control.new()
 	stripe_slot.custom_minimum_size = Vector2(6, 28)
 	stripe_slot.size_flags_vertical = Control.SIZE_FILL
@@ -446,8 +438,8 @@ func _build_scorebug_team_row(team_id: int, abbr: String) -> HBoxContainer:
 	abbr_margin.add_child(abbr_label)
 
 	# Center-aligned in a fixed-width slot so single- vs two-digit scores
-	# don't drift visually (right-alignment made "1" read as offset from
-	# "0" because the glyphs have different widths).
+	# don't drift visually — under right-alignment "1" reads as offset from
+	# "0", the glyphs having different widths.
 	var score_margin := MarginContainer.new()
 	score_margin.add_theme_constant_override("margin_left", 4)
 	score_margin.add_theme_constant_override("margin_right", 8)
@@ -485,7 +477,7 @@ func _build_phase_banner() -> void:
 	# 4px rounded corners to match the scorebug — single visual language across
 	# the HUD chrome. No top border line: a thin border that has to follow the
 	# corner curve reads as a competing stripe over the chyron's bold team-color
-	# fill, which is what the "double-curve" complaint was actually pointing at.
+	# fill.
 	_phase_style = StyleBoxFlat.new()
 	_phase_style.bg_color = MenuStyle.BROADCAST_BG
 	_phase_style.set_corner_radius_all(4)
@@ -543,10 +535,9 @@ func _build_phase_banner() -> void:
 	vbox.add_child(_assist_label)
 
 # "GOAL" wash banner — slides in from the left and overlays the scorebug for
-# the dramatic moment of a goal. Lower-third phase chyron with scorer/assist
-# info appears separately during the replay phase. Built once at _ready and
-# kept hidden; _play_top_goal_banner drives the slide-in/hold/slide-out
-# animation when a goal fires.
+# the dramatic moment of a goal (_play_top_goal_banner drives the animation).
+# The lower-third chyron with scorer/assist info is separate, and appears
+# during the replay phase.
 func _build_top_goal_banner() -> void:
 	# bg_color is a placeholder; _play_top_goal_banner re-tints the whole panel
 	# in the scoring team's primary color per goal, so the entire bar reads as
@@ -635,8 +626,7 @@ func _build_spectator_banner() -> void:
 	_spectator_wrapper.visible = false
 
 # Hides local-only menu options (Rematch, Change Position) when the local peer
-# is a spectator and shows the spectator banner. Off-screen indicators and the
-# rink scoreboard already gate on registry membership, so they need no change.
+# is a spectator and shows the spectator banner.
 func _apply_spectator_chrome() -> void:
 	var is_spec: bool = GameManager.is_local_spectator()
 	if _spectator_banner == null and is_spec:
@@ -702,9 +692,7 @@ func _build_bug_icon() -> void:
 	_scale_root.add_child(btn)
 
 # Bottom-right "[SPACE] TO SKIP" prompt shown during goal replays. Lives outside
-# the chyron because the skip-UX is a player affordance, not broadcast chrome —
-# the broadcast chyron itself stays focused on the goal info. The pulse draws
-# the eye to the prompt without yelling.
+# the chyron because the skip-UX is a player affordance, not broadcast chrome.
 func _build_skip_replay_prompt() -> void:
 	# Pad votes to skip with the south face button; keyboard with Space. Built from
 	# the same device/brand-aware text the vote-tally refresh uses.
@@ -790,8 +778,6 @@ func _refresh_device_prompts(_is_gamepad: bool) -> void:
 	_refresh_skip_prompt_text()
 	_refresh_clip_prompt()
 
-# Menu-open hint text, resolved to the active device: pad Start (≡ / + on Switch),
-# else keyboard Escape. Rebuilt on device swap via _refresh_device_prompts.
 func _menu_hint_text() -> String:
 	return "%s MENU" % ControllerGlyphs.prompt(
 			"[ESC]", "[%s]" % ControllerGlyphs.joy_label(JOY_BUTTON_START))
@@ -895,18 +881,11 @@ func _build_version_tag() -> void:
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_scale_root.add_child(label)
 
-# The FPS readout lives in NetworkDebugOverlay's top-right diagnostics row
-# (next to the always-on network health dot) so the two can't overlap.
-
-# (The old bottom-edge sprint stamina bar is gone — stamina now lives on the
-# ice as the ring inside the player's own circle; see SkaterHUDCoordinator.)
-
 # Local-player infraction banner. Shown whenever the local skater is ghosted
 # for a reason the player can clear themselves (offside or crease violation),
-# naming the infraction and the action that lifts it. Built once in code (like
-# the rest of the HUD chrome) and driven each frame from the local skater's own
-# position in _update_ghost_banner(); icing (a whole-team ghost) keeps its
-# existing toast.
+# naming the infraction and the action that lifts it. Driven each frame from the
+# local skater's own position in _update_ghost_banner(); icing (a whole-team
+# ghost) keeps its existing toast.
 func _build_ghost_banner() -> void:
 	var root := Control.new()
 	root.set_anchors_preset(Control.PRESET_TOP_WIDE)
@@ -968,11 +947,10 @@ func _update_ghost_banner() -> void:
 	var team_id: int = record.team.team_id
 	var reason: String = ""
 	var instruction: String = ""
-	# Track whether an offside actually occurred during this ghost spell. An
-	# offside ghost is held until the player tags up (has_tagged_up), so once we
-	# see them offside we latch it and keep showing OFFSIDE until they cross back
-	# — even after the puck enters the zone (which makes is_offside read false).
-	# Tagging up clears the latch.
+	# An offside ghost is held until the player tags up (has_tagged_up), so once
+	# we see them offside we latch it and keep showing OFFSIDE until they cross
+	# back — even after the puck enters the zone (which makes is_offside read
+	# false). Tagging up clears the latch.
 	var tagged_up: bool = InfractionRules.has_tagged_up(pos.z, team_id)
 	if tagged_up:
 		_ghost_was_offside = false
@@ -980,7 +958,7 @@ func _update_ghost_banner() -> void:
 		var puck: Puck = GameManager.get_puck()
 		if puck != null:
 			# GameManager's resolver, not puck.carrier — the latter is host-only, so
-			# a carrying client read as puckless and could latch OFFSIDE while
+			# a carrying client reads as puckless and latches OFFSIDE while
 			# actually carrying the puck into the zone (carrying is never offside).
 			var is_carrier: bool = GameManager.get_puck_carrier() == skater
 			if InfractionRules.is_offside(pos.z, team_id, puck.global_position.z, is_carrier):
@@ -1074,14 +1052,12 @@ func _on_local_shot_released(_direction: Vector3, power: float, is_slapper: bool
 # Applies PlayerPrefs.hud_scale by sizing _scale_root to a virtual viewport of
 # (vp / s) and scaling it up by s about the top-left: (vp/s)·s always fills the
 # screen exactly, so edge-anchored widgets stay glued to the true screen edges
-# at ANY scale. (The old approach scaled the whole CanvasLayer about the
-# viewport center, which pushed edge widgets off-screen for s > 1 — a scaled
-# canvas is wider than the screen, so no offset can keep both edges visible.)
-# Re-applies only when the scale or the viewport size actually changes
-# (dirty-check), so the steady state costs one float + one Vector2i compare
-# per frame. Menus/dialogs (own CanvasLayers) and the off-screen player
-# indicators (drawn at unprojected screen coordinates) sit outside the root
-# and are unaffected.
+# at ANY scale. Never scale the whole CanvasLayer instead: scaled about the
+# viewport center it is wider than the screen for s > 1, and no offset can keep
+# both edges visible. The dirty-check keeps the steady state at one float + one
+# Vector2i compare per frame. Menus/dialogs (own CanvasLayers) and the
+# off-screen player indicators (drawn at unprojected screen coordinates) sit
+# outside the root and are unaffected.
 func _update_hud_scale() -> void:
 	var s: float = PlayerPrefs.hud_scale
 	var vp: Vector2i = Vector2i(get_viewport().get_visible_rect().size)
@@ -1231,7 +1207,6 @@ func _refresh_skip_prompt_text() -> void:
 		_intermission_overlay.set_skip_text(text)
 
 func _skip_prompt_text() -> String:
-	# Device-aware base label (pad A/✕/B / keyboard Space), see _unhandled_input.
 	var base: String = ControllerGlyphs.prompt(
 			"[SPACE] TO SKIP", "[%s] TO SKIP" % ControllerGlyphs.joy_label(JOY_BUTTON_A))
 	if _skip_vote_total <= 1:
@@ -1332,10 +1307,8 @@ func _on_phase_changed(new_phase: int) -> void:
 			_show_phase_banner_at_rest()
 
 
-# Fires on the same reliable beat that teleports the local skater to the dot,
-# so the countdown banner can't appear before the skater is in position (the
-# pre-fix bug: client sees "FACEOFF IN 2" while their skater is still parked
-# at the post-goal position, then pops onto the dot mid-countdown).
+# Fires on the same reliable beat that teleports the local skater to the dot, so
+# the countdown banner can't appear on a client before the skater is in position.
 func _on_faceoff_prep_announced() -> void:
 	# A reel-less (scoreless) break's band has no intermission_ended to dismiss
 	# it — the next prep is its exit. Idempotent for reel breaks (already hidden).

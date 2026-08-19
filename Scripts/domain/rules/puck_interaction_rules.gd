@@ -2,8 +2,8 @@ class_name PuckInteractionRules
 
 # Segment-segment swept detection — tests whether the closest approach between
 # the puck's path (puck_prev→puck_curr) and the blade's path (blade_prev→blade_curr)
-# falls within `radius`. Handles stationary puck + fast blade swing, which the
-# old puck-segment-vs-blade-point test missed when the blade passed through the
+# falls within `radius`. Handles stationary puck + fast blade swing: testing the
+# puck's segment against a blade POINT misses a blade that passes through the
 # zone entirely within a single tick.
 
 static func check_pickup(

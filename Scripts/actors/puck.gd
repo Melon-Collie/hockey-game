@@ -4,15 +4,12 @@ extends Node3D
 signal puck_released()
 # `checker` is the defender who took the puck (poke / stick-lift / body-check),
 # or null when no skater caused it (a goalie poke — no skater takeaway credit).
-# Stat attribution credits the takeaway to the checker (the player who made the
-# defensive play), not whoever recovers the loose puck.
 signal puck_stripped(ex_carrier: Skater, checker: Skater)
 signal puck_touched_loose(skater: Skater)  # blade redirect (deflection, tip-in)
 signal puck_body_blocked(skater: Skater)   # puck absorbed by a player's body
 signal puck_touched_goalie(goalie: Goalie)  # puck contacted a goalie StaticBody3D part while uncarried
 # Controlled save landed on the GLOVE specifically — the catchable contact.
-# Host-only (emitted from the host-authoritative rebound resolution); the
-# goalie controller answers by pinning the puck in the glove (catch-and-hold).
+# Host-only; the goalie controller answers by pinning the puck in the glove.
 signal puck_caught_by_goalie(goalie: Goalie)
 signal puck_touched_post  # puck contacted any HockeyGoal geometry while uncarried
 signal puck_hit_boards     # uncarried puck struck rink boards at meaningful speed
@@ -75,14 +72,12 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 # smothered the puck (knocked it down) rather than redirecting it. The deflector
 # gets the short bobble_cooldown so they can gather their own knockdown, instead
 # of the full deflect_cooldown lockout; a genuine redirect (faster exit) keeps the
-# lockout. Feedback (game_manager) also reads this threshold so a bobble sounds
-# duller than a live redirect.
+# lockout.
 @export var bobble_speed_threshold: float = 11.0
 @export var bobble_cooldown: float = 0.12
-# Poke exit speed now scales with the blade-contest momentum (see
+# Poke exit speed scales with the blade-contest momentum (see
 # PuckCollisionRules.poke_strip_velocity): a soft poke floors at min, a hard sweep
-# squirts the puck up to max. Old behavior was a flat 6.0 regardless of how hard
-# the poke was.
+# squirts the puck up to max.
 @export var poke_strip_min_speed: float = 3.0
 @export var poke_strip_max_speed: float = 9.0
 @export var poke_carrier_vel_blend: float = 0.5
@@ -100,23 +95,23 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 @export var body_check_puck_speed: float = 3.0           # soft-strip trickle pace along the hit line
 @export var body_check_loose_speed: float = 0.8          # forward carry a full-strength hit leaves (puck drops loose at contact)
 # Delivered impulse at which the strip fully deadens the puck (jarred dead at the
-# carrier's feet). Re-anchored from 5.5 — which needed ~17 m/s closing at the 0.65
-# transfer, so the deadening ramp never engaged in real play — down onto the
-# reachable knockdown band, so a solid knockdown-grade check kills the puck dead.
+# carrier's feet). Sits inside the reachable knockdown band so a solid
+# knockdown-grade check kills the puck dead: at the 0.65 transfer, a ref up near
+# 5.5 needs ~17 m/s closing and the deadening ramp never engages in real play.
 @export var body_check_strip_ref_impulse: float = 3.5    # delivered impulse that fully deadens the strip (puck jarred dead)
 @export var hit_pickup_cooldown: float = 0.6              # seconds victim cannot pick up after a hard hit
 @export var hit_pickup_cooldown_threshold: float = 1.35   # delivered victim-impulse needed to apply hit pickup cooldown (see body_check_strip_threshold)
 @export var body_block_dampen: float = 0.5
 # Puck energy retention on an ACTIVE (shot-block crouch) block — lower than the passive
-# dampen so a committed block kills more of the shot. Was SkaterController.active_block_dampen;
-# consolidated here with the passive value now that on_body_block picks between them.
+# dampen so a committed block kills more of the shot. on_body_block picks between the two.
 @export var body_block_active_dampen: float = 0.35
 @export var body_block_cooldown: float = 0.1
-# Vertical clamp: the puck's Y is capped at ice_height + max_height by the
-# analytic step (PuckAuthorityRules). Must stay BELOW the rink's collision top
-# (HockeyRink.COLLISION_OVERGLASS_TOP, 3.2 m) — otherwise an elevated deflection
-# that pegs this clamp sits above the boards and escapes the rink. If you raise
-# this, raise COLLISION_OVERGLASS_TOP to keep the margin.
+# Vertical clamp: PuckAuthorityRules.advance_loose_puck caps the puck's Y at
+# ice_height + max_height and kills any remaining upward velocity. 3 m sits just
+# above the glass top (HockeyRink wall_height 1.07 + glass_height 1.83 ≈ 2.9 m),
+# so a hard deflection can visibly clear the glass without ever leaving the play
+# area — the board carom is a height-independent XZ clamp, so height alone never
+# lets the puck out of the rink.
 @export var max_height: float = 3.0
 
 # A puck further outside the rink boundary than this in a single step is a
@@ -132,14 +127,13 @@ const CONTAINMENT_TELEPORT_SKIP: float = 2.0
 # blocker save) the rebound is deadened to a crawl the goalie's crease-sweep then
 # clears; hard pad saves and stick contacts keep the live restitution rebound
 # (the beatable scramble chance). See GoalieSaveRules. Deadening is pose-neutral
-# rebound control, correct under every ruleset — a whistle-on-cover would be a
-# separate, ruleset-gated layer on top. Tunable so feel can be dialed in-editor.
+# rebound control: it changes the rebound, never the play's live/dead status.
 @export var save_deaden_pad_max_speed: float = 28.0  # pad/blocker saves faster than this stay live (≈63 mph — above a solid wrister, below hard shots/slappers)
 @export var save_deaden_drop_speed: float = 1.2      # absorbed exit-speed ceiling (m/s, chest/glove)
 @export var save_deaden_glove_retain: float = 0.0    # glove catch — kill it dead
 @export var save_deaden_chest_retain: float = 0.12
 # Controlled pad/blocker saves STEER cornerward instead of dying at the
-# goalie's feet — modern active-rebound doctrine (goalie realism audit F12).
+# goalie's feet — modern active-rebound doctrine.
 @export var save_steer_speed: float = 5.0            # m/s cornerward exit off a controlled pad save
 @export var save_steer_lateral_weight: float = 1.0   # cornerward bias (lateral vs forward)
 @export var save_steer_forward_weight: float = 0.35  # out-of-crease bias
@@ -153,12 +147,11 @@ var pickup_locked: bool = false
 # so it can otherwise pass its geometry gate against a puck that has since been
 # fired somewhere else entirely — and then undo that shot. -1 = never played.
 var last_played_time: float = -1.0
-# The puck's velocity store. The puck is a plain Node3D — no physics body, no
-# engine integration — so this is just state the analytic drive (host) and the
-# gameplay interactions (deflects, pokes, strips, sweeps) read and write; the
-# name is kept from the RigidBody3D era so every external reader still works.
-# On clients PuckController owns motion and this holds whatever the last
-# prediction/seed wrote (position is the replicated truth).
+# The puck's velocity store — plain state, not an engine-integrated property.
+# The analytic drive (host) and the gameplay interactions (deflects, pokes,
+# strips, sweeps) read and write it. On clients PuckController owns motion and
+# this holds whatever the last prediction/seed wrote (position is the
+# replicated truth).
 var linear_velocity: Vector3 = Vector3.ZERO
 # Per-skater puck pickup cooldowns. Keyed by Skater.get_instance_id() rather
 # than the Skater object directly so that the typed Dictionary's erase()
@@ -222,14 +215,12 @@ func _queue_contact_event(event_type: ContactEvent, obj_a: Object = null,
 	_event_count += 1
 
 
-# Emits every queued contact signal in emission order. Called by GameManager at
-# physics priority 2, immediately before the snapshot capture + broadcast (see
-# the queue doc above). An event queued outside the physics frame (a lag-comp
-# deflect applied on RPC arrival) drains on the NEXT frame's hook — still ahead
-# of the first snapshot that reflects its state change — so its skater can have
-# been freed in between; stale refs are skipped rather than emitted. A listener
-# that causes a further queue during the drain is serviced in the same pass
-# (the loop re-reads _event_count), still ahead of the capture.
+# Emits every queued contact signal in emission order. An event queued outside the
+# physics frame (a lag-comp deflect applied on RPC arrival) drains on the NEXT
+# frame's hook — still ahead of the first snapshot that reflects its state change —
+# so its skater can have been freed in between; stale refs are skipped rather than
+# emitted. A listener that queues a further event during the drain is serviced in
+# the same pass (the loop re-reads _event_count), still ahead of the capture.
 func drain_contact_events() -> void:
 	var i: int = 0
 	while i < _event_count:
@@ -265,22 +256,18 @@ func drain_contact_events() -> void:
 	_event_count = 0
 
 # ── Analytic host drive (the ONE puck simulation) ─────────────────────────────
-# The LOOSE puck is driven by the deterministic analytic sim on every host:
-# integration + ice friction + gravity + board caroms (PuckAuthorityRules / step_puck_3d),
-# goal-frame reflection (PuckGeometryCollision: posts / crossbar / top + back/side net), and
-# goalie detection + response (GoalieContactDetector + GoalieSaveRules.resolve_contact).
-# The puck is a plain Node3D — no physics engine ever touches it; gameplay pickup /
-# deflect / poke / goal-detection are analytic too, and the drive detects every contact
-# itself, queueing the feedback signals for the pre-capture drain (see the deferred
-# contact-event queue above). Clients never run this (_physics_process is host-only);
-# they render through PuckController's shared-solver prediction.
+# Host-only. The loose puck is integrated by PuckAuthorityRules (friction, gravity,
+# board caroms), reflected off the goal frame by PuckGeometryCollision (posts /
+# crossbar / top + back/side net) and answered by GoalieContactDetector +
+# GoalieSaveRules.resolve_contact. The drive detects every contact itself and queues
+# the feedback signals for the pre-capture drain (see the deferred contact-event
+# queue below).
 var _goalie_provider: Callable = Callable()  # returns Array of live Goalie nodes for contact detection
 # Sub-step ranges/counts and the goalie-detect gate live on PuckAuthorityRules —
 # SHARED with the client's Phase-3 prediction so both sides step identically.
 # Caller-owned scratch so the per-tick drive allocates nothing.
 var _frame_result: PuckGeometryCollision.Result = null
 var _goalie_contact: GoalieContactDetector.Contact = null
-# The "VFX" child, resolved once in _ready (see there).
 var _vfx: PuckVFX = null
 var _goalie_scratch: SweptDiscOBB.Result = null
 var _save_result: GoalieSaveRules.ContactResult = null
@@ -294,10 +281,7 @@ var _gather_packed := PackedFloat32Array()
 var _gather_parts: Array = []
 var _gather_goalies: Array = []
 # Drill obstacles (the tutorial/drill saucer board). Empty in a match — the
-# analytic step tests is_empty() before doing any obstacle work, so a match tick
-# pays one array read. Registered by TutorialWall; read by BOTH the host drive
-# below and PuckController's client prediction, so a drill run with a peer
-# attached predicts the same rebounds the host resolves.
+# analytic step tests is_empty() first, so a match tick pays one array read.
 var _obstacles: Array[PuckObstacleCollision.Obstacle] = []
 var _obstacle_result: PuckObstacleCollision.Result = null
 var _obstacle_scratch: SweptDiscOBB.Result = null
@@ -315,27 +299,26 @@ var _contact_latch_net: bool = false
 var _contact_latch_goalie: bool = false
 
 # ── Deferred contact-event queue ──────────────────────────────────────────────
-# Contact signals whose emission sites sit inside the 120 Hz timed physics
-# sections (_drive_analytic here; the deflect / body-block interaction checks
-# PuckController drives) are latched into this fixed-size queue instead of
-# fanning out synchronously — each emit reaches sounds, VFX, RPC sends, stat
-# tracking and replay recording, and that fan-out was being paid inside the
-# tick's timed critical section. GameManager drains the queue (via
-# drain_contact_events) at physics priority 2, in emission order, in the SAME
-# physics frame, immediately BEFORE the snapshot ring capture + broadcast — so
-# clients observe the identical event-vs-state ordering the synchronous emits
-# produced. puck_stripped / puck_released stay synchronous everywhere: their
-# listeners read call-scoped transient state on the same stack
-# (PuckController.is_processing_stick_lift, the queued release velocity read by
-# the dump-release check, the goalie reaction back-date consumed by
-# _on_puck_released).
+# Contact signals raised inside the 120 Hz timed physics sections (_drive_analytic
+# here; the deflect / body-block checks PuckController drives) are latched here
+# instead of fanning out synchronously — each emit reaches sounds, VFX, RPC sends,
+# stat tracking and replay recording, all of it otherwise paid inside the tick's
+# timed section. GameManager drains the queue (drain_contact_events) at physics
+# priority 2, in emission order, in the SAME physics frame, immediately BEFORE the
+# snapshot capture + broadcast, so clients observe the same event-vs-state ordering
+# a synchronous emit gives them.
 #
-# Preallocated parallel arrays (allocation-free per tick); each slot carries
-# the event type, up to two object refs and one float payload (current events
-# use only the first object slot). Overflow policy: DROP-NEWEST with a
-# push_warning — the capacity covers every emitter's per-tick maximum several
-# times over, so overflow means a runaway emitter, and dropping the newest
-# keeps the already-queued (older) events and their ordering intact.
+# puck_stripped / puck_released stay synchronous: their listeners read call-scoped
+# transient state on the same stack (PuckController.is_processing_stick_lift, the
+# queued release velocity read by the dump-release check, the goalie reaction
+# back-date consumed by _on_puck_released).
+#
+# Preallocated parallel arrays (allocation-free per tick); each slot carries the
+# event type, up to two object refs and one float payload (current events use only
+# the first object slot). Overflow policy: DROP-NEWEST with a push_warning — the
+# capacity covers every emitter's per-tick maximum several times over, so overflow
+# means a runaway emitter, and dropping the newest keeps the already-queued
+# (older) events and their ordering intact.
 enum ContactEvent { BOARDS, POST, NET, GOALIE_TOUCH, GOALIE_CATCH, LOOSE_TOUCH, BODY_BLOCK }
 const CONTACT_QUEUE_CAPACITY: int = 16
 var _event_types := PackedInt32Array()
@@ -343,18 +326,13 @@ var _event_objs_a: Array = []
 var _event_objs_b: Array = []
 var _event_floats := PackedFloat32Array()
 var _event_count: int = 0
-# Replay playback hold: the replay drivers own the puck transform while a goal /
-# post-game replay plays — the drive must not simulate the loose puck underneath,
-# so the drivers raise this for the playback's duration.
 var _replay_hold: bool = false
 # An external authority is actively positioning the puck THIS tick (the goalie
 # pinning it under a glove / smother — see GoalieController). Distinct from
-# pickup_locked: pickup_locked means "blades can't play it" and is true for every
-# dead-puck phase (goal celebration, period end, whistle), but during those
-# NOBODY owns the transform — the loose puck should keep coasting (bounce in the
-# net after a goal, slide after the buzzer), which is most of the charm of a dead
-# puck. Only motion_pinned (goalie pin) and _replay_hold freeze the drive; a mere
-# pickup_lock lets the puck integrate to a natural rest while staying unplayable.
+# pickup_locked, which means "blades can't play it" and is true for every dead-puck
+# phase (goal celebration, period end, whistle) — during those NOBODY owns the
+# transform, so the loose puck should keep coasting (bounce in the net after a goal,
+# slide after the buzzer). Only motion_pinned and _replay_hold freeze the drive.
 var motion_pinned: bool = false
 
 
@@ -380,8 +358,6 @@ func _ready() -> void:
 	var vfx := PuckVFX.new()
 	vfx.name = "VFX"
 	add_child(vfx)
-	# Cached here rather than re-resolved by name on every contact event — the
-	# child is created once and lives as long as the puck.
 	_vfx = vfx
 
 	# Ice-pinned tracking shadow so the small disc stays readable and airborne
@@ -495,7 +471,7 @@ func is_on_cooldown(skater: Skater) -> bool:
 # Was the skater on cooldown at an arbitrary host-time `at`? Used by the lag-comp
 # pickup resolver to judge eligibility at the claimant's view-time rather than at
 # present time (up to one-way latency later), matching its rewound is_ghost /
-# shot_state checks. Present-time `is_on_cooldown` is `is_on_cooldown_at(_, now)`.
+# shot_state checks.
 func is_on_cooldown_at(skater: Skater, at: float) -> bool:
 	return _cooldown_timers.get(skater.get_instance_id(), -1.0) > at
 
@@ -531,10 +507,6 @@ func apply_blade_deflect(skater: Skater) -> void:
 	# total speed unchanged), the same way a lofted shot trades pace for height.
 	# A dead-square knockdown collapses to ~zero speed (a bobble drop); skip the
 	# lift there — a smothered puck shouldn't pop off the ice.
-	#
-	# The level names the redirect's direction outright (the deflect-mode
-	# table — FLAT flat, LOW/MID up, HIGH down); the blade's lift height put
-	# it on the right plane to make this contact in the first place.
 	var loft_vy: float = PuckCollisionRules.deflect_loft_speed(
 			skater.elevation_level,
 			deflect_up_loft_speed, deflect_down_loft_speed)
@@ -547,9 +519,6 @@ func apply_blade_deflect(skater: Skater) -> void:
 		new_vel = Vector3(flat_dir.x, y_ratio, flat_dir.z).normalized() * horiz_speed
 
 	linear_velocity = new_vel
-	# A low-speed result is a bobble: the blade knocked the puck down instead of
-	# redirecting it. Give the deflector a short window to gather it rather than
-	# the full deflect lockout (which is meant to stop re-touching a live redirect).
 	var is_bobble: bool = new_vel.length() < bobble_speed_threshold
 	_set_cooldown(skater, bobble_cooldown if is_bobble else deflect_cooldown)
 	_queue_contact_event(ContactEvent.LOOSE_TOUCH, skater)
@@ -662,7 +631,8 @@ func apply_stick_lift_strip(checker_skater: Skater) -> void:
 	_set_cooldown(checker_skater, poke_checker_cooldown)
 	puck_stripped.emit(ex_carrier, checker_skater)
 	puck_released.emit()
-# blade_world_velocity / cooldown table entry), so it gets its own entry
+# Goalie counterpart to apply_poke_check. A Goalie is not a Skater (no
+# blade_world_velocity, no cooldown-table entry), so it gets its own entry
 # point. Strip velocity uses the goalie's blade position + the controller's
 # computed blade velocity as the checker inputs.
 #
@@ -717,6 +687,11 @@ func release(direction: Vector3, power: float) -> void:
 			# origin: launch trajectory stays a position-free function of
 			# (level, gear).
 			global_position = ex_carrier.get_blade_contact_global()
+	# Whoever fires a shot must let this seat the puck and must NOT reposition it
+	# afterwards. The branch above is the only code that knows a slapper's puck is
+	# on its ice pin rather than at the blade lifted over the shoulder, so an
+	# origin computed by the caller silently un-does it — which is what put remote
+	# slapshots on the wind-up blade's x/z.
 	if direction.y > 0:
 		global_position.y = ice_height + 0.1
 	else:
@@ -814,14 +789,10 @@ func _drive_analytic(dt: float) -> void:
 	# Pinned puck (goalie cover / glove hold) and replay playback: the pinning
 	# authority (GoalieController re-pins the position every tick; the replay driver
 	# scrubs recorded frames) owns the transform — the drive must not integrate
-	# gravity or collision against it. Without this gate the drive fought the glove
-	# pin every tick (re-detecting the held puck inside the glove box and re-firing
-	# puck_touched_goalie at 120 Hz).
-	# NOTE: pickup_locked is deliberately NOT a freeze condition. A dead-puck phase
-	# (goal celebration, period end, whistle) locks pickup but has no transform
-	# owner, so the loose puck keeps coasting — friction, board caroms and net
-	# reflections still run, and it settles to a natural rest instead of stopping
-	# dead mid-flight. Blades/bots still see it as unplayable via pickup_locked.
+	# gravity or collision against it. Without this gate the drive fights the glove
+	# pin every tick, re-detecting the held puck inside the glove box and re-firing
+	# puck_touched_goalie at 120 Hz. pickup_locked is deliberately NOT a freeze
+	# condition — see motion_pinned.
 	if motion_pinned or _replay_hold:
 		_contact_latch_goalie = false
 		_contact_latch_post = false
@@ -853,9 +824,6 @@ func _drive_analytic(dt: float) -> void:
 	# wider _GOALIE_DETECT_RANGE_Z (a goalie challenges further than the frame sits).
 	var radius: float = GameRules.PUCK_COLLISION_RADIUS
 	var goalie_range: bool = absf(prev.z) > GameRules.GOAL_LINE_Z - PuckAuthorityRules.GOALIE_DETECT_RANGE_Z
-	# _NO_GOALIES (a shared read-only const), not a `[]` literal — this line runs
-	# every loose-puck tick and a fresh Array per tick is exactly the hot-path
-	# allocation churn CLAUDE.md forbids.
 	var goalies: Array = _NO_GOALIES
 	if goalie_range and not _goalie_provider.is_null():
 		goalies = _goalie_provider.call()
@@ -863,7 +831,7 @@ func _drive_analytic(dt: float) -> void:
 		# mismatched-sign goalie sits at or beyond center ice, 20+ m from a puck
 		# that is inside the detect range of the opposite goal line, while one
 		# tick's segment advances < 0.4 m — so dropping them changes nothing.
-		# The filtered list feeds BOTH the packed gather and the legacy
+		# The filtered list feeds BOTH the packed gather and the scalar
 		# nearest() fallback below, so the two paths stay identical.
 		if goalies.size() > 1:
 			var end_sign: float = signf(prev.z)
@@ -872,9 +840,9 @@ func _drive_analytic(dt: float) -> void:
 				if g != null and signf(g.global_position.z) == end_sign:
 					_end_goalies.append(g)
 			goalies = _end_goalies
-	# Gather the goalie collision boxes ONCE per tick for the native fast path —
-	# the goalies don't move inside this loop, and the legacy path re-read the
-	# same engine properties per part per sub-step (up to 16x near the net).
+	# Gather the goalie collision boxes ONCE per tick for the native fast path: the
+	# goalies don't move inside this loop, so re-reading their engine properties per
+	# part per sub-step (up to 16x near the net) buys nothing.
 	var goalie_box_count: int = 0
 	if not goalies.is_empty() and GoalieContactDetector.native_available():
 		goalie_box_count = GoalieContactDetector.gather_boxes(
@@ -884,11 +852,10 @@ func _drive_analytic(dt: float) -> void:
 	var pos: Vector3 = prev
 	var vel: Vector3 = incoming
 	# Per-tick contact occurrence, latched across ticks so sustained contact
-	# (grinding a post, a puck resting against a pad) emits ONCE on entry —
-	# not per sub-step per tick. The physics
-	# response still applies every sub-step; only the SIGNALS are edge-gated
-	# (each emit fans out to sounds / RPCs / stat sync, so a level-triggered
-	# re-fire was up to 120 RPCs/s during held contact).
+	# (grinding a post, a puck resting against a pad) emits ONCE on entry, not per
+	# sub-step per tick. The physics response still applies every sub-step; only the
+	# SIGNALS are edge-gated — each emit fans out to sounds / RPCs / stat sync, so a
+	# level-triggered re-fire would be up to 120 RPCs/s during held contact.
 	var touched_post: bool = false
 	var touched_net: bool = false
 	var touched_goalie: bool = false
@@ -960,8 +927,8 @@ func _drive_analytic(dt: float) -> void:
 			# Eject the disc flush off the contacted face. `point` is the sphere
 			# CENTRE at toi — already `radius` off the real face via the
 			# Minkowski-expanded box — so only the start-inside depenetration
-			# `depth` is added (adding `radius` again parked the puck ~13 cm off
-			# every save, a visible pop).
+			# `depth` is added. Never add `radius` again — that parks the puck a
+			# further radius off the face on every save, a visible pop.
 			pos = _goalie_contact.point + _goalie_contact.normal * _goalie_contact.depth
 			if not _contact_latch_goalie and not touched_goalie:
 				emit_goalie = _goalie_contact.goalie as Goalie
@@ -997,11 +964,9 @@ func _drive_analytic(dt: float) -> void:
 	linear_velocity = vel
 	global_position = pos
 
-	# Deferred contact signals (see the emit_* locals above): edge-gated by the
-	# cross-tick latches, queued against the committed state and emitted by the
-	# pre-capture drain (drain_contact_events) later this same frame. Order
-	# matters — the goalie touch fires before the catch (the controller relies
-	# on that sequence to transition the catching goalie first).
+	# Edge-gated by the cross-tick latches and queued against the committed state.
+	# Order matters — the goalie touch is queued before the catch, because the
+	# controller relies on that sequence to transition the catching goalie first.
 	if touched_boards and not _contact_latch_boards:
 		_queue_contact_event(ContactEvent.BOARDS)
 	if touched_post and not _contact_latch_post:
@@ -1057,7 +1022,7 @@ func _physics_process(delta: float) -> void:
 	# skater has been freed (puppet bot teardown, etc.) alongside the
 	# naturally-expired ones. The early-out keeps this fully skipped in the
 	# no-cooldowns case; the reused _expired_cooldowns scratch avoids a per-tick
-	# allocation while cooldowns are active (per-tick path).
+	# allocation while cooldowns are active.
 	if not _cooldown_timers.is_empty():
 		var now: float = _now()
 		_expired_cooldowns.clear()

@@ -133,8 +133,7 @@ func _build_panel() -> void:
 	panel_style.bg_color = _DARK_BG
 	panel_style.set_corner_radius_all(4)
 	# Single thin TEAL_DIM border around the whole popup, matching the
-	# side menu's player card treatment. Replaces the old top-edge
-	# highlight + contrasted header/footer strip segmentation.
+	# side menu's player card treatment.
 	panel_style.border_color = MenuStyle.TEAL_DIM
 	panel_style.set_border_width_all(1)
 	panel_style.set_content_margin_all(0)  # inner sections handle their own padding
@@ -425,10 +424,9 @@ func _fill_row(row: HBoxContainer, texts: Array, name_color: Color, is_header: b
 		row.add_child(cell)
 
 func _team_badge(text: String, color: Color) -> Control:
-	# Scorebug-style team identifier: a thin vertical color stripe next
-	# to a white label. Replaces the older filled pill so the period
-	# summary speaks the same visual language as the scorebug. Returns
-	# an HBoxContainer; the stripe's StyleBoxFlat is stashed as meta so
+	# Scorebug-style team identifier: a thin vertical color stripe next to a
+	# white label, so the period summary speaks the same visual language as the
+	# scorebug. Returns an HBoxContainer; the stripe's StyleBoxFlat is meta so
 	# _on_team_colors_ready can recolor it when team palettes change.
 	var hbox := HBoxContainer.new()
 	hbox.add_theme_constant_override("separation", 8)

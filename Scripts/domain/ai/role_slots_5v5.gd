@@ -33,12 +33,9 @@ class_name AIRoleSlots5
 # rest state is decided by identity, small enough that real momentum wins.
 const POSITION_BIAS_S: float = 0.35
 
-# Same stickiness the 3v3 elections use — REFERENCED, not copied (the rationale
-# for the value lives on AIRoleSlots.HYSTERESIS_PENALTY_S). This was a duplicated
-# literal and it drifted: 3v3's was re-derived to 0.2 when time_to_arrive moved
-# to the measured phase model, this copy stayed at 0.12, and the comment kept
-# claiming they matched — so 5v5's elections were ~40% less sticky than intended.
-# Two numbers that must agree should not be two numbers.
+# Same stickiness the 3v3 elections use — REFERENCED, never copied, so the two
+# cannot drift apart. The rationale for the value lives on
+# AIRoleSlots.HYSTERESIS_PENALTY_S.
 const HYSTERESIS_PENALTY_S: float = AIRoleSlots.HYSTERESIS_PENALTY_S
 
 # ── Election-target geometry (metres, world coords) ─────────────────────────
@@ -266,11 +263,6 @@ static func assign(
 	# orients off resolve_offensive_play_ref, which answers with the puck when
 	# nobody is carrying, so a pass in flight is a situation it flows into rather
 	# than a hole it falls through.
-	#
-	# (The drift this costs is small — the stranded body barely moves in 0.4 s,
-	# 5 cm at worst toward our own end. This is a correctness fix, not a visible
-	# one; the honest reason to make it is that a role which can never work
-	# should not be handed out half of our possession time.)
 	var attacking: bool = state == AIPossessionState.State.OZONE \
 			or state == AIPossessionState.State.TRANS_OFFENSE \
 			or state == AIPossessionState.State.BREAKOUT

@@ -11,25 +11,17 @@ class_name AIRoleForecheck
 #     search region biased toward the opp blue line (the breakout
 #     lanes). Stays IN the zone — that's the forecheck; sagging out
 #     would concede it.
-#   F3 (is_high = true)  — high safety, strong side. The one conservative
-#     role: the designated first-man-back if the forecheck fails. Holds the
-#     opp blue line only while the shared pinch read allows it — the real
-#     "can I pinch?" read a defenseman makes. A man genuinely behind the line
-#     with nobody covering, or their breakout actually under way, drops him to
-#     his defensive home post instead (see _decide_high). A fixed blue-line
-#     anchor was a permanent pinch: one chip past it was a breakaway with only
-#     the goalie home.
+#   F3 (is_high = true)  — high safety, strong side. The one conservative role:
+#     the designated first-man-back if the forecheck fails. Holds the opp blue
+#     line only while the shared pinch read allows it. A fixed blue-line anchor
+#     is a permanent pinch — one chip past it is a breakaway with only the
+#     goalie home.
 #
-# Nobody is offside during a forecheck. We turned the puck over after a
-# legal zone entry, so the whole team is onside as long as the puck
-# stays in the zone — and keeping it in the zone IS the goal. So F1 and
-# F2 press freely with no offside concern; there's no penalty for being
-# deep here. If the forecheck fails and the puck leaves the zone, the
-# possession state flips to TRANS_DEFENSE, whose rush layers pull
-# everyone home — any brief delayed-offside ghost self-clears on that
-# retreat (tag up at the line, re-engage). The risk is accepted, not
-# avoided: keeping possession in their end is worth a few bots being
-# caught deep on the occasional failed pin.
+# Nobody is offside during a forecheck: we turned the puck over after a legal
+# zone entry, so the whole team is onside as long as the puck stays in the zone,
+# and keeping it in IS the goal. F1 and F2 therefore press freely with no offside
+# concern. If the forecheck fails the state flips to TRANS_DEFENSE, whose rush
+# layers pull everyone home and self-clear any delayed-offside ghost on the way.
 
 # How far off the strong-side boards F3 holds at the blue line. Keeps it
 # off the wall so it can step to either breakout lane.
@@ -102,9 +94,8 @@ static func _decide_high(ctx: RoleContext) -> RoleDecision:
 
 # ── F2: mid-lane breakout-pass read ──────────────────────────────────────────
 static func _decide_mid(ctx: RoleContext) -> RoleDecision:
-	# Read off the carrier; fall back to the puck when it's loose (a
-	# loose puck deep in their zone is a prime forecheck moment). Stand
-	# still only if there's no puck at all.
+	# A loose puck deep in their zone is a prime forecheck moment, so the read
+	# falls back to it. Stand still only when there is no puck at all.
 	var carrier_pos: Vector3 = AIRoleHelpers.resolve_defensive_play_ref(ctx)
 	if not carrier_pos.is_finite():
 		var d := RoleDecision.new()
@@ -128,11 +119,9 @@ static func _decide_mid_at(ctx: RoleContext, carrier_pos: Vector3,
 		d.target_position = search_center
 		return d
 
-	# We're defending OUR net, but F2's job is to deny the opp's BREAKOUT
-	# pass — a pass that heads toward OUR net / out of their zone. The
-	# threat we minimize is the carrier feeding a teammate up-ice. Score
-	# the same inverse-pass-threat surface (threat_surface_pass), with our team (+
-	# our candidate) as the defenders, evaluated toward our net.
+	# F2 denies the opp's BREAKOUT pass — one heading toward OUR net, out of their
+	# zone — so the threat minimized is the carrier feeding a teammate up-ice, on
+	# the same inverse-pass-threat surface PRESSURE uses.
 	var our_net: Vector3 = ctx.defending_goal_pos
 	var our_goalie_pos: Vector3 = AIRoleHelpers.resolve_our_goalie_pos(ctx)
 	var our_team_excluding_self: Array[Vector3] = ctx.scratch_teammates
@@ -160,13 +149,10 @@ static func _decide_mid_at(ctx: RoleContext, carrier_pos: Vector3,
 	for c: Vector3 in candidates:
 		if not AIRoleHelpers.is_legal_position(c):
 			continue
-		# Keep F2 IN the attacking zone — sagging back across the blue
-		# line concedes the forecheck. Reject candidates on the NZ side of
-		# the opp blue line. own_goal_dir * z grows toward our net; the
-		# opp blue line is at -own_goal_dir * BLUE_LINE_Z, so "in the zone"
-		# is own_goal_dir * c.z <= -BLUE_LINE_Z (z past the line toward
-		# the opp net). No offside concern — the team is onside until the
-		# puck leaves, and keeping it in is the whole point.
+		# Keep F2 IN the attacking zone — sagging back across the blue line
+		# concedes the forecheck. own_goal_dir * z grows toward our net and the
+		# opp blue line sits at -own_goal_dir * BLUE_LINE_Z, so "in the zone" is
+		# own_goal_dir * c.z <= -BLUE_LINE_Z.
 		if ctx.own_goal_dir * c.z > -GameRules.BLUE_LINE_Z:
 			continue
 		if AIRoleHelpers.too_close_to_teammate(c, our_team_excluding_self):
@@ -184,27 +170,21 @@ static func _decide_mid_at(ctx: RoleContext, carrier_pos: Vector3,
 	return d
 
 
-# F2 search center: high in the opp zone, between the carrier and the
-# opp blue line, biased toward the breakout lanes. Sits F2_ZONE_DEPTH_M
-# inside the blue line on the carrier's side so it shades to the strong
-# breakout lane.
+# F2's search center: F2_ZONE_DEPTH_M inside the opp blue line, shaded halfway to
+# the carrier's side so it sits between the strong breakout lane and the
+# dangerous middle outlet.
 static func _mid_search_center(ctx: RoleContext, carrier_pos: Vector3) -> Vector3:
 	var blue_z: float = -ctx.own_goal_dir * GameRules.BLUE_LINE_Z
-	# Inside the blue line toward the opp net (deeper into their zone) by
-	# F2_ZONE_DEPTH_M, i.e. away from our net.
 	var z: float = blue_z - ctx.own_goal_dir * F2_ZONE_DEPTH_M
-	# Bias X toward the carrier's side (the strong breakout lane), but
-	# pulled toward center so F2 covers the dangerous middle outlet.
 	var x: float = carrier_pos.x * 0.5
 	return Vector3(x, 0.0, z)
 
 
-# Highest pass-threat surface the carrier could exploit to any teammate,
-# with our hypothetical defender at `candidate` added to the carrier's
-# "opponents" list. Same primitive PRESSURE uses. `bases` (per-receiver
-# threats WITHOUT the candidate, in opp_teammates order) bound each term
-# from above — adding a defender only lowers a surface — so terms evaluate
-# in descending-bound order and stop when the running max meets the next
+# Highest pass-threat surface the carrier could exploit to any teammate, with our
+# hypothetical defender at `candidate` added to his view of the opponents.
+# `bases` (per-receiver threats WITHOUT the candidate, in opp_teammates order)
+# bound each term from above — adding a defender only lowers a surface — so terms
+# evaluate in descending-bound order and stop when the running max meets the next
 # bound: identical result, fewer surfaces.
 static func _max_pass_threat(
 		candidate: Vector3,
@@ -216,11 +196,9 @@ static func _max_pass_threat(
 		bases: Array[float],
 		our_team_caps: Array = [],
 		self_caps: AISkaterCaps = null) -> float:
-	# Carrier's view of defenders = our team + me at c. Append-and-restore the
-	# caller's array in place instead of duplicating it per candidate (10×/decide
-	# in F2's positioning argmax); the array is left exactly as passed and keeps
-	# its capacity across the push/pop, so steady-state calls don't alloc.
-	# The hypothetical body carries our real caps (matched caps array only).
+	# Defenders = our team + me at the candidate, push/popped into the caller's
+	# array in place (10 calls/decide). Caps ride alongside only when the caller
+	# supplied a matched array.
 	var caps_matched: bool = our_team_caps.size() == our_team_excluding_self.size()
 	our_team_excluding_self.push_back(candidate)
 	if caps_matched:
