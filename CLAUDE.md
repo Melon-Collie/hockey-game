@@ -16,6 +16,7 @@ Deep detail lives next to the code it describes and loads on demand.
 | How the game plays — every mechanic, feel, and its reasoning | `docs/gameplay-design.md` |
 | Networking invariants (RPCs, reconcile, prediction, lag comp) | `Scripts/networking/CLAUDE.md` |
 | Bot AI design rules (evaluators, difficulty axes, determinism) | `Scripts/domain/ai/CLAUDE.md` |
+| Bot agent wiring (state graph, reception and chase doctrine) | `Scripts/ai/CLAUDE.md` |
 | Goalie doctrine, controller collaborators | `Scripts/controllers/CLAUDE.md` |
 | Player attributes (body dials, gear slots, routing) | `Scripts/domain/state/CLAUDE.md` |
 | Launch modes, session lifecycle, claim resolvers, backend | `Scripts/game/CLAUDE.md` |
