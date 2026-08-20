@@ -267,6 +267,40 @@ lean and the crouch, and the per-side shoulder geometry lives in
 the blade goes on the wire. Anything else asymmetric belongs on that side of the
 line too, not as a new trunk channel.
 
+## The faceoff pose is two poses, and neither is a stride
+
+`FACEOFF_PREP` is one phase but three different things happen in it, and the
+bugs all came from treating it as one.
+
+**The walk-in is skating.** While `begin_approach`'s glide is live the skater is
+covering ground, so `is_faceoff_ready()` is false and the gait plays an ordinary
+stride — a floored crouch and staggered feet laid over a running stride read as
+a limp. The ready stance eases in as the glide hands back.
+
+**Set at the dot is two stances, not one.** The centre taking the draw sits far
+deeper than the players lined up behind him: knees well past the skating sit,
+feet split wide fore/aft, chest folded down over the dot. `Skater.
+is_faceoff_center` selects between the two, and it is *derived* on every peer
+from the C slot rather than replicated — every machine already knows every
+player's slot, and a cosmetic bit is not worth a wire byte. The pose itself is
+split across the two collaborators that own its halves: the crouch and the foot
+split are gait channels (`SkaterSkatingCoordinator`), the trunk fold is a torso
+lean (`SkaterPoseCoordinator`), floored on top of whatever the reach lean asks
+for rather than replacing it.
+
+**Nothing dispatches the state machine while movement is locked**, so no state
+can clear itself there — `SHOT_BLOCKING` used to hold its planted legs and wide
+block cylinder from the whistle to the drop, because its own exit lives in
+`_state_shot_blocking`. The teleport at the head of every approach is where a
+locked phase gets cleaned up (`_reset_to_skating_state`), and it has to publish
+`skater.current_shot_state` itself for the same reason.
+
+**Every path that poses the body publishes the lower body's yaw**
+(`SkaterPoseCoordinator.apply_lower_body_yaw`). The two locked-phase paths
+replace `apply_facing` wholesale, and one that skips this leaves the hips frozen
+at the last yaw anyone wrote — which is how skaters spent whole countdowns still
+turned down the line they skated in on.
+
 ## Build once, fill scratch
 
 A per-tick collaborator that produces a compound result should own ONE

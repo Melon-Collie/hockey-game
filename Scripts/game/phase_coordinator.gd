@@ -240,6 +240,8 @@ func _enter_faceoff_prep(puck: Puck) -> void:
 		# scales stick + arms, so a fixed offset puts the puck out of a small
 		# build's reach. Wingers ignore the argument.
 		var reach: float = -1.0
+		if record.skater != null:
+			record.skater.is_faceoff_center = record.team_slot == 0
 		if record.team_slot == 0 and record.controller != null:
 			reach = record.controller.faceoff_center_distance()
 			# Arm the center's swipe capture for the draw (host-only). A swing
@@ -513,6 +515,13 @@ func on_faceoff_positions(positions: Array) -> void:
 		var peer_id: int = positions[i]
 		var pos := Vector3(positions[i + 1], positions[i + 2], positions[i + 3])
 		i += 4
+		# Draw-taker flag for EVERY skater, not just the local one — it drives the
+		# centre's crouch, which has to look the same on every screen. Derived
+		# from the slot rather than replicated: the wire payload names every peer
+		# and the client already knows each one's slot (see Skater.is_faceoff_center).
+		var placed: PlayerRecord = _registry.get_record(peer_id) if _registry.has(peer_id) else null
+		if placed != null and placed.skater != null:
+			placed.skater.is_faceoff_center = placed.team_slot == 0
 		if peer_id == local_peer_id and _registry.has(peer_id):
 			# Wire format stays position-only; clients derive facing locally
 			# from the record's current team_id. Slot-swap RPCs land before

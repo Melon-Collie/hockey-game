@@ -40,6 +40,7 @@ namespace mitts {
 	X(crossover_lean_deg) X(crossover_phase_per_turn) X(crossover_scissor_deg) \
 	X(dig_in_cadence_rate) X(dig_in_chop) X(dig_in_fade_speed) \
 	X(dig_in_intensity) X(dig_in_lean_deg) X(dig_in_stance) \
+	X(faceoff_center_lean_deg) X(faceoff_center_split_deg) X(faceoff_center_stance) \
 	X(faceoff_split_deg) X(faceoff_stance) X(follow_through_arc_skew) \
 	X(glide_carve_lean_deg) X(glide_hold_skew) X(glide_inside_tuck_deg) \
 	X(glide_stance) X(glide_sway_deg) X(glide_sway_hz) \
@@ -92,6 +93,7 @@ public:
 		FLAG_LEFT_HANDED = 8,
 		FLAG_SPRINT = 16,
 		FLAG_FACEOFF_READY = 32,
+		FLAG_FACEOFF_CENTER = 64,
 	};
 
 	// apply() return codes.

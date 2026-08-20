@@ -511,6 +511,13 @@ var stance_knee_release: float = 0.85       # fraction of stance knee flex relea
 # replicated, so every machine poses its skaters identically.
 var faceoff_stance: float = 0.85       # stance engagement floor at the dot
 var faceoff_split_deg: float = 9.0     # fore/aft leg stagger at the dot
+# The centre taking the draw holds a far deeper pose than the players lined up
+# behind him (see Scripts/controllers/CLAUDE.md). Multiples of the same stance
+# and split levers, so a build's own leg geometry still decides the knee angle
+# and the body drop that keeps the skates on the ice.
+var faceoff_center_stance: float = 1.65    # crouch floor at the dot (× stance_hip_deg)
+var faceoff_center_split_deg: float = 9.0  # fore/aft foot split at the dot
+var faceoff_center_lean_deg: float = 26.0  # chest folded over the dot (trunk texture)
 # Fraction of the rest blade radius at which this skater's CENTER spawns from
 # the faceoff dot — reach-derived so a Size-1 center (short stick + arms) can
 # play the drop as comfortably as a Size-5 (see faceoff_center_distance).
@@ -1084,10 +1091,13 @@ const _APPROACH_CARRY_MIN: float = 0.3
 var _approach_input: InputState = InputState.new()
 
 
-# True during the FACEOFF_PREP countdown — the gait floors its stance crouch
-# and staggers the feet (see faceoff_stance / faceoff_split_deg).
+# True while this skater is SET at the dot for the drop — the gait floors its
+# stance crouch and staggers the feet (see faceoff_stance / faceoff_split_deg).
+# A live skate-in is excluded: a player still covering ground is skating, and a
+# staggered ready stance over a running stride is not a stance, it is a limp.
 func is_faceoff_ready() -> bool:
-	return _game_state_has_faceoff_prep and _game_state.is_faceoff_prep()
+	return _game_state_has_faceoff_prep and _game_state.is_faceoff_prep() \
+			and not _approach_active
 
 
 func start_celebration(duration: float) -> void:
@@ -1903,6 +1913,10 @@ func apply_blade_aim_only(input: InputState, delta: float) -> void:
 	# countdown, not the hot path); the render hook yields to it (see _self_posing).
 	_self_posing = true
 	_skating.apply(delta)
+	# apply_facing doesn't run here, so this is the only publisher of the lower
+	# body's yaw for the whole countdown — the skate-in's hip-to-travel
+	# alignment unwinds under the set skater instead of freezing at arrival.
+	_pose.apply_lower_body_yaw(delta)
 	_ik.update_bottom_hand()
 
 
@@ -2261,10 +2275,12 @@ func teleport_to(pos: Vector3, facing: Vector2 = Vector2.ZERO) -> void:
 	# restore the rest legs for the same reason.
 	if was_down:
 		skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-	# A faceoff / slot-swap teleport mid-windup must cancel any in-progress shot
-	# charge. Otherwise the slapper charge timer keeps ticking across the
-	# respawn and the player drops into the faceoff already charged.
-	_cancel_active_charge()
+	# A faceoff / slot-swap teleport mid-action must put the skater back in a
+	# plain skating state, or the slapper charge timer keeps ticking across the
+	# respawn and a shot block rides all the way to the drop — the state machine
+	# is not dispatched at all while movement is locked, so SHOT_BLOCKING's own
+	# exit never runs (see SkaterStateMachine._state_shot_blocking).
+	_reset_to_skating_state()
 	# Faceoff / slot swap teleports pass a non-zero facing so the skater
 	# squares up to the puck instead of carrying their last-frame heading
 	# (which routinely left players spawned backwards). Tutorial / test
@@ -2413,23 +2429,31 @@ func _render_approach_pose(facing: Vector2, delta: float) -> void:
 	_self_posing = true
 	_skating.apply(delta)
 	# Publish the gait's lower-body yaw (hip-to-travel alignment) — normally
-	# written inside _pose.apply_facing, which this path replaces.
-	skater.set_lower_body_lag(
-			_skating.stop_yaw_offset + _skating.travel_align_yaw + _skating.shot_hip_yaw)
+	# written inside _pose.apply_facing, which this path replaces. Going through
+	# the coordinator also decays the facing turn lag the pre-whistle play left
+	# behind, which a bare set_lower_body_lag froze for the length of the walk-in.
+	_pose.apply_lower_body_yaw(delta)
 	_ik.update_bottom_hand()
 
 
-# Cancels an in-progress wrister/slapper wind-up. No-op unless actually mid-
-# charge, so a routine teleport doesn't disturb skating state. Suppresses the
-# charge-lost flash since a forced respawn isn't player-initiated charge loss.
-func _cancel_active_charge() -> void:
+# Drops any non-skating shot state — a wrister/slapper wind-up, a one-timer
+# hold, a follow-through, a planted shot block — back to plain skating. No-op
+# when already skating, so a routine teleport doesn't disturb anything.
+# Suppresses the charge-lost flash: a forced respawn isn't player-initiated
+# charge loss.
+func _reset_to_skating_state() -> void:
 	var s: int = _sm.get_state()
-	if s != State.WRISTER_AIM and s != State.SLAPPER_CHARGE_WITH_PUCK \
-			and s != State.SLAPPER_CHARGE_WITHOUT_PUCK \
-			and s != State.ONE_TIMER_RETENTION:
+	if s == State.SKATING_WITH_PUCK or s == State.SKATING_WITHOUT_PUCK:
 		return
+	if s == State.SHOT_BLOCKING:
+		# The block widens the body-block cylinder and plants the legs; both are
+		# latched, so leaving the state is not enough on its own.
+		skater.set_block_stance(false)
 	_aiming.reset_slapper()
 	_transition_to_skating()
+	# Republish the mirror the cosmetic layers read: its usual writers sit in
+	# _process_input, which the locked phase this cleans up for never runs.
+	skater.current_shot_state = _sm.get_state() as int
 
 # ── State Machine ─────────────────────────────────────────────────────────────
 func _apply_state(input: InputState, delta: float) -> void:
