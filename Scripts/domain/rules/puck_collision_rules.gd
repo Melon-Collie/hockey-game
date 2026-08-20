@@ -65,6 +65,44 @@ static func deflect_velocity(
 		e = lerpf(normal_restitution, normal_restitution_min, hard)
 	return v_tangent * tangential_retain - v_normal * e
 
+# The same decomposition in 3D, for a surface whose normal can point anywhere —
+# a goalie's pad, blocker, chest or paddle (GoalieSaveRules.rebound_velocity).
+# `deflect_velocity` is horizontal-only because a blade's lift is a separate,
+# deliberate channel (deflect_loft_speed); a body has no such channel and its
+# faces are tilted, so the vertical has to come out of the contact itself.
+#
+# Identical model otherwise, and identical for the same reason: ONE contact
+# model means a glance off a pad and a glance off a blade cannot disagree about
+# what a glance is. `e` eases from `soft` toward `hard` as the impact speed
+# climbs to `speed_ref` — the puck's own COR falling with impact speed — so a
+# hard shot retains a smaller FRACTION while still rebounding faster in absolute
+# terms, which is why hard shots make dangerous rebounds and soft ones die.
+#
+# `normal` points out of the surface, toward the puck. A separating puck is
+# returned unchanged, so re-testing a puck already ejected off a face never
+# re-reflects it. With `retain` 1.0 and no speed falloff this reduces exactly to
+# PuckGeometryCollision.reflect_3d.
+static func deflect_velocity_3d(
+		incoming: Vector3,
+		normal: Vector3,
+		normal_restitution: float,
+		normal_restitution_min: float,
+		tangential_retain: float,
+		speed_ref: float) -> Vector3:
+	if normal.length_squared() < 0.000001:
+		return incoming
+	var n: Vector3 = normal.normalized()
+	var vn: float = incoming.dot(n)
+	if vn >= 0.0:
+		return incoming
+	var hard: float = clampf(incoming.length() / speed_ref, 0.0, 1.0) \
+			if speed_ref > 0.0001 else 0.0
+	var e: float = lerpf(normal_restitution, normal_restitution_min, hard)
+	var v_normal: Vector3 = vn * n            # into the face (vn < 0)
+	var v_tangent: Vector3 = incoming - v_normal
+	return v_tangent * tangential_retain - v_normal * e
+
+
 # Signed vertical launch speed for a deflect's redirect (fed to
 # ShotMechanics.loft_y by Puck.apply_blade_deflect). Positive lifts, negative
 # drives the puck down, zero keeps it flat.

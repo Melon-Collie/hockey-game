@@ -42,11 +42,15 @@ var last_part: int = -1              # SavePart of the contact that ended it, or
 var last_contact_pos: Vector3 = Vector3.INF   # where the save contact happened
 var last_cross: Vector3 = Vector3.INF         # net-plane crossing (x, y) if it got there
 var last_goalie_pos: Vector3 = Vector3.INF    # goalie world pos at the decisive moment
-# Puck speed at the moment of goalie contact. Lets a caller ask
-# GoalieSaveRules.is_controlled_save whether that save actually ENDED the play
-# or kicked a live puck back into the slot — this instrument stops at first
-# contact, so without it every rebound goal silently reads as a save.
+# Puck speed at the moment of goalie contact. This instrument stops at first
+# contact, so a caller ranking saves by how hard they were hit needs it, and
+# without something like it every rebound goal silently reads as a save.
 var last_shot_speed: float = 0.0
+# Did that first contact END the play — i.e. was it a glove catch? The only save
+# outcome that does, now that every other one is a material rebound. A caller
+# counting second chances wants this rather than a speed threshold: "hard enough
+# to beat the pad" stopped being a thing the model believes.
+var last_caught: bool = false
 
 # Reused per-march scratch (allocation-free like the production loop).
 var _scratch: SweptDiscOBB.Result = SweptDiscOBB.Result.new()
@@ -378,6 +382,7 @@ func fire_at(shooter: Vector3, aim: Vector3, loft_level: int, speed_m_s: float,
 	_shooter.global_position = shooter
 	_puck.clear_carrier()
 	last_part = -1
+	last_caught = false
 	last_contact_pos = Vector3.INF
 	last_cross = Vector3.INF
 	last_goalie_pos = Vector3.INF
@@ -393,6 +398,7 @@ func fire(shooter: Vector3, aim: Vector3, loft_level: int, power_t: float,
 	# Release: the puck leaves the blade and flies as a shot.
 	_puck.clear_carrier()
 	last_part = -1
+	last_caught = false
 	last_contact_pos = Vector3.INF
 	last_cross = Vector3.INF
 	last_goalie_pos = Vector3.INF
@@ -432,6 +438,9 @@ func _march(shooter: Vector3, vel_in: Vector3) -> int:
 			last_part = _classify_part(_contact.part as Node3D)
 			last_contact_pos = _contact.point
 			last_goalie_pos = g3.global_position if g3 != null else Vector3.INF
+			var fwd: Vector3 = -g3.global_transform.basis.z if g3 != null else Vector3.ZERO
+			last_caught = last_part == GoalieSaveRules.SavePart.GLOVE \
+					and GoalieSaveRules.is_face_presented(_contact.normal, fwd)
 			return SAVE
 		# Reached/passed the goal-line plane this tick (started in front, so the
 		# first tick with (pos.z − goal.z)·goal_dir ≥ 0 is the goalward crossing)?
@@ -520,7 +529,6 @@ var rebound_goal: bool = false
 # a caller that folds it into rebound statistics reports a frozen puck as a
 # second chance sitting in the crease (`rebound_pos` is the goalie's glove).
 var rebound_caught: bool = false
-var _deaden: GoalieSaveRules.DeadenConfig = null
 var _save_res: GoalieSaveRules.ContactResult = GoalieSaveRules.ContactResult.new()
 
 const REBOUND_TRACK_S: float = 1.5
@@ -529,15 +537,6 @@ const PLAYABLE_SPEED_M_S: float = 8.0   # slow enough for a skater to actually p
 
 func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
 		speed_m_s: float, err_rad: float) -> int:
-	if _deaden == null:
-		_deaden = GoalieSaveRules.DeadenConfig.new()
-		_deaden.pad_max_incoming_speed = _puck.save_deaden_pad_max_speed
-		_deaden.drop_speed = _puck.save_deaden_drop_speed
-		_deaden.glove_retain = _puck.save_deaden_glove_retain
-		_deaden.chest_retain = _puck.save_deaden_chest_retain
-		_deaden.pad_steer_speed = _puck.save_steer_speed
-		_deaden.steer_lateral_weight = _puck.save_steer_lateral_weight
-		_deaden.steer_forward_weight = _puck.save_steer_forward_weight
 	var vel: Vector3 = shot_velocity_at(shooter, aim, loft_level, speed_m_s, err_rad)
 	if vel == Vector3.ZERO:
 		return WIDE
@@ -574,13 +573,11 @@ func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
 				touched = true
 				outcome = SAVE
 			var g3: Node3D = _contact.goalie as Node3D
-			var side: float = signf(pos.x - g3.global_position.x) if g3 != null else 0.0
-			var dir_sign: int = int(signf(-g3.global_position.z)) if g3 != null else 0
-			# Mirror Puck._physics_process exactly, facing included — the
-			# controlled save is gated on the face he is presenting.
+			# Mirror Puck._physics_process exactly, facing included — the catch is
+			# gated on the face he is presenting.
 			var fwd: Vector3 = -g3.global_transform.basis.z if g3 != null else Vector3.ZERO
 			GoalieSaveRules.resolve_contact(
-					vel, part, _contact.normal, side, dir_sign, _deaden, _save_res, fwd)
+					vel, part, _contact.normal, _save_res, fwd)
 			vel = _save_res.velocity
 			pos = _contact.point + _contact.normal * _contact.depth
 			# A caught puck is dead and held — the play stops there.
@@ -675,6 +672,7 @@ func fire_release_at(shooter: Vector3, aim: Vector3, loft_level: int,
 	if vel == Vector3.ZERO:
 		return WIDE
 	last_part = -1
+	last_caught = false
 	last_contact_pos = Vector3.INF
 	last_cross = Vector3.INF
 	last_goalie_pos = Vector3.INF
@@ -761,6 +759,7 @@ func fire_release(shooter: Vector3, aim: Vector3, loft_level: int,
 	if vel == Vector3.ZERO:
 		return WIDE
 	last_part = -1
+	last_caught = false
 	last_contact_pos = Vector3.INF
 	last_cross = Vector3.INF
 	last_goalie_pos = Vector3.INF
