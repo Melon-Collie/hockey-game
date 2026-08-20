@@ -125,12 +125,16 @@ static func _step(p: Vector3, v: Vector3, dt: float,
 				# amount proportional to the normal impulse — what actually kills a hard
 				# rim-around. A glancing carom (small vn) barely slows; a square hit sheds
 				# more. Applied to the post-reflection tangential component (reflection
-				# leaves it unchanged), clamped so it can't reverse.
+				# leaves it unchanged), and bounded by the rim's sticking impulse
+				# (PUCK_BOARD_TANGENTIAL_MAX_LOSS): a board bends a carom toward square,
+				# it never annihilates the along-board channel.
 				if board_friction > 0.0:
 					var v_tan := v_xz - v_xz.dot(n) * n
 					var t_speed: float = v_tan.length()
 					if t_speed > 1e-6:
-						var drop: float = board_friction * (1.0 + bounce_factor) * vn
+						var drop: float = minf(
+								board_friction * (1.0 + bounce_factor) * vn,
+								t_speed * GameRules.PUCK_BOARD_TANGENTIAL_MAX_LOSS)
 						var new_t: float = maxf(t_speed - drop, 0.0)
 						v_xz += v_tan * (new_t / t_speed - 1.0)
 				v.x = v_xz.x
@@ -582,8 +586,10 @@ static func _bounce_velocity(v: Vector2, inward_normal: Vector2) -> Vector2:
 	var v_tan: Vector2 = out - out.dot(inward_normal) * inward_normal
 	var t_speed: float = v_tan.length()
 	if t_speed > 1e-6:
-		var drop: float = GameRules.PUCK_BOARD_FRICTION \
-				* (1.0 + GameRules.PUCK_BOARD_BOUNCE) * absf(vn)
+		var drop: float = minf(
+				GameRules.PUCK_BOARD_FRICTION
+						* (1.0 + GameRules.PUCK_BOARD_BOUNCE) * absf(vn),
+				t_speed * GameRules.PUCK_BOARD_TANGENTIAL_MAX_LOSS)
 		out += v_tan * (maxf(t_speed - drop, 0.0) / t_speed - 1.0)
 	return out
 

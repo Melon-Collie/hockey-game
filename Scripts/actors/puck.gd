@@ -523,7 +523,12 @@ func apply_blade_deflect(skater: Skater) -> void:
 	_set_cooldown(skater, bobble_cooldown if is_bobble else deflect_cooldown)
 	_queue_contact_event(ContactEvent.LOOSE_TOUCH, skater)
 
-func on_body_block(blocker: Skater) -> void:
+# `contact_normal` is the outward horizontal normal at the swept contact —
+# PuckInteractionRules.body_block_contact_normal, taken on the same segment the
+# block was detected against. The caller owns it because only the caller has the
+# segment; a normal re-derived here from the puck's committed position points the
+# wrong way whenever the puck crossed the body inside the tick.
+func on_body_block(blocker: Skater, contact_normal: Vector3) -> void:
 	if not _is_server:
 		return
 	if pickup_locked:
@@ -532,14 +537,9 @@ func on_body_block(blocker: Skater) -> void:
 		return
 	if carrier != null:
 		return  # only deflect loose/airborne pucks, not carried ones
-	var body_world: Vector3 = blocker.global_position
-	body_world.y = 0.0
-	var puck_pos: Vector3 = global_position
-	puck_pos.y = 0.0
-	var contact_normal: Vector3 = puck_pos - body_world
 	if contact_normal.length() < 0.001:
 		contact_normal = -blocker.global_transform.basis.z
-	contact_normal = contact_normal.normalized()
+	contact_normal = Vector3(contact_normal.x, 0.0, contact_normal.z).normalized()
 	# A committed shot-block crouch kills more of the shot than a passive body absorb.
 	var dampen: float = body_block_active_dampen \
 			if blocker.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING \

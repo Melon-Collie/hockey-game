@@ -55,6 +55,36 @@ static func check_body_block(
 	return y >= y_bottom and y <= y_top
 
 
+# Outward contact normal for a block check_body_block just accepted: from the body
+# axis toward the puck's CLOSEST APPROACH on the swept segment, horizontal, unit.
+#
+# The closest approach, not the puck's end-of-tick position. The two differ
+# whenever the puck crossed the body inside one tick — 0.21 m at a 25 m/s shot
+# against a ~0.3 m body — and once the centre is behind, an end-of-tick normal
+# names a face on the far side and reflects the puck back across the blocker
+# instead of off the side it struck. Sweeping the detection and then snapshotting
+# the response undoes the sweep.
+#
+# Falls back to the segment direction reversed when the puck's path runs dead
+# through the axis (no side to be on), and to +X for a degenerate stationary
+# puck, so the rule stays deterministic under test.
+static func body_block_contact_normal(
+		puck_prev: Vector3, puck_curr: Vector3, axis_xz: Vector2) -> Vector3:
+	var p0 := Vector2(puck_prev.x, puck_prev.z)
+	var p1 := Vector2(puck_curr.x, puck_curr.z)
+	var seg := p1 - p0
+	var len_sq: float = seg.length_squared()
+	var t: float = 0.0 if len_sq <= 1e-10 else clampf((axis_xz - p0).dot(seg) / len_sq, 0.0, 1.0)
+	var offset: Vector2 = (p0 + seg * t) - axis_xz
+	if offset.length_squared() > 1e-8:
+		offset = offset.normalized()
+		return Vector3(offset.x, 0.0, offset.y)
+	if len_sq > 1e-10:
+		var back: Vector2 = -seg.normalized()
+		return Vector3(back.x, 0.0, back.y)
+	return Vector3(1.0, 0.0, 0.0)
+
+
 # Stick-lift trigger geometry. The attacker's blade is a single point; the
 # victim's stick is the hand→blade shaft segment. A lift fires when the
 # attacker's blade is within `radius` of the shaft AND sits below the shaft at

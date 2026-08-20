@@ -396,6 +396,15 @@ const PUCK_BOARD_BOUNCE: float = 0.4
 # weak to kill it). Applied by AITrajectory's carom, which is the host drive and
 # the client prediction alike.
 const PUCK_BOARD_FRICTION: float = 0.25
+# Ceiling on the fraction of ALONG-board speed a single carom may shed, whatever
+# the normal impulse. Friction only bleeds tangential speed while the puck's rim
+# still SLIPS on the board; once the contact patch stops slipping the disc is
+# rolling on the wall and friction has nothing left to grip. For a disc
+# contacting on its rim that sticking impulse is m·v_t/3 (I = ½·m·r² about the
+# spin axis, moment arm r), so a third of the along-board speed is the most any
+# contact can take. Physical, not a feel knob — the boards bend a carom toward
+# square, they cannot erase the along-board channel.
+const PUCK_BOARD_TANGENTIAL_MAX_LOSS: float = 1.0 / 3.0
 # Silent grace before an out-of-play puck is whistled dead. Short enough that
 # the stoppage feels responsive, long enough that a transient penetration spike
 # (a slapshot buried into the boards for a tick or two before the carom

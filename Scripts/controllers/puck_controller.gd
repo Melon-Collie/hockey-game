@@ -704,7 +704,8 @@ func _check_body_blocks(skaters: Array, puck_curr: Vector3, now: float) -> bool:
 		var y_range: Vector2 = skater.get_body_block_y_range()
 		if PuckInteractionRules.check_body_block(
 				_prev_puck_pos, puck_curr, axis, reach, y_range.x, y_range.y):
-			puck.on_body_block(skater)
+			puck.on_body_block(skater, PuckInteractionRules.body_block_contact_normal(
+					_prev_puck_pos, puck_curr, axis))
 			return true
 	return false
 

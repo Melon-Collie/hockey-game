@@ -96,8 +96,8 @@ func test_event_queued_during_drain_is_serviced_in_the_same_drain() -> void:
 func test_on_body_block_defers_its_signal_to_the_drain() -> void:
 	# End-to-end through a real interaction entry point: the body-block path
 	# (driven from PuckController's timed interaction check) queues instead of
-	# emitting synchronously. Scene puck in the tree — on_body_block reads
-	# global positions.
+	# emitting synchronously. Scene puck in the tree — on_body_block reads the
+	# blocker's transform for its degenerate-normal fallback.
 	var scene_puck: Puck = PUCK_SCENE.instantiate() as Puck
 	add_child_autofree(scene_puck)
 	var blocker: Skater = SKATER_SCENE.instantiate() as Skater
@@ -105,7 +105,7 @@ func test_on_body_block_defers_its_signal_to_the_drain() -> void:
 	var blocked: Array[Skater] = []
 	scene_puck.puck_body_blocked.connect(func(s: Skater) -> void: blocked.append(s))
 	scene_puck.set_server_mode(true)
-	scene_puck.on_body_block(blocker)
+	scene_puck.on_body_block(blocker, Vector3(0.0, 0.0, 1.0))
 	assert_eq(blocked.size(), 0, "on_body_block must not emit synchronously")
 	scene_puck.drain_contact_events()
 	assert_eq(blocked, [blocker] as Array[Skater])

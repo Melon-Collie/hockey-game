@@ -108,6 +108,18 @@ func test_pad_save_steers_toward_contact_side_corner() -> void:
 	assert_almost_eq(v.y, 0.0, 0.0001)
 	assert_almost_eq(v.length(), 5.0, 0.0001)
 
+func test_pad_steer_never_hands_the_puck_more_pace_than_arrived() -> void:
+	# A trickler dying into the pads was steered out at the full 5 m/s — the goalie
+	# kicking a dead puck across his own crease and handing the slot a live one.
+	var v := GoalieSaveRules.deadened_velocity(
+			Vector3(0.0, 0.0, -0.8), GoalieSaveRules.SavePart.PAD, 1.0, 1, _cfg())
+	assert_almost_eq(v.length(), 0.8, 0.0001, "exit paced by the arrival, not the ceiling")
+
+func test_pad_steer_ceiling_still_binds_on_a_real_shot() -> void:
+	var v := GoalieSaveRules.deadened_velocity(
+			Vector3(0.0, 0.0, -20.0), GoalieSaveRules.SavePart.PAD, 1.0, 1, _cfg())
+	assert_almost_eq(v.length(), 5.0, 0.0001, "a shot leaves at the controlled ceiling")
+
 func test_pad_steer_is_mostly_lateral() -> void:
 	# Cornerward means lateral-dominant — the rebound goes to the corner, not
 	# back up the middle of the slot.

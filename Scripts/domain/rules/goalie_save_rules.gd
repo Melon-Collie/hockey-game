@@ -56,6 +56,8 @@ class DeadenConfig:
 	# net-front scramble. Chest/glove stay a dead absorb — the real "no rebound"
 	# surfaces. Direction = mostly lateral toward the contact side, with an
 	# out-of-crease forward bias (same shape as the crease clear).
+	# A CEILING on the cornerward exit, not a fixed pace: a pad redirects the shot
+	# it was hit with, so a slower arrival leaves slower (see deadened_velocity).
 	var pad_steer_speed: float = 5.0        # m/s — controlled cornerward exit
 	var steer_lateral_weight: float = 1.0   # cornerward bias (lateral vs forward)
 	var steer_forward_weight: float = 0.35  # out-of-crease bias
@@ -196,4 +198,9 @@ static func deadened_velocity(
 	var dlen: float = dir.length()
 	if dlen < 0.0001:
 		return Vector3.ZERO
-	return (dir / dlen) * cfg.pad_steer_speed
+	# A pad REDIRECTS the shot it was hit with; it cannot hand the puck more pace
+	# than arrived. Steering every controlled contact out at the full
+	# pad_steer_speed made the goalie fire a dead puck across his own crease — a
+	# trickler nudging the pad left at 5 m/s, which reads as a kick at nothing and
+	# hands the slot a live puck the shooter never earned.
+	return (dir / dlen) * minf(cfg.pad_steer_speed, incoming_velocity.length())

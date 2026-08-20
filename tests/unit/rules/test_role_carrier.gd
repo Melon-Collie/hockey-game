@@ -2955,10 +2955,12 @@ func _rim_ctx(team_size: int, wall_lane_blocked: bool) -> RoleContext:
 	#
 	# The bodies are placed against where the clear actually COMES TO REST. With
 	# the winger posted up the strong wall the search rims to him and the puck
-	# dies deep on that side (~(12.3, -23.0)), so the camped body is their
-	# retreating D standing on that spot. Both are derived from the delivery, not
-	# assumed: the release search is blind to skaters, so every scene here shares
-	# one candidate set and only the RACE for it moves.
+	# dies just past centre on that side (~(11.7, -2.8)), so the camped body is
+	# their retreating D standing on that spot. Both are derived from the
+	# delivery, not assumed: the release search is blind to skaters, so every
+	# scene here shares one candidate set and only the RACE for it moves — the
+	# camped test prints the settle it read, so a physics change that moves the
+	# landing shows the stale placement instead of hiding it.
 	var self_pos := Vector3(10.5, 0, 24.0)
 	var skaters: Array = [
 		[1, TEAM_ID, self_pos],
@@ -2968,7 +2970,7 @@ func _rim_ctx(team_size: int, wall_lane_blocked: bool) -> RoleContext:
 		[5, 1, Vector3(0.0, 0, 15.0)],
 	]
 	if wall_lane_blocked:
-		skaters.append([6, 1, Vector3(12.0, 0, -20.5)])
+		skaters.append([6, 1, Vector3(11.7, 0, -2.8)])
 	var ctx := _make_ctx(self_pos, skaters)
 	ctx.team_size = team_size
 	return ctx
@@ -3094,6 +3096,7 @@ func test_a_camped_wall_lane_makes_the_clear_worth_less() -> void:
 	var c := AIRoleCarrier.new()
 	c._build_action_opponents_lists(ctx)
 	var r: Array = c._best_dump(ctx, ctx.defending_goal_pos)
+	gut.p("  clear settles open %s camped %s" % [open_r[4], r[4]])
 	gut.p("  clear value: open lane %.4f vs camped %.4f" % [open_r[0], r[0]])
 	assert_lt(r[0], open_r[0],
 			"a body camped where the clear lands lowers our odds of winning it")
