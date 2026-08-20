@@ -104,7 +104,7 @@ signal poke_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms:
 signal stick_lift_claim_received(peer_id: int, host_timestamp: float, interp_delay_ms: float, input_lead_ms: float, expected_carrier_peer_id: int, blade_curr: Vector3)
 signal hit_claim_received(hitter_peer_id: int, victim_peer_id: int, host_timestamp: float, interp_delay_ms: float, input_lead_ms: float)
 signal board_hit_received(position: Vector3)
-signal goal_body_hit_received(position: Vector3)
+signal goal_body_hit_received(position: Vector3, impact_speed: float)
 signal post_hit_received(position: Vector3)
 signal goalie_hit_received(position: Vector3)
 signal deflection_received(position: Vector3)
@@ -2653,13 +2653,19 @@ func send_board_hit_to_all(position: Vector3) -> void:
 func notify_board_hit(position: Vector3) -> void:
 	NetworkSimManager.send(func(pos: Vector3) -> void: board_hit_received.emit(pos), [position], true)
 
-func send_goal_body_hit_to_all(position: Vector3) -> void:
+# `impact_speed` is the speed the puck ARRIVED at, which the receiver cannot
+# derive: the twine keeps 5% of what hits it (NET_RESTITUTION), so by the time
+# any peer has a puck to read, the shot is gone from it. Carried on the wire for
+# the same reason it is carried on Puck.puck_hit_goal_body.
+func send_goal_body_hit_to_all(position: Vector3, impact_speed: float) -> void:
 	for peer_id: int in connected_peer_ids():
-		notify_goal_body_hit.rpc_id(peer_id, position)
+		notify_goal_body_hit.rpc_id(peer_id, position, impact_speed)
 
 @rpc("authority", "reliable")
-func notify_goal_body_hit(position: Vector3) -> void:
-	NetworkSimManager.send(func(pos: Vector3) -> void: goal_body_hit_received.emit(pos), [position], true)
+func notify_goal_body_hit(position: Vector3, impact_speed: float) -> void:
+	NetworkSimManager.send(
+			func(pos: Vector3, spd: float) -> void: goal_body_hit_received.emit(pos, spd),
+			[position, impact_speed], true)
 
 func send_post_hit_to_all(position: Vector3) -> void:
 	for peer_id: int in connected_peer_ids():

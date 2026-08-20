@@ -1742,7 +1742,7 @@ func _wire_sound_signals() -> void:
 		# scales every net event off the rebound instead of off the shot.
 		puck.puck_hit_goal_body.connect(func(spd: float) -> void:
 			SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, puck.get_puck_position(), _puck_speed_volume(spd), 0.06)
-			NetworkManager.send_goal_body_hit_to_all(puck.get_puck_position())
+			NetworkManager.send_goal_body_hit_to_all(puck.get_puck_position(), spd)
 			_record_replay_audio_event("puck_goal_body", puck.get_puck_position(), spd))
 		puck.puck_touched_loose.connect(func(_s: Skater) -> void:
 			var spd: float = puck.linear_velocity.length()
@@ -1830,10 +1830,10 @@ func _wire_sound_signals() -> void:
 			if puck != null:
 				puck.fire_board_impact_vfx(spd))
 	NetworkManager.goal_body_hit_received.connect(
-		func(pos: Vector3) -> void:
+		func(pos: Vector3, spd: float) -> void:
 			if _cue_is_echo(_local_net_cue_at):
 				return
-			SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06))
+			SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, pos, _puck_speed_volume(spd), 0.06))
 	NetworkManager.post_hit_received.connect(
 		func(pos: Vector3) -> void:
 			if _cue_is_echo(_local_post_cue_at):

@@ -268,4 +268,9 @@ here whenever you bump, in the same format.
 #      (an old client renders remotes and the puck a lead behind a new host's
 #      rewind, and vice versa), which is a mis-adjudication rather than a
 #      decode error, so mixed builds must be refused.
-
+# v60: notify_goal_body_hit carries the puck's ARRIVAL speed alongside the
+#      position (Vector3 -> Vector3 + float). The twine keeps 5% of what hits
+#      it, so a receiver reading the speed off its own puck gets the rebound and
+#      plays every net thump at the floor of the volume curve whatever the shot.
+#      An RPC SIGNATURE change: an old peer decodes the extra argument as a
+#      mismatched call rather than as garbage, so mixed builds must be refused.

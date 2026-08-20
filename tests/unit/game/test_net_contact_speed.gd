@@ -74,3 +74,30 @@ func test_the_net_signal_reports_a_speed_the_puck_no_longer_has() -> void:
 	assert_almost_eq(seen[0], 25.0, 1e-6,
 			"and reports the arrival speed, not the %.2f m/s the puck is left with" %
 			puck.linear_velocity.length())
+
+
+# All three paths that play this cue must carry the arrival speed, because none
+# of them can recover it: the host's own contact, a client's local prediction,
+# and the host's broadcast to peers whose prediction missed it. The broadcast is
+# the one that needed a wire change (PROTOCOL_VERSION 60) — and it is also the
+# one most easily forgotten, since it only fires when prediction has already
+# failed, which is rare enough to go unnoticed for a long time.
+func _signal_args(obj: Object, signal_name: String) -> Array:
+	for sig: Dictionary in obj.get_signal_list():
+		if sig["name"] == signal_name:
+			return sig["args"]
+	return []
+
+
+func test_every_net_cue_path_carries_the_arrival_speed() -> void:
+	var puck: Puck = autofree(Puck.new())
+	var local: Array = _signal_args(puck, "puck_hit_goal_body")
+	assert_eq(local.size(), 1,
+			"Puck.puck_hit_goal_body must carry the arrival speed (the host's own path)")
+
+	var broadcast: Array = _signal_args(NetworkManager, "goal_body_hit_received")
+	assert_eq(broadcast.size(), 2,
+			"NetworkManager.goal_body_hit_received must carry position AND arrival " +
+			"speed — a peer receiving only a position is back to reading the rebound")
+	assert_eq(broadcast[1]["name"], "impact_speed",
+			"and the second argument is the speed, not something else that fits")
