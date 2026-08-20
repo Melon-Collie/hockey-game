@@ -153,6 +153,14 @@ func latest_goalie_state(team_id: int) -> GoalieNetworkState:
 # keep the allocating behaviour. A reused snapshot is only safe for a caller that
 # owns it outright: AICoordinator._stabilize_snapshot copies rather than aliases
 # for exactly this reason.
+#
+# Both edges CLAMP rather than refuse: a query at/after the newest capture
+# answers with the newest sample, and one before the oldest answers with the
+# oldest. Neither signals — the returned `host_timestamp` is the instant that was
+# ASKED for, not the one that was answered, so a caller who must distinguish
+# "answered exactly" from "clamped" has to test the edge itself
+# (`newest_host_timestamp` is that test for the future edge; the past edge is
+# bounded structurally, see _find_bracket).
 func get_state_at(host_timestamp: float, out: WorldSnapshot = null) -> WorldSnapshot:
 	var snap: WorldSnapshot = out
 	if snap == null:
@@ -281,6 +289,19 @@ func _interpolate_goalie(team_id: int, ts: float) -> GoalieNetworkState:
 # Fills `_bracket`. t < 0 means no valid bracket; from_state may be null.
 # Binary search: O(log BUFFER_SIZE) ≈ 10 comparisons vs. up to 720 linear.
 # Timestamps are monotonically increasing so binary search is exact.
+#
+# A ts predating every entry answers with the OLDEST sample — the nearest instant
+# the ring can speak to. Answering with the NEWEST instead reaches the far end of
+# a 3 s ring, which is the one answer guaranteed to be maximally wrong for a
+# query that asked for the past. The same clamp is what lets a caller request a
+# deliberately delayed instant without a cold ring having to be special-cased.
+#
+# It is a warm-up condition and nothing else, so it is not reported: the ring is
+# built once per world spawn and only ever grows, and the deepest lag-comp rewind
+# is `MAX_CLAIM_AGE_S` (0.2 s) plus the interp delay against BUFFER_SIZE (3 s) —
+# so past the first fraction of a second the only way in is a peer whose own ring
+# was allocated mid-match (add_player). The rewind harness reports those as
+# `warmup_skipped` rather than leaving them silent (see tests/CLAUDE.md).
 func _find_bracket(buf: Array, write_ptr: int, count: int, ts: float) -> void:
 	if count == 0:
 		_bracket.set_none(null)
@@ -305,9 +326,7 @@ func _find_bracket(buf: Array, write_ptr: int, count: int, ts: float) -> void:
 		else:
 			hi = mid - 1
 	if found < 0:
-		if OS.is_debug_build():
-			push_warning("StateBufferManager: ts %.4f predates oldest buffered %.4f (skater)" % [ts, buf[oldest_ptr].host_timestamp])
-		_bracket.set_none(newest)
+		_bracket.set_none(buf[oldest_ptr])
 		return
 	if found >= count - 1:
 		_bracket.set_none(newest)
@@ -343,9 +362,7 @@ func _find_bracket_puck(ts: float) -> void:
 		else:
 			hi = mid - 1
 	if found < 0:
-		if OS.is_debug_build():
-			push_warning("StateBufferManager: ts %.4f predates oldest buffered %.4f (puck)" % [ts, _puck_buffer[oldest_ptr].host_timestamp])
-		_bracket.set_none(newest)
+		_bracket.set_none(_puck_buffer[oldest_ptr])
 		return
 	if found >= _puck_count - 1:
 		_bracket.set_none(newest)
@@ -384,9 +401,7 @@ func _find_bracket_goalie(team_id: int, ts: float) -> void:
 		else:
 			hi = mid - 1
 	if found < 0:
-		if OS.is_debug_build():
-			push_warning("StateBufferManager: ts %.4f predates oldest buffered %.4f (goalie team %d)" % [ts, buf[oldest_ptr].host_timestamp, team_id])
-		_bracket.set_none(newest)
+		_bracket.set_none(buf[oldest_ptr])
 		return
 	if found >= count - 1:
 		_bracket.set_none(newest)
