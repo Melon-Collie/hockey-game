@@ -273,7 +273,7 @@ that file can't tell you:
 | New skater cosmetic rig behavior | The rig that owns it under `Scripts/actors/` (`SkaterLegRig` / `SkaterArmRig` / `SkaterStickRig`); it reads `Skater`'s tuning and markers and writes only its own state, and `Skater` delegates rather than reaching in. `test_skater_collaborator_seams.gd` holds the seam (see `Scripts/actors/CLAUDE.md`) |
 | New arena bowl geometry | A collaborator under `Scripts/actors/arena/`, constructed from the `ArenaBowlSpec` snapshot and never writing it; `ArenaStands` calls it from `_rebuild`, where the call order IS the child order. `test_arena_collaborator_seams.gd` holds the tiers and the seam (see `Scripts/actors/arena/CLAUDE.md`) |
 | New HUD panel | Class in `Scripts/ui/hud/` owning its widgets and its state; `HUD` holds a reference, calls methods and never writes its fields — upward flow is a signal. `test_hud_panel_wiring.gd` holds both (see `Scripts/ui/CLAUDE.md`) |
-| New user-facing UI string | `KEY,en,es` row in `locale/translations.csv`, then `tr("KEY")` at the display seam (see `Scripts/ui/CLAUDE.md`) |
+| New user-facing UI string | `KEY,en,es` row in `locale/translations.csv`, then `tr("KEY")` at the display seam; `test_ui_uses_the_locale_seam.gd` ratchets the files that still hold English (see `Scripts/ui/CLAUDE.md`) |
 
 ## Code Conventions
 

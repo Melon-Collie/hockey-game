@@ -48,18 +48,10 @@ signal kick_requested(peer_id: int, player_name: String)
 # hides the D rows — see set_active_team_size). Both team rows share the
 # physical column layout, but since the away team attacks the opposite
 # direction its L/R slots are its own R/L, the mirror image of home's in
-# the same columns. The _AWAY label sets reflect that; the slot→column
-# layout itself does not change.
+# the same columns. PositionLabels holds that mirror for the badges and the
+# column headers; the slot→column layout itself does not change.
 const _DISPLAY_ORDER  := [1, 0, 2]
 const _D_DISPLAY_ORDER := [3, 4]
-const _POSITION_LABEL      := ["C", "L", "R", "LD", "RD"]   # indexed by slot, home
-const _POSITION_LABEL_AWAY := ["C", "R", "L", "RD", "LD"]   # indexed by slot, away
-# 5v5 badge variants: with LD/RD on the board the wingers spell out LW/RW
-# too (3v3 keeps the classic single letters).
-const _POSITION_LABEL_5V5      := ["C", "LW", "RW", "LD", "RD"]
-const _POSITION_LABEL_AWAY_5V5 := ["C", "RW", "LW", "RD", "LD"]
-const _POSITION_HEADER      := ["LEFT WING", "CENTER", "RIGHT WING"]   # indexed by col, home
-const _POSITION_HEADER_AWAY := ["RIGHT WING", "CENTER", "LEFT WING"]   # indexed by col, away
 
 const _CARD_HEIGHT: int = 96
 const _STRIPE_WIDTH: int = 6
@@ -153,14 +145,12 @@ func _apply_mode_visibility() -> void:
 			_stamp_position(team_id, slot)
 
 
-# The card's position badge for the current mode: 3v3 keeps the classic
-# single letters (C/L/R); 5v5 spells the wingers out (LW/RW) so they read
-# consistently next to LD/RD. Away rows mirror L/R as usual.
+# The card's position badge for the current mode. The grid seats two D cards
+# per team, so the roster size is what tells 3v3 from 5v5 here; the wording of
+# each badge is PositionLabels' business.
 func _position_badge(team_id: int, slot: int) -> String:
 	var is_5v5: bool = _active_team_size > PlayerRules.FIRST_DEFENSE_SLOT
-	if team_id == 1:
-		return _POSITION_LABEL_AWAY_5V5[slot] if is_5v5 else _POSITION_LABEL_AWAY[slot]
-	return _POSITION_LABEL_5V5[slot] if is_5v5 else _POSITION_LABEL[slot]
+	return tr(PositionLabels.badge_key(team_id, slot, is_5v5))
 
 
 # Writes the position badge with the occupant's handedness as a chevron on
@@ -244,7 +234,7 @@ func _build_forward_row(team_id: int) -> HBoxContainer:
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var team_label := Label.new()
-	team_label.text = "AWAY" if team_id == 1 else "HOME"
+	team_label.text = tr(&"TEAM_AWAY") if team_id == 1 else tr(&"TEAM_HOME")
 	team_label.add_theme_font_size_override("font_size", 13)
 	team_label.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	team_label.custom_minimum_size = Vector2(56, 0)
@@ -297,10 +287,12 @@ func _build_header(team_id: int) -> void:
 	spacer.custom_minimum_size = Vector2(56, 0)
 	header.add_child(spacer)
 
-	var labels: Array = _POSITION_HEADER_AWAY if team_id == 1 else _POSITION_HEADER
 	for col: int in _DISPLAY_ORDER.size():
 		var lbl := Label.new()
-		lbl.text = labels[col]
+		# Uppercased at the seam: the header rail shouts, but the catalogue
+		# carries one Title Case row per position (POSITION_LW / _C / _RW),
+		# shared with the build screen's position picker.
+		lbl.text = tr(PositionLabels.column_header_key(team_id, col)).to_upper()
 		lbl.add_theme_font_size_override("font_size", 11)
 		lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -474,7 +466,7 @@ func _build_card(team_id: int, slot: int) -> PanelContainer:
 	_ready_label[team_id][slot] = ready_lbl
 
 	var ai_lbl := Label.new()
-	ai_lbl.text = "BOT"
+	ai_lbl.text = tr(&"SLOT_BOT")
 	ai_lbl.add_theme_font_size_override("font_size", 11)
 	ai_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 	ai_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -638,7 +630,7 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 		# per-card L/C/R indicator.
 		num_lbl.visible = false
 		right_col.visible = false
-		name_lbl.text = "OPEN SLOT"
+		name_lbl.text = tr(&"SLOT_OPEN")
 		name_lbl.set_meta("fit_base", _NAME_FONT_SIZE_OPEN)
 		name_lbl.add_theme_color_override("font_color", MenuStyle.TEXT_DIM)
 		name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -659,7 +651,7 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 		style.bg_color = jersey_c
 		stripe_style.bg_color = stripe_c
 		var identity: Dictionary = _bot_identities.get(slot_key, {})
-		var bot_name: String = identity.get("name", "BOT")
+		var bot_name: String = identity.get("name", tr(&"SLOT_BOT"))
 		var bot_num: int = identity.get("number", 0)
 		num_lbl.text = str(bot_num) if bot_num > 0 else "#"
 		num_lbl.add_theme_color_override("font_color", text_c)
@@ -690,7 +682,7 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 	num_lbl.add_theme_color_override("font_color", text_c)
 
 	var p_name: String = entry.get("player_name", "")
-	name_lbl.text = p_name.to_upper() if not p_name.is_empty() else "PLAYER"
+	name_lbl.text = p_name.to_upper() if not p_name.is_empty() else tr(&"SLOT_PLAYER")
 	name_lbl.add_theme_color_override("font_color", text_c)
 	_fit_name(name_lbl)
 	_hand_state[team_id][slot] = 0 if bool(entry.get("is_left_handed", true)) else 1
@@ -707,7 +699,7 @@ func _update_card(team_id: int, slot: int, entry) -> void:
 	if _show_ready and peer_id != 1:
 		ready_lbl.visible = true
 		var is_ready: bool = entry.get("is_ready", false)
-		ready_lbl.text = "READY" if is_ready else "WAITING"
+		ready_lbl.text = tr(&"SLOT_READY") if is_ready else tr(&"SLOT_WAITING")
 		ready_lbl.add_theme_color_override(
 				"font_color", _COLOR_READY if is_ready else _COLOR_WAITING)
 	else:
@@ -784,7 +776,7 @@ func _apply_ping(ping_lbl: Label, dot: ColorRect, peer_id: int, text_c: Color) -
 		ping_lbl.text = ""
 		dot.visible = false
 		return
-	ping_lbl.text = "%dms" % ms
+	ping_lbl.text = tr(&"PING_MS_TIGHT") % ms
 	ping_lbl.add_theme_color_override("font_color", _muted(text_c, 0.75))
 	dot.visible = true
 	if ms <= _PING_GREEN:

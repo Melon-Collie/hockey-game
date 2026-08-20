@@ -145,8 +145,8 @@ func _ready() -> void:
 	NetworkManager.peer_disconnected.connect(_votes.on_peer_disconnected)
 	GameManager.shots_on_goal_changed.connect(_scorebug.set_shots)
 	GameManager.stats_updated.connect(_stat_feed.poll)
-	GameManager.player_joined.connect(func(n: String, c: Color) -> void: _toast_stack.push_pair(n, "joined", c))
-	GameManager.player_left.connect(func(n: String, c: Color) -> void: _toast_stack.push_pair(n, "left", c))
+	GameManager.player_joined.connect(func(n: String, c: Color) -> void: _toast_stack.push_pair(n, tr(&"TOAST_PLAYER_JOINED"), c))
+	GameManager.player_left.connect(func(n: String, c: Color) -> void: _toast_stack.push_pair(n, tr(&"TOAST_PLAYER_LEFT"), c))
 	GameManager.puck_out_of_play.connect(_on_puck_out_of_play)
 	GameManager.icing_called.connect(_on_icing_called)
 	GameManager.goalie_freeze_called.connect(_on_goalie_freeze_called)
@@ -190,8 +190,8 @@ func _ready() -> void:
 # RMB-drag.
 func _spectator_controls_hint() -> String:
 	return ControllerGlyphs.prompt(
-			"C: camera  ·  ↑↓: player  ·  RMB drag: look",
-			"%s: camera  ·  ↑↓: player  ·  Right-stick: look" % ControllerGlyphs.joy_label(JOY_BUTTON_Y))
+			tr(&"SPECTATOR_HINT_MOUSE"),
+			tr(&"SPECTATOR_HINT_PAD") % ControllerGlyphs.joy_label(JOY_BUTTON_Y))
 
 func _unhandled_input(event: InputEvent) -> void:
 	var menu_open: bool = _confirm_dialog.visible or _pause_menu.visible or _side_menu.visible
@@ -285,7 +285,7 @@ func _build_spectator_banner() -> void:
 
 	_spectator_banner = PanelContainer.new()
 	_spectator_banner.add_theme_stylebox_override("panel", style)
-	_spectator_banner.add_child(HudChrome.lbl("SPECTATING", 20, MenuStyle.GOLD))
+	_spectator_banner.add_child(HudChrome.lbl(tr(&"SPECTATING"), 20, MenuStyle.GOLD))
 	_spectator_wrapper = MenuStyle.wrap_drop_shadow(_spectator_banner, Vector2(3, 3))
 
 	# Centered horizontally, anchored to the top.
@@ -354,7 +354,7 @@ func _build_bug_icon() -> void:
 	btn.add_theme_color_override("icon_normal_color", Color(0.7, 0.7, 0.75, 0.55))
 	btn.add_theme_color_override("icon_hover_color", Color(1.0, 1.0, 1.0, 0.90))
 	btn.add_theme_color_override("icon_pressed_color", Color(1.0, 1.0, 1.0, 0.70))
-	btn.tooltip_text = "Report Bug"
+	btn.tooltip_text = tr(&"REPORT_BUG")
 	# Mouse affordance only: its focus stylebox is deliberately transparent, so if
 	# it stayed focusable the D-pad could wander onto it out of an open menu and
 	# the ring would simply vanish. The pad reaches the reporter through the side
@@ -440,7 +440,7 @@ func _on_local_shot_released(_direction: Vector3, power: float, is_slapper: bool
 			else _shot_toast_controller.max_wrister_power
 	var mph: float = power * 2.23694
 	var pct: float = 100.0 * power / maxf(family_max, 0.001)
-	var text: String = "SHOT · %.0f MPH · %.0f%%" % [mph, pct]
+	var text: String = tr(&"SHOT_SPEED_TOAST") % [mph, pct]
 	# FH/BH is a wrister-only concept (quick passes take no penalty, there is
 	# no backhand slapper) — gate on !is_slapper so a leniency one-timer can't
 	# surface a stale hand from an earlier wrister.
@@ -585,13 +585,13 @@ func _on_phase_changed(new_phase: int) -> void:
 			# Drop instant: hold "DROP!" briefly, then dismiss on PLAYING.
 			# No whistle here — refs whistle to stop play, not to start it.
 			_chyron.stop_faceoff_countdown()
-			_chyron.show_hero("DROP!")
+			_chyron.show_hero(tr(&"PHASE_DROP"))
 		GamePhase.Phase.END_OF_PERIOD:
 			_chyron.stop_faceoff_countdown()
 			_scorebug.hide_clock_warning()
 			_chyron.clear_goal_template()
 			_flash_period_end()
-			_chyron.show_hero("END OF PERIOD")
+			_chyron.show_hero(tr(&"PHASE_END_OF_PERIOD"))
 		GamePhase.Phase.GAME_OVER:
 			_chyron.stop_faceoff_countdown()
 			_scorebug.hide_clock_warning()
@@ -599,7 +599,7 @@ func _on_phase_changed(new_phase: int) -> void:
 			_chyron.show_at_rest()  # text + color set by _on_game_over
 		_:
 			_chyron.clear_goal_template()
-			_chyron.show_hero("FACEOFF")
+			_chyron.show_hero(tr(&"FACEOFF"))
 
 
 func _on_faceoff_prep_announced() -> void:
@@ -634,22 +634,22 @@ func _hide_matchup_overlay() -> void:
 
 func _on_puck_out_of_play() -> void:
 	if _toast_stack != null:
-		_toast_stack.push("PUCK OUT OF PLAY", MenuStyle.BROADCAST_CREAM)
+		_toast_stack.push(tr(&"TOAST_PUCK_OUT_OF_PLAY"), MenuStyle.BROADCAST_CREAM)
 
 
 func _on_icing_called() -> void:
 	if _toast_stack != null:
-		_toast_stack.push("ICING", MenuStyle.BROADCAST_CREAM)
+		_toast_stack.push(tr(&"TOAST_ICING"), MenuStyle.BROADCAST_CREAM)
 
 
 func _on_goalie_freeze_called() -> void:
 	if _toast_stack != null:
-		_toast_stack.push("GOALIE FREEZES IT", MenuStyle.BROADCAST_CREAM)
+		_toast_stack.push(tr(&"TOAST_GOALIE_FREEZE"), MenuStyle.BROADCAST_CREAM)
 
 
 func _on_offside_called() -> void:
 	if _toast_stack != null:
-		_toast_stack.push("OFFSIDE", MenuStyle.BROADCAST_CREAM)
+		_toast_stack.push(tr(&"INFRACTION_OFFSIDE"), MenuStyle.BROADCAST_CREAM)
 
 # Gold screen flash when a period (or the game) ends — a visual partner to the
 # period buzzer, which GameManager already fires on these same phases.
@@ -668,13 +668,13 @@ func _on_game_over() -> void:
 	var result_text: String
 	var result_color: Color
 	if _scorebug.home_score() > _scorebug.away_score():
-		result_text = "HOME WINS"
+		result_text = tr(&"RESULT_HOME_WINS")
 		result_color = HudChrome.team_primary(0)
 	elif _scorebug.away_score() > _scorebug.home_score():
-		result_text = "AWAY WINS"
+		result_text = tr(&"RESULT_AWAY_WINS")
 		result_color = HudChrome.team_primary(1)
 	else:
-		result_text = "TIE GAME"
+		result_text = tr(&"RESULT_TIE_GAME")
 		result_color = MenuStyle.BROADCAST_CREAM
 	_chyron.show_final(result_text, result_color)
 	_votes.reset()
@@ -713,20 +713,20 @@ func _present_game_over_screen(result_text: String, result_color: Color) -> void
 func _star_stat_line(stats: PlayerStats) -> String:
 	var parts: PackedStringArray = PackedStringArray()
 	if stats.goals > 0:
-		parts.append("%dG" % stats.goals)
+		parts.append(tr(&"STAT_GOALS") % stats.goals)
 	if stats.assists > 0:
-		parts.append("%dA" % stats.assists)
+		parts.append(tr(&"STAT_ASSISTS") % stats.assists)
 	if stats.game_winning_goals > 0:
-		parts.append("GWG")
+		parts.append(tr(&"STAT_GWG"))
 	if parts.is_empty():
 		if stats.shots_on_goal > 0:
-			parts.append("%d SOG" % stats.shots_on_goal)
+			parts.append(tr(&"STAT_SOG") % stats.shots_on_goal)
 		if stats.shots_blocked > 0:
-			parts.append("%d BLK" % stats.shots_blocked)
+			parts.append(tr(&"STAT_BLOCKS") % stats.shots_blocked)
 		if stats.takeaways > 0:
-			parts.append("%d TKA" % stats.takeaways)
+			parts.append(tr(&"STAT_TAKEAWAYS") % stats.takeaways)
 		if stats.hits > 0:
-			parts.append("%d HITS" % stats.hits)
+			parts.append(tr(&"STAT_HITS") % stats.hits)
 	return " · ".join(parts)
 
 
@@ -736,11 +736,11 @@ func _star_stat_line(stats: PlayerStats) -> String:
 func _goalie_star_line(shots_faced: int, goals_against: int) -> String:
 	var saves: int = maxi(0, shots_faced - goals_against)
 	if goals_against == 0:
-		return "%d SV · SO" % saves
+		return tr(&"STAT_SAVES_SHUTOUT") % saves
 	if shots_faced <= 0:
 		return ""
 	var pct: String = ("%.3f" % (float(saves) / float(shots_faced))).trim_prefix("0")
-	return "%d SV · %s" % [saves, pct]
+	return tr(&"STAT_SAVES_PCT") % [saves, pct]
 
 func _on_game_reset() -> void:
 	if _game_over_present_tween != null and _game_over_present_tween.is_running():
@@ -773,9 +773,9 @@ func _on_vote_resolved(choice: int) -> void:
 # Drop to solo free play. For an online host this tears down the server, so the
 # confirm spells out that it ends the match for everyone.
 func _on_game_over_free_play() -> void:
-	var msg: String = "Return to free play?"
+	var msg: String = tr(&"CONFIRM_RETURN_FREE_PLAY")
 	if NetworkManager.is_host and not NetworkManager.is_offline_mode:
-		msg = "Return to free play? This ends the match for everyone."
+		msg = tr(&"CONFIRM_RETURN_FREE_PLAY_HOST")
 	_show_confirm(msg, func() -> void:
 		await NetworkManager.announce_match_end()
 		GameManager.return_to_free_play())
@@ -789,7 +789,7 @@ func _on_game_over_analytics() -> void:
 
 
 func _on_game_over_exit() -> void:
-	_show_confirm("Exit game?", func() -> void:
+	_show_confirm(tr(&"CONFIRM_EXIT_GAME"), func() -> void:
 		await NetworkManager.announce_match_end()
 		GameManager.on_scene_exit()
 		NetworkManager.reset()

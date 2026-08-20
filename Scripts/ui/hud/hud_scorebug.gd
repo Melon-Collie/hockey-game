@@ -56,7 +56,7 @@ func build(scale_root: Control) -> void:
 	# they hug the panel's full left edge top-to-bottom. The top stripe gets
 	# the panel's top-left curve, the bottom stripe gets the bottom-left
 	# curve; they meet flush at the midpoint of the inter-row separation.
-	var away_row := _build_team_row(1, "AWAY")
+	var away_row := _build_team_row(1, tr(&"TEAM_AWAY"))
 	_away_badge_style = away_row.get_meta(&"stripe_style") as StyleBoxFlat
 	_away_score_label = away_row.get_meta(&"score_label") as Label
 	var away_stripe: Panel = away_row.get_meta(&"stripe") as Panel
@@ -64,7 +64,7 @@ func build(scale_root: Control) -> void:
 	away_stripe.offset_top = -5
 	away_stripe.offset_bottom = 2
 	teams_vbox.add_child(away_row)
-	var home_row := _build_team_row(0, "HOME")
+	var home_row := _build_team_row(0, tr(&"TEAM_HOME"))
 	_home_badge_style = home_row.get_meta(&"stripe_style") as StyleBoxFlat
 	_home_score_label = home_row.get_meta(&"score_label") as Label
 	var home_stripe: Panel = home_row.get_meta(&"stripe") as Panel
@@ -86,7 +86,7 @@ func build(scale_root: Control) -> void:
 	_away_sog_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_away_sog_label.custom_minimum_size = Vector2(28, 0)
 	shots_vbox.add_child(_away_sog_label)
-	var shots_header := HudChrome.lbl("SHOTS", 10, MenuStyle.BROADCAST_DIM)
+	var shots_header := HudChrome.lbl(tr(&"SCOREBUG_SHOTS"), 10, MenuStyle.BROADCAST_DIM)
 	shots_header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	shots_vbox.add_child(shots_header)
 	_home_sog_label = HudChrome.lbl("0", 18, MenuStyle.BROADCAST_CREAM)
@@ -260,10 +260,10 @@ func update_clock(t: float) -> void:
 		_warned_thirty = false
 	if t <= 60.0 and t > 30.0 and not _warned_one_min:
 		_warned_one_min = true
-		warning_toast.emit("1 MINUTE LEFT", MenuStyle.GOLD)
+		warning_toast.emit(tr(&"CLOCK_ONE_MINUTE_LEFT"), MenuStyle.GOLD)
 	if t <= 30.0 and t > 0.0 and not _warned_thirty:
 		_warned_thirty = true
-		warning_toast.emit("30 SECONDS LEFT", HudChrome.WARN_AMBER)
+		warning_toast.emit(tr(&"CLOCK_THIRTY_SECONDS_LEFT"), HudChrome.WARN_AMBER)
 	# Final-10 hero countdown + per-second pulse on both the big number and the
 	# scorebug clock.
 	if t > 0.0 and t <= 10.0:

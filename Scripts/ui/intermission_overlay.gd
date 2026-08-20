@@ -75,7 +75,7 @@ func _build_ui() -> void:
 
 	_band.add_child(_build_score_row())
 
-	var hint := _lbl("TAB · BOX SCORE", 12, MenuStyle.TEXT_MUTED)
+	var hint := _lbl(tr(&"HINT_TAB_BOX_SCORE"), 12, MenuStyle.TEXT_MUTED)
 	hint.add_theme_font_override("font", MenuStyle.UI_FONT)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_band.add_child(hint)
@@ -113,7 +113,7 @@ func _build_score_row() -> Control:
 
 	_home_stripe_style = _stripe_style()
 	row.add_child(_stripe(_home_stripe_style))
-	row.add_child(_lbl("HOME", 18, _WHITE))
+	row.add_child(_lbl(tr(&"TEAM_HOME"), 18, _WHITE))
 	_home_score_label = _lbl("0", 40, _WHITE)
 	row.add_child(_home_score_label)
 
@@ -123,7 +123,7 @@ func _build_score_row() -> Control:
 
 	_away_score_label = _lbl("0", 40, _WHITE)
 	row.add_child(_away_score_label)
-	row.add_child(_lbl("AWAY", 18, _WHITE))
+	row.add_child(_lbl(tr(&"TEAM_AWAY"), 18, _WHITE))
 	_away_stripe_style = _stripe_style()
 	row.add_child(_stripe(_away_stripe_style))
 	return row
@@ -141,7 +141,7 @@ func _build_caption(root: Control) -> void:
 	_caption_block.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(_caption_block)
 
-	_caption_tag = _lbl("GOAL", 14, MenuStyle.GOLD)
+	_caption_tag = _lbl(tr(&"INTERMISSION_GOAL_TAG"), 14, MenuStyle.GOLD)
 	_caption_tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_caption_block.add_child(_caption_tag)
 
@@ -185,7 +185,7 @@ func set_goal_caption(team_color: Color, scorer_name: String, assist_text: Strin
 	_caption_tag.add_theme_color_override("font_color", team_color)
 	_caption_scorer.text = scorer_name
 	_caption_scorer.visible = not scorer_name.is_empty()
-	_caption_assists.text = "ASST: %s" % assist_text
+	_caption_assists.text = tr(&"INTERMISSION_ASSIST_LINE") % assist_text
 	_caption_assists.visible = not assist_text.is_empty()
 	if _caption_tween != null and _caption_tween.is_running():
 		_caption_tween.kill()
