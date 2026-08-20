@@ -672,24 +672,37 @@ const FACEOFF_END_WEAK_POINT_X_M: float = 1.2     # weak point: past mid, off-do
 # the netting.
 const FACEOFF_MAX_ABS_Z: float = GOAL_LINE_Z - 1.0
 
-# ── Bench-Door Start Points (pre-game intro skate-in) ─────────────────────────
+# ── Player benches ────────────────────────────────────────────────────────────
+# Where the two team benches sit along the +X boards: team 0 (the +Z-half team)
+# takes the +Z bench, team 1 the -Z bench. Three things are built off this and
+# have to agree — the furniture in the bowl (ArenaRinksideLayout derives both
+# numbers from here), the gate the boards leave in their ad band and glass
+# (HockeyRink), and the intro start points below — so the span lives here, in
+# the layer all three can see, rather than being restated in each.
+const BENCH_CENTER_Z: float  = 4.4
+const BENCH_HALF_LEN: float  = 3.0
+
+# ── Bench start points (pre-game intro skate-in) ──────────────────────────────
 # Where each skater begins the opening/rematch intro before skating out to its
-# faceoff slot. Both team benches sit on the +X boards; team 0 (the +Z-half
-# team) takes the +Z bench, team 1 the -Z bench. Skaters emerge just off the
-# boards and fan out from a small per-slot stagger along the bench span. Only
-# used for the center-ice opening faceoff — every other faceoff skates in from
-# the player's current position.
+# faceoff slot. They start ON the ice alongside their bench rather than queued
+# at its gate — a team steps over the boards together, and five skaters filing
+# through one doorway is not what an intro looks like. Only used for the
+# center-ice opening faceoff; every other faceoff skates in from the player's
+# current position.
 #
-# These describe the same bench the arena bowl builds, and this is the analytic
-# half of it: test_rink_geometry_mirrors.gd holds the two together, checks the
-# stagger keeps the fielded roster on the block, and checks a skater standing at
-# BENCH_DOOR_X clears the kickplate.
-const BENCH_DOOR_X: float          = 11.5
-const BENCH_DOOR_CENTER_Z: float   = 4.4
-# Per-slot fan-out along the bench span (index = team_slot). Center leaves from
-# the middle of the bench; wingers from either side, D from the outer edges,
-# so the five don't stack (3v3 uses the first three).
-const BENCH_DOOR_SLOT_DZ: Array[float] = [0.0, 2.4, -2.4, 4.8, -4.8]
+# Pulled in from the inner boards (INNER_HALF_WIDTH) far enough that a skater's
+# whole body is on the sheet rather than inside the kickplate.
+const BENCH_START_X: float = 11.5
+# Per-slot fan-out along the bench (index = team_slot), signed by team side in
+# PlayerRules.bench_start_position so both benches read the same way.
+#
+# The first three are the 3v3 line spread across the block; slots 3 and 4 fill
+# the gaps between them rather than extending past the ends, which is what keeps
+# a full 5v5 bench ON the bench — the outer pair used to sit at ±4.8, 1.8 m off
+# either end of a 3.0 m half-bench, which put one of them across centre ice
+# beside the opposing bench. Every entry has to stay inside BENCH_HALF_LEN by a
+# body's radius; test_rink_geometry_mirrors.gd holds that for the whole table.
+const BENCH_START_SLOT_DZ: Array[float] = [0.0, 2.4, -2.4, 1.2, -1.2]
 
 # Returns the faceoff dot closest to the given XZ point — picks among centre
 # ice, the four end-zone dots, and the four neutral-zone dots. Used to pick

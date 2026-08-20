@@ -60,64 +60,108 @@ func test_perimeter_collision_inner_face_is_the_inner_boundary() -> void:
 			"collision corner arc must sit at GameRules.INNER_CORNER_RADIUS")
 
 
-# ── Bench doors ──────────────────────────────────────────────────────────────
+# ── Rinkside furniture and the doors that serve it ───────────────────────────
 #
-# The pre-game intro sends every skater out from its team's bench, and
-# GameRules.BENCH_DOOR_* is where the domain thinks that bench is. The bench you
-# can actually SEE is ArenaRinksideLayout's, built into the bowl — so this is the
-# same shape as the rink mirrors above: an analytic constant against the thing
-# the player looks at, with nothing else in the codebase to catch a drift.
+# Three things are built off the bench span — the furniture in the bowl, the
+# gate the boards leave for it, and the intro's start points — and they agree
+# because all three read GameRules.BENCH_*, so there is no mirror left to guard
+# there (same as wall_height above). What still needs holding is everything
+# DERIVED from that span, because each derivation fails silently:
 #
-# It fails softly, which is why it needs a guard. Move one number and the intro
-# still runs, at the same speed, to the same faceoff dots; the skaters just walk
-# out of the boards a couple of metres from the bench they are supposed to be
-# leaving. Nothing errors and no other test notices.
+#   · A gate half a metre off its furniture is still a gate. The boards keep
+#     their ad band clear of it, the glass still opens, and it just leads
+#     nowhere — which is what the bench door did, sitting 0.45 m of its own
+#     width past the end of the bench.
+#   · A start point off the end of the bench is still a legal spawn. The intro
+#     runs at the same speed to the same dots; two of the five just step onto
+#     the ice beside a bench that isn't theirs.
 
-func test_bench_door_center_mirrors_the_arena_bench() -> void:
-	assert_almost_eq(GameRules.BENCH_DOOR_CENTER_Z,
-			ArenaRinksideLayout.BENCH_CENTER_Z, 1e-6,
-			"GameRules.BENCH_DOOR_CENTER_Z must equal ArenaRinksideLayout" +
-			".BENCH_CENTER_Z — the intro's start points and the bench furniture " +
-			"describe the same bench. Update both together.")
+func test_every_gate_opens_onto_the_furniture_it_serves() -> void:
+	# A door is for something. The penalty door has always been derived from its
+	# box; the bench door was a literal, and drifted off the end of the bench.
+	# Flush against that end is the intended result, not a coincidence, so both
+	# halves are checked: the opening lies wholly on the furniture, and the edge
+	# that is supposed to touch does touch. The bench's door is at the INNER end
+	# (nearest centre ice) so a team steps on beside its own bench; the box's is
+	# at the OUTER end so a released player leaves behind the play.
+	var rink: HockeyRink = autofree(HockeyRink.new())
+	var half_w: float = float(_RINK.get_property_default_value("rink_width")) / 2.0
+	var half_gate: float = HockeyRink.GATE_WIDTH * 0.5
+	var spans: Dictionary = {
+		# side sign → [furniture centre, half-length, +1 if the door is flush
+		# with the OUTER end, -1 if with the inner]
+		1.0: [ArenaRinksideLayout.BENCH_CENTER_Z,
+				ArenaRinksideLayout.BENCH_HALF_LEN, -1.0],
+		-1.0: [ArenaRinksideLayout.PENALTY_BOX_CENTER_Z,
+				ArenaRinksideLayout.PENALTY_BOX_HALF_LEN, 1.0],
+	}
+	var checked: int = 0
+	for gate: Vector2 in rink._gate_targets():
+		if not is_equal_approx(absf(gate.x), half_w):
+			continue  # an end-board resurfacer door serves no rinkside furniture
+		var span: Array = spans[signf(gate.x)]
+		var centre: float = absf(float(span[0]))
+		var half_len: float = float(span[1])
+		var flush_end: float = centre + float(span[2]) * half_len
+		var near: float = absf(gate.y) - half_gate
+		var far: float = absf(gate.y) + half_gate
+		assert_gt(near, centre - half_len - 1e-6,
+				"gate at %v opens past the near end of its furniture" % gate)
+		assert_lt(far, centre + half_len + 1e-6,
+				"gate at %v opens past the far end of its furniture" % gate)
+		assert_almost_eq(near if float(span[2]) < 0.0 else far, flush_end, 1e-6,
+				("gate at %v is not flush with the end of its furniture — a door " +
+						"floating mid-bench is a door nobody would walk to") % gate)
+		checked += 1
+	assert_eq(checked, 4, "expected two bench doors and two penalty doors")
 
 
-func test_the_fielded_roster_starts_on_the_bench_block() -> void:
-	# The centre-of-the-bench constant agreeing is only half of it: the per-slot
-	# stagger has to keep the skaters ON the block it centres. Checked through
+func test_the_whole_roster_starts_on_the_bench() -> void:
+	# Every slot, not just the 3v3 line: the two the 5v5 roster adds are exactly
+	# the ones that used to overrun. Driven through
 	# PlayerRules.bench_start_position rather than the raw offsets, so the
-	# side-mirroring is covered too.
-	#
-	# DEFAULT_TEAM_SIZE slots only — deliberately, and it is not a silent cap:
-	# the 5v5 pair (BENCH_DOOR_SLOT_DZ ±4.8) lands 1.8 m off either end of a
-	# 3.0 m half-bench, so at 5v5 the outer two skaters do NOT start at their
-	# bench and one of them starts across centre ice. That is a real gap, not a
-	# rounding one, and widening the constant is a feel decision rather than
-	# something to assert into existence here.
-	var half_len: float = ArenaRinksideLayout.BENCH_HALF_LEN
+	# side-mirroring is covered too, and sized against the body rather than the
+	# origin so nobody hangs half off the end.
+	var skater: Skater = autofree(Skater.new())
+	var reach: float = ArenaRinksideLayout.BENCH_HALF_LEN - skater.collision_radius()
+	assert_gt(reach, 0.0, "premise: a body fits on the bench at all")
 	for team_id: int in [0, 1]:
-		for slot: int in GameRules.DEFAULT_TEAM_SIZE:
+		for slot: int in GameRules.BENCH_START_SLOT_DZ.size():
 			var start: Vector3 = PlayerRules.bench_start_position(team_id, slot)
 			var side: float = -1.0 if team_id == 1 else 1.0
 			var along_bench: float = start.z - side * ArenaRinksideLayout.BENCH_CENTER_Z
-			assert_lt(absf(along_bench), half_len,
+			assert_lt(absf(along_bench), reach,
 					("team %d slot %d starts %.2f m from its bench centre, past the " +
-							"%.2f m the block spans") % [team_id, slot, along_bench, half_len])
+							"%.2f m a body can stand within") % [team_id, slot,
+							along_bench, reach])
 
 
-func test_bench_doors_open_onto_ice_not_into_the_kickplate() -> void:
-	# The other half of the same comment block: BENCH_DOOR_X is pulled in from
-	# the inner boards so a skater standing there is on the sheet. The body has
-	# width, so the clearance has to cover its radius, not just its origin —
-	# read off the shipped skater rather than restated here. (A bare Skater, not
-	# the scene: its @onready node refs only resolve on _ready, and the tuning
-	# vars this reads are plain class-level defaults — see CLAUDE.md on why they
-	# are `var` and not `@export`, which is also why the rink mirrors above can
-	# use get_property_default_value and this cannot.)
+func test_bench_starts_are_on_the_ice_not_in_the_kickplate() -> void:
+	# BENCH_START_X is pulled in from the inner boards so a skater standing there
+	# is on the sheet. The body has width, so the clearance has to cover its
+	# radius, not just its origin — read off the shipped skater rather than
+	# restated here. (A bare Skater, not the scene: its @onready node refs only
+	# resolve on _ready. It is read live rather than through
+	# get_property_default_value, which the rink mirrors above can use because
+	# those are @export and this is a plain `var` — see CLAUDE.md on why the
+	# skater's tunables carry no inspector rows.)
 	var skater: Skater = autofree(Skater.new())
 	var body_radius: float = skater.collision_radius()
 	assert_gt(body_radius, 0.0, "expected a skater body radius to check against")
-	assert_lt(GameRules.BENCH_DOOR_X + body_radius, GameRules.INNER_HALF_WIDTH,
-			"a skater standing at BENCH_DOOR_X must clear the kickplate lip")
+	assert_lt(GameRules.BENCH_START_X + body_radius, GameRules.INNER_HALF_WIDTH,
+			"a skater standing at BENCH_START_X must clear the kickplate lip")
+
+
+func test_the_bench_slots_do_not_overlap_each_other() -> void:
+	# Fitting on the bench is not enough on its own — five bodies inside a 6 m
+	# block have to not intersect, which is the constraint that decides how tight
+	# the stagger can get.
+	var skater: Skater = autofree(Skater.new())
+	var offsets: Array[float] = GameRules.BENCH_START_SLOT_DZ.duplicate()
+	offsets.sort()
+	for i: int in range(1, offsets.size()):
+		assert_gt(offsets[i] - offsets[i - 1], skater.collision_radius() * 2.0,
+				"bench slots at %.2f and %.2f overlap" % [offsets[i - 1], offsets[i]])
 
 
 # Every faceoff marking has a twin at −z, which is what makes the painted sheet

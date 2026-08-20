@@ -11,8 +11,12 @@ class_name ArenaRinksideLayout
 # Player benches: two team benches on the +X side straddling center ice. 3v3
 # fields no reserves, so they're empty furniture — the break in the crowd wall is
 # what sells the rink.
-const BENCH_CENTER_Z: float = 4.4    # bench centers at ±this along the boards
-const BENCH_HALF_LEN: float = 3.0    # half-length of each bench along Z
+#
+# The span itself is GameRules', not ours: the intro's start points and the
+# boards' gate are built off the same two numbers, and the domain is the layer
+# all three can see. What this file owns is the furniture's cross-section below.
+const BENCH_CENTER_Z: float = GameRules.BENCH_CENTER_Z
+const BENCH_HALF_LEN: float = GameRules.BENCH_HALF_LEN
 const BENCH_SEAT_X_OFFSET: float = 0.33  # seat center outward of the first tread's inner edge
 const BENCH_SEAT_HEIGHT: float = 0.46
 
