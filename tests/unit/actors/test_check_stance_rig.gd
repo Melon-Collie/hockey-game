@@ -1,8 +1,8 @@
 extends GutTest
 
 # The shoulder PAD and the arm that grows out of it are placed by two different
-# code paths that never read each other: `Skater._repose_upper_bone` writes the
-# cap bone, `Skater._textured_shoulder` gives the arm its root. When they
+# code paths that never read each other: `SkaterArmRig.repose_bone` writes the
+# cap bone, `SkaterArmRig._textured_shoulder` gives the arm its root. When they
 # disagreed the pad walked off the arm, worst at exactly the poses that displace
 # a shoulder most — which is what the check-commit load-up now does on purpose.
 #
@@ -38,14 +38,14 @@ func _rig(lefty: bool, committed: bool) -> Skater:
 func _cap(skater: Skater, side_sign: float) -> Vector3:
 	var bone: int = SkaterMeshBuilder.UpperBone.SHOULDER_R if side_sign > 0.0 \
 			else SkaterMeshBuilder.UpperBone.SHOULDER_L
-	return skater._arm_skeleton.get_bone_pose(bone).origin
+	return skater._arms._skeleton.get_bone_pose(bone).origin
 
 
 func _root(skater: Skater, side_sign: float) -> Vector3:
 	var marker: Vector3 = skater.shoulder.position
 	if signf(marker.x) != side_sign:
 		marker = skater.bottom_shoulder.position
-	return skater._textured_shoulder(marker)
+	return skater._arms._textured_shoulder(marker)
 
 
 func _assert_pad_sits_on_the_arm(skater: Skater, label: String) -> void:

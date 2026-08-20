@@ -25,6 +25,22 @@ Playtester builds ship via GitHub Releases (`latest` tag). `deploy.yml` computes
 
 **Supabase backend:** `Scripts/game/supabase_config.gd` holds the project URL and publishable (anon) key — safe to commit, RLS restricts it to INSERT/SELECT (there is deliberately no UPDATE grant — the key ships in every client). `CareerStatsReporter` (`Scripts/game/career_stats_reporter.gd`) POSTs one row to `career_stats` at game-over and GETs from the `career_totals` view for the career screen. `BugReporter` (`Scripts/game/bug_reporter.gd`) POSTs to `bug_reports` with a telemetry snapshot. `NetworkSessionReporter` (`Scripts/game/network_session_reporter.gd`) POSTs one connection-quality row per online game to `network_sessions` at game-over — the playtesting telemetry pipeline (see `ARCHITECTURE.md` → **Playtesting telemetry**; schema + analysis views in `supabase/migrations/*_network_sessions.sql`). All use fire-and-forget `HTTPRequest` nodes added to the scene tree root and fail silently. The secret key must never be committed — use only the publishable key in `SupabaseConfig`. **Table/view/RPC schemas are version-controlled as migrations in `supabase/migrations/`**, applied to the hosted project by `.github/workflows/supabase.yml` on merge to `main` — a schema change ships with the code that needs it rather than being pasted into the SQL editor. Migrations are idempotent DDL and CI pins that (it replays them onto a populated DB); every view needs `with (security_invoker = true)` or it bypasses RLS. `supabase/README.md` is the full workflow, including the one repo secret the pipeline stays inert without. All backend rows key on `steam_id` — there is no per-player `uuid` (`game_id` is still a UUID, minted by `PlayerPrefs.generate_uuid`).
 
+## Recording a match to disk
+
+`ReplayFileRecorder` streams the match to `user://replays/<game_id>.mreplay` on
+every peer (host, client, spectator) for any session with a game id and
+`PlayerPrefs.replay_recording_enabled`. It owns the writer's lifecycle, the
+frame throttle and the recording policy; `GameManager` keeps only the file's
+CONTENT — the header roster, the footer box score and shot log, and the event
+payloads, all built from state it owns — and hands them over at open/close.
+
+The two policy halves are static and pure (`phase_admits`, `admits_frame`), so
+what a recording contains is testable without a match: a throttle that drops a
+keyframe loses the faceoff snap, and a phase rule that admits every
+movement-locked tick fills the file with duplicate static frames. Recording is
+one-way I/O and adjudicates nothing, which is why it can live outside the
+orchestrator that sits next to it.
+
 ## Bot AI decides on a worker thread
 
 `AICoordinator` runs `TeamBrain.tick` → `build_view` → `decide()` on a persistent

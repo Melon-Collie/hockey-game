@@ -204,7 +204,7 @@ func test_bench_start_is_on_positive_x_boards() -> void:
 	for team_id: int in [0, 1]:
 		for slot: int in [0, 1, 2]:
 			assert_eq(PlayerRules.bench_start_position(team_id, slot).x,
-					GameRules.BENCH_DOOR_X)
+					GameRules.BENCH_START_X)
 
 func test_bench_start_height_matches_faceoff_spawn_height() -> void:
 	assert_eq(PlayerRules.bench_start_position(0, 0).y, GameRules.FACEOFF_SPAWN_HEIGHT)
