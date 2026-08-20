@@ -1,0 +1,5 @@
+# Blank issues stay on: the two templates are the common shapes, not a gate.
+# Plenty of what gets filed here is a note-to-self or a question that would be
+# padded out by a form, and a template that has to be deleted to file is worse
+# than no template.
+blank_issues_enabled: true
