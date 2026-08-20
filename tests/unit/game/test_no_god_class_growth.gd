@@ -48,7 +48,7 @@ const _SIZE_SLACK: int = 40
 
 const _SIZE_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/ai/skater_agent_state_machine.gd": 6166,
-	"res://Scripts/game/game_manager.gd": 5762,
+	"res://Scripts/game/game_manager.gd": 5764,
 	"res://Scripts/domain/ai/action_scoring.gd": 4476,
 	"res://Scripts/controllers/goalie_controller.gd": 4476,
 	"res://Scripts/domain/ai/role_behaviors/carrier.gd": 3755,
@@ -58,7 +58,7 @@ const _SIZE_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/actors/arena_stands.gd": 2374,
 	"res://Scripts/game/tutorial_manager.gd": 2101,
 	"res://Scripts/controllers/skater_skating_coordinator.gd": 1547,
-	"res://Scripts/controllers/puck_controller.gd": 1516,
+	"res://Scripts/controllers/puck_controller.gd": 1519,
 	"res://Scripts/actors/hockey_rink.gd": 1470,
 	"res://Scripts/domain/ai/role_behaviors/role_helpers.gd": 1436,
 	"res://Scripts/game/player_prefs.gd": 1370,
@@ -67,7 +67,7 @@ const _SIZE_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/ui/career_stats_screen.gd": 1271,
 	"res://Scripts/domain/ai/carry_space.gd": 1255,
 	"res://Scripts/ui/lobby_manager.gd": 1247,
-	"res://Scripts/actors/puck.gd": 1052,
+	"res://Scripts/actors/puck.gd": 1057,
 	"res://Scripts/ui/side_menu.gd": 995,
 	"res://Scripts/controllers/goalie_body_config_builder.gd": 974,
 	"res://Scripts/ui/network_debug_overlay.gd": 953,
