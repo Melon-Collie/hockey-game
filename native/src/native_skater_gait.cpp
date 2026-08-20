@@ -338,6 +338,7 @@ int64_t NativeSkaterGait::apply(
 	const bool is_left_handed = flags & FLAG_LEFT_HANDED;
 	const bool sprint_active = flags & FLAG_SPRINT;
 	const bool faceoff_ready = flags & FLAG_FACEOFF_READY;
+	const bool faceoff_center = flags & FLAG_FACEOFF_CENTER;
 
 	// ── Settled early-out ──
 	const bool quiet =
@@ -677,7 +678,9 @@ int64_t NativeSkaterGait::apply(
 			faceoff_ready ? 1.0 : 0.0,
 			cfg.stride_intensity_speed * delta);
 	if (faceoff_blend > 0.001) {
-		stance = MAX(stance, cfg.faceoff_stance * faceoff_blend);
+		stance = MAX(stance, (faceoff_center ? cfg.faceoff_center_stance
+											 : cfg.faceoff_stance) *
+							   faceoff_blend);
 	}
 	if (stop_blend > 0.001) {
 		stance = MAX(stance, cfg.hockey_stop_stance * stop_blend);
@@ -728,8 +731,9 @@ int64_t NativeSkaterGait::apply(
 
 	// Faceoff foot stagger.
 	if (faceoff_blend > 0.001) {
-		const double split = Math::deg_to_rad(cfg.faceoff_split_deg) * faceoff_blend *
-				(is_left_handed ? -1.0 : 1.0);
+		const double split = Math::deg_to_rad(faceoff_center ? cfg.faceoff_center_split_deg
+															 : cfg.faceoff_split_deg) *
+				faceoff_blend * (is_left_handed ? -1.0 : 1.0);
 		l_pitch += split;
 		r_pitch -= split;
 	}
@@ -1021,6 +1025,12 @@ int64_t NativeSkaterGait::apply(
 		drop += cfg.hit_commit_crouch_m * commit_t;
 	}
 
+	// The centre's fold over the dot — trunk texture, not the torso lean; see
+	// the GDScript reference for why.
+	if (faceoff_blend > 0.001 && faceoff_center) {
+		trunk_pitch_add += -Math::deg_to_rad(cfg.faceoff_center_lean_deg) * faceoff_blend;
+	}
+
 	// Trunk inertia filter + post-filter stumble wobble — see the GDScript
 	// reference's publish tail.
 	double tex_ease = 1.0;
@@ -1094,6 +1104,7 @@ void NativeSkaterGait::_bind_methods() {
 	BIND_CONSTANT(FLAG_LEFT_HANDED);
 	BIND_CONSTANT(FLAG_SPRINT);
 	BIND_CONSTANT(FLAG_FACEOFF_READY);
+	BIND_CONSTANT(FLAG_FACEOFF_CENTER);
 	BIND_CONSTANT(APPLY_ACTIVE);
 	BIND_CONSTANT(APPLY_SETTLED_HOLD);
 	BIND_CONSTANT(APPLY_JUST_SETTLED);

@@ -283,11 +283,20 @@ func apply_facing(input: InputState, delta: float) -> void:
 			-deg_to_rad(_controller.lower_body_lag_max_deg),
 			deg_to_rad(_controller.lower_body_lag_max_deg))
 
-	# Always decay and apply — even during locked states. The hockey-stop yaw
-	# (legs turned across travel while the torso keeps facing the play) and
-	# the hip-to-travel alignment (legs stride along the motion while the
-	# torso faces the cursor) ride the same lower-body channel: the gait
-	# computes both, this coordinator stays the single writer of the rotation.
+	apply_lower_body_yaw(delta)
+
+# Sole writer of the lower body's yaw. Decays the facing-driven turn lag and
+# sums the gait's two published yaw channels onto it — the hockey-stop turn
+# (legs across travel while the torso keeps facing the play) and the
+# hip-to-travel alignment (legs striding along motion under a torso facing the
+# cursor).
+#
+# Runs on EVERY path that poses the body, not just the live one: the faceoff
+# skate-in and the prep freeze replace apply_facing entirely, and a path that
+# skips this leaves the lower body frozen at the last yaw anyone published —
+# which is how skaters used to arrive at the dot with their hips still turned
+# down the line they skated in on, for the whole countdown.
+func apply_lower_body_yaw(delta: float) -> void:
 	lower_body_lag = lerpf(lower_body_lag, 0.0, _controller.lower_body_lag_speed * delta)
 	var lag_share: float = lower_body_lag
 	var gait_yaw: float = 0.0
@@ -300,6 +309,7 @@ func apply_facing(input: InputState, delta: float) -> void:
 		# generic lag out; it returns as the pivot releases.
 		lag_share *= 1.0 - _skating.pivot_hold
 	_skater.set_lower_body_lag(lag_share + gait_yaw)
+
 
 func apply_upper_body(delta: float) -> void:
 	if _sm.get_state() == State.SHOT_BLOCKING:

@@ -506,7 +506,7 @@ const _STRIDE_LEAN_DEG: float = 9.0      # shoulders drive forward while skating
 # ready stance; the STOP phase plants at the boards with the paddle down
 # across the rim's path (the real rim-stopping technique: stick blade/paddle
 # flat against the ice in front of the boards, body square to the incoming
-# puck). First-pass authored numbers — verify in-editor.
+# puck).
 func _set_puck_play_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 	_set_ready_pose(c, inputs)
 	if not inputs.puck_play_stopping:
@@ -526,7 +526,6 @@ func _set_puck_play_pose(c: GoalieBodyConfig, inputs: Inputs) -> void:
 # the head drops to look INTO the glove — the classic catch silhouette. Two
 # variants share the arms: upright keeps the ready lower body, `down` keeps
 # the butterfly seal (a glove save from the knees squeezes without standing).
-# First-pass authored numbers — verify in-editor.
 func _set_catching_pose(c: GoalieBodyConfig, inputs: Inputs, down: bool) -> void:
 	if down:
 		_set_butterfly_pose(c, inputs)
@@ -592,8 +591,8 @@ func _set_rvh_left_pose(c: GoalieBodyConfig) -> void:
 # weakness is short-side high, which is exactly what VH exists to close — while
 # the horizontal back pad seals the ice behind the vertical pad and the loaded
 # back leg powers the push if the play reverses or crosses. The post-side hand
-# rides high over the vertical pad (the over-the-shoulder seal). First-pass
-# authored numbers mirroring the RVH pose family — verify the look in-editor.
+# rides high over the vertical pad (the over-the-shoulder seal). The numbers
+# mirror the RVH pose family.
 func _set_vh_left_pose(c: GoalieBodyConfig) -> void:
 	# Post-side (left) pad vertical, tight beside the body, face square.
 	c.left_pad_pos  = Vector3(-0.28, 0.44, -0.02)

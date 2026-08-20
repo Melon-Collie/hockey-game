@@ -104,7 +104,7 @@ func build(scale_root: Control) -> void:
 
 	# "ASSISTED BY" tag — secondary tagline between the hero and the assist
 	# names. Hidden when there are no assists.
-	_assist_tag_label = HudChrome.lbl("ASSISTED BY", 16, MenuStyle.BROADCAST_CREAM)
+	_assist_tag_label = HudChrome.lbl(tr(&"CHYRON_ASSISTED_BY"), 16, MenuStyle.BROADCAST_CREAM)
 	_assist_tag_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_assist_tag_label.visible = false
 	vbox.add_child(_assist_tag_label)
@@ -139,7 +139,7 @@ func build_wash(scale_root: Control) -> void:
 	text_margin.add_theme_constant_override("margin_top", 8)
 	text_margin.add_theme_constant_override("margin_bottom", 8)
 	panel.add_child(text_margin)
-	_wash_label = HudChrome.lbl("G  O  A  L", 32, MenuStyle.BROADCAST_CREAM)
+	_wash_label = HudChrome.lbl(tr(&"CHYRON_GOAL_WASH"), 32, MenuStyle.BROADCAST_CREAM)
 	_wash_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_wash_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	text_margin.add_child(_wash_label)
@@ -176,14 +176,14 @@ func play_wash(primary: Color, secondary: Color, scorebug_size: Vector2) -> void
 # toggle visibility.
 func preload_goal(scorer_name: String, assist1_name: String, assist2_name: String,
 		primary: Color, secondary: Color) -> void:
-	_tagline_label.text = "GOAL SCORED BY"
+	_tagline_label.text = tr(&"CHYRON_GOAL_SCORED_BY")
 	_tagline_label.add_theme_color_override("font_color", secondary)
 	_phase_label.visible = false
 	_scorer_label.text = scorer_name
 	_scorer_label.add_theme_color_override("font_color", secondary)
 	# Restore the goal-chyron tag — game over borrows this label for
 	# "STAR OF THE GAME", so re-stamp it on every goal preload.
-	_assist_tag_label.text = "ASSISTED BY"
+	_assist_tag_label.text = tr(&"CHYRON_ASSISTED_BY")
 	_assist_tag_label.add_theme_color_override("font_color", secondary)
 	_assist_label.add_theme_color_override("font_color", secondary)
 	_style.bg_color = primary
@@ -272,7 +272,7 @@ func on_play_resumed() -> void:
 
 func show_final(result_text: String, result_color: Color) -> void:
 	_style.bg_color = MenuStyle.BROADCAST_BG  # clear any residual goal tint
-	_tagline_label.text = "FINAL"
+	_tagline_label.text = tr(&"FINAL")
 	# Clear the last goal's team tint (preload_goal overrides this label's color
 	# per-goal); FINAL is a non-team context, so it reads in the default.
 	_tagline_label.add_theme_color_override("font_color", MenuStyle.BROADCAST_CREAM)
@@ -341,7 +341,7 @@ func start_faceoff_countdown() -> void:
 			if _wrapper != null:
 				_wrapper.visible = true
 			if _phase_label != null:
-				_phase_label.text = "FACEOFF IN 2")
+				_phase_label.text = _faceoff_in(2))
 	elif period_card > 0.0:
 		# Period-start card over the camera sweep + bench skate-on, then the
 		# normal countdown lands on the extended drop.
@@ -349,23 +349,23 @@ func start_faceoff_countdown() -> void:
 		t.tween_interval(period_card)
 		t.tween_callback(func() -> void:
 			if _phase_label != null:
-				_phase_label.text = "FACEOFF IN 2")
+				_phase_label.text = _faceoff_in(2))
 	elif skate > 0.0:
 		# Players are skating in — hold on a plain banner, then start the numbered
 		# countdown so it ends on the extended drop.
-		_phase_label.text = "FACEOFF"
+		_phase_label.text = tr(&"FACEOFF")
 		t.tween_interval(skate)
 		t.tween_callback(func() -> void:
 			if _phase_label != null:
-				_phase_label.text = "FACEOFF IN 2")
+				_phase_label.text = _faceoff_in(2))
 	else:
-		_phase_label.text = "FACEOFF IN 2"
+		_phase_label.text = _faceoff_in(2)
 	# Half-second tween to "1" mid-window if prep >= 2s; final "DROP!" sits in
 	# the FACEOFF phase entry. Steps are evenly split so 2.0s → ~1.0s per beat.
 	t.tween_interval(prep * 0.5)
 	t.tween_callback(func() -> void:
 		if _phase_label != null:
-			_phase_label.text = "FACEOFF IN 1")
+			_phase_label.text = _faceoff_in(1))
 	_countdown_tween = t
 
 func stop_faceoff_countdown() -> void:
@@ -375,3 +375,9 @@ func stop_faceoff_countdown() -> void:
 	# The matchup screen lives under this tween's watch (its dismissal is a
 	# tween callback), so an interrupted countdown must take it down too.
 	matchup_intro_dismissed.emit()
+
+# One key with the count as a placeholder rather than a key per number: the
+# phrase does not order the same way in every language, and a key set numbered
+# in English is what traps the next language added.
+func _faceoff_in(seconds: int) -> String:
+	return tr(&"FACEOFF_IN_N") % seconds

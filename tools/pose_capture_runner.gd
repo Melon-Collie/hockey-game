@@ -135,17 +135,51 @@ const POSES: Array = [
 	{"name": "hit_commit_deep", "puck": false, "steps": [
 		[60, {"hit": true, "move": Vector2(0.84, -0.55), "aim": Vector3(1.6, 0.0, 2.4)}],
 	]},
+	# ── FACEOFF_PREP ──────────────────────────────────────────────────────────
+	# The locked-phase path (begin_approach → tick_faceoff_approach →
+	# apply_blade_aim_only), which _process_input never reaches, so the specs
+	# above cover none of it. `faceoff` names the walk-in; `hold` is the ticks
+	# spent set at the dot afterwards.
+	#
+	# Mid-walk-in: the stride the players skate to the dot on.
+	{"name": "faceoff_walkin", "puck": false, "faceoff": {
+		"from": Vector3(-1.5, 0.0, 7.0), "duration": 1.4, "ticks": 90, "hold": 0,
+	}},
+	# Set at the dot: the winger's ready stance, then the centre's crouch over
+	# the dot. Both hold well past every ease so the tile is the settled pose.
+	{"name": "faceoff_winger", "puck": false, "faceoff": {
+		"from": Vector3(-1.5, 0.0, 7.0), "duration": 1.4, "ticks": 168, "hold": 90,
+	}},
+	{"name": "faceoff_center", "puck": false, "cam": Vector3(3.1, 0.5, 0.2),
+		"faceoff": {
+			"from": Vector3(-1.5, 0.0, 7.0), "duration": 1.4, "ticks": 168, "hold": 90,
+			"center": true,
+		}},
+	# A blocker caught by the whistle: the shot-block stance must not ride
+	# through the walk-in (the state machine is not dispatched while locked).
+	{"name": "faceoff_after_block", "puck": false,
+		"steps": [[30, {"block": true, "aim": Vector3(0.0, 0.0, -3.0)}]],
+		"faceoff": {
+			"from": Vector3(-1.5, 0.0, 7.0), "duration": 1.4, "ticks": 168, "hold": 90,
+		}},
 ]
 
 
 # Minimal stand-in for the game-state Node SkaterController takes; it only ever
 # asks these two questions. Same stub the control micro-benchmark uses.
 class StubGameState extends Node:
+	# Flipped by the faceoff poses, which need the locked phase the skate-in and
+	# the ready stance are gated on.
+	var faceoff_prep: bool = false
+
 	func is_host() -> bool:
 		return true
 
 	func is_movement_locked() -> bool:
-		return false
+		return faceoff_prep
+
+	func is_faceoff_prep() -> bool:
+		return faceoff_prep
 
 
 var _camera: Camera3D = null
@@ -153,6 +187,9 @@ var _state: StubGameState = null
 var _skater_scene: PackedScene = null
 var _puck_scene: PackedScene = null
 var _record_baseline: bool = false
+# POSES, or the subset named by --only=<substring> (iterating on one pose should
+# not cost a full set — software rasterisation makes every tile expensive).
+var _poses: Array = []
 var _pose_index: int = -1
 var _posed: bool = false
 var _images: Array[Image] = []
@@ -161,8 +198,13 @@ var _controller: SkaterController = null
 var _puck: Puck = null
 
 
-func begin(record_baseline: bool) -> void:
+func begin(record_baseline: bool, only: String = "") -> void:
 	_record_baseline = record_baseline
+	_poses = POSES.filter(func(p: Dictionary) -> bool:
+			return only == "" or String(p["name"]).contains(only))
+	if _poses.is_empty():
+		push_error("no pose matches --only=%s" % only)
+		_poses = POSES
 	CosmeticFreeze.vfx = true
 	CosmeticFreeze.hud = true
 	_skater_scene = load("res://Scenes/Skater.tscn")
@@ -181,6 +223,12 @@ func _build_stage() -> void:
 	add_child(env)
 
 	_camera = Camera3D.new()
+	# Every pose runs its whole tick list inside one engine frame, so an
+	# interpolated transform is drawn somewhere back along the path it just
+	# covered — and the camera and the body land in different places along it,
+	# which frames each tile differently. Nothing here wants interpolation:
+	# the pose IS the settled transform.
+	_camera.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	_camera.fov = 45.0
 	_camera.position = CAM_OFFSET
 	add_child(_camera)
@@ -219,7 +267,7 @@ func _process(_delta: float) -> void:
 		_posed = true
 		return
 	_pose_index += 1
-	if _pose_index >= POSES.size():
+	if _pose_index >= _poses.size():
 		_finish()
 		return
 	_build_actor()
@@ -236,6 +284,7 @@ func _build_actor() -> void:
 	_puck.set_process(false)
 
 	_skater = _skater_scene.instantiate() as Skater
+	_skater.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(_skater)
 	_skater.global_position = Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 0.0)
 	# Driven by hand at a fixed DT. See the determinism note in the header.
@@ -263,13 +312,14 @@ func _teardown() -> void:
 
 
 func _run_pose() -> void:
-	var pose: Dictionary = POSES[_pose_index]
+	var pose: Dictionary = _poses[_pose_index]
 	if bool(pose.get("puck", false)):
 		_puck.set_carrier(_skater)
 		_controller.on_puck_picked_up_network()
 
 	var input := InputState.new()
-	var steps: Array = pose["steps"]
+	_state.faceoff_prep = false
+	var steps: Array = pose.get("steps", [])
 	for step: Array in steps:
 		var ticks: int = step[0]
 		var spec: Dictionary = step[1]
@@ -281,7 +331,62 @@ func _run_pose() -> void:
 			_controller._process_input(input, DT)
 			_skater._physics_process(DT)
 			_skater._process(DT)
-	_camera.global_position = _skater.global_position + CAM_OFFSET
+	if pose.has("faceoff"):
+		_run_faceoff(pose["faceoff"] as Dictionary)
+	# `cam` re-shoots a pose from somewhere the chase rig can't see it. The
+	# centre's address is the case that needs it: he faces straight down his own
+	# stick, so from behind the shaft is a dot and the fold is a silhouette.
+	var offset: Vector3 = pose.get("cam", CAM_OFFSET)
+	_camera.global_position = _skater.global_position + offset
+	_camera.look_at(_skater.global_position + CAM_AIM, Vector3.UP)
+
+
+# FACEOFF_PREP, driven through the same two entry points a locked tick uses:
+# tick_faceoff_approach while the skate-in is live, apply_blade_aim_only once it
+# has handed back. `ticks` is the whole prep window (the walk-in plus however
+# much of the countdown it should run into); `hold` extends it after arrival, so
+# a spec can frame either the stride or the settled stance.
+#
+# The skater always ENDS on the tile's origin so the fixed camera frames every
+# pose alike; the dot is placed relative to him instead — a centre's own reach
+# ahead of him, a winger's several metres off — because where the stick is
+# pointed is half of what these tiles are for.
+func _run_faceoff(spec: Dictionary) -> void:
+	var target: Vector3 = Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 0.0)
+	var start: Vector3 = target + (spec.get("from", Vector3.ZERO) as Vector3)
+	var facing := Vector2(0.0, -1.0)
+	var is_center: bool = bool(spec.get("center", false))
+	_state.faceoff_prep = true
+	_skater.is_faceoff_center = is_center
+	var default_dot: Vector3 = Vector3(0.0, 0.0, -_controller.faceoff_center_distance()) \
+			if is_center else Vector3(1.4, 0.0, -1.6)
+	var dot: Vector3 = target + (spec.get("dot", default_dot) as Vector3)
+	dot.y = 0.0
+	_controller.begin_approach(
+			start, target, facing, float(spec.get("duration", 1.4)))
+	var input := InputState.new()
+	var ticks: int = int(spec.get("ticks", 168)) + int(spec.get("hold", 0))
+	for _t: int in ticks:
+		input.delta = DT
+		input.host_timestamp += DT
+		# Everyone watches the dot through the countdown, and the blade IK aims
+		# the stick at whatever the head is on.
+		input.mouse_world_pos = dot
+		if not _controller.tick_faceoff_approach(DT):
+			_controller.apply_blade_aim_only(input, DT)
+		_skater._physics_process(DT)
+		_skater._process(DT)
+	# Numbers a 384 px tile can't be read for: how far off the dot the body
+	# settled, how deep the crouch went, and whether the hips came square.
+	print("  %s: pos %.3v crouch %.3f hips %.1f° skates %.3f/%.3f" % [
+			"centre" if is_center else "winger", _skater.global_position,
+			_skater._skating_crouch_drop,
+			rad_to_deg(_skater.lower_body.rotation.y),
+			_skater.blade_mark_position(true).y,
+			_skater.blade_mark_position(false).y])
+	print("      dot %.3v stick_horiz %.3f blade %.3v" % [
+			dot, _controller._ik.stick_horiz(),
+			_skater.upper_body_to_global(_skater.get_blade_position())])
 
 
 func _fill_input(input: InputState, spec: Dictionary, first: bool) -> void:
@@ -309,11 +414,11 @@ func _fill_input(input: InputState, spec: Dictionary, first: bool) -> void:
 func _finish() -> void:
 	var dir: String = BASELINE_DIR if _record_baseline else CURRENT_DIR
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
-	for i: int in POSES.size():
-		_images[i].save_png("%s/%s.png" % [dir, String(POSES[i]["name"])])
+	for i: int in _poses.size():
+		_images[i].save_png("%s/%s.png" % [dir, String(_poses[i]["name"])])
 	var label: String = "baseline" if _record_baseline else "current"
 	print("saved %d %s tiles to %s"
-			% [POSES.size(), label, ProjectSettings.globalize_path(dir)])
+			% [_poses.size(), label, ProjectSettings.globalize_path(dir)])
 	_save_sheet(_images, "%s/sheet.png" % OUT_DIR)
 	if not _record_baseline:
 		_diff_against_baseline()
@@ -336,10 +441,10 @@ func _save_sheet(images: Array[Image], path: String) -> void:
 				Vector2i((i % SHEET_COLS) * TILE, row * TILE))
 	sheet.save_png(path)
 	print("sheet: ", ProjectSettings.globalize_path(path))
-	for i: int in POSES.size():
+	for i: int in _poses.size():
 		@warning_ignore("integer_division")
 		var row: int = i / SHEET_COLS
-		print("  [%d,%d] %s" % [row, i % SHEET_COLS, String(POSES[i]["name"])])
+		print("  [%d,%d] %s" % [row, i % SHEET_COLS, String(_poses[i]["name"])])
 
 
 func _diff_against_baseline() -> void:
@@ -348,8 +453,8 @@ func _diff_against_baseline() -> void:
 	var overlays: Array[Image] = []
 	print("")
 	print("── Pose diff vs baseline (tolerance %d/255) ──" % DIFF_TOLERANCE)
-	for i: int in POSES.size():
-		var pose_name: String = String(POSES[i]["name"])
+	for i: int in _poses.size():
+		var pose_name: String = String(_poses[i]["name"])
 		var baseline: Image = Image.load_from_file("%s/%s.png" % [BASELINE_DIR, pose_name])
 		if baseline == null:
 			print("  %-24s NO BASELINE" % pose_name)
@@ -370,7 +475,7 @@ func _diff_against_baseline() -> void:
 	if missing > 0:
 		print("  (%d pose(s) have no baseline — run with --baseline first)" % missing)
 	if changed_poses == 0 and missing == 0:
-		print("  all %d poses identical" % POSES.size())
+		print("  all %d poses identical" % _poses.size())
 	_save_sheet(overlays, "%s/diff.png" % OUT_DIR)
 
 

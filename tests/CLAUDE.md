@@ -54,9 +54,12 @@ code you just wrote:
   ratchet rather than a cap.
 - **is now under the limit** — the file graduated; delete its entry.
 
-The same shape suits any "this must not get worse" property. What makes it work
-is that the grandfather table is the backlog written down: un-growable rather
-than invisible.
+The same shape suits any "this must not get worse" property.
+`test_ui_uses_the_locale_seam.gd` is the second one: untranslated string
+literals per file under `Scripts/ui/`, with the migrated live-match surfaces
+pinned at zero and the menu files pinned at what they had. What makes the shape
+work is that the grandfather table is the backlog written down: un-growable
+rather than invisible.
 
 ## Netcode harnesses
 

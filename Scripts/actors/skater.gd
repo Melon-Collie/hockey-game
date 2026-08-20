@@ -427,6 +427,14 @@ var current_shot_state: int = 0:
 # no-keys glide — a beat before velocity responds.
 var move_intent: Vector2 = Vector2.ZERO
 var brake_intent: bool = false
+# True while this skater is one of the two players taking the draw, set by
+# PhaseCoordinator at every faceoff placement from the record's team slot (C).
+# Cosmetic-only: it deepens the gait's ready stance into the crouch a centre
+# actually holds over the dot (see SkaterSkatingCoordinator's faceoff branch),
+# and it is only read while the prep phase is up, so nothing has to clear it.
+# Derived identically on host and client rather than replicated — every peer
+# already knows every player's slot.
+var is_faceoff_center: bool = false
 # Predicted world-space shot velocity (direction * speed) if the carrier
 # released the shot they're currently charging RIGHT NOW. Published each tick by
 # SkaterController during a live charge (WRISTER via _update_wrister_charge, SLAPPER

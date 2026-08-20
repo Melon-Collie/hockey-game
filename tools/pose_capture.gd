@@ -7,6 +7,7 @@ extends SceneTree
 #       --rendering-driver opengl3 --audio-driver Dummy \
 #       -s res://tools/pose_capture.gd -- --baseline     # record
 #   ... same without --baseline                          # compare
+#   ... --only=faceoff                                   # just the matching tiles
 #
 # Locally any GPU works: drop the env var and xvfb-run. Output paths print on
 # save (user:// — never the repo tree, so captures can't be committed).
@@ -49,4 +50,9 @@ func _on_frame() -> void:
 	_started = true
 	var runner: Node = (load(RUNNER) as GDScript).new() as Node
 	root.add_child(runner)
-	runner.call("begin", OS.get_cmdline_user_args().has("--baseline"))
+	var args: PackedStringArray = OS.get_cmdline_user_args()
+	var only: String = ""
+	for a: String in args:
+		if a.begins_with("--only="):
+			only = a.trim_prefix("--only=")
+	runner.call("begin", args.has("--baseline"), only)

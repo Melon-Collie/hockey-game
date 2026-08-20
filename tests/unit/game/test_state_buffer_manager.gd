@@ -140,3 +140,54 @@ func test_interpolated_snapshot_carries_stagger_timer() -> void:
 	assert_not_null(s)
 	assert_almost_eq(s.stagger_timer, 0.45, 1e-6,
 		"interpolated rewind must carry the newer endpoint's stagger_timer")
+
+
+# ── cold-ring path (query BEFORE oldest) ────────────────────────────────────
+
+func test_query_before_oldest_answers_with_the_oldest_sample() -> void:
+	# A ts predating every entry is unanswerable, so the ring clamps. It must
+	# clamp to the OLDEST — the nearest instant it can speak to — not fall
+	# through to the newest, which is the far end of a 3 s ring and the one
+	# answer guaranteed to be maximally wrong for a query asking about the past.
+	_seed_two_slots(
+		10.0, _slot(SkaterStateMachine.State.SKATING_WITH_PUCK, false, Vector3.ZERO),
+		10.1, _slot(SkaterStateMachine.State.FOLLOW_THROUGH, false, Vector3.ONE))
+	var snap: WorldSnapshot = sbm.get_state_at(9.5)
+	var s: SkaterNetworkState = snap.get_skater_state(PEER)
+	assert_not_null(s)
+	assert_eq(s.position, Vector3.ZERO,
+		"a pre-oldest query must answer with the oldest sample, not the newest")
+	assert_eq(s.shot_state, SkaterStateMachine.State.SKATING_WITH_PUCK as int,
+		"the clamped answer is the oldest slot verbatim")
+
+
+func test_puck_query_before_oldest_answers_with_the_oldest_sample() -> void:
+	sbm._puck_buffer.resize(StateBufferManager.BUFFER_SIZE)
+	for i: int in StateBufferManager.BUFFER_SIZE:
+		sbm._puck_buffer[i] = PuckNetworkState.new()
+	sbm._puck_buffer[0].host_timestamp = 10.0
+	sbm._puck_buffer[0].position = Vector3(1.0, 0.0, 0.0)
+	sbm._puck_buffer[1].host_timestamp = 10.1
+	sbm._puck_buffer[1].position = Vector3(2.0, 0.0, 0.0)
+	sbm._puck_ptr = 2
+	sbm._puck_count = 2
+	var snap: WorldSnapshot = sbm.get_state_at(9.5)
+	assert_not_null(snap.puck_state)
+	assert_eq(snap.puck_state.position, Vector3(1.0, 0.0, 0.0),
+		"a pre-oldest puck query must answer with the oldest sample")
+
+
+func test_goalie_query_before_oldest_answers_with_the_oldest_sample() -> void:
+	sbm._alloc_goalie(0)
+	var buf: Array = sbm._goalie_buffers[0]
+	buf[0].host_timestamp = 10.0
+	buf[0].position_x = 1.0
+	buf[1].host_timestamp = 10.1
+	buf[1].position_x = 2.0
+	sbm._goalie_ptrs[0] = 2
+	sbm._goalie_counts[0] = 2
+	var snap: WorldSnapshot = sbm.get_state_at(9.5)
+	var g: GoalieNetworkState = snap.goalie_states.get(0)
+	assert_not_null(g)
+	assert_almost_eq(g.position_x, 1.0, 1e-6,
+		"a pre-oldest goalie query must answer with the oldest sample")

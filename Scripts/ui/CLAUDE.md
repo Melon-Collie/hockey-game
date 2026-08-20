@@ -8,9 +8,25 @@ surfaces. Gameplay feel lives in `docs/gameplay-design.md`.
 Every user-facing string goes through `tr()`. Add a `KEY,en,es` row to
 `locale/translations.csv`, then `tr("KEY")` at the **display seam**.
 
+`test_ui_uses_the_locale_seam.gd` is the ratchet that holds this. It reads
+`Scripts/ui/**` for literals that look like copy; the live-match surfaces are
+migrated and pinned at zero, and the menu files still carrying English are
+pinned at the count they had so they cannot grow. It also fails when a `tr()`
+key has no catalogue row — the label would render as the raw key.
+
+**Count, don't concatenate.** A phrase built by appending a fragment
+(`tally += " · returning to lobby"`) or by a key per number (`FACEOFF IN 2`,
+`FACEOFF IN 1`) reads only in the language it was written in. One key with a
+placeholder — `FACEOFF_IN_N`, `GAME_OVER_VOTE_TALLY_LOBBY` — lets the
+translator move the pieces.
+
 **The domain layer must stay engine-free** — return a key from `domain/` (see
-`PingRules.message_key_for`) and `tr()` it in the UI or controller. Never call
-`tr()` inside `domain/`.
+`PingRules.message_key_for`, `PositionLabels.badge_key`) and `tr()` it in the
+UI or controller. Never call `tr()` inside `domain/`.
+
+A `static` helper cannot call `tr()` at all (it is an instance method) — go
+through `TranslationServer.translate()` instead, as `HudChrome.tr_key` does.
+The catalogue row is the same either way.
 
 Adding a language: new column in the CSV plus a `LocaleManager.SUPPORTED` entry
 (non-Latin scripts also need a fallback font). Locale is a `PlayerPrefs.locale`
