@@ -48,7 +48,7 @@ const _SIZE_SLACK: int = 40
 
 const _SIZE_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/ai/skater_agent_state_machine.gd": 6166,
-	"res://Scripts/game/game_manager.gd": 5762,
+	"res://Scripts/game/game_manager.gd": 5654,
 	"res://Scripts/domain/ai/action_scoring.gd": 4476,
 	"res://Scripts/controllers/goalie_controller.gd": 4476,
 	"res://Scripts/domain/ai/role_behaviors/carrier.gd": 3755,
