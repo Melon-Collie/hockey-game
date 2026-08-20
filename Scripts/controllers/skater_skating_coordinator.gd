@@ -319,6 +319,21 @@ func reset_to_rest() -> void:
 		_skater.set_edge_loads(0.0, 0.0)
 
 
+# The ready-stance crouch floor and foot split for this skater's role at the
+# dot: the centre taking the draw sits deeper and splits wider than the players
+# lined up behind him (see SkaterController.faceoff_center_stance). Both read
+# the same replicated-by-derivation flag, so a wire-fed remote centre poses
+# identically to a locally-simulated one.
+func _faceoff_stance_floor() -> float:
+	return _controller.faceoff_center_stance if _skater.is_faceoff_center \
+			else _controller.faceoff_stance
+
+
+func _faceoff_split_deg() -> float:
+	return _controller.faceoff_center_split_deg if _skater.is_faceoff_center \
+			else _controller.faceoff_split_deg
+
+
 # Arms the check-delivery drive (see the runtime state above). During
 # sustained contact or a quick follow-up hit inside an active drive the
 # broadcast can re-fire: harden the intensity but never restart the clock —
@@ -903,11 +918,12 @@ func apply(delta: float) -> void:
 	# speed-driven envelope leaves them bolt upright — floor the engagement
 	# through the countdown instead. Eased both ways: the crouch settles in
 	# over the prep and releases into the draw as the players explode out.
+	# The two centres sit far deeper than the players behind them.
 	_faceoff_blend = lerpf(_faceoff_blend,
 			1.0 if _controller.is_faceoff_ready() else 0.0,
 			_controller.stride_intensity_speed * delta)
 	if _faceoff_blend > 0.001:
-		stance = maxf(stance, _controller.faceoff_stance * _faceoff_blend)
+		stance = maxf(stance, _faceoff_stance_floor() * _faceoff_blend)
 	# Hockey stop sits DEEP — the edges only bite under bent knees.
 	if _stop_blend > 0.001:
 		stance = maxf(stance, _controller.hockey_stop_stance * _stop_blend)
@@ -993,7 +1009,7 @@ func apply(delta: float) -> void:
 
 	# Faceoff foot stagger: stick-side foot drops back, braced for the draw.
 	if _faceoff_blend > 0.001:
-		var split: float = deg_to_rad(_controller.faceoff_split_deg) * _faceoff_blend \
+		var split: float = deg_to_rad(_faceoff_split_deg()) * _faceoff_blend \
 				* (-1.0 if _skater.is_left_handed else 1.0)
 		l_pitch += split
 		r_pitch -= split
@@ -1467,6 +1483,15 @@ func apply(delta: float) -> void:
 		trunk_pitch_add += -deg_to_rad(_controller.hit_commit_lean_deg) * commit_t
 		drop += _controller.hit_commit_crouch_m * commit_t
 
+	# The centre's fold over the dot. It rides the trunk TEXTURE rather than the
+	# torso lean the block uses, because the lean rotates the UpperBody node the
+	# blade markers hang from: the blade-first IK then has to solve a stick onto
+	# the ice out of a pitched frame, and at any fold worth seeing it gives up
+	# and stands the shaft on end. The texture is bones only, so the chest reads
+	# folded while the stick keeps the address the centre actually took.
+	if _faceoff_blend > 0.001 and _skater.is_faceoff_center:
+		trunk_pitch_add += -deg_to_rad(_controller.faceoff_center_lean_deg) * _faceoff_blend
+
 	# The mohawk yaw fades with the crumple like every other leg channel.
 	_skater.set_leg_swing(l_pitch, l_roll, l_knee, r_pitch, r_roll, r_knee,
 			pivot_yaw_l * (1.0 - kd_t), pivot_yaw_r * (1.0 - kd_t))
@@ -1507,6 +1532,8 @@ func _apply_native(delta: float) -> void:
 		flags |= 16  # FLAG_SPRINT
 	if _controller.is_faceoff_ready():
 		flags |= 32  # FLAG_FACEOFF_READY
+	if _skater.is_faceoff_center:
+		flags |= 64  # FLAG_FACEOFF_CENTER
 	var code: int = _native.apply(delta, _skater.velocity,
 			_skater.global_transform.basis, _skater.move_intent,
 			_skater.current_shot_state, _skater.shot_charge,
