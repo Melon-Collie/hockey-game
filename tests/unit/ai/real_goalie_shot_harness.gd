@@ -75,23 +75,6 @@ func _begin_play() -> void:
 		_puck.motion_pinned = false
 
 
-# ONE goalie tick. Every drive loop in here MUST go through this rather than
-# calling _physics_process directly.
-#
-# GoalieWorldView is frame-stamped on Engine.get_physics_frames() and rebuilt
-# lazily, which is correct in the game: the controller runs once per physics
-# frame, so one build per frame is one build per tick. An instrument runs
-# hundreds of ticks inside a single real frame, so the view builds on the first
-# one and every tick after it reads a FROZEN world — stale opponent positions,
-# stale nearest-opponent distance. The goalie then makes his sweep-lane read, his
-# cover read, his backdoor cap and his screen read against a world that stopped
-# moving, which is not the keeper the game runs. Standing in for the engine's
-# loop means reproducing its once-per-tick contract.
-func _tick_goalie() -> void:
-	_ctrl._view.invalidate()
-	_ctrl._physics_process(DT)
-
-
 # Bind the test-owned nodes and wire the controller to a goalie defending the
 # -Z net, fed a real opposing Skater shooter (positioned per shot).
 func setup(goalie: Node, puck: Node, ctrl: GoalieController, shooter: Skater) -> void:
@@ -138,7 +121,7 @@ func settle(shooter: Vector3, ticks: int) -> void:
 	for _i: int in ticks:
 		_puck.global_position = shooter
 		_puck.linear_velocity = Vector3.ZERO
-		_tick_goalie()
+		_ctrl._physics_process(DT)
 
 
 # ── THE CARRIER WHO IS ACTUALLY MOVING ───────────────────────────────────────
@@ -185,7 +168,7 @@ func drive_in(lane_x: float, start_dist: float, release_dist: float,
 					pos, declared_aim, loft_level, shot_speed_m_s, 0.0)
 		_puck.global_position = pos
 		_puck.linear_velocity = Vector3.ZERO
-		_tick_goalie()
+		_ctrl._physics_process(DT)
 		if (pos.z - end_z) * dir <= 0.0:
 			break
 		pos.z += vel.z * DT
@@ -220,7 +203,7 @@ func sweep_across(to_x: float, seconds: float, drive_speed: float) -> Vector3:
 		_shooter.velocity = vel
 		puck = Vector3(lerpf(from_x, to_x, float(i + 1) / float(ticks)), 0.0, body.z)
 		_puck.global_position = puck
-		_tick_goalie()
+		_ctrl._physics_process(DT)
 	return puck
 
 
@@ -270,7 +253,7 @@ func deke_across(to_x: float, seconds: float, forward_speed: float,
 		var px: float = body.x + side * puck_lead_x
 		puck = Vector3(px, 0.0, body.z)
 		_puck.global_position = puck
-		_tick_goalie()
+		_ctrl._physics_process(DT)
 		if not _ctrl._sm.is_upright():
 			last_deke_went_down = true
 		var st: int = _ctrl._sm.current
@@ -297,7 +280,7 @@ func publish_windup_at(shooter: Vector3, declared_aim: Vector3, loft_level: int,
 	for _i: int in ticks:
 		_puck.global_position = shooter
 		_puck.linear_velocity = Vector3.ZERO
-		_tick_goalie()
+		_ctrl._physics_process(DT)
 
 
 # ── THE REFERENCE POSE ───────────────────────────────────────────────────────
@@ -342,7 +325,7 @@ func settle_ready(shooter: Vector3, max_ticks: int = 400, tol: float = 0.0015) -
 	for i: int in max_ticks:
 		_puck.global_position = shooter
 		_puck.linear_velocity = Vector3.ZERO
-		_tick_goalie()
+		_ctrl._physics_process(DT)
 		if not _ctrl._sm.is_upright():
 			last_settle_went_down = true
 			return i + 1
@@ -374,7 +357,7 @@ func publish_windup(shooter: Vector3, declared_aim: Vector3, loft_level: int,
 	for _i: int in ticks:
 		_puck.global_position = shooter
 		_puck.linear_velocity = Vector3.ZERO
-		_tick_goalie()
+		_ctrl._physics_process(DT)
 
 
 # Launch velocity for a shot from `shooter` toward the net-plane `aim`:
@@ -453,7 +436,7 @@ func _march(shooter: Vector3, vel_in: Vector3) -> int:
 		# The goalie sees the puck's real motion this tick and reacts.
 		_puck.global_position = pos
 		_puck.linear_velocity = vel
-		_tick_goalie()
+		_ctrl._physics_process(DT)
 		# Advance the puck with the real frame step (posts / crossbar / net).
 		_tick.touched_post = false
 		_tick.touched_net = false
@@ -610,7 +593,7 @@ func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
 		var prev: Vector3 = pos
 		_puck.global_position = pos
 		_puck.linear_velocity = vel
-		_tick_goalie()
+		_ctrl._physics_process(DT)
 		# READ THE GOALIE BACK before integrating. He plays the puck through the
 		# same API the host drive honours — apply_goalie_sweep writes
 		# linear_velocity, cover and the glove hold set motion_pinned — so an
@@ -738,7 +721,7 @@ func hold_windup_at(shooter: Vector3, declared_aim: Vector3, loft_level: int,
 	for _i: int in ticks:
 		_puck.global_position = shooter
 		_puck.linear_velocity = Vector3.ZERO
-		_tick_goalie()
+		_ctrl._physics_process(DT)
 
 
 func fire_release_at(shooter: Vector3, aim: Vector3, loft_level: int,
@@ -804,7 +787,7 @@ func hold_windup(shooter: Vector3, declared_aim: Vector3, loft_level: int,
 	for _i: int in ticks:
 		_puck.global_position = shooter
 		_puck.linear_velocity = Vector3.ZERO
-		_tick_goalie()
+		_ctrl._physics_process(DT)
 
 
 # Hold a wrister windup that SWEEPS: `hold_ticks` parked on `from_aim`, then
@@ -824,7 +807,7 @@ func sweep_windup(shooter: Vector3, from_aim: Vector3, to_aim: Vector3,
 				shooter, from_aim.lerp(to_aim, t), loft_level, power_t, 0.0)
 		_puck.global_position = shooter
 		_puck.linear_velocity = Vector3.ZERO
-		_tick_goalie()
+		_ctrl._physics_process(DT)
 
 
 # Release toward `aim` through the real puck_released event and march it.
