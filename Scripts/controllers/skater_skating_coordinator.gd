@@ -99,7 +99,7 @@ var trunk_roll_add: float = 0.0
 var _trunk_pitch_s: float = 0.0
 var _trunk_roll_s: float = 0.0
 # Eased 0..1 "committing a check" stance factor, tracked toward skater.hit_committed
-# at render rate. Drives the load-up lean / shoulder drop / crouch below.
+# at render rate. Drives the load-up lean and crouch below.
 var _hit_commit_blend: float = 0.0
 # Smoothed [0,1] stride intensity so the legs ease in/out of motion at the
 # start/end of a stride instead of snapping to full amplitude.
@@ -1451,17 +1451,20 @@ func apply(delta: float) -> void:
 		r_knee = lerpf(r_knee, 0.0, kd_t)
 
 	# Commit stance: holding the Hit button loads the skater up for the check — lean
-	# forward into it, drop the leading shoulder toward travel, and sink a touch. Off
-	# the replicated skater.hit_committed (renders on remotes), eased at render rate.
-	# Suppressed while going down (kd_t) so it can't fight the crumple.
+	# forward into it and sink a touch. Off the replicated skater.hit_committed
+	# (renders on remotes), eased at render rate. Suppressed while going down (kd_t)
+	# so it can't fight the crumple.
+	#
+	# The gait owns no shoulder channel here, and must not grow one: the trunk
+	# texture is symmetric, so a roll raises the trailing shoulder by exactly what
+	# it drops the leading one, which is a skater tipping over rather than one
+	# loading up. The per-side geometry lives in CheckStanceRules, eased at physics
+	# rate on the skater (Skater._update_commit_stance) — the loaded blade reads it.
 	_hit_commit_blend = move_toward(_hit_commit_blend,
 			1.0 if _skater.hit_committed else 0.0, _controller.hit_commit_pose_speed * delta)
 	var commit_t: float = _hit_commit_blend * (1.0 - kd_t)
 	if commit_t > 0.001:
 		trunk_pitch_add += -deg_to_rad(_controller.hit_commit_lean_deg) * commit_t
-		# Drop the shoulder toward lateral travel; straight-ahead → lean + crouch only.
-		var vel_local: Vector3 = _skater.global_transform.basis.inverse() * _skater.velocity
-		trunk_roll_add += deg_to_rad(_controller.hit_commit_shoulder_deg) * commit_t * signf(vel_local.x)
 		drop += _controller.hit_commit_crouch_m * commit_t
 
 	# The mohawk yaw fades with the crumple like every other leg channel.

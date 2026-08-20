@@ -223,8 +223,8 @@ func _apply_wrister_whip(t: float, aim_world: Vector3) -> void:
 	var blade_y: float = _ik.blade_y_lean_corrected(probe.x, probe.z) \
 			+ env * _controller.wrister_follow_through_blade_lift
 	var drop: float = hand_pos.y - blade_y
-	var horiz: float = sqrt(maxf(
-			_controller.stick_length * _controller.stick_length - drop * drop, 0.0001))
+	var stick: float = _ik.solve_stick_length()
+	var horiz: float = sqrt(maxf(stick * stick - drop * drop, 0.0001))
 	var blade_pos: Vector3 = hand_pos + local_dir * horiz
 	blade_pos.y = blade_y
 	_place_finish(hand_pos, blade_pos, blade_side_sign)

@@ -158,6 +158,8 @@ func _update_arm(marker_local: Vector3, hand_local: Vector3, pole_sign: float,
 	var hand_w: Vector3 = upper_body.to_global(hand_local)
 	var pole_local: Vector3 = _skater.arm_pole_local
 	pole_local.x *= pole_sign
+	pole_local = CheckStanceRules.tucked_pole(pole_local, CheckStanceRules.side_load(
+			_skater.get_check_lead(), signf(marker_local.x)))
 	var pole_w: Vector3 = upper_body.global_transform.basis * pole_local
 	var elbow_w: Vector3 = TwoBoneIK.solve_elbow(shoulder_w, hand_w,
 			_skater.upper_arm_length, _skater.forearm_length, pole_w)
@@ -170,18 +172,28 @@ func _update_arm(marker_local: Vector3, hand_local: Vector3, pole_sign: float,
 
 
 # Where a shoulder MARKER actually sits once the trunk texture has rolled the
-# upper-body shell (see repose_bone, which rotates the torso and shoulder
-# caps about the trunk pivot but deliberately not the arms).
+# upper-body shell and the check load-up has driven the leading shoulder forward
+# (see repose_bone, which puts both onto the cap bones but deliberately not onto
+# the arms).
 #
 # The arm has to be rooted here, not at the marker: the marker is gameplay
 # geometry and never moves with the texture, so an arm grown from it stayed put
 # while the shoulder pad it emerges from rolled away — a visible gap at every
-# large texture value, worst in the check-commit stance (24 deg of pitch and 19
-# of shoulder drop, which walks the pad ~0.2 m off the arm). The HAND is
-# untouched, so the blade keeps the position the IK solved and only the elbow
-# re-solves; nothing gameplay reads changes.
+# large texture value. The HAND is untouched, so the blade keeps the position
+# the IK solved and only the elbow re-solves; nothing gameplay reads changes.
 func _textured_shoulder(marker_local: Vector3) -> Vector3:
-	return _trunk_texture * marker_local
+	return _trunk_texture * (marker_local + _check_load_offset(signf(marker_local.x)))
+
+
+# Load-up displacement of the shoulder on `side_sign`, zero on the trailing side
+# and while nobody is committing. The cap bone and the arm root both take it.
+func _check_load_offset(side_sign: float) -> Vector3:
+	var lead: float = _skater.get_check_lead()
+	if lead == 0.0:
+		return Vector3.ZERO
+	return CheckStanceRules.load_offset(
+			CheckStanceRules.side_load(lead, side_sign),
+			side_sign, _skater.shoulder_offset)
 
 
 # One pose write per part, each a whole Transform3D built in upper-body space —
@@ -349,7 +361,13 @@ func set_head_angle(angle: float) -> void:
 
 
 func repose_bone(bone: int) -> void:
-	var pose := Transform3D(_basis[bone].scaled_local(_scale[bone]), _pos[bone])
+	var origin: Vector3 = _pos[bone]
+	# The check load-up displaces one cap before the texture rotates it: the
+	# displacement is authored in the trunk's own frame, so it rides the roll.
+	if bone == SkaterMeshBuilder.UpperBone.SHOULDER_L \
+			or bone == SkaterMeshBuilder.UpperBone.SHOULDER_R:
+		origin += _check_load_offset(signf(origin.x))
+	var pose := Transform3D(_basis[bone].scaled_local(_scale[bone]), origin)
 	# The trunk texture rotates the upper-body SHELL about the trunk pivot (the
 	# skeleton lives in upper-body space, so a zero-origin premultiply is that
 	# pivot). Arm bones are excluded — they follow the hands; the helmet takes

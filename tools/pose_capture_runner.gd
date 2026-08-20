@@ -71,7 +71,7 @@ const CAM_AIM: Vector3 = Vector3(0.0, -0.05, 0.0)
 #
 # Spec keys: move (Vector2, world), aim (Vector3, RELATIVE to the skater —
 # absolute would swing as the body translates), sprint, shoot, slap, block,
-# deflect (bool), loft (int elevation level).
+# deflect, hit (bool), loft (int elevation level).
 const POSES: Array = [
 	{"name": "rest", "puck": false, "steps": [[40, {}]]},
 	{"name": "carry", "puck": true, "steps": [[40, {"aim": Vector3(0.6, 0.0, -2.2)}]]},
@@ -119,6 +119,21 @@ const POSES: Array = [
 	# and rolls it, the widest the blade transform ever swings.
 	{"name": "blade_loft_high", "puck": false, "steps": [
 		[36, {"deflect": true, "loft": 3, "aim": Vector3(1.2, 0.0, -2.6)}],
+	]},
+	# The check-commit load-up, aimed BACK AT THE CAMERA (the only poses here
+	# framed from the front): its whole content is per-shoulder asymmetry across
+	# the chest, and the chase rig sees the back of every other pose.
+	#
+	# Straight-on first — no lateral steer at all, which is the case the stance
+	# has to read in, and the one a velocity-signed pose could not express. Then
+	# the same commit steering off the stick side, where the lead clamps to full:
+	# the deepest the leading cap and its arm root ever travel, so it is the tile
+	# that shows whether the pad still sits on the arm it grows from.
+	{"name": "hit_commit", "puck": false, "steps": [
+		[60, {"hit": true, "move": Vector2(0.55, 0.84), "aim": Vector3(1.6, 0.0, 2.4)}],
+	]},
+	{"name": "hit_commit_deep", "puck": false, "steps": [
+		[60, {"hit": true, "move": Vector2(0.84, -0.55), "aim": Vector3(1.6, 0.0, 2.4)}],
 	]},
 ]
 
@@ -280,6 +295,7 @@ func _fill_input(input: InputState, spec: Dictionary, first: bool) -> void:
 	input.move_vector = move
 	input.mouse_world_pos = _skater.global_position + aim
 	input.sprint_held = spec.get("sprint", false)
+	input.hit_held = spec.get("hit", false)
 	input.block_held = spec.get("block", false)
 	input.elevation_level = spec.get("loft", 0)
 	input.shoot_held = shoot

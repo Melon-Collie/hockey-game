@@ -234,6 +234,39 @@ summing site rather than five writers. The trunk texture in particular goes onto
 the cosmetic torso, helmet and shoulder BONES, never onto the `UpperBody` node,
 whose rotation carries the blade markers and is therefore gameplay geometry.
 
+### Pose the hand, not the blade
+
+The tracked path is blade-first: the cursor names a blade position and
+`TopHandIK` solves the hand as a consequence. A **held** pose that wants the
+blade in tight cannot be authored that way, and the check commit is the worked
+example.
+
+`TopHandIK` has two regimes. Inside the stick's resting horizontal reach it goes
+CLOSE, which pins the hand's XZ **at the shoulder marker** and varies only its
+height — the blade's authored distance stops mattering entirely, and past the
+`hand_y_max` ceiling the blade overshoots along the aim line instead of landing
+where it was put. Meanwhile the rendered arm roots at the shoulder the trunk
+texture has MOVED (`SkaterArmRig._textured_shoulder`), which a lean and a
+load-up carry ~0.16 m forward. Put together, the arm roots in FRONT of its own
+hand: the shoulder→hand chord points down and back, a mostly-downward elbow pole
+projects forward off such a chord, and the forearm folds behind the upper arm.
+
+So a held pose authors the **hand** — where the player actually holds the stick
+— and derives the blade one `solve_stick_length()` along the intended bearing.
+Authoring both ends over-constrains a rigid stick, and `enforce_rigid_stick`
+only shortens an over-long span; an under-long pair draws a visibly short stick.
+`test_commit_grip_choke.gd` holds all of it, including the fold direction.
+
+**A pose the trunk texture cannot express does not belong in the gait.** The
+texture is one pitch and one roll for the whole shell, so it is symmetric by
+construction: any "drop a shoulder" written as roll raises the other shoulder by
+exactly as much. The check-commit load-up is therefore split — the gait keeps the
+lean and the crouch, and the per-side shoulder geometry lives in
+`CheckStanceRules`, eased at PHYSICS rate on the skater
+(`Skater._update_commit_stance`) because the loaded blade position reads it and
+the blade goes on the wire. Anything else asymmetric belongs on that side of the
+line too, not as a new trunk channel.
+
 ## Build once, fill scratch
 
 A per-tick collaborator that produces a compound result should own ONE

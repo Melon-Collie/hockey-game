@@ -454,6 +454,7 @@ var _rig_last_blade: Vector3 = Vector3(NAN, NAN, NAN)
 var _rig_last_shoulder: Vector3 = Vector3(NAN, NAN, NAN)
 var _rig_last_bottom_shoulder: Vector3 = Vector3(NAN, NAN, NAN)
 var _rig_last_bottom_hand: Vector3 = Vector3(NAN, NAN, NAN)
+var _rig_last_check_lead: float = NAN
 # Render-rate cosmetic pose hook. The controller registers a Callable(delta)
 # that runs the purely-cosmetic pose passes — the leg gait, head tracking, and
 # off-hand IK — which used to run in the physics tick (120 Hz × every skater,
@@ -571,6 +572,16 @@ var _blade_lift_blend: float = 0.0
 # visual. A carrier holding the button to BRACE keeps the stick down (delivering is
 # false while carrying), so this never lifts a puck off someone's blade.
 var _commit_lift_blend: float = 0.0
+# Signed check-commit shoulder lead in [−1, +1] (+1 = the RIGHT shoulder leads),
+# eased on the same gate and clock as the stick raise above. Sign is the leading
+# side and magnitude the load depth, so a change of side can only happen by
+# sliding through a square-shouldered pose. Drives the per-shoulder load-up on
+# the cap/arm rig and the loaded blade's sweep — see CheckStanceRules.
+var _check_lead: float = 0.0
+# Metres of choke-up at a full commit, scaled per build off this skater's own
+# stick by SkaterController.apply_attributes. Read through grip_choke() below —
+# both the arm solve and the drawn shaft take it from there.
+var commit_grip_choke_m: float = 0.0
 # Counts down while an opponent's stick-lift has forcibly popped this skater's
 # blade up. Set host-side by the stick-lift claim path; decremented every tick.
 # The controller ORs this into the effective blade_up regardless of possession,
@@ -808,21 +819,25 @@ func _process(delta: float) -> void:
 # rig moved since the last rebuild. Exact equality is sufficient: a converged
 # pose reproduces bit-identical local marker positions, and any real motion trips
 # the compare. Handedness flips move the shoulder/hand markers via
-# _position_hand_markers, so they trip it too. Markers are guaranteed non-null by
-# the time _process runs (created in _ready / setup), matching the unguarded
-# access the rig functions already rely on.
+# _position_hand_markers, so they trip it too. The check load-up is in here for
+# the same reason: it displaces the arm roots without moving a marker, so a
+# rebuild gated on markers alone would hold the arms at the un-loaded shoulder.
+# Markers are guaranteed non-null by the time _process runs (created in _ready /
+# setup), matching the unguarded access the rig functions already rely on.
 func _rig_pose_changed() -> bool:
 	if top_hand.position == _rig_last_top_hand \
 			and blade.position == _rig_last_blade \
 			and shoulder.position == _rig_last_shoulder \
 			and bottom_shoulder.position == _rig_last_bottom_shoulder \
-			and bottom_hand.position == _rig_last_bottom_hand:
+			and bottom_hand.position == _rig_last_bottom_hand \
+			and _check_lead == _rig_last_check_lead:
 		return false
 	_rig_last_top_hand = top_hand.position
 	_rig_last_blade = blade.position
 	_rig_last_shoulder = shoulder.position
 	_rig_last_bottom_shoulder = bottom_shoulder.position
 	_rig_last_bottom_hand = bottom_hand.position
+	_rig_last_check_lead = _check_lead
 	return true
 
 
@@ -865,7 +880,7 @@ func _physics_process(delta: float) -> void:
 	_update_blade_elevation(delta)
 	_forced_lift_timer = maxf(_forced_lift_timer - delta, 0.0)
 	_update_blade_lift(delta)
-	_update_commit_lift(delta)
+	_update_commit_stance(delta)
 	_update_carry_contact(delta)
 	# Position + velocity are now fully settled for this tick (integration,
 	# body-check resolution, and the containment clamps above have all run).
@@ -1381,6 +1396,10 @@ const _BLADE_LIFT_BLEND_SPEED: float = 12.0
 # Ease rate for the commit-stance stick raise (units/sec). A touch slower than the
 # blade lift so the stick "loads up" into the check rather than snapping.
 const _COMMIT_LIFT_BLEND_SPEED: float = 9.0
+# Ease rate for the shoulder lead. Slower than the stick raise: the arm can snap
+# up, but a shoulder driven forward is the body's whole mass moving, and this
+# rate is also what a mid-approach change of lead side crosses zero at.
+const _CHECK_LEAD_SPEED: float = 5.0
 
 
 # Eases _blade_lift_blend toward blade_up each tick. The IK reads the blend via
@@ -1398,22 +1417,48 @@ func get_blade_lift_blend() -> float:
 	return _blade_lift_blend
 
 
-# Eases _commit_lift_blend toward an empty-handed check commit ("delivering"), so
-# the committed checker's stick cosmetically rises off the ice. A carrier holding
-# the button to brace does NOT lift (delivering is false while carrying). Called
-# from _physics_process alongside _update_blade_lift.
-func _update_commit_lift(delta: float) -> void:
+# Eases the two commit-stance channels toward an empty-handed check commit
+# ("delivering"): the stick rises off the ice, and the shoulder on the lead side
+# loads up. A carrier holding the button to BRACE gets neither (delivering is
+# false while carrying) — bracing is squaring up, not throwing a shoulder, and
+# it must never lift a puck off its own blade. Called from _physics_process
+# alongside _update_blade_lift: the lead feeds the loaded blade position, which
+# goes on the wire, so it cannot ride the render clock.
+func _update_commit_stance(delta: float) -> void:
 	var delivering: bool = hit_committed \
 			and not SkaterStateMachine.state_has_puck(current_shot_state)
 	var target: float = 1.0 if delivering else 0.0
 	_commit_lift_blend = move_toward(
 			_commit_lift_blend, target, _COMMIT_LIFT_BLEND_SPEED * delta)
+	var lead: float = 0.0
+	if delivering:
+		var body: Basis = global_transform.basis
+		lead = CheckStanceRules.lead_target(move_intent,
+				Vector2(body.x.x, body.x.z),
+				-1.0 if is_left_handed else 1.0)
+	_check_lead = move_toward(_check_lead, lead, _CHECK_LEAD_SPEED * delta)
 
 
 # Eased 0→1 commit-stance stick-raise factor consumed by
 # SkaterIKCoordinator.blade_y_local().
 func get_commit_lift_blend() -> float:
 	return _commit_lift_blend
+
+
+func get_check_lead() -> float:
+	return _check_lead
+
+
+# How far down the shaft the top hand has slid, in metres — a real choke-up, and
+# zero outside a check commit.
+#
+# The commit stance poses the hand and derives the blade one stick along the
+# loaded bearing (SkaterIKCoordinator._commit_hand_pose), so this is what decides
+# how far out that blade lands: a shorter lever holds it in tighter, which is why
+# a player pulling a stick in chokes up on it in the first place. The shaft stays
+# rigid — SkaterStickRig gives back out of the butt whatever the grip takes.
+func grip_choke() -> float:
+	return _commit_lift_blend * commit_grip_choke_m
 
 
 # Forcibly pop this skater's blade up for `duration` seconds (opponent stick
