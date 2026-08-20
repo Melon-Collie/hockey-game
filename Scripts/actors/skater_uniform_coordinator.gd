@@ -27,19 +27,20 @@ extends RefCounted
 # (Stick surface design — shaft paint/wordmark, blade weave — lives in
 # StickStyle; this coordinator layers the player's tape job on top.)
 
-# Jersey hem swing. See the shader for the model; this file owns its one input.
-const _JERSEY_SHADER: Shader = preload("res://Shaders/jersey_flow.gdshader")
+# Jersey hem swing. The skirt is its own bone (SkaterMeshBuilder.UpperBone.HEM);
+# this file owns the one number that drives it.
 # How fast the cloth catches up with the body, per second. ~0.12 s of lag: long
 # enough for a hard stop to throw the skirt forward, short enough that it has
 # settled before the next stride.
 const _FLOW_RESPONSE: float = 8.0
-# Metres of hem displacement per m/s of body-versus-cloth speed, and the ceiling
+# Metres the HEM RING travels per m/s of body-versus-cloth speed, and the ceiling
 # it saturates at. The cap is what keeps a respawn — velocity to zero in one
-# frame — from flinging the skirt off the body.
+# frame — from flinging the skirt off the body. Rings between waist and hem move
+# proportionally less; that ramp is the swing rotation's, not a number here.
 const _FLOW_METRES_PER_MPS: float = 0.010
 const _FLOW_MAX: float = 0.05
-# Below this the hem is home and the uniform write is skipped; one more write is
-# allowed through after it settles so the resting pose is the one on screen.
+# Below this the hem is home and the pose write is skipped; one more is allowed
+# through after it settles so the resting skirt is the one on screen.
 const _FLOW_IDLE: float = 0.0005
 
 var _skater: Skater
@@ -76,19 +77,16 @@ var _glove_accent: Color = Color.WHITE
 var _team_light: Color = Color.WHITE
 var _jersey_viewport: SubViewport
 var _jersey_decal: JerseyDecal
-# The torso's own ShaderMaterial, kept because the ghost path has to recognise
-# it — see apply_ghost — and because the hem flow writes it every frame.
-var _jersey_mat: ShaderMaterial
-# Body-local velocity the cloth has caught up to. The gap between this and the
-# body's actual velocity IS the swing.
-var _flow_lag: Vector3 = Vector3.ZERO
-var _flow_seeded: bool = false
-var _flow_was_moving: bool = false
 var _shoulder_viewport: SubViewport
 var _shoulder_decal: ShoulderDecal
 # Whether the skater is currently ghost-faded — read by the face-gear repaint,
 # whose design alpha is not 1.0 and so can't be restored by _fade_material.
 var _ghosted: bool = false
+# Body-local velocity the cloth has caught up to. The gap between this and the
+# body's actual velocity IS the swing.
+var _flow_lag: Vector3 = Vector3.ZERO
+var _flow_seeded: bool = false
+var _flow_was_moving: bool = false
 
 
 func setup(skater: Skater) -> void:
@@ -129,19 +127,19 @@ func _create_jersey_viewport() -> void:
 	_jersey_decal.name = "JerseyDecal"
 	_jersey_viewport.add_child(_jersey_decal)
 
-	# The one skater body part on a custom shader: the hem swings, which a
-	# StandardMaterial3D cannot do. It reproduces that material's albedo, the
-	# 0.25 U offset (which rotates the wrap 90° so the texture's back-centre,
-	# texel x=128, lands at the skater's +Z — the lathe's U starts at +Z and
-	# increases CCW), cloth roughness and a Fresnel rim.
-	_jersey_mat = ShaderMaterial.new()
-	_jersey_mat.shader = _JERSEY_SHADER
-	_jersey_mat.set_shader_parameter(&"jersey_tex", _jersey_viewport.get_texture())
-	# Seeded so the material always answers for its own hem. The shader's default
-	# would draw the same, but an unwritten uniform reads back as null, which
-	# makes "is the cloth at rest" unanswerable from outside.
-	_jersey_mat.set_shader_parameter(&"flow", Vector4.ZERO)
-	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperSurface.TORSO, _jersey_mat)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = _jersey_viewport.get_texture()
+	mat.roughness = UniformPaint.ROUGH_CLOTH
+	# uv1_offset.x = 0.25 rotates the wrap 90° around the cylinder so the
+	# texture's back-center (texel x=128) lands at the skater's +Z (back).
+	# Godot's CylinderMesh starts U=0 at +Z and increases CCW.
+	mat.uv1_offset = Vector3(0.25, 0.0, 0.0)
+	BodyRim.apply(mat)
+	# One material across both halves of the jersey: the skinned rig cuts the
+	# torso at the waist so the skirt can swing on its own bone, and the seam
+	# must not be a paint boundary as well as a geometry one.
+	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperSurface.TORSO, mat)
+	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperSurface.HEM, mat)
 
 
 # Shared SubViewport + ShoulderDecal for both shoulder spheres. Sphere U=0 is
@@ -623,7 +621,7 @@ func _paint_glove_cuffs(gloves_color: Color) -> void:
 # to the shader in that frame, so this never reads a world position at render
 # rate and never has to reason about which clock a pose came from.
 func update_jersey_flow(delta: float) -> void:
-	if _jersey_mat == null or _ghosted or delta <= 0.0:
+	if _ghosted or delta <= 0.0:
 		return
 	var local_vel: Vector3 = _skater.global_transform.basis.inverse() * _skater.velocity
 	if not _flow_seeded:
@@ -642,8 +640,7 @@ func update_jersey_flow(delta: float) -> void:
 	if not moving and not _flow_was_moving:
 		return
 	_flow_was_moving = moving
-	_jersey_mat.set_shader_parameter(&"flow",
-			Vector4(swing.x, swing.y, swing.z, 0.0) if moving else Vector4.ZERO)
+	_skater.set_hem_swing(swing if moving else Vector3.ZERO)
 
 
 func apply_ghost(ghost: bool) -> void:
@@ -700,34 +697,7 @@ func apply_ghost(ghost: bool) -> void:
 	# shared default when a rig ghosts before its first uniform pass, rather than
 	# mutating a material the whole roster shares.
 	for surface: int in SkaterMeshBuilder.UPPER_SURFACE_COUNT:
-		if surface == SkaterMeshBuilder.UpperSurface.TORSO and _jersey_mat != null:
-			_swap_torso_for_ghost(ghost)
-			continue
 		_fade_material(_skater.upper_surface_material(surface), ghost)
-
-
-# The torso wears jersey_flow.gdshader, and the StandardMaterial3D seam the loop
-# above uses cannot cast it: `upper_surface_material` would hand back a fresh
-# WHITE material, and the un-ghost pass would then restore that white to full
-# alpha, leaving every skater in a blank shirt for the rest of the match. Exactly
-# the trap the stick shaft hit, and the reason for the branch at the top of
-# apply_ghost.
-#
-# Swapped rather than faded through an alpha uniform, for the same reason the
-# stick swaps: a shader that writes ALPHA renders on the transparent path for
-# every skater on every frame, to buy a fade that is on screen during offside
-# replays only.
-func _swap_torso_for_ghost(ghost: bool) -> void:
-	if not ghost:
-		_skater.set_upper_surface_material(SkaterMeshBuilder.UpperSurface.TORSO, _jersey_mat)
-		return
-	var ghost_mat := StandardMaterial3D.new()
-	ghost_mat.albedo_texture = _jersey_viewport.get_texture()
-	ghost_mat.roughness = UniformPaint.ROUGH_CLOTH
-	ghost_mat.uv1_offset = Vector3(0.25, 0.0, 0.0)
-	BodyRim.apply(ghost_mat)
-	_fade_material(ghost_mat, true)
-	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperSurface.TORSO, ghost_mat)
 
 
 func _fade_material(mat: StandardMaterial3D, ghost: bool) -> void:

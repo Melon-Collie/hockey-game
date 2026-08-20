@@ -53,7 +53,7 @@ const _SIZE_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/controllers/goalie_controller.gd": 4476,
 	"res://Scripts/domain/ai/role_behaviors/carrier.gd": 3755,
 	"res://Scripts/controllers/skater_controller.gd": 3297,
-	"res://Scripts/actors/skater.gd": 3307,
+	"res://Scripts/actors/skater.gd": 3339,
 	"res://Scripts/networking/network_manager.gd": 2823,
 	"res://Scripts/actors/arena_stands.gd": 2374,
 	"res://Scripts/game/tutorial_manager.gd": 2101,
@@ -62,7 +62,7 @@ const _SIZE_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/actors/hockey_rink.gd": 1470,
 	"res://Scripts/domain/ai/role_behaviors/role_helpers.gd": 1436,
 	"res://Scripts/game/player_prefs.gd": 1370,
-	"res://Scripts/actors/skater_mesh_builder.gd": 1378,
+	"res://Scripts/actors/skater_mesh_builder.gd": 1451,
 	"res://Scripts/domain/rules/goalie_behavior_rules.gd": 1324,
 	"res://Scripts/ui/career_stats_screen.gd": 1271,
 	"res://Scripts/domain/ai/carry_space.gd": 1255,
@@ -85,7 +85,7 @@ const _API_SLACK: int = 3
 
 const _API_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/networking/network_manager.gd": 200,
-	"res://Scripts/actors/skater.gd": 132,
+	"res://Scripts/actors/skater.gd": 133,
 	"res://Scripts/domain/ai/action_scoring.gd": 68,
 	"res://Scripts/game/game_manager.gd": 61,
 	"res://Scripts/domain/state/player_attributes.gd": 53,
@@ -96,7 +96,7 @@ const _API_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/domain/state/game_state_machine.gd": 38,
 	"res://Scripts/domain/rules/goalie_behavior_rules.gd": 36,
 	"res://Scripts/actors/skater_hud_coordinator.gd": 30,
-	"res://Scripts/actors/skater_mesh_builder.gd": 29,
+	"res://Scripts/actors/skater_mesh_builder.gd": 32,
 	"res://Scripts/controllers/puck_controller.gd": 27,
 	"res://Scripts/game/shot_on_goal_tracker.gd": 26,
 }

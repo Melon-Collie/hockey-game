@@ -239,36 +239,69 @@ count is untouched.
 
 Cost: roughly +120 vertices per skater, ~1.4k across a 5v5. Irrelevant.
 
-### B.3 The material swap, and the trap in it
+### B.3 No shader at all — the skirt is a bone
 
-Vertex displacement needs a `ShaderMaterial`, and the torso is a
-`StandardMaterial3D` today. The template already exists:
-`Assets/Shaders/goalie_jersey.gdshader` was written for exactly this situation and
-carries a hand-rolled Fresnel `EMISSION` term reproducing `BodyRim`, because a
-`ShaderMaterial` cannot use the standard rim. `Shaders/jersey_flow.gdshader`
-copies that rim formula verbatim, samples the jersey viewport texture with the
-0.25 U offset folded in, and pins `ROUGHNESS = 0.9`.
+The first cut of this used a vertex shader, and it was wrong. Writing it turned
+up two problems that both have the same root: **a `ShaderMaterial` cannot use
+`StandardMaterial3D`'s rim.**
 
-**The trap:** `SkaterUniformCoordinator.apply_ghost` fades every upper-body
-surface through `_fade_material(mat: StandardMaterial3D, ghost: bool)`, reached
-via `SkaterMeshBuilder.surface_override`, which does `as StandardMaterial3D` and
-**silently substitutes a fresh white material when the cast fails**
-(`skater_mesh_builder.gd:441`). A `ShaderMaterial` torso would therefore turn
-white on the first offside and stay white — which is not a hypothetical. It is
-the exact bug the stick shaft already hit, and the twelve-line comment above the
-stick branch in `apply_ghost` is its record.
+- `BodyRim` is a real lighting term, applied inside the engine's light loop and
+  scaled by each light's colour and attenuation, so it vanishes in shadow. A
+  custom shader can only approximate it with `EMISSION` — additive, light-
+  independent — which is what `goalie_jersey.gdshader` does and says it does.
+  On the goalie that is fine, because the whole model is one shader. On a skater
+  it puts an emissive rim on the torso and a lit rim on the arms **beside it**,
+  so the two disagree in shadow. (Godot also derives the rim's falloff exponent
+  from roughness, which at `ROUGH_CLOTH` makes the engine's rim much broader
+  than a hand-rolled `pow(…, 3)` — a second mismatch, in all lighting.)
+- `SkaterUniformCoordinator.apply_ghost` fades every upper-body surface through
+  `_fade_material(mat: StandardMaterial3D, …)`, reached via
+  `SkaterMeshBuilder.surface_override`, which does `as StandardMaterial3D` and
+  **silently substitutes a fresh white material when the cast fails**. A
+  `ShaderMaterial` torso turns white on the first offside and stays white. Not
+  hypothetical: it is the bug the stick shaft already hit, and the twelve-line
+  comment above the stick branch in `apply_ghost` is its record.
 
-So the material swap is not one line. The fix follows the stick's own precedent:
-**swap the material while ghosted** rather than fade through an `alpha` uniform.
-A shader that writes `ALPHA` renders on the transparent path for every skater on
-every frame, to buy a fade that is on screen during offside replays only — so the
-ghost gets a translucent `StandardMaterial3D` carrying the same jersey texture,
-and un-ghosting restores the shader material.
+Reproducing the rim faithfully would mean writing a `light()` function, and
+defining `light()` replaces the **entire** BRDF — transcribing Godot's diffuse
+and specular into the repo, to be maintained against engine releases, so that one
+hem can move. That trade is not worth making.
 
-Budget this as the real work in Part B. The displacement itself is easy; the
-ghost path is where it bites. `test_jersey_flow.gd` pins it, and that assertion
-was checked against the unfixed code: without the branch, un-ghosting leaves a
-bare `StandardMaterial3D` on the torso and the test fails exactly as designed.
+**So don't use a shader.** The only thing the torso needed a shader *for* was
+moving vertices, and this rig already has a mechanism for that: the skeleton.
+`skater_mesh_builder.gd` is built on "posing a part costs an entry in the
+skeleton's pose array."
+
+Cut the torso lathe at the waist into a body surface and a skirt surface, put
+the skirt on its own bone (`UpperBone.HEM`), and the swing becomes a bone pose:
+
+- **The rim mismatch disappears.** The jersey stays a `StandardMaterial3D` with
+  `BodyRim.apply`, identical to the arms beside it, in light and in shadow.
+- **The ghost trap is sidestepped rather than worked around** — no
+  `ShaderMaterial` on the torso means no branch in `apply_ghost` at all.
+- **The ramp comes free from the geometry.** A rotation about the waist moves
+  each ring in proportion to its distance from the pivot, which is what a
+  `smoothstep` over UV.y was hand-approximating — and rotating about the waist is
+  how a hem actually moves, where a shader displacement translated it.
+- **The seam cannot open.** Both halves include the waist ring, and the swing
+  rotates *about* that ring, so it does not move. (About the ring, not the mesh
+  origin: its own rear sway puts it a few mm off centre.)
+
+Two costs, both real:
+
+- `UPPER_BONE_COUNT` 14→15, `UPPER_SURFACE_COUNT` 17→18, one more `Skin` bind,
+  and ratchet bumps on `skater.gd` and `skater_mesh_builder.gd`.
+- The bone list is deliberately **flat** — "a hierarchy would compose transforms
+  these poses do not expect" — so the skirt cannot parent to the torso to inherit
+  the gait's trunk texture and the body dials' scale. `Skater._repose_upper_bone`
+  composes it by hand off the torso's own numbers, and reposing TORSO reposes HEM
+  as one rule, so no caller can forget the skirt exists. A parent would apply the
+  trunk texture twice.
+
+`_build_lathe` grows `first`/`last`/`cap_top`/`cap_bottom` to build a slice, with
+V still derived from the **whole** profile — that is what keeps a slice's UVs the
+ones it would have had inside the complete lathe, so cutting the mesh moves no
+stripe, name or number. `test_jersey_flow.gd` pins it.
 
 ### B.4 The motion model
 
@@ -288,13 +321,13 @@ the skirt swings out ahead and settles as the lag closes. The overshoot is the
 filter's, so nothing integrates and nothing accumulates — a dropped frame or a
 teleport cannot leave the hem wound up.
 
-The filter has state, so it lives **on the CPU** — one `lerp` per skater per
-frame — and is pushed as a single packed `vec4`. One `set_shader_parameter` per
-skater per frame, not three, and none at all while the cloth is at rest.
+`swing` is specified as the **hem ring's own displacement in metres**, which is
+what lets B.3's rotation deliver it exactly: the angle is `swing / lever`, and
+every ring between waist and hem moves proportionally less because it sits closer
+to the pivot. No ramp constant appears anywhere.
 
-The ramp is expressed in the lathe's **V coordinate**, not in vertex Y. V is
-skinning-independent and is the same coordinate the painters use, so the shader
-never has to assume where in the pipeline Godot applies the bone pose.
+The filter has state, so it lives **on the CPU** — one `lerp` per skater per
+frame — and drives one bone pose. Nothing at all while the cloth is at rest.
 
 Two placement rules from CLAUDE.md apply and are both satisfied by keeping the
 model **body-local**:
@@ -303,31 +336,35 @@ model **body-local**:
   correct for cosmetics.
 - The render-clock trap — chrome drawn at render rate off a tick-rate pose must
   read `Skater.render_transform()`, not `global_position` — **does not arise at
-  all**, because a body-local flow vector displacing vertices in the torso bone's
-  own space never reads a world position. Keeping it local is what buys that, and
-  it is worth not giving up later for convenience.
+  all**, because a body-local swing posing a bone in the torso's own space never
+  reads a world position. Keeping it local is what buys that, and it is worth not
+  giving up later for convenience.
 
 Skip the write when the skater is off-screen and when `|flow|` is under a
 threshold, per hot-path discipline.
 
 ### B.5 Tests
 
-- Wiring: the torso surface carries the flow shader and the jersey viewport
-  texture, and the shader declares the uniforms the coordinator writes —
-  `test_ice_shader_uniform_contract.gd` is the pattern, and the reason it exists
-  is that a renamed uniform otherwise fails silently at runtime.
-- The painter contract: inserted profile stations leave every pre-existing
-  station's V coordinate unchanged. This is the load-bearing one — it is what
-  makes B.2's claim checkable instead of merely argued.
-- The ghost path: `apply_ghost(true)` leaves the torso the jersey shader at 0.3
-  alpha, and never a white `StandardMaterial3D`.
+- The painter contract, twice over and load-bearing both times: inserted profile
+  stations leave every pre-existing station's V unchanged, **and** cutting the
+  lathe in two renumbers neither half. Together they are what make B.2 and B.3
+  checkable rather than merely argued.
+- The seam: both halves carry the waist ring vertex-for-vertex, and a swing moves
+  the hem by what it was asked for while leaving that ring exactly where it was.
+- The skirt tracks the torso through the channels that would otherwise forget it:
+  the gait's trunk texture and a body dial's scale. The bone list is flat, so
+  nothing but `_repose_upper_bone` holds those together.
+- The jersey keeps a `StandardMaterial3D` with `BodyRim` on it, across both
+  surfaces — the assertion that the rim problem stays fixed.
+- The swing model itself: trails under acceleration, settles at a steady speed,
+  throws forward on a hard stop, and is capped against a one-frame velocity step.
 
 ### B.6 Cost
 
 | | |
 |---|---|
-| GPU | ~1.4k extra vertices across a 5v5 |
-| CPU | 12 × (one lerp + one uniform write) per frame ≈ 0.02–0.05 ms, against a measured 1.63 ms cosmetic rig |
+| GPU | ~1.4k extra vertices across a 5v5; one extra surface per skater |
+| CPU | 12 × (one lerp + one bone pose) per frame, and nothing while the cloth is at rest, against a measured 1.63 ms cosmetic rig |
 | Netcode | none, structurally — cosmetics may be frame-rate-dependent, non-deterministic and skipped |
 
 ## Part C — what this deliberately does not do
