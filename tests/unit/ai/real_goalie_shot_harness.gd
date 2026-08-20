@@ -567,12 +567,27 @@ var rebound_held: bool = false
 # He played it away with the stick: the crease sweep fired and changed the puck's
 # velocity out from under the integration.
 var rebound_swept: bool = false
+# Closest the rebound ever came to the SHOOTER, in metres. The direction-
+# sensitive half of "was that dangerous": a rebound to the corner and a rebound
+# straight back up the slot can settle the same distance from the net, and only
+# one of them lands on the stick of the man who just shot it.
+var rebound_min_dist_to_shooter: float = INF
+# Seconds the rebound spent inside danger_radius_m of the goal.
+var rebound_danger_dwell_s: float = 0.0
+# Radius from the goal centre that counts as the danger area. The caller owns the
+# definition; the harness only needs it to know when a rebound has LEFT.
+var danger_radius_m: float = 6.1
 var _save_res: GoalieSaveRules.ContactResult = GoalieSaveRules.ContactResult.new()
 
 # Long enough for the whole sequence: the puck has to settle, the clear's dwell
 # has to elapse, the windup has to run, and the swept puck has to get somewhere.
 const REBOUND_TRACK_S: float = 2.5
 const PLAYABLE_SPEED_M_S: float = 8.0   # slow enough for a skater to actually play it
+# A rebound this slow has stopped being a rebound and become a loose puck sitting
+# in the paint. Deliberately far below PLAYABLE: the question here is not "could
+# somebody touch it" — a 6 m/s puck crossing the slot qualifies for that and is
+# gone a third of a second later — it is "is it still there".
+const REBOUND_REST_M_S: float = 1.0
 
 
 func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
@@ -587,6 +602,8 @@ func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
 	rebound_caught = false
 	rebound_held = false
 	rebound_swept = false
+	rebound_min_dist_to_shooter = INF
+	rebound_danger_dwell_s = 0.0
 	_shooter.global_position = shooter
 	_puck.clear_carrier()
 	var goal := Vector3(0.0, 0.0, _goal_z)
@@ -667,14 +684,27 @@ func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
 				rebound_pos = pos
 				rebound_speed = vel.length()
 				return GOAL
-		# After a save, a puck slow enough for a skater is a second chance — but
-		# only once it is DOWN and the GOALIE is out of the running for it. A puck
-		# still falling off his chest is nobody's yet: it is above the sweep's
-		# height window, so stopping there both credits a skater with a chance he
-		# cannot take and ends the run before the clear could ever fire. Inside
-		# his sweep reach it is still his puck.
-		if touched and pos.y <= _ctrl.clear_max_height \
-				and vel.length() <= PLAYABLE_SPEED_M_S \
+		if not touched:
+			continue
+		# ── Where did the rebound GO? ────────────────────────────────────────
+		# Tracked to the moment it LEAVES the danger area, or comes to rest in it,
+		# rather than sampled at the first tick a skater could technically reach
+		# it. Those are different questions and the second one cannot answer the
+		# first: a pad rebound exits at ~6 m/s, which is already under the playable
+		# ceiling, so sampling there reported it a metre and a half from the goalie
+		# — inside the danger area by construction, whichever way it was heading.
+		# Every surface then scored the same regardless of where it aimed.
+		rebound_min_dist_to_shooter = minf(
+				rebound_min_dist_to_shooter, pos.distance_to(_shooter.global_position))
+		var from_goal: float = Vector2(pos.x - goal.x, pos.z - goal.z).length()
+		if from_goal > danger_radius_m:
+			rebound_pos = pos
+			rebound_speed = vel.length()
+			return outcome
+		rebound_danger_dwell_s += DT
+		# At rest in the danger area, and not the goalie's to take: a real second
+		# chance, sitting there.
+		if pos.y <= _ctrl.clear_max_height and vel.length() <= REBOUND_REST_M_S \
 				and (rebound_swept or not _goalie_can_still_play(pos, vel)):
 			rebound_pos = pos
 			rebound_speed = vel.length()

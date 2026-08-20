@@ -7,16 +7,15 @@ extends GutTest
 #   * a hard shot off a TOED-OUT PAD is live AND safe — the pose angle
 #     (pad_toe_out_standing / _butterfly) sends it to the corner, which is
 #     exactly what those angles exist for;
-#   * a CHEST save is deadened and DANGEROUS — GoalieSaveRules zeroes its
-#     goalward and vertical motion so the puck "settles dead in front", i.e.
-#     in the blue paint, which is the drop-then-scramble sequence;
-#   * a STICK save is never deadened by rule, but the blade angle plus the
-#     stick's restitution still throws most of them clear.
+#   * a CHEST save is dead by construction — he smothers it and puts it down for
+#     the crease sweep, so the puck never becomes a rebound at all;
+#   * a STICK save is the dangerous one, and not because of its restitution: the
+#     paddle has no lateral cant, so it sends the puck back where it came from.
 #
 # So the measurement is DESTINATION, not restitution. This applies the real save
 # response (GoalieSaveRules.resolve_contact + the flush eject, the same pair
-# Puck._physics_process runs) and keeps marching until the puck is slow enough
-# for a skater to play, then asks where that happened.
+# Puck._physics_process runs) and tracks the rebound until it LEAVES the danger
+# area or comes to rest in it.
 #
 # ── WHAT IT MEASURES, AND WHAT IT CANNOT ─────────────────────────────────────
 #   surface | saves | rebound STAYS in the slot
@@ -76,6 +75,7 @@ func before_each() -> void:
 	add_child_autofree(_ctrl)
 	_h = Harness.new()
 	_h.setup(_goalie, _puck, _ctrl, _shooter)
+	_h.danger_radius_m = SLOT_RADIUS_M
 
 
 func _in_danger(p: Vector3) -> bool:
@@ -162,9 +162,15 @@ func test_report_rebound_destination_by_save_surface() -> void:
 #   HELD    he ended the play with it — a glove catch, or a cover smother.
 #   SWEPT   he played it away with the stick. Both are the goalie dealing with
 #           his own rebound, and both are excluded from STAYS below.
-#   STAYS   nobody dealt with it and it settled in the danger area. THIS is the
-#           scramble number.
-#   SPEED   how fast it was when a skater could first have it.
+#   STAYS   nobody dealt with it and it never left the danger area — it came to
+#           rest in there. THIS is the scramble number.
+#   DWELL   seconds the rebound spent inside the danger area on its way out. A
+#           puck crossing the slot and a puck sitting in it are different
+#           problems, and STAYS alone cannot tell them apart.
+#   ->SHOOTER  it came back within a stick of the man who just shot it. The
+#           DIRECTION number, and the one the pose actually controls: a rebound
+#           to the corner and a rebound straight back up the slot can settle the
+#           same distance from the net.
 #   OWN     it went into his own net.
 #
 # Attribution is to the FIRST surface struck, so a pad save gloved on the way
@@ -185,6 +191,8 @@ const SPOTS: Array[Vector3] = [
 ]
 const BASELINE_MPH: Array[float] = [65.0, 75.0, 85.0]
 const AIM_FRACTIONS: Array[float] = [-1.0, -0.5, 0.0, 0.5, 1.0]
+# Within a stick of the shooter counts as "it came back to him".
+const BACK_AT_SHOOTER_M: float = 1.8
 
 
 func test_report_rebound_baseline_across_the_shot_map() -> void:
@@ -196,7 +204,7 @@ func test_report_rebound_baseline_across_the_shot_map() -> void:
 		ShotMechanics.ELEVATION_MID,
 		ShotMechanics.ELEVATION_HIGH,
 	]
-	# Per first-contact surface: [saves, held, swept, stayed, own, speed sum].
+	# Per surface: [saves, held, swept, stayed, own, dwell sum, back-at-shooter].
 	var by_part: Dictionary = {}
 	var shots: int = 0
 	var first_goals: int = 0
@@ -218,7 +226,7 @@ func test_report_rebound_baseline_across_the_shot_map() -> void:
 						continue
 					var k: String = _part_names[_h.last_part] if _h.last_part >= 0 else "?"
 					if not by_part.has(k):
-						by_part[k] = [0, 0, 0, 0, 0, 0.0]
+						by_part[k] = [0, 0, 0, 0, 0, 0.0, 0]
 					var row: Array = by_part[k]
 					row[0] += 1
 					if _h.rebound_caught or _h.rebound_held:
@@ -232,28 +240,30 @@ func test_report_rebound_baseline_across_the_shot_map() -> void:
 					if _h.rebound_goal:
 						row[4] += 1
 						own_goals += 1
-					row[5] += _h.rebound_speed
+					row[5] += _h.rebound_danger_dwell_s
+					if _h.rebound_min_dist_to_shooter <= BACK_AT_SHOOTER_M:
+						row[6] += 1
 	gut.p("%d spots x %d lofts x %d aims x %d speeds (65-85 mph), perfect execution."
 			% [SPOTS.size(), lofts.size(), AIM_FRACTIONS.size(), BASELINE_MPH.size()])
-	gut.p("  surface | saves | HELD | SWEPT | loose | STAYS in slot | mean SPEED | OWN")
-	var totals := [0, 0, 0, 0, 0, 0.0]
-	for k: String in PART:
+	gut.p("  surface | saves | HELD | SWEPT | loose | STAYS | DWELL | ->SHOOTER | OWN")
+	var totals := [0, 0, 0, 0, 0, 0.0, 0]
+	for k: String in _part_names:
 		if not by_part.has(k):
-			gut.p("  %-7s |     0 |    0 |     0 |     0 |            -- |         -- |  --" % k)
+			gut.p("  %-7s |     0 |    0 |     0 |     0 |    -- |    -- |        -- |  --" % k)
 			continue
 		var row: Array = by_part[k]
-		for i: int in 6:
+		for i: int in 7:
 			totals[i] += row[i]
 		var loose: int = row[0] - row[1] - row[2]
-		gut.p("  %-7s | %5d | %4d | %5d | %5d | %5d  (%3.0f%%) | %6.2f m/s | %3d" % [
+		gut.p("  %-7s | %5d | %4d | %5d | %5d | %5d | %5.2fs | %4d (%3.0f%%) | %3d" % [
 			k, row[0], row[1], row[2], loose, row[3],
-			100.0 * float(row[3]) / float(maxi(loose, 1)),
-			row[5] / float(maxi(loose, 1)), row[4]])
+			row[5] / float(maxi(loose, 1)),
+			row[6], 100.0 * float(row[6]) / float(maxi(loose, 1)), row[4]])
 	var all_loose: int = totals[0] - totals[1] - totals[2]
-	gut.p("  TOTAL   | %5d | %4d | %5d | %5d | %5d  (%3.0f%%) | %6.2f m/s | %3d" % [
+	gut.p("  TOTAL   | %5d | %4d | %5d | %5d | %5d | %5.2fs | %4d (%3.0f%%) | %3d" % [
 		totals[0], totals[1], totals[2], all_loose, totals[3],
-		100.0 * float(totals[3]) / float(maxi(all_loose, 1)),
-		totals[5] / float(maxi(all_loose, 1)), totals[4]])
+		totals[5] / float(maxi(all_loose, 1)),
+		totals[6], 100.0 * float(totals[6]) / float(maxi(all_loose, 1)), totals[4]])
 	gut.p("  shots %d | beaten clean %d | own-net rebounds %d"
 			% [shots, first_goals, own_goals])
 	assert_true(true, "report")
