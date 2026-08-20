@@ -52,8 +52,8 @@ const _SIZE_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/domain/ai/action_scoring.gd": 4476,
 	"res://Scripts/controllers/goalie_controller.gd": 4476,
 	"res://Scripts/domain/ai/role_behaviors/carrier.gd": 3755,
-	"res://Scripts/controllers/skater_controller.gd": 3306,
-	"res://Scripts/actors/skater.gd": 3350,
+	"res://Scripts/controllers/skater_controller.gd": 3320,
+	"res://Scripts/actors/skater.gd": 3380,
 	"res://Scripts/networking/network_manager.gd": 2823,
 	"res://Scripts/actors/arena_stands.gd": 2374,
 	"res://Scripts/game/tutorial_manager.gd": 2101,
@@ -85,7 +85,7 @@ const _API_SLACK: int = 3
 
 const _API_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/networking/network_manager.gd": 200,
-	"res://Scripts/actors/skater.gd": 133,
+	"res://Scripts/actors/skater.gd": 134,
 	"res://Scripts/domain/ai/action_scoring.gd": 68,
 	"res://Scripts/game/game_manager.gd": 61,
 	"res://Scripts/domain/state/player_attributes.gd": 53,

@@ -101,6 +101,17 @@ var hit_commit_blade_lift_m: float = 0.22     # stick raise off the ice on an em
 var hit_commit_blade_local_x: float = 0.10    # forehand-side offset of the loaded blade
 var hit_commit_blade_local_z: float = -0.34   # how far in FRONT the loaded blade sits (−z = ahead)
 var hit_commit_blade_sweep_m: float = 0.16    # how far the loaded blade swings toward the TRAILING side
+# Choke-up while committed, as a fraction of this skater's own stick, so it
+# scales with the build for free. The loaded blade above is only REACHABLE
+# because of this: a raised blade eats the hand-to-blade drop, so a full-length
+# stick's horizontal projection cannot come nearer than ~0.92 m to the shoulder
+# while the pose asks for ~0.53 m. Sliding the hand down the shaft shortens the
+# lever and lets the blade come in without the hand climbing to its ROM ceiling.
+# The shaft is rigid — Skater.update_stick_mesh gives back out of the butt
+# whatever the grip takes, so the drawn stick keeps its length.
+# Raising it past what the target needs just buys headroom; test_commit_grip
+# _choke.gd fails if it ever stops being enough.
+var hit_commit_choke_frac: float = 0.25
 var hit_commit_pose_speed: float = 9.0        # how fast the stance eases in/out
 # ── Body-Check Stagger Tuning ─────────────────────────────────────────────────
 # Getting checked hard staggers the victim: a temporary thrust penalty plus a
@@ -1358,6 +1369,9 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# reach. update_stick_mesh() and the arm bone wrappers recompute visuals from
 	# these every frame, so no separate visual pass is needed.
 	stick_length              = _base_stick_length              * attrs.stick_len_mult()
+	# The commit choke is a fraction of the stick it slides down, so it lands in
+	# metres here rather than being re-derived at the two sites that read it.
+	skater.commit_grip_choke_m = stick_length * hit_commit_choke_frac
 	# The CURVE gear's visual half — regenerates the blade mesh to the picked
 	# pattern (gameplay half is PlayerAttributes' loft/backhand leans).
 	skater.apply_blade_pattern(attrs.curve)

@@ -709,13 +709,25 @@ func blade_y_lean_corrected(blade_local_x: float, blade_local_z: float) -> float
 	var numerator: float = blade_y_local() + blade_local_z * sin(pitch) - blade_local_x * sin(roll) * cp
 	return numerator / (cp * cr)
 
+# The stick length every arm solve must use THIS instant: the rigid shaft minus
+# however far the top hand has slid down it. Zero choke outside a check commit,
+# so this is _controller.stick_length everywhere else.
+#
+# One accessor rather than three readers of _controller.stick_length: two sites
+# solving the same frame from different lengths draw two different sticks, and
+# the shot poses reconstruct their own hand/blade pair (a one-timer wind-up can
+# be charged empty-handed with the Hit button down, so they DO overlap a commit).
+func solve_stick_length() -> float:
+	return _controller.stick_length - _skater.grip_choke()
+
+
 # Horizontal projection of the stick onto the XZ plane, given the fixed
 # vertical drop from hand to blade. Used by follow-through to keep stick
 # length consistent with the IK solver.
 func stick_horiz() -> float:
 	var drop: float = _controller.hand_rest_y - blade_y_local()
-	var sq: float = _controller.stick_length * _controller.stick_length - drop * drop
-	return sqrt(maxf(sq, 0.0001))
+	var length: float = solve_stick_length()
+	return sqrt(maxf(length * length - drop * drop, 0.0001))
 
 # ── Config Builders ───────────────────────────────────────────────────────────
 # Cached: export-derived fields are filled once (until invalidate_configs);
@@ -723,7 +735,6 @@ func stick_horiz() -> float:
 func _ik_config(blade_y: float, max_blade_reach: float = INF) -> TopHandIK.Config:
 	if _cached_top_cfg == null:
 		_cached_top_cfg = TopHandIK.Config.new()
-		_cached_top_cfg.stick_length = _controller.stick_length
 		_cached_top_cfg.hand_rest_y = _controller.hand_rest_y
 		_cached_top_cfg.hand_y_max = _controller.hand_y_max
 		_cached_top_cfg.rom_forehand_angle_max = deg_to_rad(_controller.rom_forehand_angle_max_deg)
@@ -731,21 +742,23 @@ func _ik_config(blade_y: float, max_blade_reach: float = INF) -> TopHandIK.Confi
 		_cached_top_cfg.rom_forehand_reach_max = _controller.rom_forehand_reach_max
 		_cached_top_cfg.rom_backhand_reach_max = _controller.rom_backhand_reach_max
 		if _native_top != null:
-			_native_top.stick_length = _cached_top_cfg.stick_length
 			_native_top.hand_rest_y = _cached_top_cfg.hand_rest_y
 			_native_top.hand_y_max = _cached_top_cfg.hand_y_max
 			_native_top.rom_forehand_angle_max = _cached_top_cfg.rom_forehand_angle_max
 			_native_top.rom_backhand_angle_max = _cached_top_cfg.rom_backhand_angle_max
 			_native_top.rom_forehand_reach_max = _cached_top_cfg.rom_forehand_reach_max
 			_native_top.rom_backhand_reach_max = _cached_top_cfg.rom_backhand_reach_max
-	# Both per-tick fields are written on EVERY call, never left to carry over:
-	# max_blade_reach is a property of the aim line being solved, so a stale one
-	# would silently constrain an unrelated later solve this tick.
+	# All three per-tick fields are written on EVERY call, never left to carry
+	# over: max_blade_reach is a property of the aim line being solved, so a stale
+	# one would silently constrain an unrelated later solve this tick, and the
+	# choked stick_length below is a property of this instant's grip.
 	_cached_top_cfg.blade_y = blade_y
 	_cached_top_cfg.max_blade_reach = max_blade_reach
+	_cached_top_cfg.stick_length = solve_stick_length()
 	if _native_top != null:
 		_native_top.blade_y = blade_y
 		_native_top.max_blade_reach = max_blade_reach
+		_native_top.stick_length = _cached_top_cfg.stick_length
 	return _cached_top_cfg
 
 func _bottom_hand_ik_config() -> BottomHandIK.Config:

@@ -635,6 +635,10 @@ var _commit_lift_blend: float = 0.0
 # sliding through a square-shouldered pose. Drives the per-shoulder load-up on
 # the cap/arm rig and the loaded blade's sweep — see CheckStanceRules.
 var _check_lead: float = 0.0
+# Metres of choke-up at a full commit, scaled per build off the skater's own
+# stick by SkaterController.apply_attributes. Read through grip_choke() below —
+# both the arm solve and the drawn shaft take it from there.
+var commit_grip_choke_m: float = 0.0
 # Counts down while an opponent's stick-lift has forcibly popped this skater's
 # blade up. Set host-side by the stick-lift claim path; decremented every tick.
 # The controller ORs this into the effective blade_up regardless of possession,
@@ -1538,6 +1542,26 @@ func get_commit_lift_blend() -> float:
 	return _commit_lift_blend
 
 
+# How far down the shaft the top hand has slid, in metres — a real choke-up, and
+# zero outside a check commit.
+#
+# The commit stance asks for two things a rigid full-length stick cannot do at
+# once: the blade RAISED off the ice and held IN, close to the body. Raising it
+# eats the hand-to-blade drop, and the stick's horizontal projection is
+# sqrt(stick² − drop²), so a raised blade has to sit FURTHER out, not nearer. At
+# full length the nearest the blade can come is about 0.92 m from the shoulder
+# while the pose asks for ~0.53 m; the solver answers by pinning the hand at
+# hand_y_max and overshooting the target along the aim line, which parks the
+# hand above the shoulder with the elbow swinging under it.
+#
+# Choking up is what a real player does to pull a stick in, and it is the term
+# the model was missing: it shortens the lever, so the blade can come in without
+# the hand climbing. test_commit_grip_choke.gd pins that the loaded blade is
+# actually REACHED, which is the property the authored dials silently lacked.
+func grip_choke() -> float:
+	return _commit_lift_blend * commit_grip_choke_m
+
+
 func get_check_lead() -> float:
 	return _check_lead
 
@@ -2428,8 +2452,13 @@ func update_stick_mesh() -> void:
 		return
 	var dir: Vector3 = to_tip.normalized()
 	_stick_flex_axis = _solve_stick_flex_axis(dir)
-	var butt_start: Vector3 = stick_origin - dir * SHAFT_BUTT_EXTEND_M
-	var shaft_len: float = to_tip.length() + SHAFT_BUTT_EXTEND_M + _SHAFT_TIP_OVERRUN_M
+	# A choked grip slides the HAND down the shaft; the shaft itself is rigid, so
+	# whatever the hand gives up above it has to come back out of the butt. Without
+	# this term the drawn stick would shrink by the choke — a shorter stick rather
+	# than a shorter grip, which is not what the solve means (see Skater.grip_choke).
+	var butt_extend: float = SHAFT_BUTT_EXTEND_M + grip_choke()
+	var butt_start: Vector3 = stick_origin - dir * butt_extend
+	var shaft_len: float = to_tip.length() + butt_extend + _SHAFT_TIP_OVERRUN_M
 	# Single local write, replacing position + scale.z + look_at (see
 	# _update_bone_mesh for why the trio is expensive). Unlike the arm bones the
 	# shaft is NOT rotationally symmetric — the handle-wrap paint reads its
@@ -2454,7 +2483,7 @@ func update_stick_mesh() -> void:
 		var shaft_mat: ShaderMaterial = stick_mesh.material_override as ShaderMaterial
 		if shaft_mat != null:
 			shaft_mat.set_shader_parameter(&"shaft_len_m", _shaft_len_sent)
-	_update_stick_knob(stick_origin, to_tip)
+	_update_stick_knob(stick_origin, to_tip, butt_extend)
 
 
 # Which way "toward the target" points on the shaft's ONE available bow axis,
@@ -2502,7 +2531,8 @@ func _hosel_tip_upper_body() -> Vector3:
 # `to_shaft_end` is the hand→hosel-tip vector the shaft
 # itself was aimed with, so the knob and the shaft always share one axis; the
 # knob wraps the top of the butt extension, slightly proud of its end.
-func _update_stick_knob(stick_origin: Vector3, to_shaft_end: Vector3) -> void:
+func _update_stick_knob(stick_origin: Vector3, to_shaft_end: Vector3,
+		butt_extend: float) -> void:
 	if stick_knob_mesh == null or not is_instance_valid(stick_knob_mesh):
 		return
 	if to_shaft_end.length_squared() < 0.0001:
@@ -2514,7 +2544,7 @@ func _update_stick_knob(stick_origin: Vector3, to_shaft_end: Vector3) -> void:
 	var up_shaft: Vector3 = -to_shaft_end.normalized()
 	var knob_h: float = SkaterMeshBuilder.KNOB_HEIGHT_M
 	var knob_center: Vector3 = stick_origin \
-			+ up_shaft * (SHAFT_BUTT_EXTEND_M - knob_h * 0.5 + _KNOB_PROUD_M)
+			+ up_shaft * (butt_extend - knob_h * 0.5 + _KNOB_PROUD_M)
 	# Post-multiplied X(+90°) maps the cylinder's long axis onto the aim, which
 	# is what rotate_object_local did. Safe to compose directly here because the
 	# knob carries no node scale (SkaterUniformCoordinator._rebuild_stick_knob
