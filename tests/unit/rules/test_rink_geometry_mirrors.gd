@@ -60,6 +60,66 @@ func test_perimeter_collision_inner_face_is_the_inner_boundary() -> void:
 			"collision corner arc must sit at GameRules.INNER_CORNER_RADIUS")
 
 
+# ── Bench doors ──────────────────────────────────────────────────────────────
+#
+# The pre-game intro sends every skater out from its team's bench, and
+# GameRules.BENCH_DOOR_* is where the domain thinks that bench is. The bench you
+# can actually SEE is ArenaRinksideLayout's, built into the bowl — so this is the
+# same shape as the rink mirrors above: an analytic constant against the thing
+# the player looks at, with nothing else in the codebase to catch a drift.
+#
+# It fails softly, which is why it needs a guard. Move one number and the intro
+# still runs, at the same speed, to the same faceoff dots; the skaters just walk
+# out of the boards a couple of metres from the bench they are supposed to be
+# leaving. Nothing errors and no other test notices.
+
+func test_bench_door_center_mirrors_the_arena_bench() -> void:
+	assert_almost_eq(GameRules.BENCH_DOOR_CENTER_Z,
+			ArenaRinksideLayout.BENCH_CENTER_Z, 1e-6,
+			"GameRules.BENCH_DOOR_CENTER_Z must equal ArenaRinksideLayout" +
+			".BENCH_CENTER_Z — the intro's start points and the bench furniture " +
+			"describe the same bench. Update both together.")
+
+
+func test_the_fielded_roster_starts_on_the_bench_block() -> void:
+	# The centre-of-the-bench constant agreeing is only half of it: the per-slot
+	# stagger has to keep the skaters ON the block it centres. Checked through
+	# PlayerRules.bench_start_position rather than the raw offsets, so the
+	# side-mirroring is covered too.
+	#
+	# DEFAULT_TEAM_SIZE slots only — deliberately, and it is not a silent cap:
+	# the 5v5 pair (BENCH_DOOR_SLOT_DZ ±4.8) lands 1.8 m off either end of a
+	# 3.0 m half-bench, so at 5v5 the outer two skaters do NOT start at their
+	# bench and one of them starts across centre ice. That is a real gap, not a
+	# rounding one, and widening the constant is a feel decision rather than
+	# something to assert into existence here.
+	var half_len: float = ArenaRinksideLayout.BENCH_HALF_LEN
+	for team_id: int in [0, 1]:
+		for slot: int in GameRules.DEFAULT_TEAM_SIZE:
+			var start: Vector3 = PlayerRules.bench_start_position(team_id, slot)
+			var side: float = -1.0 if team_id == 1 else 1.0
+			var along_bench: float = start.z - side * ArenaRinksideLayout.BENCH_CENTER_Z
+			assert_lt(absf(along_bench), half_len,
+					("team %d slot %d starts %.2f m from its bench centre, past the " +
+							"%.2f m the block spans") % [team_id, slot, along_bench, half_len])
+
+
+func test_bench_doors_open_onto_ice_not_into_the_kickplate() -> void:
+	# The other half of the same comment block: BENCH_DOOR_X is pulled in from
+	# the inner boards so a skater standing there is on the sheet. The body has
+	# width, so the clearance has to cover its radius, not just its origin —
+	# read off the shipped skater rather than restated here. (A bare Skater, not
+	# the scene: its @onready node refs only resolve on _ready, and the tuning
+	# vars this reads are plain class-level defaults — see CLAUDE.md on why they
+	# are `var` and not `@export`, which is also why the rink mirrors above can
+	# use get_property_default_value and this cannot.)
+	var skater: Skater = autofree(Skater.new())
+	var body_radius: float = skater.collision_radius()
+	assert_gt(body_radius, 0.0, "expected a skater body radius to check against")
+	assert_lt(GameRules.BENCH_DOOR_X + body_radius, GameRules.INNER_HALF_WIDTH,
+			"a skater standing at BENCH_DOOR_X must clear the kickplate lip")
+
+
 # Every faceoff marking has a twin at −z, which is what makes the painted sheet
 # symmetric about centre ice. The albedo image therefore looks the same whichever
 # way its Z axis runs, so nothing in the paint itself can catch a frame that is
