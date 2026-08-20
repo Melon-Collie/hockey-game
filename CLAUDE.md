@@ -82,6 +82,18 @@ MultiMesh's declared `custom_aabb` against the geometry it must contain — the
 check for a suspected mis-cull, and one only a real renderer can make (instance
 transforms read back empty under `--headless`).
 
+**Measure a cosmetic effect at the game camera before designing it.**
+`GameCamera` holds 10–32 m above the ice at −75° and 50° FOV, so a whole goal is
+~11% of frame width and a skater is smaller. Motion that reads clearly in a
+close-up — a net bulging 15 cm under a slapshot, a jersey hem swinging 5 cm —
+moves well under 1% of the frame there and is invisible in play. Put the real
+camera on it FIRST: build the node under a `Camera3D` at those parameters,
+render two frames, diff them (same recipe as above — `xvfb-run`,
+`--rendering-method gl_compatibility`). Twenty minutes, and it is a check no
+display-less test can make: unit tests will happily go green around an effect
+nobody can see. Two deformation features were built, tested and reverted for
+skipping it.
+
 Run the suite after touching domain code and report results. **AI perf changes
 also run the benchmarks** (`bash .claude/hooks/run-gut.sh -gdir=res://benchmarks`
 — report-only host-cost scenarios plus a per-evaluator micro-bench, outside the
