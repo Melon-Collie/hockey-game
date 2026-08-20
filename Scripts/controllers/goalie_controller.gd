@@ -1134,7 +1134,7 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 		# a loose puck (already gated inside Puck) and starts the clear timer.
 		puck.puck_hit_boards.connect(_on_reaction_resolved)
 		puck.puck_touched_post.connect(_on_reaction_resolved)
-		puck.puck_hit_goal_body.connect(_on_reaction_resolved.unbind(1))
+		puck.puck_hit_goal_body.connect(_on_reaction_resolved)
 
 # Overwrite the difficulty-varying @exports from a skill profile. Only the knobs
 # the profile carries are touched; everything else keeps its authored default.

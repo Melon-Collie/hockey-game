@@ -1737,12 +1737,9 @@ func _wire_sound_signals() -> void:
 			puck.fire_board_impact_vfx(spd)
 			NetworkManager.send_board_hit_to_all(puck.get_puck_position())
 			_record_replay_audio_event("puck_boards", puck.get_puck_position(), spd))
-		# `spd` is the ARRIVAL speed, carried on the signal — the twine has already
-		# eaten ~95% of it by the time this runs, and reading it back off the puck
-		# scales every net event off the rebound instead of off the shot.
-		puck.puck_hit_goal_body.connect(func(spd: float) -> void:
+		puck.puck_hit_goal_body.connect(func() -> void:
+			var spd: float = puck.linear_velocity.length()
 			SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, puck.get_puck_position(), _puck_speed_volume(spd), 0.06)
-			_bulge_net(puck.get_puck_position(), spd)
 			NetworkManager.send_goal_body_hit_to_all(puck.get_puck_position())
 			_record_replay_audio_event("puck_goal_body", puck.get_puck_position(), spd))
 		puck.puck_touched_loose.connect(func(_s: Skater) -> void:
@@ -1783,7 +1780,6 @@ func _wire_sound_signals() -> void:
 		puck_controller.predicted_net_contact.connect(
 			func(pos: Vector3, spd: float) -> void:
 				SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, pos, _puck_speed_volume(spd), 0.06)
-				_bulge_net(pos, spd)
 				_local_net_cue_at = NetworkManager.local_time())
 		puck_controller.predicted_board_contact.connect(
 			func(pos: Vector3, spd: float) -> void:
@@ -1835,9 +1831,7 @@ func _wire_sound_signals() -> void:
 		func(pos: Vector3) -> void:
 			if _cue_is_echo(_local_net_cue_at):
 				return
-			var spd: float = puck.linear_velocity.length() if puck != null else 0.0
-			SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, pos, _puck_speed_volume(spd), 0.06)
-			_bulge_net(pos, spd))
+			SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, pos, _puck_speed_volume(puck.linear_velocity.length() if puck != null else 0.0), 0.06))
 	NetworkManager.post_hit_received.connect(
 		func(pos: Vector3) -> void:
 			if _cue_is_echo(_local_post_cue_at):
@@ -5011,17 +5005,6 @@ func _post_pitch(speed: float) -> float:
 func _cue_is_echo(local_cue_at: float) -> bool:
 	var window: float = clampf(NetworkManager.get_latest_rtt_ms() / 1000.0 + 0.05, 0.08, 0.5)
 	return NetworkManager.local_time() - local_cue_at < window
-
-
-# Bulge the twine of whichever net the contact happened at. Rides the net-contact
-# cue rather than a signal of its own, so the deformation, the thump and the
-# broadcast all describe one event — and so a client's local prediction bulges
-# its own net immediately instead of waiting ~RTT for the host to say so.
-func _bulge_net(pos: Vector3, speed: float) -> void:
-	for goal: HockeyGoal in goals:
-		if signf(goal.goal_line_z()) == signf(pos.z):
-			goal.net_impact(pos, speed)
-			return
 
 
 # Pitch for a blade deflection cue. A low-speed result is a bobble (the blade

@@ -22,8 +22,7 @@ func before_each() -> void:
 	_loose_skaters = []
 	puck.puck_hit_boards.connect(func() -> void: _order.append("boards"))
 	puck.puck_touched_post.connect(func() -> void: _order.append("post"))
-	# Carries the puck's ARRIVAL speed (see the signal's own comment).
-	puck.puck_hit_goal_body.connect(func(_spd: float) -> void: _order.append("net"))
+	puck.puck_hit_goal_body.connect(func() -> void: _order.append("net"))
 	puck.puck_touched_loose.connect(func(s: Skater) -> void:
 		_order.append("loose")
 		_loose_skaters.append(s))

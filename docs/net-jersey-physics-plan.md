@@ -13,6 +13,65 @@ because the cosmetic rig never touches a tick.
 Explicitly NOT in scope, and argued against at the end: true per-vertex cloth on
 either, and a net that comes off its moorings.
 
+**Status: both parts were built and then reverted — see the Outcome section
+immediately below, which is now the most useful thing in this file.**
+
+## OUTCOME — both features were built, measured, and reverted
+
+**Read this before acting on anything below.** Parts A and B were implemented in
+full, tested, and taken back out. The plan's engineering was sound; its premise
+was not. Neither deformation is visible at the camera this game is played at, and
+nothing in the analysis below noticed that, because nothing in it asked.
+
+`GameCamera` holds 10–32 m above the ice at a −75° pitch and 50° FOV. At a
+typical 15 m hold the whole goal is about **11% of the frame width**, and from
+75° down you are looking at the net's ROOF — the back panel, where a shot
+actually lands, is nearly edge-on. Rendered at that exact framing, at rest and
+mid-bulge from a 25 m/s shot:
+
+| | net bulge | share of frame that changes |
+|---|---|---|
+| 10 m (closest the camera ever gets) | 0.15 m ≈ 25 px | 1.1%, worst pixel delta 0.34 of 3.0 |
+| 15 m (typical) | 0.15 m ≈ 17 px | 0.12% |
+
+The two frames are indistinguishable by eye. Amplified 6×, what changes is the
+diamond texture shimmering by a pixel — not a shape anyone reads as a bulge. The
+jersey hem is about a third of that displacement on an object that never gets
+closer, so it is further below the threshold again.
+
+**The lesson is procedural, and it is the whole value of this document now:** a
+cosmetic feature needs a visibility check at real game framing BEFORE it is
+designed, not after it is built twice. That check cost twenty minutes — build a
+scene, put the actual camera on it, render two frames, diff them. Every technical
+question below (tessellation density, seam tearing, bone vs shader, netcode
+containment) was answered correctly and none of them mattered.
+
+Three things came out of the work and were kept:
+
+1. **A real audio bug, fixed and landed separately.** Contact cues are deferred
+   until after the tick commits, so every net thump read its speed off a puck the
+   twine had already stopped: `NET_RESTITUTION` is 0.05, so a 25 m/s shot reached
+   the volume curve holding 1.25 m/s. The curve spans 1→21 m/s, so the entire
+   dynamic range of the cue was about an eighth of a decibel — a slapshot into the
+   mesh has always sounded exactly like a dump-in. `puck_hit_goal_body` now
+   carries the arrival speed. Nothing to do with net physics; it is a bug the
+   visual work happened to walk into.
+2. **A latent bug in the shipping celebration ripple, still present.**
+   `goal_net.gdshader` displaces each panel along its own face normal, and panels
+   meet at right angles, so a bulge moves the two sides of a shared seam apart —
+   at the 0.22 m peak, a ~0.3 m hole torn in the twine, worst along the top edge
+   at the front. It has shipped invisibly behind a goal horn and a strobe. If net
+   visuals are ever revisited, fix this first: it is the one net deformation that
+   happens while the camera is pushed in.
+3. **The netcode analysis in §0 and Part C stands unchanged.** It was never
+   contingent on the features being visible, and it is the answer to "why not
+   just use cloth" whenever that comes up again.
+
+If someone does return to this: the only framing where net detail could pay off
+is the goal celebration (`GameCamera._GOAL_CINE_ZOOM` 0.72, then the replay's
+behind-the-net cut). Spend the budget there, on one event, and measure it at that
+camera before writing any of it.
+
 ## 0. The dividing line
 
 The puck's sim is analytic and deterministic (`docs/netcode-determinism-
@@ -37,7 +96,7 @@ That is the entire design constraint, and Part A is shaped around it:
   needs no wire traffic, no snapshot entry, and no replay.
 - **net → puck is expensive, and gets exactly one scalar.**
 
-## Part A — the net that moves
+## Part A — the net that moves *(built, reverted — see Outcome)*
 
 ### A.1 What is there now
 
@@ -205,7 +264,7 @@ A1 looking unfinished.
 | Netcode (A1) | none |
 | Netcode (A2) | one float, derived not transmitted, in the snapshot and both kernels |
 
-## Part B — the jersey that moves
+## Part B — the jersey that moves *(built, reverted — see Outcome)*
 
 ### B.1 What is there now
 

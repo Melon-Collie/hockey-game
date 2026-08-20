@@ -27,31 +27,19 @@ extends RefCounted
 # spanning the same envelope as the primitive each replaces (heights and radii
 # from Scenes/Skater.tscn) so nothing pokes through ice, boards, or gear that
 # was tuned around the primitive silhouettes.
-# Stations below the waist are denser than the silhouette needs, because
-# jersey_flow.gdshader swings the skirt and a swing needs rings to bend through.
-# The three marked ones sit exactly on the segments between their neighbours, so
-# the surface is unchanged — and, load-bearing, so is every other station's UV:
-# _build_lathe derives V from a station's own height, so an inserted ring lands
-# at the V its height implies and leaves the stripe, name and number where
-# JerseyDecal painted them. test_torso_profile_uvs.gd holds that.
 const _TORSO_PROFILE: Array[Vector2] = [
 	Vector2(0.275, 0.158),   # trap line — stays wide so the deltoid caps emerge from it
 	Vector2(0.245, 0.198),
 	Vector2(0.130, 0.208),   # chest
-	Vector2(0.000, 0.196),   # waist tuck — the hem swing ramps in from here down
-	Vector2(-0.075, 0.200),  # swing station
+	Vector2(0.000, 0.196),   # waist tuck
 	Vector2(-0.150, 0.204),
-	Vector2(-0.190, 0.209),  # swing station
 	Vector2(-0.230, 0.214),
-	Vector2(-0.253, 0.218),  # swing station
 	Vector2(-0.275, 0.222),  # jersey hem flare
 ]
 # Rear (+Z is the back) shift per _TORSO_PROFILE ring — the hockey-butt sway:
 # the seat builds through the lower back and peaks at the hem that drapes
 # over it, while the chest rings stay centered so the belly keeps its line.
-const _TORSO_REAR_SWAY: Array[float] = [
-	0.0, 0.0, 0.0, 0.006, 0.012, 0.018, 0.023, 0.028, 0.030, 0.032,
-]
+const _TORSO_REAR_SWAY: Array[float] = [0.0, 0.0, 0.0, 0.006, 0.018, 0.028, 0.032]
 const _THIGH_PROFILE: Array[Vector2] = [
 	Vector2(0.150, 0.142),
 	Vector2(0.050, 0.139),
@@ -558,8 +546,8 @@ static func shared_arm_bone_z() -> ArrayMesh:
 
 
 # ── The upper-body rig: one skinned mesh, one Skeleton3D ─────────────────────
-# Fifteen bones of one skeleton — both arms, the torso, the jersey skirt, the
-# helmet/head unit, the two deltoid caps — driving one mesh, so posing a part costs an entry in
+# Fourteen bones of one skeleton — both arms, the torso, the helmet/head unit,
+# the two deltoid caps — driving one mesh, so posing a part costs an entry in
 # the skeleton's pose array rather than a Node3D transform write (which dirties
 # a subtree and pushes a global to the RenderingServer).
 #
@@ -568,15 +556,9 @@ static func shared_arm_bone_z() -> ArrayMesh:
 # are identity, the skin binds are identity, and each part's geometry is left in
 # its own local space. A skinned vertex is then exactly `bone_pose * v`.
 #
-# The bone list is FLAT (no parents): all fifteen are posed independently in
+# The bone list is FLAT (no parents): all fourteen are posed independently in
 # UpperBody's space, and a hierarchy would compose transforms these poses do not
 # expect. The legs are the opposite case — see LegBone.
-#
-# HEM is the one bone that must FOLLOW another: the skirt is a slice of the same
-# lathe as the torso and has to inherit every pose the torso gets, plus its own
-# swing. With no hierarchy to do that, Skater._repose_upper_bone composes it by
-# hand off the torso's numbers — which is deliberate, because a parent would
-# compose the trunk texture twice.
 enum UpperBone {
 	TOP_UPPER_ARM,
 	TOP_FOREARM,
@@ -592,9 +574,8 @@ enum UpperBone {
 	HELMET,
 	SHOULDER_L,
 	SHOULDER_R,
-	HEM,
 }
-const UPPER_BONE_COUNT: int = 15
+const UPPER_BONE_COUNT: int = 14
 
 # Surfaces. One per bone for the first thirteen; the helmet is the exception,
 # carrying the shell and the head/neck skin as two surfaces of one bone (they
@@ -623,9 +604,8 @@ enum UpperSurface {
 	SHOULDER_R,
 	TOP_FINGERS,
 	BOTTOM_FINGERS,
-	HEM,
 }
-const UPPER_SURFACE_COUNT: int = 18
+const UPPER_SURFACE_COUNT: int = 17
 # Scene node name per bone for the four parts whose placement is authored in
 # Scenes/Skater.tscn rather than derived (the arm parts are placed by IK). Read
 # by Skater._build_upper_rig, which then frees them — same deal as LEG_BONE_NODE.
@@ -633,7 +613,6 @@ const UPPER_SURFACE_COUNT: int = 18
 const UPPER_BONE_NODE: Array[String] = [
 	"", "", "", "", "", "", "", "", "", "",
 	"UpperBodyMesh", "Helmet", "ShoulderL", "ShoulderR",
-	"",  # HEM — takes the torso's placement rather than one of its own
 ]
 
 
@@ -658,7 +637,7 @@ static func shared_upper_skin_mesh() -> ArrayMesh:
 		_append_skinned_surface(m, fist, UpperBone.BOTTOM_HAND, FIST_PART_BACK)
 		_append_skinned_surface(m, cuff, UpperBone.TOP_CUFF)
 		_append_skinned_surface(m, cuff, UpperBone.BOTTOM_CUFF)
-		_append_skinned_surface(m, shared_torso_body(), UpperBone.TORSO)
+		_append_skinned_surface(m, _shared("torso", _build_torso), UpperBone.TORSO)
 		_append_skinned_surface(m, helmet, UpperBone.HELMET, HELMET_SURF_SHELL)
 		_append_skinned_surface(m, helmet, UpperBone.HELMET, HELMET_SURF_SKIN)
 		_append_skinned_surface(m, shoulder, UpperBone.SHOULDER_L)
@@ -666,7 +645,6 @@ static func shared_upper_skin_mesh() -> ArrayMesh:
 		# Out of anatomical order — see the UpperSurface doc block.
 		_append_skinned_surface(m, fist, UpperBone.TOP_HAND, FIST_PART_FINGERS)
 		_append_skinned_surface(m, fist, UpperBone.BOTTOM_HAND, FIST_PART_FINGERS)
-		_append_skinned_surface(m, shared_torso_skirt(), UpperBone.HEM)
 		return m)
 
 
@@ -762,58 +740,6 @@ static func shared_knob() -> ArrayMesh:
 static func _build_torso() -> ArrayMesh:
 	return _build_lathe(_TORSO_PROFILE, _TORSO_SIDES, _TORSO_X_SCALE, _TORSO_Z_SCALE,
 			_TORSO_REAR_SWAY)
-
-
-# ── The jersey, in two halves ─────────────────────────────────────────────────
-# The skinned rig splits the torso at the waist so the skirt can swing on a bone
-# of its own (UpperBone.HEM) while the body above it stays put. Both halves
-# INCLUDE the waist station, so they share that ring — and the swing is a
-# rotation ABOUT it, which leaves it exactly where it was. That is what makes
-# the seam impossible to open rather than merely small.
-#
-# Unskinned figures (the locker mannequin, the lobby's bench dummies) keep taking
-# the whole torso from shared_torso(): they have no skeleton to swing anything
-# with, and the two slices reassemble into that same surface.
-const _TORSO_WAIST_STATION: int = 3  # _TORSO_PROFILE's y = 0.0 ring
-
-
-static func shared_torso_body() -> ArrayMesh:
-	return _shared("torso_body", func() -> ArrayMesh:
-		return _build_lathe(_TORSO_PROFILE, _TORSO_SIDES, _TORSO_X_SCALE, _TORSO_Z_SCALE,
-				_TORSO_REAR_SWAY, 0, _TORSO_WAIST_STATION, true, false))
-
-
-static func shared_torso_skirt() -> ArrayMesh:
-	return _shared("torso_skirt", func() -> ArrayMesh:
-		return _build_lathe(_TORSO_PROFILE, _TORSO_SIDES, _TORSO_X_SCALE, _TORSO_Z_SCALE,
-				_TORSO_REAR_SWAY, _TORSO_WAIST_STATION, -1, false, true))
-
-
-# Pose for UpperBone.HEM that carries the skirt's hem ring `swing` metres, in the
-# torso's own local frame. Applied by Skater on top of the torso's pose.
-#
-# A rotation about the waist by `swing / lever` moves a point one lever below the
-# pivot by `swing` — so the hem lands on exactly the displacement asked for, and
-# every ring between waist and hem moves proportionally less. The ramp is the
-# geometry's, which is why nothing here has to describe one.
-static func hem_swing_transform(swing: Vector3) -> Transform3D:
-	var lever: float = _TORSO_PROFILE[_TORSO_WAIST_STATION].x \
-			- _TORSO_PROFILE[_TORSO_PROFILE.size() - 1].x
-	var reach: float = swing.length()
-	if reach < 0.00001 or lever < 0.00001:
-		return Transform3D.IDENTITY
-	# Axis is the swing turned a quarter turn about vertical; a purely vertical
-	# swing has no lever to turn on and is dropped.
-	var axis: Vector3 = swing.cross(Vector3.UP)
-	if axis.length_squared() < 0.000001:
-		return Transform3D.IDENTITY
-	var basis := Basis(axis.normalized(), reach / lever)
-	var pivot := Vector3(0.0, _TORSO_PROFILE[_TORSO_WAIST_STATION].x,
-			_TORSO_REAR_SWAY[_TORSO_WAIST_STATION])
-	# About the shared waist ring, not the mesh origin — the ring's own rear sway
-	# puts it a few mm off centre, and rotating about the wrong point is exactly
-	# how the seam would open.
-	return Transform3D(basis, pivot - basis * pivot)
 
 
 # Head ball at HEAD_RADIUS, sitting _HEAD_FORWARD_M ahead of the helmet center.
@@ -1137,27 +1063,18 @@ static func _build_skate() -> ArrayMesh:
 # Faceted solid of revolution over (y, radius) stations, with the cylinder UV
 # convention from the class doc block. Both end caps are emitted — the torso's
 # top cap is where the jersey yoke paints.
-# `first`/`last` build only a SLICE of the profile (last < 0 means "to the end"),
-# and cap_top / cap_bottom say whether that slice closes its own ends. V is
-# derived from the WHOLE profile either way, so a slice carries exactly the UVs
-# it would have had inside the complete lathe — which is what lets the torso be
-# cut in two at the waist, for the skirt to swing on its own bone, without
-# moving a single stripe or digit of the painted jersey.
 static func _build_lathe(profile: Array[Vector2], sides: int,
 		x_scale: float, z_scale: float,
-		z_offsets: Array[float] = [],
-		first: int = 0, last: int = -1,
-		cap_top: bool = true, cap_bottom: bool = true) -> ArrayMesh:
+		z_offsets: Array[float] = []) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	st.set_smooth_group(-1)  # flat shading — see class doc block
 	var y_top: float = profile[0].x
 	var y_bot: float = profile[profile.size() - 1].x
 	var span: float = maxf(y_top - y_bot, 0.001)
-	var hi: int = profile.size() - 1 if last < 0 else last
 	var rings: Array[PackedVector3Array] = []
 	var vs := PackedFloat32Array()
-	for i in range(first, hi + 1):
+	for i in profile.size():
 		var s: Vector2 = profile[i]
 		var ring: PackedVector3Array = _ring(s.x, s.y, x_scale, z_scale, sides)
 		# Optional per-ring Z shift (index-aligned with the profile; short or
@@ -1170,7 +1087,7 @@ static func _build_lathe(profile: Array[Vector2], sides: int,
 				ring[k].z += z_off
 		rings.append(ring)
 		vs.append(0.5 * (y_top - s.x) / span)
-	for i in rings.size() - 1:
+	for i in profile.size() - 1:
 		for k in sides:
 			var u0: float = float(k) / float(sides)
 			var u1: float = float(k + 1) / float(sides)
@@ -1179,13 +1096,11 @@ static func _build_lathe(profile: Array[Vector2], sides: int,
 					rings[i][k + 1], Vector2(u1, vs[i]),
 					rings[i + 1][k + 1], Vector2(u1, vs[i + 1]),
 					rings[i + 1][k], Vector2(u0, vs[i + 1]))
-	if cap_top:
-		var top_off: float = z_offsets[first] if first < z_offsets.size() else 0.0
-		_cap(st, rings[0], Vector3(0.0, profile[first].x, top_off), Vector2(0.25, 0.75), true)
-	if cap_bottom:
-		var bot_off: float = z_offsets[hi] if hi < z_offsets.size() else 0.0
-		_cap(st, rings[rings.size() - 1], Vector3(0.0, profile[hi].x, bot_off),
-				Vector2(0.75, 0.75), false)
+	var top_off: float = z_offsets[0] if z_offsets.size() > 0 else 0.0
+	var bot_off: float = z_offsets[profile.size() - 1] \
+			if z_offsets.size() >= profile.size() else 0.0
+	_cap(st, rings[0], Vector3(0.0, y_top, top_off), Vector2(0.25, 0.75), true)
+	_cap(st, rings[rings.size() - 1], Vector3(0.0, y_bot, bot_off), Vector2(0.75, 0.75), false)
 	st.generate_normals()
 	return st.commit()
 

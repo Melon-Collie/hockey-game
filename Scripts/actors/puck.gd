@@ -13,12 +13,7 @@ signal puck_touched_goalie(goalie: Goalie)  # puck contacted a goalie StaticBody
 signal puck_caught_by_goalie(goalie: Goalie)
 signal puck_touched_post  # puck contacted any HockeyGoal geometry while uncarried
 signal puck_hit_boards     # uncarried puck struck rink boards at meaningful speed
-# Uncarried puck struck net panel or skirt (non-pipe goal geometry). Carries the
-# speed the puck ARRIVED at, which is not a speed any listener can read back off
-# the puck: the twine absorbs almost everything (NET_RESTITUTION 0.05), so by the
-# time this drains a 25 m/s shot is travelling 1.25 m/s. Anything scaling with
-# how hard the net was hit — the thump, the mesh bulge — needs the former.
-signal puck_hit_goal_body(impact_speed: float)
+signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe goal geometry)
 
 @export var max_speed: float = 38.0
 @export var reattach_cooldown: float = 0.5
@@ -241,7 +236,7 @@ func drain_contact_events() -> void:
 			ContactEvent.POST:
 				puck_touched_post.emit()
 			ContactEvent.NET:
-				puck_hit_goal_body.emit(_event_floats[i])
+				puck_hit_goal_body.emit()
 			ContactEvent.GOALIE_TOUCH:
 				if is_instance_valid(obj):
 					puck_touched_goalie.emit(obj as Goalie)
@@ -977,7 +972,7 @@ func _drive_analytic(dt: float) -> void:
 	if touched_post and not _contact_latch_post:
 		_queue_contact_event(ContactEvent.POST)
 	if touched_net and not _contact_latch_net:
-		_queue_contact_event(ContactEvent.NET, null, null, incoming_speed)
+		_queue_contact_event(ContactEvent.NET)
 	if emit_goalie != null:
 		_queue_contact_event(ContactEvent.GOALIE_TOUCH, emit_goalie)
 	if emit_caught != null:

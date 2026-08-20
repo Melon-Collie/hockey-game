@@ -12,6 +12,7 @@ const LAMP_FLASHES: int = 6
 const LAMP_RISE_TIME: float = 0.10
 const LAMP_FALL_TIME: float = 0.24
 const LAMP_FADE_TIME: float = 0.6
+const NET_RIPPLE_PEAK: float = 0.22
 # Clamp bracket under the base, wrapping the glass top edge (glass is 0.05
 # thick, centered on the fixture) so the lamp reads as mounted, not floating.
 const BRACKET_SIZE := Vector3(0.14, 0.12, 0.10)
@@ -21,7 +22,7 @@ var _particles: GPUParticles3D = null
 var _light: OmniLight3D = null
 var _lamp_light: OmniLight3D = null
 var _dome_mat: StandardMaterial3D = null
-var _shake_net: Callable = Callable()
+var _net_material: ShaderMaterial = null
 var _lamp_tween: Tween = null
 
 func _ready() -> void:
@@ -61,12 +62,11 @@ func _ready() -> void:
 
 
 # Called by HockeyGoal after this node is in the tree (game runtime only, not
-# in the editor). `shake_net` registers the celebration bulge on the goal's own
-# impact path — the twine's displacement lives there, so this only asks for it;
-# lamp_local_pos places the lamp fixture atop the glass behind this net,
-# expressed relative to this node.
-func setup(shake_net: Callable, lamp_local_pos: Vector3) -> void:
-	_shake_net = shake_net
+# in the editor). net_material is the shared ShaderMaterial on the net panels
+# (for the goal ripple); lamp_local_pos places the lamp fixture atop the
+# glass behind this net, expressed relative to this node.
+func setup(net_material: ShaderMaterial, lamp_local_pos: Vector3) -> void:
+	_net_material = net_material
 	_build_lamp(lamp_local_pos)
 
 
@@ -76,8 +76,7 @@ func celebrate() -> void:
 	var tween := create_tween()
 	tween.tween_property(_light, "light_energy", 0.0, 1.8)
 	_strobe_lamp()
-	if _shake_net.is_valid():
-		_shake_net.call()
+	_ripple_net()
 
 
 func _build_lamp(lamp_local_pos: Vector3) -> void:
@@ -143,3 +142,12 @@ func _apply_lamp(intensity: float) -> void:
 	_dome_mat.emission_energy_multiplier = intensity * DOME_MAX_EMISSION
 
 
+func _ripple_net() -> void:
+	if _net_material == null:
+		return
+	_net_material.set_shader_parameter("ripple_amount", 0.0)
+	var tween := create_tween()
+	tween.tween_property(_net_material, "shader_parameter/ripple_amount", NET_RIPPLE_PEAK, 0.06)
+	var settle := tween.tween_property(_net_material, "shader_parameter/ripple_amount", 0.0, 0.9)
+	settle.set_trans(Tween.TRANS_CUBIC)
+	settle.set_ease(Tween.EASE_OUT)

@@ -8,12 +8,10 @@ extends Node3D
 # judged in the place it will actually be seen.
 #
 # Built from the individual part meshes rather than the skinned rig. That costs
-# nothing in fidelity: `shared_torso()` is the whole torso lathe, and the skinned
-# rig carries that same lathe cut in two at the waist (a body surface and a
-# skirt, so the skirt can swing on its own bone), so the silhouette is identical
-# while the pose stays plain node transforms — no Skeleton3D, no bone poses, no
-# gait, and nothing here to swing a hem with. The lobby's bench dummies are
-# assembled the same way.
+# nothing in fidelity: `shared_torso()` and the skinned mesh's torso surface are
+# the same cached `_shared("torso", ...)` geometry, so the silhouette is
+# identical while the pose stays plain node transforms — no Skeleton3D, no bone
+# poses, no gait. The lobby's bench dummies are assembled the same way.
 #
 # Frame: the rest positions below are Scenes/Skater.tscn's, in MeshRoot-local
 # coordinates, so the figure is laid out in the rig's own numbers and faces −Z

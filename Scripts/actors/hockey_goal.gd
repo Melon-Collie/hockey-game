@@ -36,30 +36,9 @@ const PIPE_RADIAL_SEGMENTS: int = 8
 const NET_TEXTURE_PATH: String    = "res://Assets/textures/net_diamond.png"
 const NET_TEXTURE_TILE_SIZE: float = 0.164  # 4 diamonds × 41mm each
 
-# All net panels share one ShaderMaterial (goal_net.gdshader) so an impact is a
-# single uniform write for the whole cage. Rebuilt per _rebuild().
+# All net panels share one ShaderMaterial (goal_net.gdshader) so GoalVFX can
+# drive a single ripple uniform on goal. Rebuilt per _rebuild().
 const NET_SHADER_PATH: String = "res://Shaders/goal_net.gdshader"
-
-# Live impacts the twine is still settling from. Four is enough for a scramble
-# in the crease — a fifth contact inside 0.7 s evicts the oldest, which by then
-# has decayed to near nothing anyway.
-const MAX_IMPACTS: int = 4
-# 4 × the shader's DECAY_TAU: past here the envelope is under 6% of peak and
-# the panel is visually at rest. Must stay in step with goal_net.gdshader —
-# test_goal_net_impacts.gd holds the pair.
-const IMPACT_LIFETIME: float = 0.7
-# Peak bulge per m/s of closing speed, and the ceiling it saturates at. A hard
-# shot buries about 18 cm of twine; the cap is what stops a freak deflection
-# speed from turning the mesh inside out.
-const IMPACT_METRES_PER_MPS: float = 0.006
-const IMPACT_MAX_BULGE: float = 0.20
-# Gaussian falloff radius of a puck strike. About a stick-blade's width of
-# twine moves with the disc, which is what a struck net does.
-const IMPACT_RADIUS: float = 0.45
-# The goal celebration is the same displacement path, registered as one wide,
-# deep impact rather than a second uniform: the whole cage shakes at once.
-const CELEBRATION_BULGE: float = 0.22
-const CELEBRATION_RADIUS: float = 1.20
 
 # Goal lamp fixture placement: seated on the top edge of the end glass behind
 # this net (glass tops out around 2.9 m — wall 1.07 + glass 1.83). Height is
@@ -70,20 +49,7 @@ const LAMP_HEIGHT: float = 2.95
 const LAMP_BEHIND_BOARDS: float = 0.0
 
 var defending_team_id: int = -1  # set by GameManager when goals are assigned to teams
-var _net_material: ShaderMaterial = null  # shared across all net panels; every impact writes it once
-
-# Impact ring buffer, mirroring goal_net.gdshader's two uniform arrays.
-# xyz = origin (world), w = signed peak displacement; then x = start time,
-# y = falloff radius. Kept as members and written in place so a contact costs
-# two uniform writes and no allocation.
-var _impact_origin_amp := PackedVector4Array()
-var _impact_start_radius := PackedVector4Array()
-var _impact_dir := PackedVector4Array()
-var _impact_next: int = 0
-# Clock the shader reads impact ages against, advanced only while the twine is
-# still moving — see _process.
-var _net_time: float = 0.0
-var _impacts_live_until: float = -1.0
+var _net_material: ShaderMaterial = null  # shared across all net panels; GoalVFX tweens its ripple uniform
 
 
 # The actual world-Z of this goal's goal line. The HockeyGoal *node* sits at
@@ -140,9 +106,7 @@ func _rebuild() -> void:
 		child.queue_free()
 
 	var goal_z: float = facing * (rink_length / 2.0 - distance_from_end)
-	_net_material = _make_net_material()
-	_net_material.set_shader_parameter(&"cavity_center", _cavity_center(goal_z))
-	_reset_impacts()
+	_net_material = _make_net_material(goal_z)
 	_build_mouth(goal_z)
 	_build_skirt(goal_z)
 	_build_crown(goal_z)
@@ -157,7 +121,7 @@ func _rebuild() -> void:
 	# GoalVFX is not a @tool script, so only drive it at game runtime.
 	if not Engine.is_editor_hint():
 		var lamp_world := Vector3(0.0, LAMP_HEIGHT, facing * (rink_length / 2.0 + LAMP_BEHIND_BOARDS))
-		goal_vfx.setup(shake_for_goal, lamp_world - goal_vfx.position)
+		goal_vfx.setup(_net_material, lamp_world - goal_vfx.position)
 
 
 # --------------------------------------------------------------------------
@@ -364,8 +328,7 @@ func _build_net_panels(goal_z: float) -> void:
 		Vector3(-CROWN_HALF_WIDTH, NET_HEIGHT, goal_z),
 		Vector3( CROWN_HALF_WIDTH, NET_HEIGHT, goal_z),
 		Vector3( CROWN_HALF_WIDTH, NET_HEIGHT, back_z_top),
-		Vector3(-CROWN_HALF_WIDTH, NET_HEIGHT, back_z_top),
-		goal_z
+		Vector3(-CROWN_HALF_WIDTH, NET_HEIGHT, back_z_top)
 	)
 
 	# --- 2. BACK panel ---
@@ -376,8 +339,7 @@ func _build_net_panels(goal_z: float) -> void:
 		Vector3(-CROWN_HALF_WIDTH, NET_HEIGHT, back_z_top),  # top-left
 		Vector3( CROWN_HALF_WIDTH, NET_HEIGHT, back_z_top),  # top-right
 		Vector3( POST_HALF_WIDTH,  0.0,        back_z_bot),  # bottom-right
-		Vector3(-POST_HALF_WIDTH,  0.0,        back_z_bot),  # bottom-left
-		goal_z
+		Vector3(-POST_HALF_WIDTH,  0.0,        back_z_bot)   # bottom-left
 	)
 
 	# --- 3 & 4. SIDE panels (right trapezoids, vertical at ±POST_HALF_WIDTH) ---
@@ -391,8 +353,7 @@ func _build_net_panels(goal_z: float) -> void:
 			Vector3(x, 0.0,        goal_z),
 			Vector3(x, NET_HEIGHT, goal_z),
 			Vector3(x, NET_HEIGHT, back_z_top),
-			Vector3(x, 0.0,        back_z_bot),
-			goal_z
+			Vector3(x, 0.0,        back_z_bot)
 		)
 
 	# --- 5 & 6. CROWN-TO-SIDE gusset rectangles (horizontal, at y=NET_HEIGHT) ---
@@ -408,7 +369,7 @@ func _build_net_panels(goal_z: float) -> void:
 		var r2 := Vector3(side * CROWN_HALF_WIDTH, NET_HEIGHT, goal_z)
 		var r3 := Vector3(side * CROWN_HALF_WIDTH, NET_HEIGHT, back_z_top)
 		var r4 := Vector3(side * POST_HALF_WIDTH,  NET_HEIGHT, back_z_top)
-		_add_net_quad(r1, r2, r3, r4, goal_z)
+		_add_net_quad(r1, r2, r3, r4)
 
 	# --- 7 & 8. BACK-SIDE gusset triangles (vertical-ish, closes side↔back seam) ---
 	# The side panel has its back edge at x=±POST_HALF_WIDTH, but the back
@@ -424,7 +385,7 @@ func _build_net_panels(goal_z: float) -> void:
 		var q1 := Vector3(side * POST_HALF_WIDTH,  0.0,        back_z_bot)
 		var q2 := Vector3(side * CROWN_HALF_WIDTH, NET_HEIGHT, back_z_top)
 		var q3 := Vector3(side * POST_HALF_WIDTH,  NET_HEIGHT, back_z_top)
-		_add_net_tri(q1, q2, q3, goal_z)
+		_add_net_tri(q1, q2, q3)
 
 
 # --------------------------------------------------------------------------
@@ -479,6 +440,14 @@ func _add_quarter_bend(
 		_add_cylinder(mid, seg_basis, seg_len * 1.05, POST_RADIUS, color)
 
 
+# Project a 3D point onto a 2D UV coordinate, given an anchor point and two
+# perpendicular basis vectors in the panel's plane. The UV is the point's
+# offset from the anchor expressed in the (u_axis, v_axis) basis, scaled.
+func _project_uv(p: Vector3, anchor: Vector3, u_axis: Vector3, v_axis: Vector3, uv_scale: float) -> Vector2:
+	var offset: Vector3 = p - anchor
+	return Vector2(offset.dot(u_axis) * uv_scale, offset.dot(v_axis) * uv_scale)
+
+
 # Godot's CylinderMesh default axis is +Y. Build a Basis whose Y axis
 # points along `up_dir`, with any valid perpendicular X/Z.
 func _basis_from_up(up_dir: Vector3) -> Basis:
@@ -490,35 +459,65 @@ func _basis_from_up(up_dir: Vector3) -> Basis:
 	return Basis(x_axis, up, z_axis)
 
 
-# Centre of the cage's cavity, which is what NetPanelBuilder orients panel
-# normals away from. Depth is taken at the ice, where the cage is deepest.
-func _cavity_center(goal_z: float) -> Vector3:
-	return Vector3(0.0, NET_HEIGHT / 2.0, goal_z + facing * BASE_DEPTH / 2.0)
+# Build a triangular net panel (3 corners in world space). For small gap-filler
+# panels where a quad would degenerate. Same flat visual as _add_net_quad.
+func _add_net_tri(a: Vector3, b: Vector3, c: Vector3) -> void:
+	var verts := PackedVector3Array([a, b, c])
+	var normal: Vector3 = (b - a).cross(c - a).normalized()
+	var normals := PackedVector3Array([normal, normal, normal])
+	# UVs: same approach as _add_net_quad — project onto 2D basis anchored at A.
+	var u_axis: Vector3 = (b - a).normalized()
+	var v_axis: Vector3 = normal.cross(u_axis).normalized()
+	var uv_scale: float = 1.0 / NET_TEXTURE_TILE_SIZE
+	var uv_a: Vector2 = _project_uv(a, a, u_axis, v_axis, uv_scale)
+	var uv_b: Vector2 = _project_uv(b, a, u_axis, v_axis, uv_scale)
+	var uv_c: Vector2 = _project_uv(c, a, u_axis, v_axis, uv_scale)
+	var uvs := PackedVector2Array([uv_a, uv_b, uv_c])
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	var array_mesh := ArrayMesh.new()
+	array_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 
-
-# Triangular net panel (3 corners in world space), for the small gap-fillers
-# where a quad would degenerate.
-func _add_net_tri(a: Vector3, b: Vector3, c: Vector3, goal_z: float) -> void:
-	_add_panel(NetPanelBuilder.tri(a, b, c, NET_TEXTURE_TILE_SIZE, _cavity_center(goal_z)))
-
-
-# Quadrilateral net panel from four corners in world space, in order around the
-# quad (A, B, C, D — either CW or CCW). Rendered double-sided via the net
-# material's cull_disabled. Mesh only: the puck's carom off the panels is
-# analytic (PuckGeometryCollision), and the skater is held out of the pocket by
-# GameRules.push_out_of_net — so a panel that bulges under the shader does not
-# move what anything collides with.
-func _add_net_quad(a: Vector3, b: Vector3, c: Vector3, d: Vector3, goal_z: float) -> void:
-	_add_panel(NetPanelBuilder.quad(a, b, c, d, NET_TEXTURE_TILE_SIZE, _cavity_center(goal_z)))
-
-
-func _add_panel(mesh: ArrayMesh) -> void:
 	var mesh_inst := MeshInstance3D.new()
-	mesh_inst.mesh = mesh
-	# The shader displaces vertices outside the mesh's own bounds, so the
-	# renderer must be told to expect it or a bulging panel culls at the edge
-	# of frame while it is still on screen.
-	mesh_inst.extra_cull_margin = IMPACT_MAX_BULGE + CELEBRATION_BULGE
+	mesh_inst.mesh = array_mesh
+	_apply_mat_net(mesh_inst)
+	add_child(mesh_inst)
+
+
+# Build an arbitrary quadrilateral net panel from four corners in world space.
+# Corners must be given in order around the quad (A, B, C, D — either CW or CCW).
+# The mesh is rendered double-sided via the net material's CULL_DISABLED flag.
+# Mesh only: the puck's carom off the panels is analytic (PuckGeometryCollision),
+# and the skater is held out of the pocket by GameRules.push_out_of_net.
+func _add_net_quad(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
+	var verts := PackedVector3Array([a, b, c, a, c, d])  # two triangles (ABC, ACD)
+	var normal: Vector3 = (b - a).cross(d - a).normalized()
+	var normals := PackedVector3Array([normal, normal, normal, normal, normal, normal])
+	# UVs: project each vertex onto the panel's plane using a 2D basis (U, V)
+	# anchored at corner A. U runs along edge A->B, V runs along edge A->D.
+	# UVs are then scaled by 1/NET_TEXTURE_TILE_SIZE so the diamond grid tiles
+	# at the real-world target size regardless of panel dimensions.
+	var u_axis: Vector3 = (b - a).normalized()
+	var v_axis: Vector3 = normal.cross(u_axis).normalized()
+	var uv_scale: float = 1.0 / NET_TEXTURE_TILE_SIZE
+	var uv_a: Vector2 = _project_uv(a, a, u_axis, v_axis, uv_scale)
+	var uv_b: Vector2 = _project_uv(b, a, u_axis, v_axis, uv_scale)
+	var uv_c: Vector2 = _project_uv(c, a, u_axis, v_axis, uv_scale)
+	var uv_d: Vector2 = _project_uv(d, a, u_axis, v_axis, uv_scale)
+	var uvs := PackedVector2Array([uv_a, uv_b, uv_c, uv_a, uv_c, uv_d])
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	var array_mesh := ArrayMesh.new()
+	array_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+
+	var mesh_inst := MeshInstance3D.new()
+	mesh_inst.mesh = array_mesh
 	_apply_mat_net(mesh_inst)
 	add_child(mesh_inst)
 
@@ -545,92 +544,6 @@ func check_goal_crossing(prev_center: Vector3, curr_center: Vector3) -> void:
 		goal_scored.emit()
 
 
-# --------------------------------------------------------------------------
-# NET IMPACTS — the twine's response to being hit.
-#
-# Purely cosmetic, and deliberately so. The puck's carom off these panels was
-# already resolved analytically (PuckGeometryCollision) before anything here
-# runs, and nothing here feeds back into it. That is what lets every peer drive
-# its own twine from its own contact detection — the host from its authoritative
-# sim, a client from its local prediction, either from the broadcast — without a
-# single bulge going on the wire or into a reconcile snapshot.
-# --------------------------------------------------------------------------
-
-# A puck has reached the twine at `world_pos` carrying `speed` m/s. Bulges the
-# mesh there: outward when the puck came from inside the cage, inward when it is
-# pressing on the netting from outside (a rim behind the goal, a puck settling
-# on the roof).
-func net_impact(world_pos: Vector3, speed: float) -> void:
-	var bulge: float = minf(speed * IMPACT_METRES_PER_MPS, IMPACT_MAX_BULGE)
-	if bulge <= 0.0:
-		return
-	# Speed, not its component into the panel: the broadcast path carries only a
-	# position, and a contact that fires at all has arrived roughly into the
-	# twine rather than sliding along it.
-	var normal: Vector3 = NetGeometry.nearest_surface_normal(world_pos)
-	# A puck that came in through the mouth pushes the twine out of the cage; one
-	# pressing on the netting from outside pushes it in.
-	var dir: Vector3 = normal if NetGeometry.interior_or_mouth(world_pos) else -normal
-	_register_impact(world_pos, bulge, IMPACT_RADIUS, dir)
-
-
-# The goal celebration, as one wide deep impact at the mouth rather than a second
-# displacement path: the whole cage billows outward at once. Radial rather than
-# directional — a single direction would shove the cage sideways instead of
-# swelling it.
-func shake_for_goal() -> void:
-	_register_impact(Vector3(0.0, NET_HEIGHT / 2.0, goal_line_z()),
-			CELEBRATION_BULGE, CELEBRATION_RADIUS, Vector3.ZERO)
-
-
-# `dir` is the unit direction the twine is pushed, or Vector3.ZERO for the radial
-# billow the shader derives per vertex from cavity_center.
-func _register_impact(origin: Vector3, amp: float, radius: float, dir: Vector3) -> void:
-	if _net_material == null:
-		return
-	var radial: float = 1.0 if dir.is_zero_approx() else 0.0
-	_impact_origin_amp[_impact_next] = Vector4(origin.x, origin.y, origin.z, amp)
-	_impact_start_radius[_impact_next] = Vector4(_net_time, radius, 0.0, 0.0)
-	_impact_dir[_impact_next] = Vector4(dir.x, dir.y, dir.z, radial)
-	_impact_next = (_impact_next + 1) % MAX_IMPACTS
-	_net_material.set_shader_parameter(&"impact_origin_amp", _impact_origin_amp)
-	_net_material.set_shader_parameter(&"impact_start_radius", _impact_start_radius)
-	_net_material.set_shader_parameter(&"impact_dir", _impact_dir)
-	_impacts_live_until = _net_time + IMPACT_LIFETIME
-	set_process(true)
-
-
-# The twine's clock, running only while an impact is still settling: an idle net
-# costs nothing at all, and the frame the last one expires the arrays are zeroed
-# so the shader's per-vertex loop skips every slot from then on.
-func _process(delta: float) -> void:
-	_net_time += delta
-	_net_material.set_shader_parameter(&"net_time", _net_time)
-	if _net_time < _impacts_live_until:
-		return
-	_reset_impacts()
-
-
-func _reset_impacts() -> void:
-	# Written out rather than looped: packed arrays are value types, so a `for buf
-	# in [...]` would resize and clear three copies and leave the members alone.
-	_impact_origin_amp.resize(MAX_IMPACTS)
-	_impact_start_radius.resize(MAX_IMPACTS)
-	_impact_dir.resize(MAX_IMPACTS)
-	_impact_origin_amp.fill(Vector4.ZERO)
-	_impact_start_radius.fill(Vector4.ZERO)
-	_impact_dir.fill(Vector4.ZERO)
-	_impact_next = 0
-	_impacts_live_until = -1.0
-	set_process(false)
-	if _net_material == null:
-		return
-	_net_material.set_shader_parameter(&"impact_origin_amp", _impact_origin_amp)
-	_net_material.set_shader_parameter(&"impact_start_radius", _impact_start_radius)
-	_net_material.set_shader_parameter(&"impact_dir", _impact_dir)
-	_net_material.set_shader_parameter(&"net_time", _net_time)
-
-
 func _apply_mat(mesh_inst: MeshInstance3D, color: Color) -> void:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
@@ -641,16 +554,19 @@ func _apply_mat_net(mesh_inst: MeshInstance3D) -> void:
 	mesh_inst.material_override = _net_material
 
 
-# One ShaderMaterial shared by every net panel of this goal, so an impact
-# anywhere on the cage is a single uniform write rather than one per panel.
-func _make_net_material() -> ShaderMaterial:
+# One ShaderMaterial shared by every net panel of this goal, so the goal
+# ripple is a single uniform write. ripple_origin sits at the goal mouth —
+# the wave radiates back through the net from there.
+func _make_net_material(goal_z: float) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = load(NET_SHADER_PATH)
-	mat.set_shader_parameter(&"tint", net_color)
+	mat.set_shader_parameter("tint", net_color)
+	mat.set_shader_parameter("ripple_origin", Vector3(0.0, NET_HEIGHT / 2.0, goal_z))
+	mat.set_shader_parameter("ripple_amount", 0.0)
 	# ResourceLoader.exists checks at runtime in case the asset isn't present
 	# yet — in that case we just render the flat translucent color as before.
 	if ResourceLoader.exists(NET_TEXTURE_PATH):
 		var tex: Texture2D = load(NET_TEXTURE_PATH)
-		mat.set_shader_parameter(&"albedo_tex", tex)
-		mat.set_shader_parameter(&"use_texture", true)
+		mat.set_shader_parameter("albedo_tex", tex)
+		mat.set_shader_parameter("use_texture", true)
 	return mat

@@ -27,29 +27,6 @@ extends RefCounted
 # (Stick surface design — shaft paint/wordmark, blade weave — lives in
 # StickStyle; this coordinator layers the player's tape job on top.)
 
-# Jersey hem swing. The skirt is its own bone (SkaterMeshBuilder.UpperBone.HEM);
-# this file owns the one number that drives it.
-# How fast the cloth catches up with the body, per second. ~0.17 s of lag: long
-# enough for a hard stop to throw the skirt forward, short enough that it has
-# settled before the next stride. Under a SUSTAINED acceleration a first-order
-# lag holds a constant gap of `a / _FLOW_RESPONSE`, which is what makes this
-# number half of the swing's size and not just its speed.
-const _FLOW_RESPONSE: float = 6.0
-# Metres the HEM RING travels per m/s of body-versus-cloth speed, and the ceiling
-# it saturates at. The cap is what keeps a respawn — velocity to zero in one
-# frame — from flinging the skirt off the body. Rings between waist and hem move
-# proportionally less; that ramp is the swing rotation's, not a number here.
-# Sized against what a skater can actually do rather than picked flat: full
-# skating effort is ~10 m/s^2 (SkaterController.stride_effort_ref_accel), which
-# holds a 1.7 m/s gap and so swings the hem ~4.7 cm — a fifth of the hem's own
-# radius, and visible on a top-down camera. A hard stop roughly doubles that and
-# lands on the cap.
-const _FLOW_METRES_PER_MPS: float = 0.028
-const _FLOW_MAX: float = 0.09
-# Below this the hem is home and the pose write is skipped; one more is allowed
-# through after it settles so the resting skirt is the one on screen.
-const _FLOW_IDLE: float = 0.0005
-
 var _skater: Skater
 var _blade_mesh: MeshInstance3D
 var _blade_tape: MeshInstance3D                    # team-colored tape band, child of _blade_mesh
@@ -89,11 +66,6 @@ var _shoulder_decal: ShoulderDecal
 # Whether the skater is currently ghost-faded — read by the face-gear repaint,
 # whose design alpha is not 1.0 and so can't be restored by _fade_material.
 var _ghosted: bool = false
-# Body-local velocity the cloth has caught up to. The gap between this and the
-# body's actual velocity IS the swing.
-var _flow_lag: Vector3 = Vector3.ZERO
-var _flow_seeded: bool = false
-var _flow_was_moving: bool = false
 
 
 func setup(skater: Skater) -> void:
@@ -142,11 +114,7 @@ func _create_jersey_viewport() -> void:
 	# Godot's CylinderMesh starts U=0 at +Z and increases CCW.
 	mat.uv1_offset = Vector3(0.25, 0.0, 0.0)
 	BodyRim.apply(mat)
-	# One material across both halves of the jersey: the skinned rig cuts the
-	# torso at the waist so the skirt can swing on its own bone, and the seam
-	# must not be a paint boundary as well as a geometry one.
 	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperSurface.TORSO, mat)
-	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperSurface.HEM, mat)
 
 
 # Shared SubViewport + ShoulderDecal for both shoulder spheres. Sphere U=0 is
@@ -612,42 +580,6 @@ func _paint_glove_cuffs(gloves_color: Color) -> void:
 	var cuff_radius: float = _skater.arm_mesh_thickness * 0.6 * _skater.forearm_visual_mult
 	_skater.set_arm_cuff_radius(SkaterMeshBuilder.UpperBone.TOP_CUFF, cuff_radius)
 	_skater.set_arm_cuff_radius(SkaterMeshBuilder.UpperBone.BOTTOM_CUFF, cuff_radius)
-
-
-# One frame of hem swing, called from Skater._process (render rate, and only
-# while the skater is on screen — an off-screen jersey needs no cloth).
-#
-# The model is a lag: `_flow_lag` is the velocity the cloth has caught up to, and
-# what displaces the hem is the gap between it and the body's real velocity.
-# Accelerating opens the gap forward, so the skirt trails; stopping reverses it,
-# so the skirt swings out ahead and then settles as the lag closes. Nothing
-# integrates and nothing accumulates, so a dropped frame or a teleport cannot
-# leave the hem wound up.
-#
-# Body-local throughout: the flow is derived once from the body basis and handed
-# to the shader in that frame, so this never reads a world position at render
-# rate and never has to reason about which clock a pose came from.
-func update_jersey_flow(delta: float) -> void:
-	if _ghosted or delta <= 0.0:
-		return
-	var local_vel: Vector3 = _skater.global_transform.basis.inverse() * _skater.velocity
-	if not _flow_seeded:
-		# First frame: the cloth starts where the body is, not at rest, so a
-		# skater spawned already moving does not open with a lurch.
-		_flow_lag = local_vel
-		_flow_seeded = true
-	_flow_lag = _flow_lag.lerp(local_vel, clampf(_FLOW_RESPONSE * delta, 0.0, 1.0))
-	var gap: Vector3 = local_vel - _flow_lag
-	var swing: Vector3 = -gap * _FLOW_METRES_PER_MPS
-	if swing.length() > _FLOW_MAX:
-		swing = swing.normalized() * _FLOW_MAX
-	var moving: bool = swing.length() > _FLOW_IDLE
-	# One write after settling puts the resting hem on screen; then nothing until
-	# it moves again.
-	if not moving and not _flow_was_moving:
-		return
-	_flow_was_moving = moving
-	_skater.set_hem_swing(swing if moving else Vector3.ZERO)
 
 
 func apply_ghost(ghost: bool) -> void:

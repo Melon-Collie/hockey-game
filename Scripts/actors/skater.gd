@@ -864,11 +864,6 @@ func _process(delta: float) -> void:
 			update_stick_mesh()
 			update_arm_mesh()
 			update_bottom_arm_mesh()
-		# Jersey hem swing: one filter step and, while the cloth is off its
-		# resting pose, one uniform write. Velocity-driven rather than
-		# marker-driven, so it sits outside the dirty-flag rebuild above — a
-		# skater gliding in a fixed pose still has a hem that trails.
-		_uniform.update_jersey_flow(delta)
 	_update_stick_flex(delta)
 	# World HUD (ring, name, chevrons, beacon) at RENDER rate: ~10 top_level node
 	# transforms per skater that nothing reads back and no gameplay depends on,
@@ -2991,8 +2986,6 @@ func set_upper_surface_material(surface: int, mat: Material) -> void:
 # The arms stay anchored to the (deterministic) hands and stick on purpose.
 var _trunk_texture := Basis.IDENTITY
 var _trunk_texture_head := Basis.IDENTITY
-# Jersey skirt swing, in the torso's local frame — see set_hem_swing.
-var _hem_swing := Transform3D.IDENTITY
 var _trunk_texture_pitch: float = 0.0
 var _trunk_texture_roll: float = 0.0
 
@@ -3006,22 +2999,6 @@ var _trunk_texture_roll: float = 0.0
 # helmet from the torso top at deep folds. 1.0 / 1.0 restores rigid coupling.
 var helmet_pitch_follow: float = 0.85
 var helmet_roll_follow: float = 0.4
-
-
-# Jersey skirt swing: `swing` is where the hem ring should sit relative to its
-# rest pose, in the torso's local frame, in metres. Driven at render rate by
-# SkaterUniformCoordinator.update_jersey_flow.
-#
-# A bone pose rather than a vertex shader, and that is the whole reason the torso
-# can stay a StandardMaterial3D with the real BodyRim term on it — a custom
-# shader would have had to approximate that rim with emission, which does not
-# fade in shadow the way the arms beside it do.
-func set_hem_swing(swing: Vector3) -> void:
-	var next: Transform3D = SkaterMeshBuilder.hem_swing_transform(swing)
-	if next.is_equal_approx(_hem_swing):
-		return
-	_hem_swing = next
-	_repose_upper_bone(SkaterMeshBuilder.UpperBone.HEM)
 
 
 func set_trunk_texture(pitch_add: float, roll_add: float) -> void:
@@ -3040,33 +3017,19 @@ func set_trunk_texture(pitch_add: float, roll_add: float) -> void:
 
 
 func _repose_upper_bone(bone: int) -> void:
-	# HEM is the jersey skirt: the same lathe as the torso, cut at the waist, so
-	# it has no placement of its own and takes the torso's. Reading the torso's
-	# numbers here rather than seeding a second copy is what stops the two halves
-	# of the jersey drifting apart when a body dial scales the trunk.
-	var is_hem: bool = bone == SkaterMeshBuilder.UpperBone.HEM
-	var src: int = SkaterMeshBuilder.UpperBone.TORSO if is_hem else bone
 	var pose := Transform3D(
-			_upper_basis[src].scaled_local(_upper_scale[src]), _upper_pos[src])
+			_upper_basis[bone].scaled_local(_upper_scale[bone]), _upper_pos[bone])
 	# The trunk texture rotates the upper-body SHELL about the trunk pivot (the
 	# skeleton lives in upper-body space, so a zero-origin premultiply is that
 	# pivot). Arm bones are excluded — they follow the hands; the helmet takes
 	# the stabilized head share instead of the full texture.
-	if src == SkaterMeshBuilder.UpperBone.TORSO \
-			or src == SkaterMeshBuilder.UpperBone.SHOULDER_L \
-			or src == SkaterMeshBuilder.UpperBone.SHOULDER_R:
+	if bone == SkaterMeshBuilder.UpperBone.TORSO \
+			or bone == SkaterMeshBuilder.UpperBone.SHOULDER_L \
+			or bone == SkaterMeshBuilder.UpperBone.SHOULDER_R:
 		pose = Transform3D(_trunk_texture, Vector3.ZERO) * pose
-	elif src == SkaterMeshBuilder.UpperBone.HELMET:
+	elif bone == SkaterMeshBuilder.UpperBone.HELMET:
 		pose = Transform3D(_trunk_texture_head, Vector3.ZERO) * pose
-	if is_hem:
-		# Post-multiplied: the swing is expressed in the torso's own frame, about
-		# the waist ring the two halves share.
-		pose = pose * _hem_swing
 	_arm_skeleton.set_bone_pose(bone, pose)
-	if bone == SkaterMeshBuilder.UpperBone.TORSO:
-		# One rule instead of a call beside every torso repose — the skirt cannot
-		# be left behind by a caller that forgets it exists.
-		_repose_upper_bone(SkaterMeshBuilder.UpperBone.HEM)
 
 
 # ── Torso / helmet / shoulder sizing seam ─────────────────────────────────────

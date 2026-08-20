@@ -1265,10 +1265,7 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 		if tick_net and not span_net and tick_vel_in.length() >= 1.0:
 			span_net = true
 			if not _pred_cue_net_prev:
-				# The ARRIVAL speed, like the host's own net event: `vel` here is
-				# post-resolution, and the twine keeps ~5% of what hit it, so
-				# scaling a cue off it reports every shot as a dump-in.
-				predicted_net_contact.emit(pos, tick_vel_in.length())
+				predicted_net_contact.emit(pos, vel.length())
 		# Board carom: the host's own feedback read — the raw (un-reflected)
 		# full-tick XZ position crossing the inner boundary with into-board
 		# pace (see Puck._drive_analytic's touched_boards).
