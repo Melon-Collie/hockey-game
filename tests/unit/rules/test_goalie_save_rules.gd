@@ -128,14 +128,28 @@ func test_a_side_on_glove_contact_is_not_a_catch() -> void:
 
 
 func test_only_the_glove_ever_ends_the_play() -> void:
+	# The chest smother kills the shot but the play continues — low-stoppage
+	# ruleset, so he sweeps rather than covers for a whistle.
 	for part: int in GoalieSaveRules.SavePart.size():
 		if part == GoalieSaveRules.SavePart.GLOVE:
 			continue
 		var r := _res()
 		GoalieSaveRules.resolve_contact(
 				Vector3(0.0, 0.0, -12.0), part, SQUARE_N, r, FACING)
-		assert_false(r.caught, "part %d rebounds, it does not hold" % part)
-		assert_gt(r.velocity.length(), 0.0, "part %d leaves the puck live" % part)
+		assert_false(r.caught, "part %d does not hold the puck" % part)
+		assert_gt(r.velocity.length(), 0.0, "part %d leaves the puck playable" % part)
+
+
+func test_the_mask_pings_rather_than_smothering() -> void:
+	# Head and Body were one save part, so a puck off the mask used to resolve as
+	# a chest save. Under the smother that would be catching a puck with his face.
+	var r := _res()
+	GoalieSaveRules.resolve_contact(
+			Vector3(0.0, 0.0, -25.0), GoalieSaveRules.SavePart.MASK,
+			SQUARE_N, r, FACING)
+	assert_false(r.trapped)
+	assert_gt(r.velocity.length(), _square(GoalieSaveRules.SavePart.CHEST, 25.0).length(),
+			"a hard shell throws it further than a chest protector would")
 
 
 func test_no_facing_supplied_lets_every_face_present() -> void:
@@ -148,18 +162,71 @@ func test_no_facing_supplied_lets_every_face_present() -> void:
 	assert_true(r.caught)
 
 
-func test_resolve_contact_matches_rebound_velocity_for_every_non_catch() -> void:
-	# resolve_contact must not have a second opinion about the physics.
+func test_resolve_contact_matches_rebound_velocity_for_every_contact() -> void:
+	# resolve_contact must not have a second opinion about the physics. Only the
+	# two ACTS (glove catch, chest smother) are allowed to depart from it.
 	var incoming := Vector3(4.0, 1.0, -18.0)
 	var n := Vector3(0.2, 0.3, 0.9).normalized()
 	for part: int in [GoalieSaveRules.SavePart.STICK, GoalieSaveRules.SavePart.PAD,
-			GoalieSaveRules.SavePart.BLOCKER, GoalieSaveRules.SavePart.CHEST]:
+			GoalieSaveRules.SavePart.BLOCKER, GoalieSaveRules.SavePart.MASK]:
 		var r := _res()
 		GoalieSaveRules.resolve_contact(incoming, part, n, r, FACING)
 		assert_almost_eq(
 				r.velocity.distance_to(
 						GoalieSaveRules.rebound_velocity(incoming, part, n)),
 				0.0, 0.0001, "part %d" % part)
+
+# ── The chest trap, and its coupling to the sweep ────────────────────────────
+
+func test_a_chest_he_is_squared_to_is_a_smother() -> void:
+	var r := _res()
+	GoalieSaveRules.resolve_contact(
+			Vector3(3.0, -2.0, -30.0), GoalieSaveRules.SavePart.CHEST,
+			SQUARE_N, r, FACING)
+	assert_true(r.trapped, "a shot into a squared chest is a dead play")
+	assert_false(r.caught, "dead, but not held — the ruleset does not stop play")
+	assert_almost_eq(r.velocity.length(), GoalieSaveRules.CHEST_TRAP_DROP_M_S, 0.001,
+			"none of the shot survives; this is the puck sliding off him")
+
+
+func test_the_smothered_puck_leaves_in_front_of_him() -> void:
+	# Off the face he trapped it against, not onto his own skate line — a puck
+	# dead on his toes is one his next shuffle shoves goalward.
+	var r := _res()
+	GoalieSaveRules.resolve_contact(
+			Vector3(0.0, 0.0, -30.0), GoalieSaveRules.SavePart.CHEST,
+			SQUARE_N, r, FACING)
+	assert_gt(r.velocity.z, 0.0, "away from him, along the struck face")
+	assert_eq(r.velocity.y, 0.0, "no launch of its own — gravity takes it down")
+
+
+func test_a_chest_struck_from_behind_is_padding_not_a_smother() -> void:
+	var r := _res()
+	GoalieSaveRules.resolve_contact(
+			Vector3(0.0, 0.0, -30.0), GoalieSaveRules.SavePart.CHEST,
+			Vector3(0.0, 0.0, -1.0), r, Vector3(0.0, 0.0, 1.0))
+	assert_false(r.trapped, "you cannot smother what hit your back")
+	assert_gt(r.velocity.length(), 0.0)
+
+
+func test_a_trapped_chest_puck_is_still_there_for_the_sweep() -> void:
+	# THE COUPLING. A smother is only the first beat: the crease sweep has to be
+	# able to take the puck afterwards, and it only takes one still inside its
+	# reach once the dwell has elapsed. Break this and a "dead play" becomes a
+	# loose puck in the paint, which is the opposite of one.
+	var clear := GoalieCreaseClear.new()
+	var ctrl := GoalieController.new()
+	var dwell: float = ctrl.clear_dwell
+	ctrl.free()
+	var drop: float = GoalieSaveRules.CHEST_TRAP_DROP_M_S
+	assert_lt(drop, clear.max_puck_speed,
+			"a trapped puck is slow enough for the sweep to be allowed to take it")
+	# It also has to still be WITHIN reach when the dwell completes. The puck
+	# starts at the chest, roughly a body's half-depth in front of him.
+	var start_offset: float = 0.4
+	assert_lt(start_offset + drop * dwell, clear.reach,
+			"and still inside his stick when the dwell elapses")
+
 
 # ── is_face_presented ────────────────────────────────────────────────────────
 

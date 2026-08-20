@@ -59,6 +59,39 @@ var _frame: PuckGeometryCollision.Result = PuckGeometryCollision.Result.new()
 var _tick: PuckAuthorityRules.TickResult = PuckAuthorityRules.TickResult.new()
 
 
+# A fresh play starts. Stands in for the phase machinery, which is the OTHER
+# half of the world the controller lives in and which no instrument runs.
+#
+# `pickup_locked` is the one that bites: a glove catch sets it (the puck goes
+# dead to blades while he holds it) and only the phase machine's PLAYING entry
+# clears it, after the faceoff. In an instrument nothing ever clears it, so the
+# FIRST catch of a run locks the puck permanently — and `pickup_locked` is a gate
+# on the crease sweep, so from that shot onward the goalie can never clear his
+# own rebound again. Measured: 1 sweep in 63 chest saves, against 12 of 12 when
+# the same cases run before any catch.
+func _begin_play() -> void:
+	if _puck != null:
+		_puck.pickup_locked = false
+		_puck.motion_pinned = false
+
+
+# ONE goalie tick. Every drive loop in here MUST go through this rather than
+# calling _physics_process directly.
+#
+# GoalieWorldView is frame-stamped on Engine.get_physics_frames() and rebuilt
+# lazily, which is correct in the game: the controller runs once per physics
+# frame, so one build per frame is one build per tick. An instrument runs
+# hundreds of ticks inside a single real frame, so the view builds on the first
+# one and every tick after it reads a FROZEN world — stale opponent positions,
+# stale nearest-opponent distance. The goalie then makes his sweep-lane read, his
+# cover read, his backdoor cap and his screen read against a world that stopped
+# moving, which is not the keeper the game runs. Standing in for the engine's
+# loop means reproducing its once-per-tick contract.
+func _tick_goalie() -> void:
+	_ctrl._view.invalidate()
+	_ctrl._physics_process(DT)
+
+
 # Bind the test-owned nodes and wire the controller to a goalie defending the
 # -Z net, fed a real opposing Skater shooter (positioned per shot).
 func setup(goalie: Node, puck: Node, ctrl: GoalieController, shooter: Skater) -> void:
@@ -96,6 +129,7 @@ func shot_env() -> Dictionary:
 # Drive the goalie to its set pose for a shooter at `shooter`, holding the puck
 # there. `ticks` long enough to settle (challenge depth + square-up).
 func settle(shooter: Vector3, ticks: int) -> void:
+	_begin_play()
 	_shooter.global_position = shooter
 	_shooter.velocity = Vector3.ZERO
 	# Carry the puck so the goalie reads a CARRIER threat and sets at the proper
@@ -104,7 +138,7 @@ func settle(shooter: Vector3, ticks: int) -> void:
 	for _i: int in ticks:
 		_puck.global_position = shooter
 		_puck.linear_velocity = Vector3.ZERO
-		_ctrl._physics_process(DT)
+		_tick_goalie()
 
 
 # ── THE CARRIER WHO IS ACTUALLY MOVING ───────────────────────────────────────
@@ -151,7 +185,7 @@ func drive_in(lane_x: float, start_dist: float, release_dist: float,
 					pos, declared_aim, loft_level, shot_speed_m_s, 0.0)
 		_puck.global_position = pos
 		_puck.linear_velocity = Vector3.ZERO
-		_ctrl._physics_process(DT)
+		_tick_goalie()
 		if (pos.z - end_z) * dir <= 0.0:
 			break
 		pos.z += vel.z * DT
@@ -186,7 +220,7 @@ func sweep_across(to_x: float, seconds: float, drive_speed: float) -> Vector3:
 		_shooter.velocity = vel
 		puck = Vector3(lerpf(from_x, to_x, float(i + 1) / float(ticks)), 0.0, body.z)
 		_puck.global_position = puck
-		_ctrl._physics_process(DT)
+		_tick_goalie()
 	return puck
 
 
@@ -236,7 +270,7 @@ func deke_across(to_x: float, seconds: float, forward_speed: float,
 		var px: float = body.x + side * puck_lead_x
 		puck = Vector3(px, 0.0, body.z)
 		_puck.global_position = puck
-		_ctrl._physics_process(DT)
+		_tick_goalie()
 		if not _ctrl._sm.is_upright():
 			last_deke_went_down = true
 		var st: int = _ctrl._sm.current
@@ -263,7 +297,7 @@ func publish_windup_at(shooter: Vector3, declared_aim: Vector3, loft_level: int,
 	for _i: int in ticks:
 		_puck.global_position = shooter
 		_puck.linear_velocity = Vector3.ZERO
-		_ctrl._physics_process(DT)
+		_tick_goalie()
 
 
 # ── THE REFERENCE POSE ───────────────────────────────────────────────────────
@@ -294,6 +328,7 @@ var last_settle_went_down: bool = false
 
 func settle_ready(shooter: Vector3, max_ticks: int = 400, tol: float = 0.0015) -> int:
 	last_settle_went_down = false
+	_begin_play()
 	_ctrl.reset_to_crease()
 	_shooter.global_position = shooter
 	_shooter.velocity = Vector3.ZERO
@@ -307,7 +342,7 @@ func settle_ready(shooter: Vector3, max_ticks: int = 400, tol: float = 0.0015) -
 	for i: int in max_ticks:
 		_puck.global_position = shooter
 		_puck.linear_velocity = Vector3.ZERO
-		_ctrl._physics_process(DT)
+		_tick_goalie()
 		if not _ctrl._sm.is_upright():
 			last_settle_went_down = true
 			return i + 1
@@ -339,7 +374,7 @@ func publish_windup(shooter: Vector3, declared_aim: Vector3, loft_level: int,
 	for _i: int in ticks:
 		_puck.global_position = shooter
 		_puck.linear_velocity = Vector3.ZERO
-		_ctrl._physics_process(DT)
+		_tick_goalie()
 
 
 # Launch velocity for a shot from `shooter` toward the net-plane `aim`:
@@ -418,7 +453,7 @@ func _march(shooter: Vector3, vel_in: Vector3) -> int:
 		# The goalie sees the puck's real motion this tick and reacts.
 		_puck.global_position = pos
 		_puck.linear_velocity = vel
-		_ctrl._physics_process(DT)
+		_tick_goalie()
 		# Advance the puck with the real frame step (posts / crossbar / net).
 		_tick.touched_post = false
 		_tick.touched_net = false
@@ -479,8 +514,10 @@ func _classify_part(part_body: Node3D) -> int:
 	match part_body.name:
 		"Glove":
 			return GoalieSaveRules.SavePart.GLOVE
-		"Body", "Head":
+		"Body":
 			return GoalieSaveRules.SavePart.CHEST
+		"Head":
+			return GoalieSaveRules.SavePart.MASK
 		"Blocker":
 			return GoalieSaveRules.SavePart.BLOCKER
 		"Stick":
@@ -507,16 +544,22 @@ func _net_verdict(cross_x: float, cross_y: float) -> int:
 # pair Puck._physics_process runs) and keeps marching, so it can answer the
 # question that actually matters: where does the puck END UP.
 #
-# "Live vs deadened" is NOT that question. A hard shot off a toed-out pad is
-# live AND safe — the pose angle sends it to the corner. A chest save is
-# deadened and DANGEROUS — GoalieSaveRules zeroes its goalward and vertical
-# motion so it settles dead in front of him, in the paint. Destination is the
-# measurement; restitution is not.
+# A SAVE IS NOT OVER WHEN THE PUCK LEAVES THE PAD. The goalie's own next beat is
+# part of it: a puck that dies in front of him is one he sweeps to the corner
+# (GoalieCreaseClear — inside `reach` of him, on the ice, under `max_puck_speed`,
+# after a dwell), and a puck he gets a glove on is one he holds. So this keeps
+# the CONTROLLER ticking for the whole window and reads the puck back from it
+# each tick, rather than marching over the goalie's own actions with its own
+# integration. Measuring the rebound alone scores "dead at his feet" as a
+# second chance in the slot, when it is the setup for the clear.
 #
 # Fills `last_part` with the FIRST contact as usual, plus:
-#   rebound_pos    where the puck was when it settled / left the danger area
-#   rebound_speed  its speed there
-#   rebound_goal   true if it eventually went in (first shot OR rebound)
+#   rebound_pos     where the puck ended the window
+#   rebound_speed   its speed there
+#   rebound_goal    it went in (first shot OR rebound)
+#   rebound_caught  he closed a glove on it
+#   rebound_held    he pinned it (glove hold or a cover smother)
+#   rebound_swept   he played it away with the stick
 #
 # The return value is the FIRST-shot verdict — SAVE once the goalie touched it,
 # whatever happened next. Read `rebound_goal` beside it: SAVE with rebound_goal
@@ -529,9 +572,16 @@ var rebound_goal: bool = false
 # a caller that folds it into rebound statistics reports a frozen puck as a
 # second chance sitting in the crease (`rebound_pos` is the goalie's glove).
 var rebound_caught: bool = false
+# He pinned it (glove hold or cover smother) — the goalie owns the transform.
+var rebound_held: bool = false
+# He played it away with the stick: the crease sweep fired and changed the puck's
+# velocity out from under the integration.
+var rebound_swept: bool = false
 var _save_res: GoalieSaveRules.ContactResult = GoalieSaveRules.ContactResult.new()
 
-const REBOUND_TRACK_S: float = 1.5
+# Long enough for the whole sequence: the puck has to settle, the clear's dwell
+# has to elapse, the windup has to run, and the swept puck has to get somewhere.
+const REBOUND_TRACK_S: float = 2.5
 const PLAYABLE_SPEED_M_S: float = 8.0   # slow enough for a skater to actually play it
 
 
@@ -545,6 +595,8 @@ func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
 	rebound_speed = 0.0
 	rebound_goal = false
 	rebound_caught = false
+	rebound_held = false
+	rebound_swept = false
 	_shooter.global_position = shooter
 	_puck.clear_carrier()
 	var goal := Vector3(0.0, 0.0, _goal_z)
@@ -558,7 +610,20 @@ func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
 		var prev: Vector3 = pos
 		_puck.global_position = pos
 		_puck.linear_velocity = vel
-		_ctrl._physics_process(DT)
+		_tick_goalie()
+		# READ THE GOALIE BACK before integrating. He plays the puck through the
+		# same API the host drive honours — apply_goalie_sweep writes
+		# linear_velocity, cover and the glove hold set motion_pinned — so an
+		# instrument that re-imposes its own `vel` every tick simply deletes the
+		# clear and then reports that the puck sat in the crease.
+		if _puck.motion_pinned:
+			rebound_held = true
+			rebound_pos = _puck.global_position
+			rebound_speed = 0.0
+			return outcome if touched else SAVE
+		if _puck.linear_velocity.distance_to(vel) > 0.01:
+			rebound_swept = true
+			vel = _puck.linear_velocity
 		_tick.touched_post = false
 		_tick.touched_net = false
 		PuckAuthorityRules.step_frame_substep(pos, vel, DT, RADIUS,
@@ -579,7 +644,11 @@ func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
 			GoalieSaveRules.resolve_contact(
 					vel, part, _contact.normal, _save_res, fwd)
 			vel = _save_res.velocity
-			pos = _contact.point + _contact.normal * _contact.depth
+			# Mirror Puck._drive_analytic: a smothered puck is PLACED on the ice.
+			if _save_res.trapped:
+				pos = Vector3(_contact.point.x, _puck.ice_height, _contact.point.z)
+			else:
+				pos = _contact.point + _contact.normal * _contact.depth
 			# A caught puck is dead and held — the play stops there.
 			if _save_res.caught:
 				rebound_pos = pos
@@ -608,9 +677,15 @@ func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
 				rebound_pos = pos
 				rebound_speed = vel.length()
 				return GOAL
-		# After a save, the first moment it is slow enough to be played is where
-		# the second chance lives.
-		if touched and vel.length() <= PLAYABLE_SPEED_M_S:
+		# After a save, a puck slow enough for a skater is a second chance — but
+		# only once it is DOWN and the GOALIE is out of the running for it. A puck
+		# still falling off his chest is nobody's yet: it is above the sweep's
+		# height window, so stopping there both credits a skater with a chance he
+		# cannot take and ends the run before the clear could ever fire. Inside
+		# his sweep reach it is still his puck.
+		if touched and pos.y <= _ctrl.clear_max_height \
+				and vel.length() <= PLAYABLE_SPEED_M_S \
+				and (rebound_swept or not _goalie_can_still_play(pos, vel)):
 			rebound_pos = pos
 			rebound_speed = vel.length()
 			return outcome
@@ -663,7 +738,7 @@ func hold_windup_at(shooter: Vector3, declared_aim: Vector3, loft_level: int,
 	for _i: int in ticks:
 		_puck.global_position = shooter
 		_puck.linear_velocity = Vector3.ZERO
-		_ctrl._physics_process(DT)
+		_tick_goalie()
 
 
 func fire_release_at(shooter: Vector3, aim: Vector3, loft_level: int,
@@ -729,7 +804,7 @@ func hold_windup(shooter: Vector3, declared_aim: Vector3, loft_level: int,
 	for _i: int in ticks:
 		_puck.global_position = shooter
 		_puck.linear_velocity = Vector3.ZERO
-		_ctrl._physics_process(DT)
+		_tick_goalie()
 
 
 # Hold a wrister windup that SWEEPS: `hold_ticks` parked on `from_aim`, then
@@ -749,7 +824,7 @@ func sweep_windup(shooter: Vector3, from_aim: Vector3, to_aim: Vector3,
 				shooter, from_aim.lerp(to_aim, t), loft_level, power_t, 0.0)
 		_puck.global_position = shooter
 		_puck.linear_velocity = Vector3.ZERO
-		_ctrl._physics_process(DT)
+		_tick_goalie()
 
 
 # Release toward `aim` through the real puck_released event and march it.
@@ -782,3 +857,14 @@ func windup_shot(shooter: Vector3, declared_aim: Vector3, aim: Vector3,
 		loft_level: int, power_t: float, windup_ticks: int) -> int:
 	hold_windup(shooter, declared_aim, loft_level, power_t, windup_ticks)
 	return fire_release(shooter, aim, loft_level, power_t, 0.0)
+
+
+# Is the puck still the GOALIE's to play — inside the crease sweep's window? The
+# same geometry GoalieCreaseClear gates on, so the instrument stops crediting a
+# skater with a second chance the keeper is about to take away.
+func _goalie_can_still_play(puck_pos: Vector3, puck_vel: Vector3) -> bool:
+	if puck_pos.y > _ctrl.clear_max_height:
+		return false
+	if puck_vel.length() > _ctrl.clear_max_puck_speed:
+		return false
+	return _goalie.global_position.distance_to(puck_pos) <= _ctrl.clear_reach

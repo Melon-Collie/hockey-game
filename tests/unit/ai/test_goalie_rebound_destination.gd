@@ -59,7 +59,7 @@ var _puck: Node = null
 var _shooter: Skater = null
 var _ctrl: GoalieController = null
 var _h: RefCounted = null
-const PART := ["STICK", "PAD", "BLOCK", "CHEST", "GLOVE"]
+const PART := ["STICK", "PAD", "BLOCK", "CHEST", "GLOVE", "MASK"]
 
 
 func before_each() -> void:
@@ -151,24 +151,26 @@ func test_report_rebound_destination_by_save_surface() -> void:
 # so every surface gets the pucks it would actually see — and reports four
 # numbers per surface rather than one:
 #
-#   HELD    the play ENDED in his glove. Not a rebound, and excluded from the
-#           three below — a frozen puck sits in the crease, so folding it in
-#           reports every catch as a second chance in the slot. Attributed to the
-#           FIRST surface struck, so a pad save gloved on the way down is a HELD
-#           row under PAD; that is the sequence, not a misclassification.
-#   STAYS   the rebound settled in the danger area: a second chance exists.
-#   SPEED   how fast it was when it became playable. Destination is only half of
-#           "dangerous" — a dead puck in the paint and a live one are different
-#           problems, and this model produces both.
-#   OWN     the rebound went into his own net.
+# A SAVE IS A SEQUENCE, and the columns follow it. The goalie's next beat is part
+# of the save: a puck that dies in front of him is one he SWEEPS to the corner,
+# and a puck he gets a hand on is one he HOLDS. Only what survives both is a
+# second chance.
 #
-# READ STAYS x SPEED AS THE DANGER, not OWN. There is no second shooter in this
-# harness, so OWN can only catch the goalie beating himself — a rebound that
-# finds the net off his own body with nobody touching it. That is a real failure
-# worth watching (it is why the chest gained an out-of-crease drop) but it is
-# rare by construction, and a zero there says nothing about whether the crease is
-# a scramble. It was unobservable at all until the harness's crossing test
-# stopped being gated on `not touched`.
+#   HELD    he ended the play with it — a glove catch, or a cover smother.
+#   SWEPT   he played it away with the stick. Both are the goalie dealing with
+#           his own rebound, and both are excluded from STAYS below.
+#   STAYS   nobody dealt with it and it settled in the danger area. THIS is the
+#           scramble number.
+#   SPEED   how fast it was when a skater could first have it.
+#   OWN     it went into his own net.
+#
+# Attribution is to the FIRST surface struck, so a pad save gloved on the way
+# down is a HELD row under PAD; that is the sequence, not a misclassification.
+#
+# READ STAYS AS THE DANGER, not OWN. There is no second shooter in this harness,
+# so OWN can only catch the goalie beating himself — a rebound that finds the net
+# off his own body with nobody touching it. Rare by construction, and a zero
+# there says nothing about whether the crease is a scramble.
 const SPOTS: Array[Vector3] = [
 	Vector3(0.0, 0.0, 3.0),     # doorstep, centre
 	Vector3(0.0, 0.0, 6.4),     # slot / dot line
@@ -191,7 +193,7 @@ func test_report_rebound_baseline_across_the_shot_map() -> void:
 		ShotMechanics.ELEVATION_MID,
 		ShotMechanics.ELEVATION_HIGH,
 	]
-	# Per first-contact surface: [saves, held, stayed in danger, own, speed sum].
+	# Per first-contact surface: [saves, held, swept, stayed, own, speed sum].
 	var by_part: Dictionary = {}
 	var shots: int = 0
 	var first_goals: int = 0
@@ -213,38 +215,42 @@ func test_report_rebound_baseline_across_the_shot_map() -> void:
 						continue
 					var k: String = PART[_h.last_part] if _h.last_part >= 0 else "?"
 					if not by_part.has(k):
-						by_part[k] = [0, 0, 0, 0, 0.0]
+						by_part[k] = [0, 0, 0, 0, 0, 0.0]
 					var row: Array = by_part[k]
 					row[0] += 1
-					if _h.rebound_caught:
+					if _h.rebound_caught or _h.rebound_held:
 						row[1] += 1
 						continue
-					if _in_danger(_h.rebound_pos):
+					if _h.rebound_swept:
 						row[2] += 1
-					if _h.rebound_goal:
+						continue
+					if _in_danger(_h.rebound_pos):
 						row[3] += 1
+					if _h.rebound_goal:
+						row[4] += 1
 						own_goals += 1
-					row[4] += _h.rebound_speed
+					row[5] += _h.rebound_speed
 	gut.p("%d spots x %d lofts x %d aims x %d speeds (65-85 mph), perfect execution."
 			% [SPOTS.size(), lofts.size(), AIM_FRACTIONS.size(), BASELINE_MPH.size()])
-	gut.p("  surface | saves | HELD | rebounds | STAYS in slot | mean SPEED | OWN")
-	var totals := [0, 0, 0, 0, 0.0]
+	gut.p("  surface | saves | HELD | SWEPT | loose | STAYS in slot | mean SPEED | OWN")
+	var totals := [0, 0, 0, 0, 0, 0.0]
 	for k: String in PART:
 		if not by_part.has(k):
-			gut.p("  %-7s |     0 |    0 |        0 |            -- |         -- |  --" % k)
+			gut.p("  %-7s |     0 |    0 |     0 |     0 |            -- |         -- |  --" % k)
 			continue
 		var row: Array = by_part[k]
-		for i: int in 5:
+		for i: int in 6:
 			totals[i] += row[i]
-		gut.p("  %-7s | %5d | %4d | %8d | %5d  (%3.0f%%) | %6.2f m/s | %3d" % [
-			k, row[0], row[1], row[0] - row[1], row[2],
-			100.0 * float(row[2]) / float(maxi(row[0] - row[1], 1)),
-			row[4] / float(maxi(row[0] - row[1], 1)), row[3]])
-	var rebounds: int = totals[0] - totals[1]
-	gut.p("  TOTAL   | %5d | %4d | %8d | %5d  (%3.0f%%) | %6.2f m/s | %3d" % [
-		totals[0], totals[1], rebounds, totals[2],
-		100.0 * float(totals[2]) / float(maxi(rebounds, 1)),
-		totals[4] / float(maxi(rebounds, 1)), totals[3]])
+		var loose: int = row[0] - row[1] - row[2]
+		gut.p("  %-7s | %5d | %4d | %5d | %5d | %5d  (%3.0f%%) | %6.2f m/s | %3d" % [
+			k, row[0], row[1], row[2], loose, row[3],
+			100.0 * float(row[3]) / float(maxi(loose, 1)),
+			row[5] / float(maxi(loose, 1)), row[4]])
+	var all_loose: int = totals[0] - totals[1] - totals[2]
+	gut.p("  TOTAL   | %5d | %4d | %5d | %5d | %5d  (%3.0f%%) | %6.2f m/s | %3d" % [
+		totals[0], totals[1], totals[2], all_loose, totals[3],
+		100.0 * float(totals[3]) / float(maxi(all_loose, 1)),
+		totals[5] / float(maxi(all_loose, 1)), totals[4]])
 	gut.p("  shots %d | beaten clean %d | own-net rebounds %d"
 			% [shots, first_goals, own_goals])
 	assert_true(true, "report")

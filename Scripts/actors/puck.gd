@@ -906,7 +906,14 @@ func _drive_analytic(dt: float) -> void:
 			# Minkowski-expanded box — so only the start-inside depenetration
 			# `depth` is added. Never add `radius` again — that parks the puck a
 			# further radius off the face on every save, a visible pop.
-			pos = _goalie_contact.point + _goalie_contact.normal * _goalie_contact.depth
+			# He smothered it and put it down. Ejecting flush off the chest
+			# instead drops the puck through his own stick and pads on the way to
+			# the ice, and the paddle throws it clear of the crease sweep.
+			if _save_result.trapped:
+				pos = Vector3(_goalie_contact.point.x, ice_height,
+						_goalie_contact.point.z)
+			else:
+				pos = _goalie_contact.point + _goalie_contact.normal * _goalie_contact.depth
 			if not _contact_latch_goalie and not touched_goalie:
 				emit_goalie = _goalie_contact.goalie as Goalie
 			# The catch is gated on its own occurrence, NOT the touch latch — a
@@ -968,8 +975,10 @@ func _classify_save_part(part_body: Node3D) -> int:
 	match part_body.name:
 		"Glove":
 			return GoalieSaveRules.SavePart.GLOVE
-		"Body", "Head":
+		"Body":
 			return GoalieSaveRules.SavePart.CHEST
+		"Head":
+			return GoalieSaveRules.SavePart.MASK
 		"Blocker":
 			return GoalieSaveRules.SavePart.BLOCKER
 		"Stick":
