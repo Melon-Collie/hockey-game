@@ -1452,18 +1452,11 @@ func get_check_lead() -> float:
 # How far down the shaft the top hand has slid, in metres — a real choke-up, and
 # zero outside a check commit.
 #
-# The commit stance asks for two things a rigid full-length stick cannot do at
-# once: the blade RAISED off the ice and held IN, close to the body. Raising it
-# eats the hand-to-blade drop, and the stick's horizontal projection is
-# sqrt(stick² − drop²), so a raised blade has to sit FURTHER out, not nearer. At
-# full length the nearest the blade can come is about 0.92 m from the shoulder
-# while the pose asks for ~0.53 m; the solver answers by pinning the hand at
-# hand_y_max and overshooting the target along the aim line.
-#
-# Choking up is what a real player does to pull a stick in, and it is the term
-# the model was missing: it shortens the lever, so the blade can come in without
-# the hand climbing. test_commit_grip_choke.gd pins that the loaded blade is
-# actually REACHED, which is the property the authored dials silently lacked.
+# The commit stance poses the hand and derives the blade one stick along the
+# loaded bearing (SkaterIKCoordinator._commit_hand_pose), so this is what decides
+# how far out that blade lands: a shorter lever holds it in tighter, which is why
+# a player pulling a stick in chokes up on it in the first place. The shaft stays
+# rigid — SkaterStickRig gives back out of the butt whatever the grip takes.
 func grip_choke() -> float:
 	return _commit_lift_blend * commit_grip_choke_m
 

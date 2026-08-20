@@ -1,21 +1,20 @@
 extends GutTest
 
-# The check-commit stance authors a loaded blade position — and for a long time
-# nothing checked that the arm could actually put the blade there.
+# The check-commit stance poses the HAND and lets the blade follow it down the
+# shaft, and these are the checks that the pose the dials describe is the pose
+# the rig actually holds.
 #
-# It could not. A raised blade eats the hand-to-blade drop, and the stick's
-# horizontal projection is sqrt(stick² − drop²), so raising the blade pushes its
-# nearest reachable point FURTHER out. At full stick length the blade could not
-# come closer than ~0.92 m to the shoulder while the pose asked for ~0.53 m.
-# TopHandIK does not fail loudly on that: it pins the hand at hand_y_max and
-# overshoots the target ALONG THE AIM LINE, so the dials silently degraded from
-# a position to a direction, and the hand parked above the shoulder with the
-# elbow swinging beneath it.
+# Blade-first did not survive contact with the geometry. A loaded blade tucked
+# close sits deep inside TopHandIK's CLOSE regime, and CLOSE pins the hand's XZ
+# at the shoulder marker — while the rendered arm roots at the shoulder the trunk
+# texture has MOVED, which the commit's lean and load-up carry ~0.16 m forward.
+# The arm ended up rooted in front of its own hand, and the forearm folded behind
+# the upper arm to reach back to it.
 #
-# SkaterController.hit_commit_choke_frac is the term that makes the pose
-# reachable. These tests are the check that was missing: the blade lands where
-# it is authored, the hand stays off its ceiling, and the choke never turns into
-# a shorter STICK — only a shorter grip.
+# So: the hand is posed where a checker holds it, the blade is derived one
+# (choked) stick along the loaded bearing, and the elbow falls out of a chord
+# that finally points forward. The fold assertion below is the one that would
+# have caught the original defect.
 
 const SKATER_SCENE: PackedScene = preload("res://Scenes/Skater.tscn")
 const PUCK_SCENE: PackedScene = preload("res://Scenes/Puck.tscn")
@@ -71,38 +70,61 @@ func _committed(lefty: bool, hit: bool) -> SkaterController:
 	return controller
 
 
-# Where the stance ASKS for the blade, in upper-body-local XZ.
-func _authored_blade(c: SkaterController) -> Vector2:
-	var skater: Skater = c.skater
-	var side: float = -1.0 if skater.is_left_handed else 1.0
-	return Vector2(
-			c.hit_commit_blade_local_x * side
-					- skater.get_check_lead() * c.hit_commit_blade_sweep_m,
-			c.hit_commit_blade_local_z)
-
-
-func test_the_loaded_blade_is_actually_reached() -> void:
+# The HAND is what the stance authors; the blade follows it down the shaft.
+func test_the_loaded_hand_is_posed_where_the_stance_asks() -> void:
 	for lefty: bool in [true, false]:
 		var c: SkaterController = _committed(lefty, true)
-		var blade: Vector3 = c.skater.blade.position
-		var want: Vector2 = _authored_blade(c)
-		assert_almost_eq(blade.x, want.x, 0.02,
-				"%s: the blade lands where the stance authored it (x)"
-						% ["lefty" if lefty else "righty"])
-		assert_almost_eq(blade.z, want.y, 0.02,
-				"%s: the blade lands where the stance authored it (z)"
-						% ["lefty" if lefty else "righty"])
+		var side: float = -1.0 if lefty else 1.0
+		var hand: Vector3 = c.skater.top_hand.position
+		var label: String = "lefty" if lefty else "righty"
+		# Looser on x than the others: the wall/net clamps run after the pose and
+		# the rigid-stick correction slides the hand along the shaft to pay for
+		# them, which shows up as a couple of centimetres across the body.
+		assert_almost_eq(hand.x, c.hit_commit_hand_local_x * side, 0.05,
+				"%s: the loaded hand sits where it is posed (x)" % label)
+		assert_almost_eq(hand.y, c.hit_commit_hand_local_y, 0.02,
+				"%s: the loaded hand sits where it is posed (y)" % label)
+		assert_almost_eq(hand.z, c.hit_commit_hand_local_z, 0.02,
+				"%s: the loaded hand sits where it is posed (z)" % label)
 
 
 func test_the_hand_stays_off_its_ceiling() -> void:
-	# hand_y_max is the symptom the overshoot showed up as: pinned there, the
-	# solve has no way left to shorten the stick's reach and gives up on the
-	# target. Off it, the pose has room in both directions.
+	# The blade-first solve used to park the hand AT hand_y_max, which is what
+	# folded the elbow backwards. Posed, it sits wherever the stance says — and
+	# that has to be somewhere the arm can actually hold.
 	for lefty: bool in [true, false]:
 		var c: SkaterController = _committed(lefty, true)
 		assert_lt(c.skater.top_hand.position.y, c.hand_y_max - 0.03,
 				"%s: the top hand has headroom under its ROM ceiling"
 						% ["lefty" if lefty else "righty"])
+
+
+# The defect this whole pose rework exists for: the forearm folding behind the
+# upper arm. An elbow is a hinge, so the fold has to open toward the FRONT.
+func test_the_forearm_folds_forward_not_backward() -> void:
+	for lefty: bool in [true, false]:
+		var c: SkaterController = _committed(lefty, true)
+		var skater: Skater = c.skater
+		var root: Vector3 = skater._arms._textured_shoulder(skater.shoulder.position)
+		var hand: Vector3 = skater.top_hand.position
+		var pole: Vector3 = skater.arm_pole_local
+		pole.x *= 1.0 if lefty else -1.0
+		pole = CheckStanceRules.tucked_pole(pole, CheckStanceRules.side_load(
+				skater.get_check_lead(), signf(skater.shoulder.position.x)))
+		var elbow: Vector3 = skater.upper_body.to_local(TwoBoneIK.solve_elbow(
+				skater.upper_body.to_global(root), skater.upper_body.to_global(hand),
+				skater.upper_arm_length, skater.forearm_length,
+				skater.upper_body.global_transform.basis * pole))
+		var upper: Vector3 = (elbow - root).normalized()
+		var fore: Vector3 = (hand - elbow).normalized()
+		var fold: Vector3 = fore - upper * fore.dot(upper)
+		var label: String = "lefty" if lefty else "righty"
+		assert_lt(fold.z, 0.0,
+				"%s: the forearm folds in FRONT of the upper arm, not behind it" % label)
+		# And it is a real bend rather than a doubled-over one.
+		var flex: float = 180.0 - rad_to_deg(acos(clampf(upper.dot(fore), -1.0, 1.0)))
+		assert_between(flex, 60.0, 150.0,
+				"%s: the elbow holds a natural bend (got %.0f deg)" % [label, flex])
 
 
 func test_the_choke_shortens_the_grip_not_the_stick() -> void:
@@ -111,7 +133,7 @@ func test_the_choke_shortens_the_grip_not_the_stick() -> void:
 	# stick: the drawn length must not move.
 	var loose: SkaterController = _committed(true, false)
 	var choked: SkaterController = _committed(true, true)
-	assert_gt(choked.skater.grip_choke(), 0.2,
+	assert_gt(choked.skater.grip_choke(), 0.1,
 			"the commit really is choking up — otherwise this proves nothing")
 	assert_eq(loose.skater.grip_choke(), 0.0, "and an uncommitted skater is not")
 	var loose_len: float = loose.skater.stick_mesh.scale.z

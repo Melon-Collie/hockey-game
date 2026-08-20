@@ -337,14 +337,6 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 	# reads this local copy — _smoothed_blade state is untouched, staying coherent
 	# for the exit.
 	var commit_t: float = _skater.get_commit_lift_blend()
-	if commit_t > 0.0:
-		# Swept off the shoulder being thrown: the leading shoulder is driving
-		# into the contact, and a stick planted on that side swings through it.
-		var loaded := Vector2(
-				_controller.hit_commit_blade_local_x * blade_side_sign
-						- _skater.get_check_lead() * _controller.hit_commit_blade_sweep_m,
-				_controller.hit_commit_blade_local_z)
-		capped_blade_xz = capped_blade_xz.lerp(loaded, commit_t)
 	# The board limit is re-derived for the CAPPED aim line, not reused from the
 	# target above: the smoothed blade lags the target (and is carried along by
 	# the skater's own translation), so the two can point at different stretches
@@ -356,6 +348,11 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 					_skater.shoulder.position)))
 	var hand_local: Vector3 = ik.hand
 	var blade_local: Vector3 = ik.blade
+	if commit_t > 0.0:
+		var posed: TopHandIK.Result = _commit_hand_pose(
+				hand_local, blade_local, blade_side_sign, commit_t)
+		hand_local = posed.hand
+		blade_local = posed.blade
 
 	# Carry transit lift: while carrying, raise the blade over the puck during
 	# a pushing-face flip. One sin-envelope hop per flip (Skater
@@ -560,6 +557,43 @@ func update_bottom_hand() -> void:
 				cfg)
 	_skater.set_bottom_hand_position(bh)
 
+# The commit stance poses the HAND and derives the blade from it, rather than
+# posing the blade and letting the hand fall out. Why blade-first cannot work
+# here — and why the elbow reversed when it was used — is in
+# Scripts/controllers/CLAUDE.md under "Pose the hand, not the blade".
+func _commit_hand_pose(hand_local: Vector3, blade_local: Vector3,
+		blade_side_sign: float, commit_t: float) -> TopHandIK.Result:
+	var posed_hand := Vector3(
+			_controller.hit_commit_hand_local_x * blade_side_sign,
+			_controller.hit_commit_hand_local_y,
+			_controller.hit_commit_hand_local_z)
+	# Authoring both ends over-constrains a rigid stick, and enforce_rigid_stick
+	# only ever SHORTENS an over-long span — an under-long pair passes straight
+	# through and draws a stick too short for the body holding it.
+	var stick: float = solve_stick_length()
+	var drop: float = posed_hand.y - blade_local.y
+	var horiz: float = sqrt(maxf(stick * stick - drop * drop, 0.0001))
+	# Where the stick POINTS while it is held ready, as a bearing off the hand —
+	# the choke decides how far along it the blade sits. Swept off the shoulder
+	# being thrown: that shoulder is driving into the contact, and a stick planted
+	# on it swings through it.
+	var bearing := Vector2(
+			(_controller.hit_commit_blade_bearing_x
+					- _skater.get_check_lead() * _controller.hit_commit_blade_sweep)
+					* blade_side_sign,
+			_controller.hit_commit_blade_bearing_z)
+	if bearing.length_squared() < 0.000001:
+		bearing = Vector2(0.0, -1.0)
+	bearing = bearing.normalized()
+	var posed_blade := Vector3(
+			posed_hand.x + bearing.x * horiz,
+			blade_local.y,
+			posed_hand.z + bearing.y * horiz)
+	_rigid_result.hand = hand_local.lerp(posed_hand, commit_t)
+	_rigid_result.blade = blade_local.lerp(posed_blade, commit_t)
+	return _rigid_result
+
+
 # Rigid-stick correction for a POSED hand/blade pair — this skater's shoulder and
 # cached config wrapped around the pure rule (TopHandIK.enforce_rigid_stick).
 # Shared with SkaterShotPoseCoordinator, which runs every pose it authors through
@@ -710,13 +744,10 @@ func blade_y_lean_corrected(blade_local_x: float, blade_local_z: float) -> float
 	return numerator / (cp * cr)
 
 # The stick length every arm solve must use THIS instant: the rigid shaft minus
-# however far the top hand has slid down it. Zero choke outside a check commit,
-# so this is _controller.stick_length everywhere else.
-#
-# One accessor rather than three readers of _controller.stick_length: two sites
-# solving the same frame from different lengths draw two different sticks, and
-# the shot poses reconstruct their own hand/blade pair (a one-timer wind-up can
-# be charged empty-handed with the Hit button down, so they DO overlap a commit).
+# however far the top hand has slid down it (zero outside a check commit). One
+# accessor, because two sites solving one frame from different lengths draw two
+# different sticks — and the shot poses do overlap a commit (a one-timer can be
+# charged empty-handed with the Hit button down).
 func solve_stick_length() -> float:
 	return _controller.stick_length - _skater.grip_choke()
 

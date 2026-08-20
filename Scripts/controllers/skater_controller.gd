@@ -87,31 +87,37 @@ var hit_turn_multiplier: float = 1.0
 var hit_commit_lean_deg: float = 14.0         # forward trunk lean into the check
 var hit_commit_crouch_m: float = 0.12         # sink into the checking stance
 var hit_commit_blade_lift_m: float = 0.22     # stick raise off the ice on an empty-handed commit
-# Loaded blade pose: while committing (empty-handed), the blade STOPS chasing the
-# cursor and eases to a body-local "ready to hit" position — stick up (the lift
-# above), held in front, and swept off the shoulder that is being thrown, so the
-# stance reads as a distinct silhouette instead of a raised-but-still-tracking
-# stick. Body-local XZ: +x is the forehand side (× blade_side_sign), −z is in
-# front of the skater (the blade-bearing convention). The sweep is signed by the
-# lead (Skater.get_check_lead), which keeps the stick out of the shoulder driving
-# into the contact and keeps the silhouette moving WITH the shoulders instead of
-# frozen at one fixed point. Gameplay-inert — the blade is withdrawn from puck
-# play while committed, so this is a pure cosmetic override that eases back to
-# cursor tracking on release. Feel dials; verify the silhouette in-game.
-var hit_commit_blade_local_x: float = 0.10    # forehand-side offset of the loaded blade
-var hit_commit_blade_local_z: float = -0.34   # how far in FRONT the loaded blade sits (−z = ahead)
-var hit_commit_blade_sweep_m: float = 0.16    # how far the loaded blade swings toward the TRAILING side
+# Loaded stick pose: while committing (empty-handed), the stick STOPS chasing the
+# cursor and eases to a body-local "ready to hit" pose, so the stance reads as a
+# distinct silhouette instead of a raised-but-still-tracking stick. A BEARING off
+# the posed hand, not a blade position — the blade sits one (choked) stick along
+# it, so how far out it lands is the choke's business and this is purely which
+# way the stick points. Dimensionless XZ: +x is the forehand side (×
+# blade_side_sign), −z is in front of the skater. The sweep is signed by the lead
+# (Skater.get_check_lead), which keeps the stick out of the shoulder driving into
+# the contact and moves the silhouette WITH the shoulders. Gameplay-inert — the
+# blade is withdrawn from puck play while committed, so this is a pure cosmetic
+# override that eases back to cursor tracking on release. Feel dials; verify the
+# silhouette in-game.
+var hit_commit_blade_bearing_x: float = 0.25   # forehand-side lean of the loaded stick
+var hit_commit_blade_bearing_z: float = -1.0   # −z = pointing ahead of the skater
+var hit_commit_blade_sweep: float = 0.35       # bearing shift toward the TRAILING side
+# Where the top HAND holds the loaded stick, body-local. Posed rather than left
+# to the blade-first solve, which parks it at the shoulder and folds the elbow
+# backwards — see SkaterIKCoordinator._commit_hand_pose. In FRONT of the
+# shoulder (−z) is the load-bearing part: the arm roots at the leaning,
+# load-displaced shoulder, so a hand at the body plane ends up BEHIND its own
+# root. +x is the forehand side (× blade_side_sign).
+var hit_commit_hand_local_x: float = 0.12
+var hit_commit_hand_local_y: float = 0.05
+var hit_commit_hand_local_z: float = -0.40
 # Choke-up while committed, as a fraction of this skater's own stick, so it
-# scales with the build for free. The loaded blade above is only REACHABLE
-# because of this: a raised blade eats the hand-to-blade drop, so a full-length
-# stick's horizontal projection cannot come nearer than ~0.92 m to the shoulder
-# while the pose asks for ~0.53 m. Sliding the hand down the shaft shortens the
-# lever and lets the blade come in without the hand climbing to its ROM ceiling.
-# The shaft is rigid — Skater.update_stick_mesh gives back out of the butt
-# whatever the grip takes, so the drawn stick keeps its length.
-# Raising it past what the target needs just buys headroom; test_commit_grip
-# _choke.gd fails if it ever stops being enough.
-var hit_commit_choke_frac: float = 0.25
+# scales with the build for free. With the hand posed and the blade derived one
+# stick along the loaded bearing, this is the dial that decides how far out that
+# blade sits: choke harder and the stick is held in tighter. The shaft itself is
+# rigid — SkaterStickRig gives back out of the butt whatever the grip takes, so
+# the drawn stick keeps its length and only the grip moves.
+var hit_commit_choke_frac: float = 0.10
 var hit_commit_pose_speed: float = 9.0        # how fast the stance eases in/out
 # ── Body-Check Stagger Tuning ─────────────────────────────────────────────────
 # Getting checked hard staggers the victim: a temporary thrust penalty plus a
