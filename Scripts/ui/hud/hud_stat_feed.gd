@@ -9,12 +9,14 @@ extends RefCounted
 
 signal feed_event(subject: String, detail: String, color: Color)
 
-const _LABELS: Dictionary[StringName, String] = {
-	StatFeedRules.EVENT_SHOT_ON_GOAL: "SHOT ON GOAL",
-	StatFeedRules.EVENT_BLOCKED_SHOT: "BLOCKED SHOT",
-	StatFeedRules.EVENT_HIT: "HIT",
-	StatFeedRules.EVENT_TAKEAWAY: "TAKEAWAY",
-	StatFeedRules.EVENT_FACEOFF_WIN: "FACEOFF WON",
+# Translation keys, tr()'d at the emit seam; copy lives in
+# locale/translations.csv.
+const _LABEL_KEYS: Dictionary[StringName, StringName] = {
+	StatFeedRules.EVENT_SHOT_ON_GOAL: &"STAT_FEED_SHOT_ON_GOAL",
+	StatFeedRules.EVENT_BLOCKED_SHOT: &"STAT_FEED_BLOCKED_SHOT",
+	StatFeedRules.EVENT_HIT: &"STAT_FEED_HIT",
+	StatFeedRules.EVENT_TAKEAWAY: &"STAT_FEED_TAKEAWAY",
+	StatFeedRules.EVENT_FACEOFF_WIN: &"STAT_FEED_FACEOFF_WIN",
 }
 
 # peer_id -> PlayerStats snapshot from the previous stats_updated.
@@ -33,7 +35,7 @@ func poll() -> void:
 		if prev != null:
 			for event: StringName in StatFeedRules.feed_events(prev, snapshot):
 				feed_event.emit(record.display_name(),
-						"· %s" % _LABELS[event], _color_for(record))
+						"· %s" % tr(_LABEL_KEYS[event]), _color_for(record))
 		_baseline[pid] = snapshot
 	# Drop baselines for departed players so a reused peer id starts fresh.
 	for pid: int in _baseline.keys():

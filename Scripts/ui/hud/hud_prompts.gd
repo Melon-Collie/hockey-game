@@ -87,8 +87,9 @@ func build_menu_hint(scale_root: Control) -> void:
 # ── Skip prompt ──────────────────────────────────────────────────────────────
 
 func skip_text() -> String:
-	var base: String = ControllerGlyphs.prompt(
-			"[SPACE] TO SKIP", "[%s] TO SKIP" % ControllerGlyphs.joy_label(JOY_BUTTON_A))
+	var key: String = ControllerGlyphs.prompt(
+			tr(&"KEY_SPACE"), "[%s]" % ControllerGlyphs.joy_label(JOY_BUTTON_A))
+	var base: String = tr(&"PROMPT_SKIP") % key
 	if _skip_vote_total <= 1:
 		# Solo session — no tally, the single press just skips.
 		return base
@@ -158,8 +159,8 @@ func _clip_text() -> String:
 # ── Menu hint ────────────────────────────────────────────────────────────────
 
 func _menu_hint_text() -> String:
-	return "%s MENU" % ControllerGlyphs.prompt(
-			"[ESC]", "[%s]" % ControllerGlyphs.joy_label(JOY_BUTTON_START))
+	return tr(&"PROMPT_MENU") % ControllerGlyphs.prompt(
+			tr(&"KEY_ESC"), "[%s]" % ControllerGlyphs.joy_label(JOY_BUTTON_START))
 
 func show_menu_hint() -> void:
 	if _menu_hint_label == null:

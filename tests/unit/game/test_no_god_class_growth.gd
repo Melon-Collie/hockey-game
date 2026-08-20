@@ -74,7 +74,7 @@ const _SIZE_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/networking/network_telemetry.gd": 939,
 	"res://Scripts/controllers/local_controller.gd": 924,
 	"res://Scripts/ui/player_settings_popup.gd": 863,
-	"res://Scripts/ui/slot_grid_panel.gd": 847,
+	"res://Scripts/ui/slot_grid_panel.gd": 839,
 	"res://Scripts/domain/state/game_state_machine.gd": 838,
 	"res://Scripts/ui/locker_popup.gd": 822,
 	"res://Scripts/ui/hud.gd": 811,

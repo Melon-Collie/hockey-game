@@ -7,15 +7,13 @@ const _DIM     := MenuStyle.BROADCAST_DIM
 const _HEADER  := MenuStyle.BROADCAST_DIM
 const _SEP     := MenuStyle.BROADCAST_SEP
 
-# Away's slot 1/2 are its own RW/LW — the mirror image of home's LW/RW in the
-# same slots, since the away team attacks the opposite direction. See
-# slot_grid_panel.gd's _DISPLAY_ORDER comment for the full explanation.
-# 3v3 is position-free rovers (slots 1/2 labeled plain L/R); 5v5 has a real
-# forward/defense split, so the wingers read LW/RW there.
-const _POSITION_LABEL           := ["C", "L", "R", "LD", "RD"]     # 3v3, indexed by team_slot, home
-const _POSITION_LABEL_AWAY      := ["C", "R", "L", "RD", "LD"]     # 3v3, indexed by team_slot, away
-const _POSITION_LABEL_5V5       := ["C", "LW", "RW", "LD", "RD"]   # 5v5, indexed by team_slot, home
-const _POSITION_LABEL_5V5_AWAY  := ["C", "RW", "LW", "RD", "LD"]   # 5v5, indexed by team_slot, away
+# Column headers, tr()'d where the header row is built. The order is the
+# left-to-right order _fill_row lays a row out in, and every data row passes
+# its cells in the same order.
+const _COLUMN_KEYS: Array[StringName] = [
+	&"COL_PING", &"COL_NUMBER", &"COL_POS", &"COL_PLAYER", &"COL_GOALS",
+	&"COL_ASSISTS", &"COL_POINTS", &"COL_SOG", &"COL_HITS", &"COL_BLOCKS",
+]
 
 var _rows_container: VBoxContainer = null
 var _period_score_labels: Array = []  # [team_id][period_index, then total]
@@ -159,7 +157,7 @@ func _build_panel() -> void:
 	title_style.set_content_margin(SIDE_RIGHT, 18)
 	var title_panel := PanelContainer.new()
 	title_panel.add_theme_stylebox_override("panel", title_style)
-	var title_label := _lbl("BOX SCORE", 16, _WHITE)
+	var title_label := _lbl(tr(&"BOX_SCORE_TITLE"), 16, _WHITE)
 	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title_panel.add_child(title_label)
 	vbox.add_child(title_panel)
@@ -187,7 +185,10 @@ func _build_panel() -> void:
 	table_outer.add_child(table_vbox)
 
 	var header_row := _make_row()
-	_fill_row(header_row, ["PING", "#", "POS", "PLAYER", "G", "A", "PTS", "SOG", "HITS", "BLK"], _HEADER, true)
+	var headers: Array = []
+	for key: StringName in _COLUMN_KEYS:
+		headers.append(tr(key))
+	_fill_row(header_row, headers, _HEADER, true)
 	table_vbox.add_child(header_row)
 
 	_rows_container = VBoxContainer.new()
@@ -203,7 +204,7 @@ func _build_panel() -> void:
 	footer_style.set_content_margin(SIDE_BOTTOM, 6)
 	var footer_panel := PanelContainer.new()
 	footer_panel.add_theme_stylebox_override("panel", footer_style)
-	var footer := _lbl("PRESS TAB TO TOGGLE", 11, _DIM)
+	var footer := _lbl(tr(&"HINT_PRESS_TAB"), 11, _DIM)
 	footer.add_theme_font_override("font", MenuStyle.UI_FONT)
 	footer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	footer_panel.add_child(footer)
@@ -234,18 +235,19 @@ func _rebuild_period_grid(num_periods: int) -> void:
 	for p: int in num_periods:
 		var period_num: int = p + 1
 		var reg_periods: int = _data_num_periods()
-		var header_text: String = "OT%d" % (period_num - reg_periods) if period_num > reg_periods else str(period_num)
+		var header_text: String = tr(&"PERIOD_ORD_OT_N") % (period_num - reg_periods) \
+				if period_num > reg_periods else str(period_num)
 		var h := _lbl(header_text, 12, _HEADER)
 		h.custom_minimum_size = Vector2(col_num, 0)
 		h.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		_period_summary_grid.add_child(h)
-	var t_header := _lbl("T", 12, _HEADER)
+	var t_header := _lbl(tr(&"COL_TOTAL"), 12, _HEADER)
 	t_header.custom_minimum_size = Vector2(col_num, 0)
 	t_header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_period_summary_grid.add_child(t_header)
 
 	for team_id: int in [1, 0]:
-		var label: String = "AWAY" if team_id == 1 else "HOME"
+		var label: String = tr(&"TEAM_AWAY") if team_id == 1 else tr(&"TEAM_HOME")
 		var badge := _team_badge(label, _period_stripe(team_id))
 		var badge_style := badge.get_meta(&"stripe_style") as StyleBoxFlat
 		if team_id == 1:
@@ -315,12 +317,8 @@ func _refresh() -> void:
 		var display_name: String = record.display_name()
 		var ping_str: String = _ping_label(record.peer_id)
 		var is_5v5: bool = int(team_counts.get(record.team.team_id, 0)) >= 5
-		var labels: Array
-		if record.team.team_id == 1:
-			labels = _POSITION_LABEL_5V5_AWAY if is_5v5 else _POSITION_LABEL_AWAY
-		else:
-			labels = _POSITION_LABEL_5V5 if is_5v5 else _POSITION_LABEL
-		var pos_str: String = labels[record.team_slot]
+		var pos_str: String = tr(PositionLabels.badge_key(
+				record.team.team_id, record.team_slot, is_5v5))
 		var num_str: String = str(record.jersey_number)
 		_fill_row(row,
 			[ping_str, num_str, pos_str, display_name, str(s.goals), str(s.assists), str(pts), str(s.shots_on_goal), str(s.hits), str(s.shots_blocked)],
@@ -328,7 +326,7 @@ func _refresh() -> void:
 		)
 
 func _make_team_header(team_id: int) -> HBoxContainer:
-	var label_text: String = "AWAY" if team_id == 1 else "HOME"
+	var label_text: String = tr(&"TEAM_AWAY") if team_id == 1 else tr(&"TEAM_HOME")
 	# Two panels stitched together so the outside reads as one 4px-rounded
 	# shape with a hard vertical seam between the stripe and the jersey
 	# body — same "rounded outside, flat inside" pattern the lobby cards
@@ -405,9 +403,9 @@ func _ping_label(peer_id: int) -> String:
 		return "—"  # ping is meaningless for an offline file replay
 	var local_id: int = NetworkManager.local_peer_id()
 	if peer_id == local_id:
-		return "—" if NetworkManager.is_host else "%d ms" % int(NetworkManager.get_rtt_ms())
+		return "—" if NetworkManager.is_host else tr(&"PING_MS") % int(NetworkManager.get_rtt_ms())
 	var p: int = NetworkManager.get_peer_ping_ms(peer_id)
-	return "%d ms" % p if p > 0 else "—"
+	return tr(&"PING_MS") % p if p > 0 else "—"
 
 func _fill_row(row: HBoxContainer, texts: Array, name_color: Color, is_header: bool) -> void:
 	var widths := [52, 36, 36, 150, 38, 38, 48, 48, 56, 48]

@@ -50,37 +50,44 @@ static func team_primary(team_id: int) -> Color:
 		return TeamColorRegistry.get_colors(GameManager.teams[team_id].color_slot, team_id).primary
 	return _UNRESOLVED
 
+# The locale seam for this file's text helpers. They are static, and tr() is an
+# instance method, so they reach the catalogue through TranslationServer
+# instead; the rows still live in locale/translations.csv like every other
+# string (see Scripts/ui/CLAUDE.md).
+static func tr_key(key: StringName) -> String:
+	return String(TranslationServer.translate(key))
+
 static func period_ordinal(p: int) -> String:
 	var n: int = GameManager.get_num_periods()
 	if p > n:
-		return "OT%d" % (p - n)
+		return tr_key(&"PERIOD_ORD_OT_N") % (p - n)
 	match p:
-		1: return "1ST"
-		2: return "2ND"
-		3: return "3RD"
-		_: return "P%d" % p
+		1: return tr_key(&"PERIOD_ORD_1ST")
+		2: return tr_key(&"PERIOD_ORD_2ND")
+		3: return tr_key(&"PERIOD_ORD_3RD")
+		_: return tr_key(&"PERIOD_ORD_N") % p
 
 # Hero text for the period-start intro card: "2ND PERIOD" for regulation,
 # "OVERTIME" for the first OT, numbered beyond (repeated ties keep cycling OT).
 static func period_intro_title(p: int) -> String:
 	var n: int = GameManager.get_num_periods()
 	if p <= n:
-		return "%s PERIOD" % period_ordinal(p)
+		return tr_key(&"PERIOD_INTRO_TITLE") % period_ordinal(p)
 	var ot: int = p - n
 	if ot <= 1:
-		return "OVERTIME"
-	return "OVERTIME %d" % ot
+		return tr_key(&"PERIOD_INTRO_OVERTIME")
+	return tr_key(&"PERIOD_INTRO_OVERTIME_N") % ot
 
 # Band title for the break after period `p`: "END OF 1ST PERIOD", or
 # "END OF OVERTIME" when repeated OT ties keep the game going.
 static func intermission_title(p: int) -> String:
 	var n: int = GameManager.get_num_periods()
 	if p <= n:
-		return "END OF %s PERIOD" % period_ordinal(p)
+		return tr_key(&"INTERMISSION_TITLE") % period_ordinal(p)
 	var ot: int = p - n
 	if ot <= 1:
-		return "END OF OVERTIME"
-	return "END OF OVERTIME %d" % ot
+		return tr_key(&"INTERMISSION_TITLE_OVERTIME")
+	return tr_key(&"INTERMISSION_TITLE_OVERTIME_N") % ot
 
 static func format_clock(t: float) -> String:
 	var secs: int = int(ceil(t))

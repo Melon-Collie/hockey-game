@@ -99,11 +99,11 @@ func update() -> void:
 	# their OWN crease is never offside either — has_tagged_up holds in their own
 	# end — so that case also falls through to the crease prompt.)
 	if _was_offside and not tagged_up:
-		reason = "OFFSIDE"
-		instruction = "Skate back to your blue line to tag up"
+		reason = tr(&"INFRACTION_OFFSIDE")
+		instruction = tr(&"GHOST_OFFSIDE_INSTRUCTION")
 	elif CreaseRules.is_in_crease(Vector2(pos.x, pos.z)):
-		reason = "CREASE VIOLATION"
-		instruction = "Clear out of the goal crease to rejoin the play"
+		reason = tr(&"INFRACTION_CREASE")
+		instruction = tr(&"GHOST_CREASE_INSTRUCTION")
 	else:
 		# Any other ghost cause (e.g. a whole-team icing ghost) surfaces through
 		# its own toast — no per-player recovery action to prompt here.

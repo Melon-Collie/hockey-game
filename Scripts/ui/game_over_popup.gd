@@ -102,7 +102,7 @@ func _build_top_block(root: Control) -> void:
 	_top_block.offset_top = 64
 	root.add_child(_top_block)
 
-	var final_tag := _lbl("FINAL", 18, _DIM)
+	var final_tag := _lbl(tr(&"FINAL"), 18, _DIM)
 	final_tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_top_block.add_child(final_tag)
 
@@ -122,7 +122,7 @@ func _build_score_row() -> Control:
 
 	_home_stripe_style = _stripe_style()
 	row.add_child(_stripe(_home_stripe_style))
-	row.add_child(_lbl("HOME", 24, _WHITE))
+	row.add_child(_lbl(tr(&"TEAM_HOME"), 24, _WHITE))
 	_home_score_label = _lbl("0", 56, _WHITE)
 	row.add_child(_home_score_label)
 
@@ -132,7 +132,7 @@ func _build_score_row() -> Control:
 
 	_away_score_label = _lbl("0", 56, _WHITE)
 	row.add_child(_away_score_label)
-	row.add_child(_lbl("AWAY", 24, _WHITE))
+	row.add_child(_lbl(tr(&"TEAM_AWAY"), 24, _WHITE))
 	_away_stripe_style = _stripe_style()
 	row.add_child(_stripe(_away_stripe_style))
 	return row
@@ -224,11 +224,11 @@ func _build_bottom_block(root: Control) -> void:
 
 	# Leads the strip: the analytics screen is a VIEW of the game just played,
 	# so it sits ahead of the what-next actions rather than among them.
-	var analytics_btn := _action_button("Game Analytics")
+	var analytics_btn := _action_button(tr(&"GAME_OVER_ANALYTICS"))
 	analytics_btn.pressed.connect(func() -> void: analytics_pressed.emit())
 	actions.add_child(analytics_btn)
 
-	_rematch_btn = _action_button("Rematch")
+	_rematch_btn = _action_button(tr(&"GAME_OVER_REMATCH"))
 	_rematch_btn.pressed.connect(func() -> void: rematch_toggled.emit())
 	actions.add_child(_rematch_btn)
 
@@ -240,18 +240,18 @@ func _build_bottom_block(root: Control) -> void:
 	# tutorial, drills). Offline the voter pool is just the host, so the vote
 	# resolves on the click; a host who wants to force the lobby without
 	# waiting on the vote still has the pause menu's instant Return to Lobby.
-	_lobby_btn = _action_button("Return to Lobby")
+	_lobby_btn = _action_button(tr(&"GAME_OVER_RETURN_LOBBY"))
 	_lobby_btn.pressed.connect(func() -> void: lobby_vote_toggled.emit())
 	actions.add_child(_lobby_btn)
 
 	# Always available: drop to solo free play. Offline this is the only leave
 	# action; for an online client it disconnects just them; for an online host
 	# it tears down the server (everyone drops out).
-	var free_play_btn := _action_button("Return to Free Play")
+	var free_play_btn := _action_button(tr(&"GAME_OVER_RETURN_FREE_PLAY"))
 	free_play_btn.pressed.connect(func() -> void: free_play_pressed.emit())
 	actions.add_child(free_play_btn)
 
-	var exit_btn := _action_button("Exit Game")
+	var exit_btn := _action_button(tr(&"GAME_OVER_EXIT"))
 	exit_btn.pressed.connect(func() -> void: exit_pressed.emit())
 	actions.add_child(exit_btn)
 
@@ -261,7 +261,7 @@ func _build_bottom_block(root: Control) -> void:
 	_vote_label.add_theme_color_override("font_color", Color(0.62, 0.62, 0.68, 1.0))
 	_bottom_block.add_child(_vote_label)
 
-	var hint := _lbl("TAB · BOX SCORE", 12, MenuStyle.TEXT_MUTED)
+	var hint := _lbl(tr(&"HINT_TAB_BOX_SCORE"), 12, MenuStyle.TEXT_MUTED)
 	hint.add_theme_font_override("font", MenuStyle.UI_FONT)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_bottom_block.add_child(hint)
@@ -353,15 +353,16 @@ func hide_popup() -> void:
 # the other flavor switches the vote instead); the tally line flags when the
 # pool is already headed to the lobby.
 func update_votes(votes: Dictionary[int, int], total_voters: int, local_vote: int) -> void:
-	_rematch_btn.text = "Unvote" \
-			if local_vote == RematchVoteRules.Choice.REMATCH else "Rematch"
-	_lobby_btn.text = "Unvote" \
-			if local_vote == RematchVoteRules.Choice.LOBBY else "Return to Lobby"
+	_rematch_btn.text = tr(&"GAME_OVER_UNVOTE") \
+			if local_vote == RematchVoteRules.Choice.REMATCH else tr(&"GAME_OVER_REMATCH")
+	_lobby_btn.text = tr(&"GAME_OVER_UNVOTE") \
+			if local_vote == RematchVoteRules.Choice.LOBBY else tr(&"GAME_OVER_RETURN_LOBBY")
 	var count: int = RematchVoteRules.count_voted(votes)
-	var tally: String = "%d / %d voted" % [count, total_voters]
-	if RematchVoteRules.has_lobby_vote(votes):
-		tally += " · returning to lobby"
-	_vote_label.text = tally
+	# One key per phrasing rather than a suffix appended to the tally: the
+	# clause does not attach at the end in every language.
+	var key: StringName = &"GAME_OVER_VOTE_TALLY_LOBBY" \
+			if RematchVoteRules.has_lobby_vote(votes) else &"GAME_OVER_VOTE_TALLY"
+	_vote_label.text = tr(key) % [count, total_voters]
 
 
 # Slimmer than MenuStyle.popup_button so four of them sit comfortably in one

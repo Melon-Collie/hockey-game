@@ -18,15 +18,6 @@ extends CanvasLayer
 const _WHITE := MenuStyle.BROADCAST_CREAM
 const _DIM := MenuStyle.BROADCAST_DIM
 
-# Position badges, matching scoreboard.gd / slot_grid_panel.gd's convention:
-# 3v3 is position-free rovers (plain L/R); 5v5 has a real forward/defense
-# split, so wingers spell out LW/RW. Home/away mirror slots 1/2 since away
-# attacks the opposite direction (see slot_grid_panel.gd's _DISPLAY_ORDER).
-const _POSITION_LABEL          := ["C", "L", "R", "LD", "RD"]
-const _POSITION_LABEL_AWAY     := ["C", "R", "L", "RD", "LD"]
-const _POSITION_LABEL_5V5      := ["C", "LW", "RW", "LD", "RD"]
-const _POSITION_LABEL_5V5_AWAY := ["C", "RW", "LW", "RD", "LD"]
-
 # Between the intermission reel's light wash (0.32) and the modal scrim
 # (0.55): the sweep behind is mood, not content, but should still read.
 const _INTRO_SCRIM := Color(0.024, 0.039, 0.071, 0.40)
@@ -68,7 +59,7 @@ func _build_ui() -> void:
 	_content.add_theme_constant_override("separation", 22)
 	centering.add_child(_content)
 
-	var tag := _lbl("TONIGHT'S MATCHUP", 16, _DIM)
+	var tag := _lbl(tr(&"MATCHUP_TITLE"), 16, _DIM)
 	tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_content.add_child(tag)
 
@@ -78,19 +69,19 @@ func _build_ui() -> void:
 	_content.add_child(columns)
 
 	_home_stripe_style = _stripe_style()
-	var home_col := _build_team_column("HOME", _home_stripe_style)
+	var home_col := _build_team_column(tr(&"TEAM_HOME"), _home_stripe_style)
 	_home_rows = home_col.get_meta(&"rows") as VBoxContainer
 	columns.add_child(home_col)
 
 	# Center spine: just the VS — the archetype tags carry the build story in
 	# words, so there is no legend to key.
-	var vs := _lbl("VS", 30, _DIM)
+	var vs := _lbl(tr(&"MATCHUP_VS"), 30, _DIM)
 	vs.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vs.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	columns.add_child(vs)
 
 	_away_stripe_style = _stripe_style()
-	var away_col := _build_team_column("AWAY", _away_stripe_style)
+	var away_col := _build_team_column(tr(&"TEAM_AWAY"), _away_stripe_style)
 	_away_rows = away_col.get_meta(&"rows") as VBoxContainer
 	columns.add_child(away_col)
 
@@ -157,14 +148,12 @@ func _fill_rows(rows: VBoxContainer, records: Array[PlayerRecord],
 	for child: Node in rows.get_children():
 		child.queue_free()
 	var is_5v5: bool = records.size() >= 5
-	var labels: Array = _POSITION_LABEL_AWAY if team_id == 1 else _POSITION_LABEL
-	if is_5v5:
-		labels = _POSITION_LABEL_5V5_AWAY if team_id == 1 else _POSITION_LABEL_5V5
 	var open_group: int = -1  # -1 = none yet, 0 = forwards, 1 = defense
 	for record: PlayerRecord in records:
 		var group: int = 1 if PlayerRules.is_defense_slot(record.team_slot) else 0
 		if is_5v5 and group != open_group:
-			_add_group_header(rows, "DEFENSE" if group == 1 else "FORWARDS",
+			_add_group_header(rows,
+					tr(&"MATCHUP_GROUP_DEFENSE") if group == 1 else tr(&"MATCHUP_GROUP_FORWARDS"),
 					open_group != -1)
 			open_group = group
 		var row := HBoxContainer.new()
@@ -172,7 +161,8 @@ func _fill_rows(rows: VBoxContainer, records: Array[PlayerRecord],
 		# Badge left-aligned in its cell so C / LW / LD share a left rail with
 		# the group headers above them; the jersey numbers keep the right
 		# alignment that lines up 7 with 71.
-		var pos := _lbl(labels[record.team_slot], 14, _DIM)
+		var pos := _lbl(
+				tr(PositionLabels.badge_key(team_id, record.team_slot, is_5v5)), 14, _DIM)
 		pos.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 		pos.custom_minimum_size = Vector2(28, 0)
 		pos.size_flags_vertical = Control.SIZE_SHRINK_CENTER
