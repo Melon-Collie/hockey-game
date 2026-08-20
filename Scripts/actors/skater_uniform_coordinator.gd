@@ -29,16 +29,23 @@ extends RefCounted
 
 # Jersey hem swing. The skirt is its own bone (SkaterMeshBuilder.UpperBone.HEM);
 # this file owns the one number that drives it.
-# How fast the cloth catches up with the body, per second. ~0.12 s of lag: long
+# How fast the cloth catches up with the body, per second. ~0.17 s of lag: long
 # enough for a hard stop to throw the skirt forward, short enough that it has
-# settled before the next stride.
-const _FLOW_RESPONSE: float = 8.0
+# settled before the next stride. Under a SUSTAINED acceleration a first-order
+# lag holds a constant gap of `a / _FLOW_RESPONSE`, which is what makes this
+# number half of the swing's size and not just its speed.
+const _FLOW_RESPONSE: float = 6.0
 # Metres the HEM RING travels per m/s of body-versus-cloth speed, and the ceiling
 # it saturates at. The cap is what keeps a respawn — velocity to zero in one
 # frame — from flinging the skirt off the body. Rings between waist and hem move
 # proportionally less; that ramp is the swing rotation's, not a number here.
-const _FLOW_METRES_PER_MPS: float = 0.010
-const _FLOW_MAX: float = 0.05
+# Sized against what a skater can actually do rather than picked flat: full
+# skating effort is ~10 m/s^2 (SkaterController.stride_effort_ref_accel), which
+# holds a 1.7 m/s gap and so swings the hem ~4.7 cm — a fifth of the hem's own
+# radius, and visible on a top-down camera. A hard stop roughly doubles that and
+# lands on the cap.
+const _FLOW_METRES_PER_MPS: float = 0.028
+const _FLOW_MAX: float = 0.09
 # Below this the hem is home and the pose write is skipped; one more is allowed
 # through after it settles so the resting skirt is the one on screen.
 const _FLOW_IDLE: float = 0.0005

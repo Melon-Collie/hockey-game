@@ -1737,8 +1737,10 @@ func _wire_sound_signals() -> void:
 			puck.fire_board_impact_vfx(spd)
 			NetworkManager.send_board_hit_to_all(puck.get_puck_position())
 			_record_replay_audio_event("puck_boards", puck.get_puck_position(), spd))
-		puck.puck_hit_goal_body.connect(func() -> void:
-			var spd: float = puck.linear_velocity.length()
+		# `spd` is the ARRIVAL speed, carried on the signal — the twine has already
+		# eaten ~95% of it by the time this runs, and reading it back off the puck
+		# scales every net event off the rebound instead of off the shot.
+		puck.puck_hit_goal_body.connect(func(spd: float) -> void:
 			SoundManager.play_world(SoundManager.Sound.PUCK_GOAL_BODY, puck.get_puck_position(), _puck_speed_volume(spd), 0.06)
 			_bulge_net(puck.get_puck_position(), spd)
 			NetworkManager.send_goal_body_hit_to_all(puck.get_puck_position())

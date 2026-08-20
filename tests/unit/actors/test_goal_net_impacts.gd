@@ -221,3 +221,51 @@ func test_the_net_only_processes_while_an_impact_is_live() -> void:
 	assert_false(goal.is_processing(), "once the twine settles the clock stops again")
 	assert_almost_eq(_impacts(goal)[0].w, 0.0, 1e-9,
 			"and the buffer is zeroed, so the shader's per-vertex loop skips every slot")
+
+
+# ── Arrival speed, not rebound speed ─────────────────────────────────────────
+# The twine keeps 5% of what hits it (NET_RESTITUTION), so a 25 m/s shot is
+# travelling 1.25 m/s by the time a contact listener runs. Scaling the bulge off
+# what the puck is doing AFTER the bounce asked for 7.5 mm where 150 mm was
+# wanted, which is a net that visibly does not move — the whole feature, lost to
+# reading the speed one line too late.
+#
+# The fix is that Puck.puck_hit_goal_body CARRIES the arrival speed, because it
+# is the one thing no listener can recover from the puck afterwards. These
+# assertions are what stop it being quietly dropped again.
+
+func test_a_hard_shot_bulges_the_net_visibly() -> void:
+	var goal: HockeyGoal = _make_goal()
+	goal.net_impact(_inside(goal), 25.0)
+	assert_gt(absf(_impacts(goal)[0].w), 0.10,
+			"a 25 m/s shot must bury better than 10 cm of twine. Anything near " +
+			"1 cm means a rebound speed reached this, not an arrival speed")
+
+
+func test_the_net_signal_carries_a_speed_the_puck_no_longer_has() -> void:
+	var puck := Puck.new()
+	autofree(puck)
+	var seen: Array[float] = []
+	puck.puck_hit_goal_body.connect(func(spd: float) -> void: seen.append(spd))
+	# Queue the event the way the analytic drive does, with the arrival speed,
+	# then leave the puck moving at the deadened rebound speed a listener would
+	# otherwise read back off it.
+	puck._queue_contact_event(Puck.ContactEvent.NET, null, null, 25.0)
+	puck.linear_velocity = Vector3(0.0, 0.0, 1.25)
+	puck.drain_contact_events()
+	assert_eq(seen.size(), 1, "the net event drains once")
+	assert_almost_eq(seen[0], 25.0, 1e-6,
+			"and it reports the speed the puck ARRIVED at, not the %.2f m/s it is " %
+			puck.linear_velocity.length() +
+			"travelling once the twine has absorbed the shot")
+
+
+# The restitution that causes all this, pinned so a change to it is a decision
+# rather than a surprise about why the net stopped moving.
+func test_the_twine_really_does_swallow_almost_everything() -> void:
+	var out: Vector3 = PuckGeometryCollision.reflect_3d(
+			Vector3(0.0, 0.0, 25.0), Vector3(0.0, 0.0, -1.0),
+			PuckGeometryCollision.NET_RESTITUTION)
+	assert_lt(out.length(), 2.0,
+			"a 25 m/s shot leaves the twine under 2 m/s — this is why a contact " +
+			"listener cannot read the impact speed off the puck")
