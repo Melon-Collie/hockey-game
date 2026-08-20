@@ -508,9 +508,18 @@ func _net_verdict(cross_x: float, cross_y: float) -> int:
 #   rebound_pos    where the puck was when it settled / left the danger area
 #   rebound_speed  its speed there
 #   rebound_goal   true if it eventually went in (first shot OR rebound)
+#
+# The return value is the FIRST-shot verdict — SAVE once the goalie touched it,
+# whatever happened next. Read `rebound_goal` beside it: SAVE with rebound_goal
+# is a second chance buried, and a caller counting only the return value scores
+# that as a stop.
 var rebound_pos: Vector3 = Vector3.INF
 var rebound_speed: float = 0.0
 var rebound_goal: bool = false
+# The save ENDED the play — the goalie holds the puck. Not a rebound at all, and
+# a caller that folds it into rebound statistics reports a frozen puck as a
+# second chance sitting in the crease (`rebound_pos` is the goalie's glove).
+var rebound_caught: bool = false
 var _deaden: GoalieSaveRules.DeadenConfig = null
 var _save_res: GoalieSaveRules.ContactResult = GoalieSaveRules.ContactResult.new()
 
@@ -536,6 +545,7 @@ func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
 	rebound_pos = Vector3.INF
 	rebound_speed = 0.0
 	rebound_goal = false
+	rebound_caught = false
 	_shooter.global_position = shooter
 	_puck.clear_carrier()
 	var goal := Vector3(0.0, 0.0, _goal_z)
@@ -577,17 +587,30 @@ func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
 			if _save_res.caught:
 				rebound_pos = pos
 				rebound_speed = 0.0
+				rebound_caught = true
 				return SAVE
-		elif (pos.z - goal.z) * goal_dir >= 0.0 and not touched:
+		elif (pos.z - goal.z) * goal_dir >= 0.0:
 			var seg: float = pos.z - prev.z
 			var f: float = clampf((goal.z - prev.z) / seg, 0.0, 1.0) if absf(seg) > 1e-6 else 1.0
-			outcome = _net_verdict(prev.x + (pos.x - prev.x) * f,
+			var verdict: int = _net_verdict(prev.x + (pos.x - prev.x) * f,
 					prev.y + (pos.y - prev.y) * f)
-			if outcome == GOAL:
+			# BEFORE any contact the crossing IS the outcome. AFTER one the shot is
+			# already a save, and only a GOAL is terminal — a rebound crossing the
+			# goal-line plane wide of the posts is a puck going behind the net, which
+			# keeps playing. Gating this whole branch on `not touched` (as it was)
+			# made the second chance unobservable: the loop ran on to the speed cut
+			# and reported a settle point that could be inside the cage.
+			if not touched:
+				outcome = verdict
+				rebound_goal = verdict == GOAL
+				rebound_pos = pos
+				rebound_speed = vel.length()
+				return outcome
+			if verdict == GOAL:
 				rebound_goal = true
-			rebound_pos = pos
-			rebound_speed = vel.length()
-			return outcome
+				rebound_pos = pos
+				rebound_speed = vel.length()
+				return GOAL
 		# After a save, the first moment it is slow enough to be played is where
 		# the second chance lives.
 		if touched and vel.length() <= PLAYABLE_SPEED_M_S:
