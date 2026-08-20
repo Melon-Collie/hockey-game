@@ -58,7 +58,10 @@ const Harness := preload("res://tests/unit/ai/real_goalie_shot_harness.gd")
 const GOAL_Z: float = -GameRules.GOAL_LINE_Z
 const SLOT: float = GameRules.GOAL_LINE_Z - GameRules.ICING_FACEOFF_DOT_Z
 const MPH: float = 78.0 * 0.44704
-const PART := ["STICK", "PAD", "BLOCK", "CHEST", "GLOVE"]
+# Save-surface labels, DERIVED from the enum. A hand-kept copy goes stale the
+# moment a part is added — MASK split from CHEST and every such list started
+# reporting "?" for it.
+static var _part_names: Array = GoalieSaveRules.SavePart.keys()
 
 var _goalie: Node = null
 var _puck: Node = null
@@ -98,5 +101,5 @@ func test_drop_state_across_the_glove_window() -> void:
 				% [a, side, GoalieStateMachine.State.keys()[st_rel], dp_rel,
 				_ctrl._slide.drop_progress,
 				"GOAL" if o == Harness.GOAL else "save",
-				PART[_h.last_part] if _h.last_part >= 0 else "-"])
+				_part_names[_h.last_part] if _h.last_part >= 0 else "-"])
 	assert_true(true)

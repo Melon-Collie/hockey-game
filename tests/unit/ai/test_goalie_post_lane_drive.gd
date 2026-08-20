@@ -216,7 +216,10 @@ const MAX_AIM: float = GameRules.NET_HALF_WIDTH \
 		- GameRules.NET_POST_RADIUS - GameRules.PUCK_COLLISION_RADIUS
 const SHOT_MPH: Array[float] = [70.0, 80.0]
 const MPH_TO_MS: float = 0.44704
-const PART := ["STICK", "PAD", "BLOCK", "CHEST", "GLOVE"]
+# Save-surface labels, DERIVED from the enum. A hand-kept copy goes stale the
+# moment a part is added — MASK split from CHEST and every such list started
+# reporting "?" for it.
+static var _part_names: Array = GoalieSaveRules.SavePart.keys()
 
 var _goalie: Node = null
 var _puck: Node = null
@@ -349,7 +352,7 @@ func _map(lane_x: float, release_dist: float, windup: bool) -> Dictionary:
 					elif a > 0.0:
 						right_goals += 1
 				elif o == Harness.SAVE:
-					var k: String = PART[_h.last_part] if _h.last_part >= 0 else "?"
+					var k: String = _part_names[_h.last_part] if _h.last_part >= 0 else "?"
 					parts[k] = int(parts.get(k, 0)) + 1
 					if best == ".":
 						best = k.substr(0, 1).to_lower()

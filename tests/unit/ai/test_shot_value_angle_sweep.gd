@@ -93,7 +93,10 @@ var _ctrl: GoalieController = null
 var _h: RefCounted = null
 var _parts: Dictionary = {}
 var _out: Dictionary = {}
-const PART := ["STICK", "PAD", "BLOCK", "CHEST", "GLOVE"]
+# Save-surface labels, DERIVED from the enum. A hand-kept copy goes stale the
+# moment a part is added — MASK split from CHEST and every such list started
+# reporting "?" for it.
+static var _part_names: Array = GoalieSaveRules.SavePart.keys()
 
 
 func before_each() -> void:
@@ -150,7 +153,7 @@ func _cell(spot: Vector3, spread: float) -> Dictionary:
 		if o == Harness.GOAL:
 			goals += 1
 		elif o == Harness.SAVE:
-			var k: String = PART[_h.last_part] if _h.last_part >= 0 else "?"
+			var k: String = _part_names[_h.last_part] if _h.last_part >= 0 else "?"
 			_parts[k] = int(_parts.get(k, 0)) + 1
 	return {
 		"model": model, "measured": float(goals) / float(SAMPLES),

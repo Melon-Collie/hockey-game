@@ -51,6 +51,10 @@ var last_shot_speed: float = 0.0
 # counting second chances wants this rather than a speed threshold: "hard enough
 # to beat the pad" stopped being a thing the model believes.
 var last_caught: bool = false
+# Was that first contact a chest SMOTHER? Neither a live rebound nor a stoppage:
+# the shot is dead and the puck is his to sweep. A caller counting second chances
+# must not fold it in with pucks that kicked out live.
+var last_trapped: bool = false
 
 # Reused per-march scratch (allocation-free like the production loop).
 var _scratch: SweptDiscOBB.Result = SweptDiscOBB.Result.new()
@@ -401,6 +405,7 @@ func fire_at(shooter: Vector3, aim: Vector3, loft_level: int, speed_m_s: float,
 	_puck.clear_carrier()
 	last_part = -1
 	last_caught = false
+	last_trapped = false
 	last_contact_pos = Vector3.INF
 	last_cross = Vector3.INF
 	last_goalie_pos = Vector3.INF
@@ -417,6 +422,7 @@ func fire(shooter: Vector3, aim: Vector3, loft_level: int, power_t: float,
 	_puck.clear_carrier()
 	last_part = -1
 	last_caught = false
+	last_trapped = false
 	last_contact_pos = Vector3.INF
 	last_cross = Vector3.INF
 	last_goalie_pos = Vector3.INF
@@ -457,8 +463,9 @@ func _march(shooter: Vector3, vel_in: Vector3) -> int:
 			last_contact_pos = _contact.point
 			last_goalie_pos = g3.global_position if g3 != null else Vector3.INF
 			var fwd: Vector3 = -g3.global_transform.basis.z if g3 != null else Vector3.ZERO
-			last_caught = last_part == GoalieSaveRules.SavePart.GLOVE \
-					and GoalieSaveRules.is_face_presented(_contact.normal, fwd)
+			var presented: bool = GoalieSaveRules.is_face_presented(_contact.normal, fwd)
+			last_caught = last_part == GoalieSaveRules.SavePart.GLOVE and presented
+			last_trapped = last_part == GoalieSaveRules.SavePart.CHEST and presented
 			return SAVE
 		# Reached/passed the goal-line plane this tick (started in front, so the
 		# first tick with (pos.z − goal.z)·goal_dir ≥ 0 is the goalward crossing)?
@@ -731,6 +738,7 @@ func fire_release_at(shooter: Vector3, aim: Vector3, loft_level: int,
 		return WIDE
 	last_part = -1
 	last_caught = false
+	last_trapped = false
 	last_contact_pos = Vector3.INF
 	last_cross = Vector3.INF
 	last_goalie_pos = Vector3.INF
@@ -818,6 +826,7 @@ func fire_release(shooter: Vector3, aim: Vector3, loft_level: int,
 		return WIDE
 	last_part = -1
 	last_caught = false
+	last_trapped = false
 	last_contact_pos = Vector3.INF
 	last_cross = Vector3.INF
 	last_goalie_pos = Vector3.INF

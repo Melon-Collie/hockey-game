@@ -59,7 +59,10 @@ var _puck: Node = null
 var _shooter: Skater = null
 var _ctrl: GoalieController = null
 var _h: RefCounted = null
-const PART := ["STICK", "PAD", "BLOCK", "CHEST", "GLOVE", "MASK"]
+# Save-surface labels, DERIVED from the enum. A hand-kept copy goes stale the
+# moment a part is added — MASK split from CHEST and every such list started
+# reporting "?" for it.
+static var _part_names: Array = GoalieSaveRules.SavePart.keys()
 
 
 func before_each() -> void:
@@ -114,7 +117,7 @@ func test_report_rebound_destination_by_save_surface() -> void:
 					continue
 				if o != Harness.SAVE:
 					continue
-				var k: String = PART[_h.last_part] if _h.last_part >= 0 else "?"
+				var k: String = _part_names[_h.last_part] if _h.last_part >= 0 else "?"
 				if not by_part.has(k):
 					by_part[k] = [0, 0]
 				var row: Array = by_part[k]
@@ -213,7 +216,7 @@ func test_report_rebound_baseline_across_the_shot_map() -> void:
 						if o == Harness.GOAL:
 							first_goals += 1
 						continue
-					var k: String = PART[_h.last_part] if _h.last_part >= 0 else "?"
+					var k: String = _part_names[_h.last_part] if _h.last_part >= 0 else "?"
 					if not by_part.has(k):
 						by_part[k] = [0, 0, 0, 0, 0, 0.0]
 					var row: Array = by_part[k]

@@ -172,7 +172,10 @@ var _puck: Node = null
 var _shooter: Skater = null
 var _ctrl: GoalieController = null
 var _h: RefCounted = null
-const PART := ["STICK", "PAD", "BLOCK", "CHEST", "GLOVE"]
+# Save-surface labels, DERIVED from the enum. A hand-kept copy goes stale the
+# moment a part is added — MASK split from CHEST and every such list started
+# reporting "?" for it.
+static var _part_names: Array = GoalieSaveRules.SavePart.keys()
 
 
 func before_each() -> void:
@@ -217,12 +220,12 @@ func _sweep(spot: Vector3, label: String) -> int:
 					row_goals += 1
 					best = "G"
 				elif o == Harness.SAVE:
-					var k: String = PART[_h.last_part] if _h.last_part >= 0 else "?"
+					var k: String = _part_names[_h.last_part] if _h.last_part >= 0 else "?"
 					parts[k] = int(parts.get(k, 0)) + 1
-					# Did that save actually END the play? Only a glove catch does —
-					# every other surface is a material rebound and leaves the puck
-					# loose, so the slot is a scramble.
-					if not _h.last_caught:
+					# Did that save leave a LIVE puck? A glove catch ends the play and a
+					# chest smother kills the shot dead for the sweep; every other
+					# surface is a material rebound, so the slot is a scramble.
+					if not _h.last_caught and not _h.last_trapped:
 						live += 1
 					if best == ".":
 						best = k.substr(0, 1).to_lower()
@@ -293,7 +296,7 @@ func test_report_the_sweep_a_human_can_actually_execute() -> void:
 						total += 1
 						best = "G"
 					elif o == Harness.SAVE:
-						var k: String = PART[_h.last_part] if _h.last_part >= 0 else "?"
+						var k: String = _part_names[_h.last_part] if _h.last_part >= 0 else "?"
 						parts[k] = int(parts.get(k, 0)) + 1
 						if best == ".":
 							best = k.substr(0, 1).to_lower()

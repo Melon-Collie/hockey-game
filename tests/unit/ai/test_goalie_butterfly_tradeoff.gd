@@ -136,13 +136,10 @@ var _shooter: Skater = null
 var _ctrl: GoalieController = null
 var _h: RefCounted = null
 var _parts: Dictionary = {}
-const PART_NAME: Dictionary = {
-	GoalieSaveRules.SavePart.PAD: "pad",
-	GoalieSaveRules.SavePart.GLOVE: "GLOVE",
-	GoalieSaveRules.SavePart.BLOCKER: "BLOCK",
-	GoalieSaveRules.SavePart.CHEST: "chest",
-	GoalieSaveRules.SavePart.STICK: "stick",
-}
+# Save-surface labels, DERIVED from the enum. A hand-kept copy goes stale the
+# moment a part is added — MASK split from CHEST and every such list started
+# reporting "?" for it.
+static var _part_names: Array = GoalieSaveRules.SavePart.keys()
 
 
 func before_each() -> void:
@@ -193,7 +190,7 @@ func _sweep(force_down: bool, loft: int, dist: float = 7.0,
 			goals += 1
 		elif o == Harness.SAVE:
 			row += "s"
-			var k: String = PART_NAME.get(_h.last_part, "?")
+			var k: String = _part_names[_h.last_part] if _h.last_part >= 0 else "?"
 			_parts[k] = int(_parts.get(k, 0)) + 1
 		else:
 			row += "x"
