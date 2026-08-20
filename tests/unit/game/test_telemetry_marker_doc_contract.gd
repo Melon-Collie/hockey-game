@@ -22,6 +22,7 @@ extends GutTest
 # a band that is always red is learned around.
 
 const _DOC: String = "res://docs/telemetry_dictionary.md"
+const _ClockSyncScript: GDScript = preload("res://Scripts/networking/clock_sync.gd")
 
 
 func _doc_text() -> String:
@@ -111,6 +112,29 @@ func test_documented_broadcast_band_tracks_the_broadcast_rate() -> void:
 			NetworkTelemetry.BROADCAST_SAG_WARN_MULT, 1e-6,
 			"telemetry_dictionary.md's sag threshold disagrees with the band the " +
 			"F3 overlay colours the row with")
+
+
+# The input-queue band is the other relation-shaped one, and it rots the same
+# way: a fixed "1–3 frames" was right only for a settled servo, so a session
+# running a legitimately warm lead read as backed up. Both queue rows state the
+# band as the stamp lead in ticks, which is what actually fills the queue.
+func test_documented_queue_depth_band_tracks_the_stamp_lead() -> void:
+	const KEY: String = "input_queue_depth"
+	var row: String = _band_row(KEY)
+	var tick: float = float(Constants.PHYSICS_TICK)
+	assert_true(row.contains("INPUT_LEAD_SEC") and row.contains("PHYSICS_TICK"),
+			"the band must name the constants it derives from — a fixed frame " +
+			"count is what went stale here: %s" % row)
+	# "~3 with the servo settled": the designed depth, lead_extra at zero.
+	assert_almost_eq(_number_in(row, "~([0-9]+(?:\\.[0-9]+)?)\\s+with the servo settled",
+					KEY, "a settled depth"),
+			_ClockSyncScript.INPUT_LEAD_SEC * tick, 0.51,
+			"the settled depth must be INPUT_LEAD_SEC in ticks")
+	# "~9–10 at its ceiling": the same lead plus the servo's whole range.
+	assert_almost_eq(_number_in(row, "~([0-9]+(?:\\.[0-9]+)?)[–-][0-9]+ at its ceiling",
+					KEY, "a ceiling depth"),
+			(_ClockSyncScript.INPUT_LEAD_SEC + _ClockSyncScript.MAX_LEAD_EXTRA_S) * tick, 0.51,
+			"the ceiling depth must be INPUT_LEAD_SEC + MAX_LEAD_EXTRA_S in ticks")
 
 
 func test_documented_freeze_tripwires_match() -> void:
