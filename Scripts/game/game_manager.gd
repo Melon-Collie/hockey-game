@@ -344,23 +344,15 @@ var _net_session_reporter: NetworkSessionReporter = null
 var _net_session_reported: bool = false
 var _achievements: AchievementService = null
 var _stat_recorder: SteamStatRecorder = null
-# Streams broadcast frames to user://replays/<game_id>.mreplay on a worker
-# thread. Lives on every peer (host + client + spectator) for any session
+# Streams broadcast frames and events to user://replays/<game_id>.mreplay on a
+# worker thread. Lives on every peer (host + client + spectator) for any session
 # with a non-empty _game_id and PlayerPrefs.replay_recording_enabled. Opens
 # once the registry has stabilized (post-_push_lobby_assignments_to_clients
 # on host, post-sync_existing_players on clients) and closes on scene exit.
-var _replay_file_writer: ReplayFileWriter = null
-# host_ts of the last world-state frame written to the .mreplay file. Drives the
-# REPLAY_FILE_RATE throttle in _record_world_state_to_file. -INF so the first
-# frame of each recording always writes; reset on writer open.
-var _last_file_frame_ts: float = -INF
-# Tracks the phase of the most recent .mreplay frame so movement-locked
-# phases (GOAL_SCORED, FACEOFF_PREP, END_OF_PERIOD, GAME_OVER) record their
-# first transition frame and skip the duplicate-static frames that follow.
-# The transition frame at GOAL_SCORED entry captures puck-in-net, which the
-# previous broadcast (still PLAYING) usually missed. -1 = nothing recorded
-# yet this game; reset on scene exit + rematch rollover.
-var _last_recorded_phase: int = -1
+# Owns the writer, the frame throttle and the recording policy; this file keeps
+# only the header/footer content, which is built from the roster and the state
+# machine it owns.
+var _replay_file := ReplayFileRecorder.new()
 
 # ── Spectator state ───────────────────────────────────────────────────────────
 # Host-side: peer_ids of connected spectators. Used to gate `_registry.spawn`
@@ -450,8 +442,9 @@ var _stats_sync_gate := StatsSyncGate.new()
 # stamps the raw fields into these preallocated parallel arrays; the Dictionary
 # build, JSON encode for the .mreplay writer, and the client mirror RPC all run
 # in the _process drain (_drain_replay_event_queue). Record-time gates
-# (host / replay-mode / celebration / _should_record_to_file) are evaluated at
-# QUEUE time so a phase flip before the drain can't change what gets recorded.
+# (host / replay-mode / celebration / the recorder's own phase policy) are
+# evaluated at QUEUE time so a phase flip before the drain can't change what
+# gets recorded.
 # Overflow: drop-newest with a warning — capacity covers any real per-frame
 # event burst several times over.
 const _REPLAY_EVENT_QUEUE_CAP: int = 32
@@ -1372,7 +1365,7 @@ func _spawn_world() -> void:
 				cfg.get("rule_set", GameRules.DEFAULT_RULE_SET),
 				cfg.get("team_size", GameRules.DEFAULT_TEAM_SIZE))
 		var cfg_id: String = cfg.get("game_id", "")
-		if cfg_id.is_empty() or _is_valid_game_id(cfg_id):
+		if cfg_id.is_empty() or ReplayFileRecorder.is_valid_game_id(cfg_id):
 			_game_id = cfg_id
 		else:
 			push_warning("rejected game_id from config: %s" % cfg_id)
@@ -1654,17 +1647,10 @@ func _wire_subsystems() -> void:
 		var ts: float = NetworkManager.local_time() if NetworkManager.is_host \
 				else NetworkManager.estimated_host_time()
 		_recorder.record_frame(goal_frame, ts)
-		# Also enqueue to the .mreplay file so the puck-in-net moment
-		# lands in the recording deterministically. Without this, the
-		# first dead-puck broadcast (the only frame `_should_record_to_file`
-		# admits while movement-locked) is what represents "goal" in the
-		# file — a tick after the actual entry. Update
-		# `_last_recorded_phase` so the natural broadcast pipeline doesn't
-		# duplicate this frame on its next tick.
-		if _replay_file_writer != null and _should_record_to_file():
-			_replay_file_writer.enqueue_frame(ts, goal_frame)
-			if _state_machine != null:
-				_last_recorded_phase = _state_machine.current_phase
+		# Also enqueue to the .mreplay file so the puck-in-net moment lands
+		# in the recording deterministically — see ReplayFileRecorder
+		# .force_frame for what the throttled path would capture instead.
+		_replay_file.force_frame(ts, goal_frame, _live_phase())
 	_phase_coord.setup(_state_machine, _registry, teams,
 			get_puck, _get_goalie_controllers, _shot_tracker, _drop_puck_if_carried,
 			_recorder, _goal_replay_driver, _codec,
@@ -1921,7 +1907,7 @@ func _record_replay_audio_event(kind: String, position: Vector3, speed: float,
 	# Nothing consumes events (no recorder, no file, no clients to mirror to):
 	# skip queueing entirely. Ordered so a live match (recorder always present)
 	# short-circuits before the peers query.
-	if _recorder == null and _replay_file_writer == null \
+	if _recorder == null and not _replay_file.is_open() \
 			and NetworkManager.connected_peer_ids().is_empty():
 		return
 	if _replay_evt_count >= _REPLAY_EVENT_QUEUE_CAP:
@@ -1932,7 +1918,8 @@ func _record_replay_audio_event(kind: String, position: Vector3, speed: float,
 	_replay_evt_pos[i] = position
 	_replay_evt_speed[i] = speed
 	_replay_evt_ts[i] = NetworkManager.local_time()
-	_replay_evt_to_file[i] = 1 if _replay_file_writer != null and _should_record_to_file() else 0
+	_replay_evt_to_file[i] = 1 if _replay_file.is_open() \
+			and _replay_file.should_record(_live_phase()) else 0
 	_replay_evt_extra[i] = extra
 	_replay_evt_count += 1
 
@@ -1959,8 +1946,8 @@ func _drain_replay_event_queue() -> void:
 		var ts: float = _replay_evt_ts[i]
 		if _recorder != null:
 			_recorder.record_event(ts, event)
-		if _replay_evt_to_file[i] == 1 and _replay_file_writer != null:
-			_replay_file_writer.enqueue_event(ts, JSON.stringify(event).to_utf8_buffer())
+		if _replay_evt_to_file[i] == 1:
+			_replay_file.record_event(ts, JSON.stringify(event).to_utf8_buffer())
 		# Mirror the event onto every client / spectator so their recorders see
 		# the same timeline. Required for the goal-replay cinematic to use the
 		# same shot anchor + adaptive clip start everywhere.
@@ -1983,8 +1970,8 @@ func _on_replay_event_received(host_ts: float, event: Dictionary) -> void:
 	# Persist into the client's own .mreplay file too — the writer isn't
 	# host-gated, so a client recording needs these events as well as the frames
 	# or it plays back silent.
-	if _replay_file_writer != null and _should_record_to_file():
-		_replay_file_writer.enqueue_event(host_ts, JSON.stringify(event).to_utf8_buffer())
+	if _replay_file.should_record(_live_phase()):
+		_replay_file.record_event(host_ts, JSON.stringify(event).to_utf8_buffer())
 
 
 # Client / spectator side: the host mirrors its replay-mode flag here when it
@@ -2533,37 +2520,20 @@ func _total_skip_voters() -> int:
 
 
 # ── Replay file recording ────────────────────────────────────────────────────
-# Opened once per game on every peer, after the registry has been populated
-# from lobby assignments / sync_existing_players. Idempotent — safe to call
-# repeatedly from both the host and client setup paths; the second call
-# short-circuits.
+# ReplayFileRecorder owns the writer and the throttle; what stays here is the
+# file's CONTENT — the header, the footer and the event payloads, all built from
+# the roster, the state machine and the shot log this file owns.
 func _open_replay_file_writer() -> void:
-	if _replay_file_writer != null:
-		return
-	if _game_id.is_empty():
-		return  # free play / tutorial / drill — see _game_id doc
-	if not PlayerPrefs.replay_recording_enabled:
-		return
-	# Purge oldest first so the new file is never the one we delete next game.
-	# keep_count - 1 because we're about to add a new file.
-	ReplayFileIndex.purge_oldest(ReplayFileIndex.REPLAY_DIR,
-			maxi(PlayerPrefs.replay_keep_count - 1, 0))
-	var path: String = ReplayFileIndex.REPLAY_DIR.path_join(_game_id + ReplayFileIndex.REPLAY_EXT)
-	var writer := ReplayFileWriter.new()
-	if not writer.open(path, _build_replay_header()):
-		return
-	_replay_file_writer = writer
-	_last_file_frame_ts = -INF
+	_replay_file.open(_game_id, _build_replay_header())
 
 
 func _close_replay_file_writer() -> void:
-	if _replay_file_writer == null:
+	if not _replay_file.is_open():
 		return
 	# Queued-but-undrained events (final horn, OS window close) must reach the
 	# writer before its worker drains for the last time.
 	_drain_replay_event_queue()
-	_replay_file_writer.close_async(_build_replay_footer())
-	_replay_file_writer = null
+	_replay_file.close(_build_replay_footer())
 
 
 # Rematch path: close the current .mreplay (writes its footer with the
@@ -2580,59 +2550,19 @@ func _close_replay_file_writer() -> void:
 func _rollover_replay_file_to(new_game_id: String) -> void:
 	if new_game_id.is_empty():
 		return
-	if not _is_valid_game_id(new_game_id):
+	if not ReplayFileRecorder.is_valid_game_id(new_game_id):
 		push_warning("rejected new_game_id: %s" % new_game_id)
 		return
 	_close_replay_file_writer()
-	_last_recorded_phase = -1
+	_replay_file.reset_phase()
 	_game_id = new_game_id
 	_open_replay_file_writer()
 
 
-# Game IDs are UUIDs minted by PlayerPrefs.generate_uuid (hex + dashes). This
-# guard runs on the path concatenation surface so a malicious host can't ship
-# `../etc/passwd` via notify_game_reset and have a client write outside the
-# replays folder. Belt-and-braces: the only legitimate source is already
-# UUIDs, but the wire format permits arbitrary strings.
-const _MAX_GAME_ID_LEN: int = 64
-static func _is_valid_game_id(s: String) -> bool:
-	if s.is_empty() or s.length() > _MAX_GAME_ID_LEN:
-		return false
-	for i: int in s.length():
-		var c: String = s.substr(i, 1)
-		if not (c >= "a" and c <= "z") \
-				and not (c >= "A" and c <= "Z") \
-				and not (c >= "0" and c <= "9") \
-				and c != "-" and c != "_":
-			return false
-	return true
-
-
-# One player as the .mreplay carries them — shared by the file header's
-# initial roster and the mid-game `player_joined` event so the two descriptions
-# of a skater can't drift apart (the viewer spawns from either through the same
-# path). Callers add the field their own record needs on top ("is_local" /
-# "kind"). Static: pure PlayerRecord → Dictionary, no GameManager state.
+# The .mreplay's per-player record. Re-exported from ReplayFileRecorder so the
+# viewer-side decode and its test keep one name to point at.
 static func replay_roster_entry(record: PlayerRecord) -> Dictionary:
-	return {
-		"peer_id": record.peer_id,
-		"player_name": record.player_name,
-		"jersey_number": record.jersey_number,
-		"team_id": record.team.team_id if record.team != null else 0,
-		"team_slot": record.team_slot,
-		"is_left_handed": record.is_left_handed,
-		# Build (height / weight / gear) so the viewer can re-apply the
-		# player's attributes — otherwise replay skaters render at the
-		# neutral frame and their re-derived lean/reach no longer matches
-		# the host's lean-compensated blade positions (stick off the ice).
-		"build": record.attributes.to_dict() if record.attributes != null else {},
-		# Cosmetics, packed exactly as the join / spawn wire carries them, so
-		# the viewer dresses each skater in the look they actually played in
-		# rather than the stock kit.
-		"tape_code": record.tape_code,
-		"skin_tone": record.skin_tone,
-		"gear_style_code": record.gear_style_code,
-	}
+	return ReplayFileRecorder.roster_entry(record)
 
 
 # Roster captured at game-start; mid-game joiners aren't in here but the viewer
@@ -2719,7 +2649,7 @@ func _build_replay_footer() -> Dictionary:
 # set is small enough that the byte overhead doesn't matter.
 func _on_goal_for_replay_event(scoring_team: Team, scorer: String,
 		assist1: String, assist2: String) -> void:
-	if _replay_file_writer == null or _state_machine == null:
+	if not _replay_file.is_open() or _state_machine == null:
 		return
 	var ts: float = NetworkManager.local_time() if NetworkManager.is_host \
 			else NetworkManager.estimated_host_time()
@@ -2733,7 +2663,7 @@ func _on_goal_for_replay_event(scoring_team: Team, scorer: String,
 		"assist1": assist1,
 		"assist2": assist2,
 	}).to_utf8_buffer()
-	_replay_file_writer.enqueue_event(ts, payload)
+	_replay_file.record_event(ts, payload)
 
 
 # Record a period-end marker for the .mreplay viewer's timeline. END_OF_PERIOD
@@ -2743,7 +2673,7 @@ func _on_goal_for_replay_event(scoring_team: Team, scorer: String,
 func _on_phase_changed_for_replay_event(new_phase: GamePhase.Phase) -> void:
 	if new_phase != GamePhase.Phase.END_OF_PERIOD:
 		return
-	if _replay_file_writer == null or _state_machine == null:
+	if not _replay_file.is_open() or _state_machine == null:
 		return
 	var ts: float = NetworkManager.local_time() if NetworkManager.is_host \
 			else NetworkManager.estimated_host_time()
@@ -2751,29 +2681,28 @@ func _on_phase_changed_for_replay_event(new_phase: GamePhase.Phase) -> void:
 		"kind": "period_end",
 		"period": _state_machine.current_period,
 	}).to_utf8_buffer()
-	_replay_file_writer.enqueue_event(ts, payload)
+	_replay_file.record_event(ts, payload)
 
 
 # Roster events for the .mreplay viewer. Header captures the initial roster;
 # these fire only for mid-game changes (joins, demotes, promotes,
 # disconnects) so the viewer can spawn / despawn actors instead of leaving
-# them stuck or invisible. _replay_file_writer is null during the initial
-# registry-population pass (writer opens AFTER registry stabilizes), so the
-# `if _replay_file_writer == null: return` guard naturally suppresses the
-# initial spawns.
+# them stuck or invisible. The recorder is closed during the initial
+# registry-population pass (it opens AFTER the registry stabilizes), so the
+# `is_open()` guard naturally suppresses the initial spawns.
 func _on_replay_player_joined_event(record: PlayerRecord) -> void:
-	if _replay_file_writer == null:
+	if not _replay_file.is_open():
 		return
 	var ts: float = NetworkManager.local_time() if NetworkManager.is_host \
 			else NetworkManager.estimated_host_time()
 	var entry: Dictionary = replay_roster_entry(record)
 	entry["kind"] = "player_joined"
 	var payload: PackedByteArray = JSON.stringify(entry).to_utf8_buffer()
-	_replay_file_writer.enqueue_event(ts, payload)
+	_replay_file.record_event(ts, payload)
 
 
 func _on_replay_player_left_event(record: PlayerRecord) -> void:
-	if _replay_file_writer == null:
+	if not _replay_file.is_open():
 		return
 	var ts: float = NetworkManager.local_time() if NetworkManager.is_host \
 			else NetworkManager.estimated_host_time()
@@ -2781,7 +2710,7 @@ func _on_replay_player_left_event(record: PlayerRecord) -> void:
 		"kind": "player_left",
 		"peer_id": record.peer_id,
 	}).to_utf8_buffer()
-	_replay_file_writer.enqueue_event(ts, payload)
+	_replay_file.record_event(ts, payload)
 
 
 # Common path shared by every host-side player-spawn site:
@@ -4552,7 +4481,7 @@ func on_scene_exit() -> void:
 	# blocks until the worker exits, so we must call this while the registry
 	# (used to build the footer) is still intact.
 	_close_replay_file_writer()
-	_last_recorded_phase = -1
+	_replay_file.reset_phase()
 	# Session-scoped — a scene exit mid goal-replay must not carry a stale
 	# "in replay" flag into the next session (a fresh driver is created there, so
 	# a leftover true would let a skip vote fire before any replay is running).
@@ -5276,61 +5205,24 @@ func get_world_state() -> PackedByteArray:
 	if _recorder != null and not NetworkManager.is_replay_mode() \
 			and not _is_celebration_phase():
 		_recorder.record_frame(state, ts)
-	# File writer throttles to REPLAY_FILE_RATE and skips dead-puck phase ticks
-	# past the first one — see _record_world_state_to_file / _should_record_to_file.
-	# The first frame on each phase transition captures the puck-in-net moment /
-	# faceoff snap / etc.
+	# The file recorder throttles to REPLAY_FILE_RATE and skips dead-puck phase
+	# ticks past the first one (see ReplayFileRecorder.should_record).
 	_record_world_state_to_file(ts, state)
 	return state
 
 
-# Tee a broadcast world-state frame into the .mreplay file, throttled to
-# REPLAY_FILE_RATE. The viewer interpolates between snapshots, so the steady
-# PLAYING stream is decimated from STATE_RATE (120 Hz) to ~30 Hz — a ~4x file-
-# size cut at no perceptible playback cost. Phase-transition frames bypass the
-# throttle (the first frame of a new phase is a keyframe — faceoff snap, the
-# resume after a movement-locked gap — and must never be dropped). The goal
-# moment is recorded full-rate via force_record, which calls enqueue_frame
-# directly rather than this helper. Advances _last_recorded_phase so
-# _should_record_to_file's "first frame of a locked phase only" gate keeps working.
+# Tee a broadcast world-state frame into the .mreplay file. The viewer
+# interpolates between snapshots, so the steady PLAYING stream is decimated from
+# STATE_RATE (120 Hz) to ~30 Hz — a ~4x file-size cut at no perceptible playback
+# cost. The throttle and the phase rules are the recorder's.
 func _record_world_state_to_file(host_ts: float, data: PackedByteArray) -> void:
-	if _replay_file_writer == null or not _should_record_to_file():
-		return
-	var phase_did_change: bool = _state_machine != null \
-			and _state_machine.current_phase != _last_recorded_phase
-	if not phase_did_change \
-			and host_ts - _last_file_frame_ts < 1.0 / float(Constants.REPLAY_FILE_RATE):
-		return
-	_replay_file_writer.enqueue_frame(host_ts, data)
-	_last_file_frame_ts = host_ts
-	if _state_machine != null:
-		_last_recorded_phase = _state_machine.current_phase
+	_replay_file.record_frame(host_ts, data, _live_phase())
 
 
-func _should_record_to_file() -> bool:
-	if NetworkManager.is_replay_mode():
-		return false
-	if _state_machine == null:
-		return true
-	var phase: int = _state_machine.current_phase
-	# FACEOFF_PREP is movement-locked for INPUT, but the skaters actively skate in
-	# to the dot over the "2 → 1 → DROP" countdown (PhaseCoordinator.begin_approach).
-	# Record it at the normal throttled rate so the replay plays the walk-up —
-	# capturing only the first (pre-approach) frame made the viewer teleport
-	# straight from there to the drop. The crossing bracket into FACEOFF_PREP is
-	# still a clean cut in FileReplayDriver (_is_faceoff_reset_bracket), so the
-	# puck's reset-to-dot doesn't smear; the intra-prep brackets interpolate.
-	if phase == GamePhase.Phase.FACEOFF_PREP:
-		return true
-	if PhaseRules.is_movement_locked(phase):
-		# Capture only the first frame of each movement-locked phase. Goal:
-		# the puck-in-net moment on GOAL_SCORED entry — without this, the
-		# last recorded frame before the gap is the previous PLAYING tick,
-		# which usually shows the puck still approaching the net rather
-		# than inside it. Subsequent ticks at 5 Hz are duplicate static
-		# state and add nothing.
-		return phase != _last_recorded_phase
-	return true
+# The phase the recorder judges a frame by, or -1 before the state machine
+# exists (record everything).
+func _live_phase() -> int:
+	return _state_machine.current_phase if _state_machine != null else -1
 
 
 # ── Public API consumed by controllers, HUD, camera, scoreboard ──────────────

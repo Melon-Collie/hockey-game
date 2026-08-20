@@ -164,20 +164,20 @@ static func faceoff_facing(team_id: int) -> Vector2:
 	return Vector2.ZERO
 
 
-# Bench-door start point for the pre-game intro skate-in. Both benches are on
-# the +X boards; team 0 (the +Z-half team) uses the +Z bench, team 1 the -Z
-# bench, with a per-slot stagger along the bench so the three skaters don't
-# stack. Y matches FACEOFF_SPAWN_HEIGHT so the intro path stays level with the
-# dot placement. Unknown team_id (-1, tests) falls back to the +Z bench.
+# Bench start point for the pre-game intro skate-in. Both benches are on the
+# +X boards; team 0 (the +Z-half team) uses the +Z bench, team 1 the -Z bench,
+# with a per-slot stagger along the bench so the skaters don't stack. Y matches
+# FACEOFF_SPAWN_HEIGHT so the intro path stays level with the dot placement.
+# Unknown team_id (-1, tests) falls back to the +Z bench.
 static func bench_start_position(team_id: int, team_slot: int) -> Vector3:
 	var side: float = -1.0 if team_id == 1 else 1.0
-	var center_z: float = side * GameRules.BENCH_DOOR_CENTER_Z
+	var center_z: float = side * GameRules.BENCH_CENTER_Z
 	var dz: float = 0.0
-	if team_slot >= 0 and team_slot < GameRules.BENCH_DOOR_SLOT_DZ.size():
+	if team_slot >= 0 and team_slot < GameRules.BENCH_START_SLOT_DZ.size():
 		# Mirror the stagger with the team side so both benches fan toward
 		# center ice rather than toward the end boards.
-		dz = side * GameRules.BENCH_DOOR_SLOT_DZ[team_slot]
-	return Vector3(GameRules.BENCH_DOOR_X, GameRules.FACEOFF_SPAWN_HEIGHT, center_z + dz)
+		dz = side * GameRules.BENCH_START_SLOT_DZ[team_slot]
+	return Vector3(GameRules.BENCH_START_X, GameRules.FACEOFF_SPAWN_HEIGHT, center_z + dz)
 
 
 # Post-goal skate-in start: the final faceoff slot pushed radially OUTWARD from

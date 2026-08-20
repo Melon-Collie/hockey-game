@@ -21,6 +21,8 @@ Deep detail lives next to the code it describes and loads on demand.
 | Player attributes (body dials, gear slots, routing) | `Scripts/domain/state/CLAUDE.md` |
 | Launch modes, session lifecycle, claim resolvers, backend | `Scripts/game/CLAUDE.md` |
 | UI conventions (locale seam, menu style, popups) | `Scripts/ui/CLAUDE.md` |
+| Skater collaborators (rig seam, render clock, why the API is wide) | `Scripts/actors/CLAUDE.md` |
+| Arena bowl collaborators (spec seam, tiers, build order) | `Scripts/actors/arena/CLAUDE.md` |
 | Test suite conventions | `tests/CLAUDE.md` |
 | Native C++ kernels (GDExtension build, parity gates) | `native/README.md` |
 | Class boundaries, subsystem decisions, invariants | `ARCHITECTURE.md` |
@@ -252,6 +254,8 @@ that file can't tell you:
 | New bot AI evaluator | `domain/ai/action_scoring.gd` (shot, pass, dump, and the shared clocks) or `domain/ai/carry_space.gd` (the carrier's room to operate: evasion, controlled space, deke, brake) + GUT calibration test — build it as a grounded model (see `Scripts/domain/ai/CLAUDE.md`) |
 | Port a hot kernel to C++ | `native/src/` + seeded parity fuzz test + micro-bench row; GDScript original stays as the reference (see `native/README.md`) |
 | New "body dial X scales Y" rule | `PlayerAttributes` (see `Scripts/domain/state/CLAUDE.md`) |
+| New skater cosmetic rig behavior | The rig that owns it under `Scripts/actors/` (`SkaterLegRig` / `SkaterArmRig` / `SkaterStickRig`); it reads `Skater`'s tuning and markers and writes only its own state, and `Skater` delegates rather than reaching in. `test_skater_collaborator_seams.gd` holds the seam (see `Scripts/actors/CLAUDE.md`) |
+| New arena bowl geometry | A collaborator under `Scripts/actors/arena/`, constructed from the `ArenaBowlSpec` snapshot and never writing it; `ArenaStands` calls it from `_rebuild`, where the call order IS the child order. `test_arena_collaborator_seams.gd` holds the tiers and the seam (see `Scripts/actors/arena/CLAUDE.md`) |
 | New HUD panel | Class in `Scripts/ui/hud/` owning its widgets and its state; `HUD` holds a reference, calls methods and never writes its fields — upward flow is a signal. `test_hud_panel_wiring.gd` holds both (see `Scripts/ui/CLAUDE.md`) |
 | New user-facing UI string | `KEY,en,es` row in `locale/translations.csv`, then `tr("KEY")` at the display seam (see `Scripts/ui/CLAUDE.md`) |
 

@@ -428,7 +428,7 @@ func _pose_stick(attrs: PlayerAttributes, tape: StickTapeConfig) -> void:
 			if tape.has_blade_tape() else null
 
 	var stick_len: float = GameRules.DEFAULT_STICK_LENGTH_M * attrs.stick_len_mult() \
-			+ Skater.SHAFT_BUTT_EXTEND_M
+			+ SkaterStickRig.SHAFT_BUTT_EXTEND_M
 	var lean: float = deg_to_rad(_SHAFT_LEAN_DEG)
 	var axis := Vector3(0.0, sin(lean), cos(lean))
 	_shaft.transform = Transform3D(
