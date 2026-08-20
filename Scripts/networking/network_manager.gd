@@ -1118,6 +1118,7 @@ func _broadcast_state() -> void:
 	# recorder/file-writer copies taken inside get_world_state — replay frames
 	# stay event-free and decode_for_replay never sees the block.
 	_event_log.append_block(state, local_time())
+	NetworkTelemetry.record_world_state_sent()
 	for peer_id in connected_peer_ids():
 		receive_world_state.rpc_id(peer_id, state)
 		NetworkTelemetry.record_bytes_sent(state.size())

@@ -51,6 +51,7 @@ var _recent_samples: Array[Dictionary] = []
 
 # ── Window counters (reset each second) ──────────────────────────────────────
 var _world_state_count: int = 0
+var _world_state_sent_count: int = 0  # once per broadcast, not per recipient
 var _input_count: int = 0
 var _reconcile_count: int = 0
 var _reconcile_on_replayed_count: int = 0  # subset: matched a replay-re-recorded entry
@@ -179,6 +180,11 @@ var _window_timer: float = 0.0
 
 # ── Published metrics (read by overlay) ──────────────────────────────────────
 var world_state_hz: float = 0.0          # world-state packets RECEIVED per second (clients; ~STATE_RATE)
+# World-state broadcasts SENT per second (host; ~STATE_RATE). Separate from the
+# receive counter because they are separate measurements on separate machines:
+# the host never receives its own state, and a client never sends one, so each
+# side folds a structural 0 on the other's field.
+var world_state_sent_hz: float = 0.0
 var input_hz: float = 0.0                # ~120/s — input batch send rate (Constants.INPUT_RATE)
 var reconcile_per_sec: float = 0.0
 # Subset of reconcile_per_sec whose matched prediction was replay-re-recorded.
@@ -263,6 +269,11 @@ const BCAST_INTERVAL_WINDOW: int = 120  # 2 s at the 60 Hz broadcast rate
 # ── Static call sites (no-op when not in a game session) ─────────────────────
 static func record_world_state() -> void:
 	if instance: instance._world_state_count += 1
+
+# Called from NetworkManager._broadcast_state past its offline/empty-state
+# early-returns, so this counts snapshots that actually reached the wire.
+static func record_world_state_sent() -> void:
+	if instance: instance._world_state_sent_count += 1
 
 static func record_input_sent() -> void:
 	if instance: instance._input_count += 1
@@ -584,6 +595,7 @@ func tick(delta: float) -> void:
 	if _window_timer < 1.0:
 		return
 	world_state_hz = _world_state_count / _window_timer
+	world_state_sent_hz = _world_state_sent_count / _window_timer
 	input_hz = _input_count / _window_timer
 	reconcile_per_sec = _reconcile_count / _window_timer
 	recon_replayed_entry_per_sec = _reconcile_on_replayed_count / _window_timer
@@ -653,6 +665,7 @@ func tick(delta: float) -> void:
 		broadcast_interval_p95_ms = 0.0
 	_fold_session_sample()
 	_world_state_count = 0
+	_world_state_sent_count = 0
 	_input_count = 0
 	_reconcile_count = 0
 	_reconcile_on_replayed_count = 0
@@ -884,6 +897,11 @@ const STARVATION_WARN_PER_SEC: float = 0.5
 const STARVATION_BAD_PER_SEC: float = 5.0
 const PUCK_SNAP_WARN_PER_SEC: float = 2.0
 const PUCK_SNAP_BAD_PER_SEC: float = 10.0
+# The one pair expressed as MULTIPLES of the live send interval
+# (NetworkManager.state_delta) rather than absolute ms: the cadence is a runtime
+# knob, so an absolute band goes stale the next time the rate moves.
+const BROADCAST_SAG_WARN_MULT: float = 1.4
+const BROADCAST_SAG_BAD_MULT: float = 2.0
 # The one tripwire that deliberately fires at WARN rather than BAD: a hard snap
 # on a moving puck is rare enough that the trace is worth capturing before the
 # rate goes red. Counted per window rather than per second — at the one-second

@@ -591,7 +591,8 @@ func _render_host(t: NetworkTelemetry) -> void:
 			var ping := NetworkManager.get_peer_ping_ms(pid)
 			_context(_band(float(ping), 80.0, 150.0), NetworkManager.get_peer_name(pid),
 				"%d ms" % ping, "this client's round-trip to you — distance, not a bug (doesn't flag the header)")
-	_info("Snapshots out", "%.0f/s" % t.world_state_hz, "world states broadcast per tick (constant 120/s in every phase)")
+	_info("Snapshots out", "%.0f/s (target %.0f)" % [t.world_state_sent_hz, 1.0 / NetworkManager.state_delta],
+		"world states broadcast per second, counted once per broadcast rather than per recipient (Bandwidth below is the per-peer total); constant at the send rate in every phase")
 	_sim_line(t)
 
 	if not peers.is_empty():
@@ -608,11 +609,13 @@ func _render_host(t: NetworkTelemetry) -> void:
 
 	_section("Host frame health")
 	_frame_health(t)
-	# Judge the gap against the live target interval (state_delta) rather than
-	# a hardcoded 120Hz, so a future runtime rate change (congestion response)
-	# doesn't read red by default.
+	# Judge the gap against the live target interval (state_delta) rather than a
+	# hardcoded ms figure, so a runtime rate change (set_broadcast_rate, the
+	# congestion-response hook) doesn't read red by default.
 	var bcast_target_ms := NetworkManager.state_delta * 1000.0
-	_metric(_band(t.broadcast_interval_p95_ms, bcast_target_ms * 1.4, bcast_target_ms * 2.0),
+	_metric(_band(t.broadcast_interval_p95_ms,
+			bcast_target_ms * NetworkTelemetry.BROADCAST_SAG_WARN_MULT,
+			bcast_target_ms * NetworkTelemetry.BROADCAST_SAG_BAD_MULT),
 		"Broadcast gap", "p95 %.1f ms (target ~%.0f)" % [t.broadcast_interval_p95_ms, bcast_target_ms],
 		"gap between snapshots vs the send-rate target; sustained high = host stalling or send path backed up")
 

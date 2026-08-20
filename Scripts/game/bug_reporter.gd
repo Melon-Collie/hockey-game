@@ -81,7 +81,10 @@ func _telemetry_snapshot(telemetry: NetworkTelemetry) -> Dictionary:
 	var snapshot: Dictionary = {"build_id": SteamManager.get_app_build_id()}
 	if telemetry == null:
 		return snapshot
+	# Both directions: the receive counter folds 0 on a host and the send counter
+	# folds 0 on a client, so a report from either side carries one real figure.
 	snapshot["world_state_hz"] = telemetry.world_state_hz
+	snapshot["world_state_sent_hz"] = telemetry.world_state_sent_hz
 	snapshot["input_hz"] = telemetry.input_hz
 	snapshot["reconcile_per_sec"] = telemetry.reconcile_per_sec
 	snapshot["reconcile_magnitude_avg"] = telemetry.reconcile_magnitude_avg

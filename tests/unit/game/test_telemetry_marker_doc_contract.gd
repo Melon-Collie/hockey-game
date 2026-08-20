@@ -15,6 +15,11 @@ extends GutTest
 # trusting the sentence. If the doc is reworded such that a threshold can no
 # longer be found, that fails too — an unreadable spec and a wrong one are the
 # same problem for the person holding the summary.
+#
+# The healthy-band COLUMN is held the same way wherever a band is expressed as an
+# arithmetic relation to a named constant. That column is the other place these
+# numbers rot, and it rots more quietly: a tripwire that never fires is noticed,
+# a band that is always red is learned around.
 
 const _DOC: String = "res://docs/telemetry_dictionary.md"
 
@@ -64,6 +69,48 @@ func test_documented_puck_snap_tripwire_matches_its_count() -> void:
 			NetworkTelemetry.PUCK_SNAP_WARN_PER_SEC, 1e-6,
 			"the puck-snap marker is documented as the overlay's WARN band read as a " +
 			"per-window count — if they diverge, say which one the doc means")
+
+
+# The whole `| `key` | … |` table row, so one band's several numbers come out of
+# one read. (?m) so ^ and $ anchor to lines rather than the whole document.
+func _band_row(key: String) -> String:
+	var re := RegEx.create_from_string("(?m)^\\|\\s*`" + key + "`\\s*\\|.*$")
+	var m: RegExMatch = re.search(_doc_text())
+	assert_true(m != null,
+			"telemetry_dictionary.md no longer has a table row for `%s`" % key)
+	return "" if m == null else m.get_string(0)
+
+
+func _number_in(row: String, pattern: String, key: String, what: String) -> float:
+	var re := RegEx.create_from_string(pattern)
+	var m: RegExMatch = re.search(row)
+	assert_true(m != null,
+			"telemetry_dictionary.md's `%s` band no longer states %s in a form " % [key, what] +
+			"this test can read — an unreadable band and a wrong one are the same " +
+			"problem for the person holding the summary")
+	return NAN if m == null else float(m.get_string(1))
+
+
+# The healthy-band COLUMN, which the tripwire assertions above do not reach — and
+# where the 120-vs-60 error lived. The broadcast cadence is COUNTED in physics
+# ticks but fires every second one, so a band stated as the tick interval reads
+# every healthy host as sagging by 2×, permanently.
+func test_documented_broadcast_band_tracks_the_broadcast_rate() -> void:
+	const KEY: String = "broadcast_interval_p95_ms"
+	var row: String = _band_row(KEY)
+	# The relation AND its arithmetic result are both stated, because both are
+	# read by a human; the relation is what survives a rate change.
+	assert_true(row.contains("1000 / STATE_RATE"),
+			"the band must name the constant it derives from rather than only a " +
+			"number, or the next rate change strands it: %s" % row)
+	assert_almost_eq(_number_in(row, "=\\s*([0-9]+(?:\\.[0-9]+)?)\\s*ms", KEY, "a target interval"),
+			1000.0 / float(Constants.STATE_RATE), 0.05,
+			"telemetry_dictionary.md's broadcast target disagrees with " +
+			"1000 / Constants.STATE_RATE (%d Hz)" % Constants.STATE_RATE)
+	assert_almost_eq(_number_in(row, ">\\s*([0-9]+(?:\\.[0-9]+)?)×\\s*target", KEY, "a sag multiplier"),
+			NetworkTelemetry.BROADCAST_SAG_WARN_MULT, 1e-6,
+			"telemetry_dictionary.md's sag threshold disagrees with the band the " +
+			"F3 overlay colours the row with")
 
 
 func test_documented_freeze_tripwires_match() -> void:
