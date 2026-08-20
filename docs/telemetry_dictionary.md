@@ -65,6 +65,7 @@ below.
 | Key | Unit | Healthy | Meaning |
 |---|---|---|---|
 | `reconcile_per_sec` | /s | <1 | How often the server snapped the local skater's prediction. Sustained higher = real non-determinism in input replay, or a divergence channel the threshold check can't see. |
+| `recon_replayed_per_sec` | /s | <1 | Subset of `reconcile_per_sec` whose matched prediction was a replay-**re-recorded** entry rather than a live capture. The reconcile-storm attribution split: a high share means corrections are echoing through the replay's approximations (no goalie-body sliding, snapshot-approximated body checks — replay-fidelity work); a low share during storms means genuine fresh live-prediction divergence (the body-check/contact Known Issue). |
 | `reconcile_mag_m` | m | <0.05 | Average snap distance. Large + frequent = corrections the player feels as rubber-banding. |
 | `reconcile_match_pct` | % | ~100 | Share of reconcile lookups that found the client's own prediction for the server's ack timestamp. <100% = the client reconciles against *lag*, not real error — a miss falls back to the (prediction-lead-ahead) live position and trips a spurious position snap, so a low match rate is the dominant residual-churn driver. **Read `_avg` and `_min` together**: `_min` (one post-faceoff window can own it) flags transients; a low `_avg` means the shortfall is *sustained*. The `reconcile_miss_*` totals below say why. |
 | `recon_pos_per_sec` / `recon_vel_per_sec` / `recon_ubody_per_sec` | /s | ~0 | Which channel tripped the snap: position vs velocity vs upper-body pose. Isolates *what* is diverging. |
@@ -126,6 +127,7 @@ grab-then-lose bug. A miss fraction that stays high after v28 points at the
 | `poke_claim_misses_total` | Of those, how many failed the swept `check_poke` against the rewound carried puck. Read as `poke_claim_misses / poke_claims`. |
 | `stick_lift_claims_total` | Client stick-lift claims that reached the rewound geometry test (blade hooked under an opposing carrier's shaft). The denominator for lifts. |
 | `stick_lift_claim_misses_total` | Of those, how many failed `check_blade_under_stick` against the rewound shaft. Read as `stick_lift_claim_misses / stick_lift_claims`. |
+| `claim_stamp_rejects_total` | Claims (any of the four types) dropped at the RPC boundary by the stamp-plausibility gate (`LagCompRewind.is_claim_stamp_plausible`) — before any resolver ran, so they appear in no other claim counter above. Expect 0. Sustained non-zero = legit claims silently eaten because an RTT spike outran the host's ping EMA (felt as "reached the puck, nothing happened"), or a client shopping timestamps. |
 
 ### Why a claim missed — read these before trusting a miss rate
 
@@ -149,10 +151,6 @@ across the carried input lead, so its error grows with lead depth. Sessions wher
 `input_lead_extra_ms_avg` sits at the `MAX_LEAD_EXTRA_S` ceiling reconstruct
 across ~3× the designed span and will inflate divergence, clamps, and therefore
 misses. Check the lead before comparing miss rates across sessions.
-| `host_input_queue_depth` (max/avg) | **Host only** (clients fold 0; the separate `input_queue_depth` is the client's echo). Deepest pending remote-input queue the host saw in the window. **Read it WITH `input_drains_per_sec` — this is the discriminator for drain-driven reconcile churn:** drains firing while depth is **deep** (≫2) means the drain is eating a cushion the lead servo deliberately built (raise the drain trigger); drains while depth is **shallow** (0–1) means inputs genuinely arrive late and the lead/clock is the problem. Healthy depth ≈ the stamp lead in ticks. |
-| `input_lead_extra_ms` (max/avg) | Client only. The adaptive input-lead servo's live EXTRA above the static `INPUT_LEAD_SEC` base (bounded 0..50 ms). Healthy: settles low and stable. Pinned at ~50 = runaway over-lead (a hidden input-latency tax on this client's actions); ~0 while the host row shows rising `input_drains_per_sec` = under-leading (the cushion isn't covering real jitter). Added post-C1 because the honest capture labels changed what the servo measures as pop-overdue. |
-| `recon_replayed_per_sec` (max/avg) | Client only. Subset of `reconcile_per_sec` whose matched prediction was a replay-**re-recorded** entry rather than a live capture. The reconcile-storm attribution split: a high share means corrections are echoing through the replay's approximations (no goalie-body sliding, snapshot-approximated body checks — replay-fidelity work); a low share during storms means genuine fresh live-prediction divergence (the body-check/contact Known Issue). |
-| `claim_stamp_rejects_total` | Claims (any of the four types) dropped at the RPC boundary by the stamp-plausibility gate (`LagCompRewind.is_claim_stamp_plausible`) — before any resolver ran, so they appear in no other claim counter. Expect 0. Sustained non-zero = legit claims silently eaten because an RTT spike outran the host's ping EMA (felt as "reached the puck, nothing happened"), or a client shopping timestamps. |
 
 ## Optimistic-pickup outcomes (client rows only)
 
@@ -169,6 +167,19 @@ actually sees attach and, when it rolls back, feels as **"grab, then lose it."**
 | `provisional_confirmed_total` | Pins the host granted (promoted seamlessly to a real carry). |
 | `provisional_stolen_total` | Pins rolled back because a *different* carrier legitimately won the puck — a lost 50/50, **not** the felt bug. |
 
+## Input pipeline, client side (client rows only)
+
+The host owns the input queue, so both of these describe host-side behaviour —
+but they are folded on the CLIENT and appear on client rows. The host's own
+half (`host_input_queue_depth`, `input_lead_ms`, `input_starvations_per_sec`)
+is in the section below, and the pair is what makes a lead problem
+diagnosable: a queue is only "too deep" relative to the lead that filled it.
+
+| Key | Unit | Healthy | Meaning |
+|---|---|---|---|
+| `input_queue_depth` | frames | ≈ the stamp lead in ticks: `(INPUT_LEAD_SEC + input_lead_extra) × PHYSICS_TICK` — ~3 with the servo settled, ~9–10 at its ceiling | The host's measurement of **this** client's pending-input queue, put in the client's own skater block on the wire and folded here as a median. `NetworkManager.on_queue_depth_received` early-returns on the host, so **host rows fold 0** — the host's view of the same quantity is `host_input_queue_depth` below. 0 = starving. The band tracks the lead rather than a fixed depth: read it with `input_lead_extra_ms`, because a servo at its ceiling triples the designed depth with nothing wrong. |
+| `input_lead_extra_ms` (max/avg) | ms | settles low and stable | The adaptive input-lead servo's live EXTRA above the static `INPUT_LEAD_SEC` base (bounded 0..`MAX_LEAD_EXTRA_S`, 50 ms). Pinned at ~50 = runaway over-lead (a hidden input-latency tax on this client's actions); ~0 while the host row shows rising `input_drains_per_sec` = under-leading (the cushion isn't covering real jitter). Added post-C1 because the honest capture labels changed what the servo measures as pop-overdue. |
+
 ## Host frame / input health (host rows only; clients omit or fold 0)
 
 | Key | Unit | Healthy | Meaning |
@@ -176,9 +187,9 @@ actually sees attach and, when it rolls back, feels as **"grab, then lose it."**
 | `sim_rate_hz` | Hz | ≥97% of 120 | Effective physics tick rate. Below target = host overloaded, the sim dilates and **every client's** update rate sags with it. `_min` is the worst window. Omitted (not 0) on client rows. |
 | `worst_stall_ms` | ms | <33 fine, >66 a hitch everyone felt | Longest gap between physics ticks in a window (the single worst hitch). |
 | `host_stalls_total` | count | 0 | Session sum of physics ticks whose gap exceeded 33 ms — how MANY noticeable hitches, vs `worst_stall_ms`'s single worst. Read with the `auto_markers` (below), whose `phase` / `actor_count` / `last_event` attribute them. Host only; TOTAL_KEY. |
-| `broadcast_interval_p95_ms` | ms | ≈ 8.3 (120 Hz target); >1.4× target = sagging | p95 gap between world-state broadcasts. Sustained high = host stalling or send path backed up. Omitted on client rows. |
-| `input_queue_depth` | frames | 1–3 | Client inputs buffered on the host. 0 = starving, high = backed up. |
-| `input_lead_ms` | ms | ~0–10 | How late client inputs arrive vs schedule. |
+| `broadcast_interval_p95_ms` | ms | ≈ `1000 / STATE_RATE` = 16.7 ms; >1.4× target = sagging | p95 gap between world-state broadcasts. The target is the **broadcast** cadence (`Constants.STATE_RATE`, 60 Hz), not the 120 Hz physics tick the row above measures — the cadence is counted in ticks but fires every second one. Sustained high = host stalling or send path backed up. Omitted on client rows. |
+| `host_input_queue_depth` (max/avg) | frames | ≈ the stamp lead in ticks (same band as `input_queue_depth` above) | Deepest pending remote-input queue the host saw in the window, maxed across **networked** peers only — bots are non-local too and their structural 0 would scale the number by the human share of the roster. **Read it WITH `input_drains_per_sec` — the discriminator for drain-driven reconcile churn:** drains firing while depth is **deep** (well past the stamp lead) means the drain is eating a cushion the lead servo deliberately built (raise the drain trigger); drains while depth is **shallow** (0–1) means inputs genuinely arrive late and the lead/clock is the problem. |
+| `input_lead_ms` | ms | ~0–10 | How late client inputs were when the host popped them (`estimated_host_time() − stamp`), measured at pop time on the host. |
 | `input_starvations_per_sec` | /s | <0.5 | Host ticks that had no fresh client input and reused the last one. Two causes: genuine **client→host** loss (the client's own `packet_loss_pct` can't see this outbound direction), and — more often — the **catch-up drain after a host stall** (a hitch, then a burst of physics ticks consumes the tiny input queue). A starvation spike sharing a window with a `host_stall`/`worst_stall_ms` spike is the latter; correlate before blaming the uplink. |
 
 ## Markers: `felt_lag_markers` and `auto_markers`
