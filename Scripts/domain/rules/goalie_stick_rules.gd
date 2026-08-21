@@ -141,42 +141,32 @@ const BLADE_LIE_DEG: float = -(PADDLE_TO_BLADE_DEG - 90.0)
 # How far the blade's face is turned in plan — about the blade's HEIGHT axis, so
 # the toe leads and the face looks off to one side rather than straight up-ice.
 #
-# WHAT IT STANDS IN FOR IS THE CURVE. Goalie blades are catalogued by curve the
-# way player blades are, and a curved blade has no single face direction: its
-# normal rotates along its length, so a puck off the heel and a puck off the toe
-# leave on different bearings. A collider that is one flat box cannot have that,
-# and this is the curve's MEAN face rotation — the one plane closest to the
-# surface a real blade presents.
+# IT IS THE CURVE'S MEAN FACE ANGLE, AND IT IS DERIVED. A curved blade has no
+# single face direction: the normal rotates along its length, so heel and toe
+# send pucks on different bearings. One flat box cannot fan like that, and this
+# is the one plane closest to the surface a real blade presents.
 #
-# The limitation is the other side of the same coin and worth knowing before
-# reading a rebound table: one plane steers every contact the same way, where a
-# real curve is what lets a keeper put pucks into BOTH corners depending where on
-# the blade he takes them. Do not confuse this with the "Open"/"Closed" face
-# angle a blade pattern also advertises — that one is loft, about the long axis,
-# and BLADE_LIE_DEG already owns it here.
+# The mean falls out of the bow with no curve left over. For a bow of d·u^p over
+# a chord of L the face angle at u is atan(d·p·u^(p-1)/L), and the mean of
+# p·u^(p-1) across the blade is exactly 1 for any p — so the mean face angle is
+# atan(d/L), whatever the pattern's character. At the rulebook's 0.75 in of curve
+# over a 15 in blade that is under three degrees.
 #
-# It is the blade's, not the pose's, which is what makes it safe. A rotation
-# about the collider's own origin does not move the blade, so the standing reach,
-# the five-hole cover and the planning model are all untouched — the same
-# argument BLADE_LIE_DEG makes. The alternative was to steer with the assembly
-# YAW, which turns the face by swinging the whole stick sideways and pays for
-# every degree in cover.
+# IT WAS 18, WHICH IS SIX TIMES THE REAL FIGURE, and it showed: at 18 the toe sat
+# 11.7 cm out of the paddle's plane, so the blade read as skewed across the stick
+# rather than running out of it. That was buying rebound steer by cheating the
+# geometry, and the geometry is visible. A real blade steers a few degrees, and
+# this now says so.
 #
-# Signed toward the TOE, so both stances steer the same way rather than the
-# upright one going one way and the down one the other. It takes the butterfly
-# blade from +2 degrees of bearing — dead square, a mirror — to +100, the corner.
+# Do not confuse it with the "Open"/"Closed" face angle a pattern also
+# advertises — that one is loft, about the long axis, and BLADE_LIE_DEG owns it.
 #
-# 18 IS A MEASURED OPTIMUM, and both directions off it are worse for the same
-# reason a face angle costs something: the blade is 0.38 m long and turning it
-# shortens its lateral footprint. Swept against the shot map, 10 / 18 / 30
-# degrees give 40 / 39 / 47 clean beats and 38 / 29 / 29 in-tight goals — 30
-# steers marginally better and pays 5 cm of blade for it.
-#
-# DO NOT READ THE ->SHOOTER COLUMN AS THIS CONSTANT'S SCORE. It barely moves
-# across that sweep (49 / 47 / 45%) because at the doorstep spot the metric
-# cannot resolve steering at all; see test_goalie_rebound_destination's per-spot
-# breakdown, where every one of those rebounds lives.
-const BLADE_CURVE_FACE_DEG: float = 18.0
+# It is the blade's, not the pose's, which is what makes it safe: a rotation
+# about the joint does not move the blade's reach or its cover, the same argument
+# BLADE_LIE_DEG makes. Steering with the assembly YAW instead turns the face by
+# swinging the whole stick sideways and pays for every degree in cover.
+static func blade_curve_face_deg() -> float:
+	return rad_to_deg(atan(BLADE_CURVE_DEPTH_M / BLADE_WIDTH_M))
 
 const ACTIVE_YAW_CAP_DEG: float = 25.0
 # The yaw extremes standing_lateral_reach probes. A const rather than a literal
@@ -206,7 +196,7 @@ static func blade_centre_offset() -> Vector3:
 	var heel := Vector3(
 			ASSEMBLY_LATERAL_M + BLADE_WIDTH_M * 0.5, -ASSEMBLY_DROP_M, 0.0)
 	var blade := Basis.from_euler(Vector3(
-			deg_to_rad(BLADE_LIE_DEG), deg_to_rad(BLADE_CURVE_FACE_DEG),
+			deg_to_rad(BLADE_LIE_DEG), deg_to_rad(blade_curve_face_deg()),
 			deg_to_rad(BLADE_TOE_CANT_DEG)), EULER_ORDER_YXZ)
 	return heel + blade * Vector3(-BLADE_WIDTH_M * 0.5, 0.0, 0.0)
 
@@ -309,7 +299,7 @@ static func blade_basis(tilt_deg: float, roll_deg: float) -> Basis:
 	var arm := Basis.from_euler(Vector3(
 			deg_to_rad(tilt_deg), 0.0, deg_to_rad(roll_deg)), EULER_ORDER_YXZ)
 	var blade := Basis.from_euler(Vector3(
-			deg_to_rad(BLADE_LIE_DEG), deg_to_rad(BLADE_CURVE_FACE_DEG),
+			deg_to_rad(BLADE_LIE_DEG), deg_to_rad(blade_curve_face_deg()),
 			deg_to_rad(BLADE_TOE_CANT_DEG)), EULER_ORDER_YXZ)
 	return arm * blade
 

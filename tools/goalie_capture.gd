@@ -108,6 +108,17 @@ func _on_frame() -> void:
 		_camera.look_at(Vector3(-0.10, 0.07, -0.62))
 	elif _frames == 74:
 		_save("goalie_stick_close.png")
+		# Tight on the JOINT itself — heel, hosel and the paddle's bottom.
+		_camera.position = Vector3(-0.55, 0.28, -1.05)
+		_camera.look_at(Vector3(-0.02, 0.06, -0.60))
+	elif _frames == 84:
+		_save("goalie_joint.png")
+		# Plan view of the blade: the only angle that shows whether its long axis
+		# runs square out of the paddle or is skewed across it.
+		_camera.position = Vector3(-0.05, 1.15, -0.60)
+		_camera.look_at(Vector3(-0.05, 0.0, -0.62))
+	elif _frames == 94:
+		_save("goalie_blade_plan.png")
 		quit()
 
 

@@ -14,7 +14,7 @@ extends GutTest
 #   the PADS steer wide — +/-55 standing, +/-72 in butterfly, which is the
 #   toe-out doing its job;
 #   the BLADE now steers with them, +89 standing and +100 in butterfly, off
-#   GoalieStickRules.BLADE_CURVE_FACE_DEG. Before that angle existed the butterfly
+#   GoalieStickRules.blade_curve_face_deg(). Before that angle existed the butterfly
 #   blade sat at +2.4 — square to the shooter, which is a mirror;
 #   the BLOCKER still has no lateral cant, so standing it fires the puck 87
 #   degrees UP and dead straight back up the slot, and in butterfly its normal has

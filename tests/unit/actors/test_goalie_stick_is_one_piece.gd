@@ -169,6 +169,15 @@ func test_the_blade_heel_stays_in_the_paddle() -> void:
 	var box: Vector3 = (paddle.shape as BoxShape3D).size
 	var d: Vector3 = (heel_top - paddle.position).abs() - box * 0.5
 	var worst: float = maxf(maxf(d.x, d.y), d.z)
+	# Printed as well as asserted: "the heel extends past the paddle" and "it is at
+	# a weird angle" are both read off a render, and both were settled by these
+	# three numbers rather than by looking harder. The toe's Z is the one to watch
+	# — it is how far the blade swings out of the paddle's plane, and the curve's
+	# mean face angle is the only thing that should be putting it there.
+	gut.p("  Stick frame: heel %s  toe %s  paddle bottom %s" % [
+		cs.transform * Vector3(half, 0.0, 0.0),
+		cs.transform * Vector3(-half, 0.0, 0.0),
+		paddle.position - Vector3(0.0, box.y * 0.5, 0.0)])
 	# A centimetre of tolerance, because the heel corner is a rotated point on a
 	# box and sitting slightly proud of the paddle's face is a stick, not a gap.
 	# The failure this catches is the centre-pivot one, which was six.

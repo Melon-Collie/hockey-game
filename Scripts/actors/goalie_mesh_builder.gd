@@ -281,14 +281,13 @@ static func shared_goalie_blade() -> ArrayMesh:
 		p.toe_round_m = 0.018
 		p.toe_kick_m = 0.002
 		p.toe_kick_start_frac = 0.82
-		# The blade's own twist stays at zero: BLADE_CURVE_FACE_DEG already turns
+		# The blade's own twist stays at zero: blade_curve_face_deg() already turns
 		# the whole blade, and doing it twice would double the steer.
 		p.face_open_deg = 0.0
-		# The hosel climbs the PADDLE, and in the blade's own frame the paddle
-		# leans back by the lie — so the shaft angle it wants is the lie's
-		# complement, not a number.
-		p.hosel_length = 0.06
-		p.hosel_angle_deg = 90.0 - GoalieStickRules.flat_blade_tilt_deg()
+		# NO HOSEL. The builder's taper is sized to hide inside a player's 0.05 m
+		# shaft, and a goalie paddle is 0.03 m thick — it stood proud of the very
+		# joint it exists to close. The paddle's own box meets the heel instead.
+		p.hosel_length = 0.0
 		return StickBladeMeshBuilder.build(p))
 
 

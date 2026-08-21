@@ -315,7 +315,7 @@ func apply_network_pose(state: GoalieNetworkState) -> void:
 func _seat_blade() -> void:
 	var rot := Basis.from_euler(Vector3(
 			deg_to_rad(GoalieStickRules.BLADE_LIE_DEG),
-			deg_to_rad(GoalieStickRules.BLADE_CURVE_FACE_DEG), 0.0), EULER_ORDER_YXZ)
+			deg_to_rad(GoalieStickRules.blade_curve_face_deg()), 0.0), EULER_ORDER_YXZ)
 	# The heel is the authored box's +X end, and the only point that may not move.
 	var half := Vector3(GoalieStickRules.BLADE_WIDTH_M * 0.5, 0.0, 0.0)
 	var heel: Vector3 = _stick_blade.position + half
