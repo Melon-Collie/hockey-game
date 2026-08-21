@@ -1,8 +1,8 @@
 extends SceneTree
 
-# Dev visualizer: renders the goalie offscreen from three standing angles plus
-# a butterfly, so goalie mesh/pose changes can be SEEN without launching the
-# game. A bare-instantiated goalie is a collapsed lump — every part is placed
+# Dev visualizer: renders the goalie offscreen from three standing angles, a
+# butterfly, a near-overhead butterfly and a close-up of the stick on the ice,
+# so goalie mesh/pose changes can be SEEN without launching the game. A bare-instantiated goalie is a collapsed lump — every part is placed
 # per-tick by its controller — so this drives the real pose builder directly:
 # a GoalieBodyConfigBuilder.Inputs bundle (state + defaults) rebuilt and
 # snapped with apply_body_config(config, 1.0) each frame. The goalie faces −Z.
@@ -91,6 +91,21 @@ func _on_frame() -> void:
 		_camera.look_at(Vector3(0.0, 0.6, 0.0))
 	elif _frames == 50:
 		_save("goalie_butterfly.png")
+		# Near-overhead: the one angle that shows where the blade sits ACROSS
+		# him — in the five-hole or outboard of a pad — which no eye-level shot
+		# can separate from perspective. Off vertical rather than straight down,
+		# so look_at keeps a usable up vector.
+		_camera.position = Vector3(0.0, 2.6, -1.2)
+		_camera.look_at(Vector3(0.0, 0.15, 0.0))
+	elif _frames == 62:
+		_save("goalie_butterfly_top.png")
+		_inputs.state = GoalieStateMachine.State.READY
+		# Low and close from the blocker side: the blade against the ice and the
+		# paddle's angle, which is what the seating solve is for.
+		_camera.position = Vector3(1.5, 0.5, -1.5)
+		_camera.look_at(Vector3(0.1, 0.1, -0.6))
+	elif _frames == 74:
+		_save("goalie_stick_close.png")
 		quit()
 
 

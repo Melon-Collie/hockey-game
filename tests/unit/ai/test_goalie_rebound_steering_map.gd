@@ -117,6 +117,29 @@ func test_report_where_the_blade_sits() -> void:
 		var arm := _goalie.get_node_or_null("BlockArm") as Node3D
 		gut.p("--- %s  goalie root y=%+.3f  wrist y=%+.3f  pad face z=%+.3f"
 				% [stance, _goalie.global_position.y, arm.global_position.y, pad_z])
+		# Does the blade cover the FIVE-HOLE? An overhead render reads like it
+		# sits outboard of a pad, and a 512 px software tile cannot resolve 15 cm
+		# of lateral placement, so the gap and the blade's span across it are
+		# reported as numbers instead.
+		var gap_lo: float = -INF
+		var gap_hi: float = INF
+		for pad_name: String in ["LeftPad", "RightPad"]:
+			var pad := _goalie.get_node_or_null(pad_name) as Node3D
+			for ch in pad.get_children():
+				var cs2 := ch as CollisionShape3D
+				if cs2 == null or (cs2.shape as BoxShape3D) == null:
+					continue
+				var e: float = _lateral_extent(cs2, (cs2.shape as BoxShape3D).size)
+				var cx: float = cs2.global_transform.origin.x
+				if cx < 0.0:
+					gap_lo = maxf(gap_lo, cx + e)
+				else:
+					gap_hi = minf(gap_hi, cx - e)
+		var blade := _goalie.get_node("BlockArm/Stick/StickBladeCollider") as CollisionShape3D
+		var bx: float = blade.global_transform.origin.x
+		var be: float = _lateral_extent(blade, (blade.shape as BoxShape3D).size)
+		gut.p("     five-hole gap x %+.3f .. %+.3f | blade spans %+.3f .. %+.3f"
+				% [gap_lo, gap_hi, bx - be, bx + be])
 		var stick := _goalie.get_node_or_null("BlockArm/Stick") as Node3D
 		if stick == null:
 			continue
@@ -214,6 +237,13 @@ func _up_ice_extent(cs: CollisionShape3D, size: Vector3) -> float:
 	var h: Vector3 = size * 0.5
 	return cs.global_transform.origin.z + absf(b.x.z) * h.x \
 			+ absf(b.y.z) * h.y + absf(b.z.z) * h.z
+
+
+# Half the box's LATERAL span, the x-axis twin of _half_span_y.
+func _lateral_extent(cs: CollisionShape3D, size: Vector3) -> float:
+	var b: Basis = cs.global_transform.basis
+	var h: Vector3 = size * 0.5
+	return absf(b.x.x) * h.x + absf(b.y.x) * h.y + absf(b.z.x) * h.z
 
 
 func _half_span_y(cs: CollisionShape3D, size: Vector3) -> float:
