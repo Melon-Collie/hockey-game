@@ -567,6 +567,11 @@ var rebound_held: bool = false
 # He played it away with the stick: the crease sweep fired and changed the puck's
 # velocity out from under the integration.
 var rebound_swept: bool = false
+# Every goalie part the puck met, in order, for the whole tracked flight — not
+# just the first. The save is a SEQUENCE, and what a rebound touches on its way
+# out is a different question from what stopped it: a chest smother that then
+# finds his own stick is a dead play that came back to life.
+var contact_parts: Array[int] = []
 # Closest the rebound ever came to the SHOOTER, in metres. The direction-
 # sensitive half of "was that dangerous": a rebound to the corner and a rebound
 # straight back up the slot can settle the same distance from the net, and only
@@ -602,6 +607,8 @@ func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
 	rebound_caught = false
 	rebound_held = false
 	rebound_swept = false
+	last_trapped = false
+	contact_parts = []
 	rebound_min_dist_to_shooter = INF
 	rebound_danger_dwell_s = 0.0
 	_shooter.global_position = shooter
@@ -639,6 +646,7 @@ func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
 		vel = _tick.velocity
 		if GoalieContactDetector.nearest([_goalie], prev, pos, RADIUS, _scratch, _contact):
 			var part: int = _classify_part(_contact.part as Node3D)
+			contact_parts.append(part)
 			if not touched:
 				last_part = part
 				last_shot_speed = vel.length()
@@ -650,6 +658,8 @@ func fire_tracking_rebound(shooter: Vector3, aim: Vector3, loft_level: int,
 			var fwd: Vector3 = -g3.global_transform.basis.z if g3 != null else Vector3.ZERO
 			GoalieSaveRules.resolve_contact(
 					vel, part, _contact.normal, _save_res, fwd)
+			if contact_parts.size() == 1:
+				last_trapped = _save_res.trapped
 			vel = _save_res.velocity
 			# Mirror Puck._drive_analytic: a smothered puck is PLACED on the ice.
 			if _save_res.trapped:
