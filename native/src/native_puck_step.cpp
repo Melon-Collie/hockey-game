@@ -10,6 +10,11 @@ namespace mitts {
 // AITrajectory airborne epsilons.
 static constexpr double AIRBORNE_POS_EPS_M = 0.001;
 static constexpr double AIRBORNE_VY_EPS_M_S = 0.05;
+// GameRules.PUCK_BOARD_TANGENTIAL_MAX_LOSS — the rim's sticking bound on how
+// much along-board speed one carom can shed. A derived physical constant (the
+// disc's own inertia), not a tunable, so it is mirrored here rather than passed
+// through set_puck_params; test_native_puck_step_parity holds the two together.
+static constexpr double BOARD_TANGENTIAL_MAX_LOSS = 1.0 / 3.0;
 
 // GDScript signf/sign semantics: -1, 0, or +1.
 static inline double sgn(double v) {
@@ -156,7 +161,8 @@ void NativePuckStep::step_core(Vector3 &p, Vector3 &v, double dt,
 					const Vector2 v_tan = v_xz - n * v_xz.dot(n);
 					const double t_speed = v_tan.length();
 					if (t_speed > 1e-6) {
-						const double drop = b_friction * (1.0 + bounce) * vn;
+						const double drop = MIN(b_friction * (1.0 + bounce) * vn,
+								t_speed * BOARD_TANGENTIAL_MAX_LOSS);
 						const double new_t = MAX(t_speed - drop, 0.0);
 						v_xz += v_tan * (real_t)(new_t / t_speed - 1.0);
 					}

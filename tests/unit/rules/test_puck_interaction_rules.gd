@@ -271,6 +271,47 @@ func test_body_block_misses_a_puck_over_the_top_of_the_band() -> void:
 			"a puck above the band clears the body")
 
 
+# ── body_block_contact_normal ────────────────────────────────────────────────
+
+
+func test_body_block_normal_names_the_side_the_puck_actually_struck() -> void:
+	# Puck crosses the body left-to-right, passing on the +Z side. The face it hit
+	# is the +Z one, wherever the tick happened to end.
+	var n: Vector3 = PuckInteractionRules.body_block_contact_normal(
+			Vector3(-1.0, 0.7, 0.3), Vector3(1.0, 0.7, 0.3), _AXIS)
+	assert_almost_eq(n.z, 1.0, 0.001, "normal points out the side the puck passed")
+	assert_almost_eq(n.x, 0.0, 0.001)
+	assert_almost_eq(n.y, 0.0, 0.001)
+
+
+func test_body_block_normal_survives_a_puck_that_crossed_the_body_this_tick() -> void:
+	# The bug this exists for: the puck ends the tick PAST the axis, so a normal
+	# taken from its committed position names the far face and reflects it back
+	# across the blocker. Read on the swept segment, the answer is unchanged by
+	# how far past the puck got.
+	var early: Vector3 = PuckInteractionRules.body_block_contact_normal(
+			Vector3(-0.4, 0.7, 0.25), Vector3(-0.1, 0.7, 0.25), _AXIS)
+	var late: Vector3 = PuckInteractionRules.body_block_contact_normal(
+			Vector3(-0.4, 0.7, 0.25), Vector3(0.5, 0.7, 0.25), _AXIS)
+	assert_almost_eq(late.z, 1.0, 0.001, "still the +Z face after crossing the axis")
+	assert_gt(late.dot(early), 0.9, "same face as the sub-tick sample that stopped short")
+
+
+func test_body_block_normal_falls_back_for_a_dead_centre_hit() -> void:
+	# Straight through the axis: no side to be on, so the normal faces the puck's
+	# own approach rather than picking a side out of float noise.
+	var n: Vector3 = PuckInteractionRules.body_block_contact_normal(
+			Vector3(-1.0, 0.7, 0.0), Vector3(1.0, 0.7, 0.0), _AXIS)
+	assert_almost_eq(n.x, -1.0, 0.001, "faces back down the incoming line")
+
+
+func test_body_block_normal_is_unit_and_horizontal() -> void:
+	var n: Vector3 = PuckInteractionRules.body_block_contact_normal(
+			Vector3(-1.0, 1.4, 0.2), Vector3(0.2, 0.3, 0.2), _AXIS)
+	assert_almost_eq(n.length(), 1.0, 0.001)
+	assert_eq(n.y, 0.0, "the body block is resolved in XZ")
+
+
 # ── sweep_separation ─────────────────────────────────────────────────────────
 # The diagnostic exposure of the quantity check_pickup / check_poke threshold on.
 # A claim miss reports a bare boolean, which cannot distinguish a boundary graze

@@ -1,8 +1,8 @@
 extends SceneTree
 
-# Dev visualizer: renders the goalie offscreen from three standing angles plus
-# a butterfly, so goalie mesh/pose changes can be SEEN without launching the
-# game. A bare-instantiated goalie is a collapsed lump — every part is placed
+# Dev visualizer: renders the goalie offscreen from three standing angles, a
+# butterfly, a near-overhead butterfly and a close-up of the stick on the ice,
+# so goalie mesh/pose changes can be SEEN without launching the game. A bare-instantiated goalie is a collapsed lump — every part is placed
 # per-tick by its controller — so this drives the real pose builder directly:
 # a GoalieBodyConfigBuilder.Inputs bundle (state + defaults) rebuilt and
 # snapped with apply_body_config(config, 1.0) each frame. The goalie faces −Z.
@@ -91,6 +91,34 @@ func _on_frame() -> void:
 		_camera.look_at(Vector3(0.0, 0.6, 0.0))
 	elif _frames == 50:
 		_save("goalie_butterfly.png")
+		# Near-overhead: the one angle that shows where the blade sits ACROSS
+		# him — in the five-hole or outboard of a pad — which no eye-level shot
+		# can separate from perspective. Off vertical rather than straight down,
+		# so look_at keeps a usable up vector.
+		_camera.position = Vector3(0.0, 2.6, -1.2)
+		_camera.look_at(Vector3(0.0, 0.15, 0.0))
+	elif _frames == 62:
+		_save("goalie_butterfly_top.png")
+		_inputs.state = GoalieStateMachine.State.READY
+		# Low and close, square to the blade's FACE rather than down its length —
+		# from the blocker side the blade points away and foreshortens to a wedge,
+		# which shows the joint but none of the blade. This shows the taper, the
+		# bow and the toe, and the paddle running into the heel.
+		_camera.position = Vector3(-0.85, 0.32, -1.45)
+		_camera.look_at(Vector3(-0.10, 0.07, -0.62))
+	elif _frames == 74:
+		_save("goalie_stick_close.png")
+		# Tight on the JOINT itself — heel, hosel and the paddle's bottom.
+		_camera.position = Vector3(-0.55, 0.28, -1.05)
+		_camera.look_at(Vector3(-0.02, 0.06, -0.60))
+	elif _frames == 84:
+		_save("goalie_joint.png")
+		# Plan view of the blade: the only angle that shows whether its long axis
+		# runs square out of the paddle or is skewed across it.
+		_camera.position = Vector3(-0.05, 1.15, -0.60)
+		_camera.look_at(Vector3(-0.05, 0.0, -0.62))
+	elif _frames == 94:
+		_save("goalie_blade_plan.png")
 		quit()
 
 

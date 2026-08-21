@@ -54,7 +54,10 @@ var _puck: Node = null
 var _shooter: Skater = null
 var _ctrl: GoalieController = null
 var _h: RefCounted = null
-const PART := ["STICK", "PAD", "BLOCK", "CHEST", "GLOVE"]
+# Save-surface labels, DERIVED from the enum. A hand-kept copy goes stale the
+# moment a part is added — MASK split from CHEST and every such list started
+# reporting "?" for it.
+static var _part_names: Array = GoalieSaveRules.SavePart.keys()
 
 
 func before_each() -> void:
@@ -90,7 +93,7 @@ func _walk(spot: Vector3, loft: int, label: String, hold_ticks: int) -> void:
 			row += "G"
 			goals.append(a)
 		elif o == Harness.SAVE:
-			row += PART[_h.last_part].substr(0, 1).to_lower() \
+			row += _part_names[_h.last_part].substr(0, 1).to_lower() \
 					if _h.last_part >= 0 else "?"
 		else:
 			row += "x"

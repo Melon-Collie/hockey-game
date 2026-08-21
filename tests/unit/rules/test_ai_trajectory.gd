@@ -185,6 +185,42 @@ func test_step_puck_board_friction_bleeds_tangential_speed() -> void:
 	assert_gt(stepped.basis.x.z, 27.0, "but most of the tangential pace is kept on a glance")
 
 
+func test_a_square_carom_cannot_erase_the_along_board_channel() -> void:
+	# The Coulomb drop is proportional to the NORMAL impulse, so on a steep hit it
+	# outgrows the tangential speed it is subtracted from. Unbounded, every contact
+	# past ~71° of incidence came straight back off the wall — one outcome for a
+	# fifth of the incidence range, and the angle of reflection stopped tracking the
+	# angle of incidence. The rim's sticking bound caps the loss at a third.
+	var pos := Vector3(GameRules.INNER_HALF_WIDTH - 0.02, 0, 0)
+	for inc_deg: float in [72.0, 80.0, 89.0]:
+		var a: float = deg_to_rad(inc_deg)
+		var vel := Vector3(sin(a), 0.0, cos(a)) * 20.0
+		var stepped: Transform3D = AITrajectory.step_puck(pos, vel, 1.0 / 120.0)
+		var kept: float = stepped.basis.x.z / vel.z
+		assert_gt(kept, 1.0 - GameRules.PUCK_BOARD_TANGENTIAL_MAX_LOSS - 0.02,
+				"%.0f-degree carom keeps at least two thirds of its along-board pace" % inc_deg)
+
+
+func test_steeper_caroms_come_off_the_boards_at_distinct_angles() -> void:
+	# The property a player reads directly: a steeper hit comes off nearer to square,
+	# and no two incidences share an exit. Collapsing them all onto the wall normal is
+	# what "the bounce looked wrong" was.
+	var pos := Vector3(GameRules.INNER_HALF_WIDTH - 0.02, 0, 0)
+	var last: float = -INF
+	for inc_deg: float in [45.0, 55.0, 65.0, 75.0, 85.0]:
+		var a: float = deg_to_rad(inc_deg)
+		var vel := Vector3(sin(a), 0.0, cos(a)) * 20.0
+		var out: Vector3 = AITrajectory.step_puck(pos, vel, 1.0 / 120.0).basis.x
+		# Angle off the board surface, taken on the outgoing (−X, +Z) velocity.
+		var off_board: float = rad_to_deg(atan2(-out.x, out.z))
+		assert_gt(off_board, last + 1.0,
+				"%.0f-degree carom leaves more square than the shallower one" % inc_deg)
+		assert_lt(off_board, inc_deg,
+				"%.0f-degree carom still leaves shallower than it arrived (restitution)"
+						% inc_deg)
+		last = off_board
+
+
 func test_step_puck_chained_matches_predict_puck_at() -> void:
 	# The load-bearing guarantee: the puck drive free-runs by CHAINING step_puck, and
 	# that must equal the AITrajectory predictor the AI reasons with, or the bots aim

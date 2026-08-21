@@ -8,7 +8,7 @@ signal puck_stripped(ex_carrier: Skater, checker: Skater)
 signal puck_touched_loose(skater: Skater)  # blade redirect (deflection, tip-in)
 signal puck_body_blocked(skater: Skater)   # puck absorbed by a player's body
 signal puck_touched_goalie(goalie: Goalie)  # puck contacted a goalie StaticBody3D part while uncarried
-# Controlled save landed on the GLOVE specifically — the catchable contact.
+# He closed his hand on it — the one save outcome that ends the play.
 # Host-only; the goalie controller answers by pinning the puck in the glove.
 signal puck_caught_by_goalie(goalie: Goalie)
 signal puck_touched_post  # puck contacted any HockeyGoal geometry while uncarried
@@ -121,23 +121,6 @@ signal puck_hit_goal_body  # uncarried puck struck net panel or skirt (non-pipe 
 # clamps the center to the rink's rounded rectangle every sub-step.
 const CONTAINMENT_TELEPORT_SKIP: float = 2.0
 
-# ── Save-rebound control (host-authoritative) ─────────────────────────────────
-# A real goalie controls rebounds instead of caroming every shot back into the
-# slot. On a controlled save (chest/glove catch at any speed, or an easy pad/
-# blocker save) the rebound is deadened to a crawl the goalie's crease-sweep then
-# clears; hard pad saves and stick contacts keep the live restitution rebound
-# (the beatable scramble chance). See GoalieSaveRules. Deadening is pose-neutral
-# rebound control: it changes the rebound, never the play's live/dead status.
-@export var save_deaden_pad_max_speed: float = 28.0  # pad/blocker saves faster than this stay live (≈63 mph — above a solid wrister, below hard shots/slappers)
-@export var save_deaden_drop_speed: float = 1.2      # absorbed exit-speed ceiling (m/s, chest/glove)
-@export var save_deaden_glove_retain: float = 0.0    # glove catch — kill it dead
-@export var save_deaden_chest_retain: float = 0.12
-# Controlled pad/blocker saves STEER cornerward instead of dying at the
-# goalie's feet — modern active-rebound doctrine.
-@export var save_steer_speed: float = 5.0            # m/s cornerward exit off a controlled pad save
-@export var save_steer_lateral_weight: float = 1.0   # cornerward bias (lateral vs forward)
-@export var save_steer_forward_weight: float = 0.35  # out-of-crease bias
-
 var carrier: Skater = null
 var pickup_locked: bool = false
 # Host time of the last release/nudge — the last moment this puck was teleported
@@ -184,9 +167,6 @@ var _pending_reset_xz: Vector2 = Vector2.ZERO
 # the puck_released signal — and the drive itself — see the full XYZ launch
 # vector (incl. loft vy) even though the release ran before the physics step.
 var _pending_elevation_vel: Vector3 = Vector3.ZERO
-# Built once from the save-deaden exports (rebuilt only on demand — exports don't
-# change at runtime), so the per-save classification allocates nothing.
-var _deaden_cfg: GoalieSaveRules.DeadenConfig = null
 # Callable (Skater) -> int team_id, or -1 if the skater isn't registered. Set
 # by GameManager at spawn time so Puck doesn't reach upward for team checks.
 var _team_resolver: Callable = Callable()
@@ -348,7 +328,6 @@ func set_goalie_provider(provider: Callable) -> void:
 
 func _ready() -> void:
 	process_physics_priority = 1  # Run after Skater's integration so blade world pos is current
-	_build_deaden_cfg()
 	_native_step = NativePuckStepFactory.make_configured()
 
 	# Swap the scene's cylinder for the shared beveled low-poly puck
@@ -523,7 +502,12 @@ func apply_blade_deflect(skater: Skater) -> void:
 	_set_cooldown(skater, bobble_cooldown if is_bobble else deflect_cooldown)
 	_queue_contact_event(ContactEvent.LOOSE_TOUCH, skater)
 
-func on_body_block(blocker: Skater) -> void:
+# `contact_normal` is the outward horizontal normal at the swept contact —
+# PuckInteractionRules.body_block_contact_normal, taken on the same segment the
+# block was detected against. The caller owns it because only the caller has the
+# segment; a normal re-derived here from the puck's committed position points the
+# wrong way whenever the puck crossed the body inside the tick.
+func on_body_block(blocker: Skater, contact_normal: Vector3) -> void:
 	if not _is_server:
 		return
 	if pickup_locked:
@@ -532,14 +516,9 @@ func on_body_block(blocker: Skater) -> void:
 		return
 	if carrier != null:
 		return  # only deflect loose/airborne pucks, not carried ones
-	var body_world: Vector3 = blocker.global_position
-	body_world.y = 0.0
-	var puck_pos: Vector3 = global_position
-	puck_pos.y = 0.0
-	var contact_normal: Vector3 = puck_pos - body_world
 	if contact_normal.length() < 0.001:
 		contact_normal = -blocker.global_transform.basis.z
-	contact_normal = contact_normal.normalized()
+	contact_normal = Vector3(contact_normal.x, 0.0, contact_normal.z).normalized()
 	# A committed shot-block crouch kills more of the shot than a passive body absorb.
 	var dampen: float = body_block_active_dampen \
 			if blocker.current_shot_state == SkaterStateMachine.State.SHOT_BLOCKING \
@@ -902,7 +881,7 @@ func _drive_analytic(dt: float) -> void:
 					_obstacles, _obstacle_scratch, _obstacle_result):
 				pos = _obstacle_result.position
 				vel = _obstacle_result.velocity
-		# Goalie: swept-OBB over THIS sub-step's segment → deaden / steer / catch / live reflect.
+		# Goalie: swept-OBB over THIS sub-step's segment → material rebound, or a catch.
 		var goalie_hit: bool = false
 		if not goalies.is_empty():
 			if goalie_box_count > 0:
@@ -915,21 +894,26 @@ func _drive_analytic(dt: float) -> void:
 		if goalie_hit:
 			var part: int = _classify_save_part(_goalie_contact.part as Node3D)
 			var g3: Node3D = _goalie_contact.goalie as Node3D
-			var side: float = signf(pos.x - g3.global_position.x) if g3 != null else 0.0
-			var dir_sign: int = int(signf(-g3.global_position.z)) if g3 != null else 0
-			# Facing gates the controlled save — he can only smother/catch what his
-			# chest is pointed at. Local -Z is forward for the goalie rig.
+			# Facing gates the CATCH — he can only close his hand on what he is
+			# looking at. Local -Z is forward for the goalie rig. Every other
+			# outcome is a contact and needs no goalie frame beyond the normal.
 			var fwd: Vector3 = -g3.global_transform.basis.z if g3 != null else Vector3.ZERO
 			GoalieSaveRules.resolve_contact(
-					vel, part, _goalie_contact.normal, side, dir_sign, _deaden_cfg,
-					_save_result, fwd)
+					vel, part, _goalie_contact.normal, _save_result, fwd)
 			vel = _save_result.velocity
 			# Eject the disc flush off the contacted face. `point` is the sphere
 			# CENTRE at toi — already `radius` off the real face via the
 			# Minkowski-expanded box — so only the start-inside depenetration
 			# `depth` is added. Never add `radius` again — that parks the puck a
 			# further radius off the face on every save, a visible pop.
-			pos = _goalie_contact.point + _goalie_contact.normal * _goalie_contact.depth
+			# He smothered it and put it down. Ejecting flush off the chest
+			# instead drops the puck through his own stick and pads on the way to
+			# the ice, and the paddle throws it clear of the crease sweep.
+			if _save_result.trapped:
+				pos = Vector3(_goalie_contact.point.x, ice_height,
+						_goalie_contact.point.z)
+			else:
+				pos = _goalie_contact.point + _goalie_contact.normal * _goalie_contact.depth
 			if not _contact_latch_goalie and not touched_goalie:
 				emit_goalie = _goalie_contact.goalie as Goalie
 			# The catch is gated on its own occurrence, NOT the touch latch — a
@@ -983,28 +967,18 @@ func _drive_analytic(dt: float) -> void:
 	_contact_latch_goalie = touched_goalie
 
 
-# Build the cached deaden config from the exports. Called from _ready; the
-# exports don't change at runtime so it never needs rebuilding mid-play.
-func _build_deaden_cfg() -> void:
-	_deaden_cfg = GoalieSaveRules.DeadenConfig.new()
-	_deaden_cfg.pad_max_incoming_speed = save_deaden_pad_max_speed
-	_deaden_cfg.drop_speed = save_deaden_drop_speed
-	_deaden_cfg.glove_retain = save_deaden_glove_retain
-	_deaden_cfg.chest_retain = save_deaden_chest_retain
-	_deaden_cfg.pad_steer_speed = save_steer_speed
-	_deaden_cfg.steer_lateral_weight = save_steer_lateral_weight
-	_deaden_cfg.steer_forward_weight = save_steer_forward_weight
-
-
 # Classify a save surface by its StaticBody3D node name (LeftPad / RightPad /
 # Body / Head / Glove / Blocker / Stick under Goalie.tscn). Unknown parts fall
-# back to PAD (a live-on-hard, deaden-on-easy surface — the safe default).
+# back to PAD — the middle of the material table, so a part nobody classified
+# rebounds plausibly rather than like a paddle or a chest.
 func _classify_save_part(part_body: Node3D) -> int:
 	match part_body.name:
 		"Glove":
 			return GoalieSaveRules.SavePart.GLOVE
-		"Body", "Head":
+		"Body":
 			return GoalieSaveRules.SavePart.CHEST
+		"Head":
+			return GoalieSaveRules.SavePart.MASK
 		"Blocker":
 			return GoalieSaveRules.SavePart.BLOCKER
 		"Stick":

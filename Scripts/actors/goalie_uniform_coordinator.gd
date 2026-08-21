@@ -107,8 +107,12 @@ func apply_uniform(colors: Dictionary) -> void:
 	# shaft through blade, the real-world goalie norm. The white tape knob is
 	# geometry-side (Goalie._init_stick_knob) and never repaints.
 	var stick_mat: StandardMaterial3D = StickStyle.make_goalie_stick_material()
-	# Shaft, paddle and blade are one merged mesh (see GoalieMeshBuilder).
+	# Shaft and paddle are one merged mesh; the BLADE is a separate node and needs
+	# painting in its own right (see GoalieMeshBuilder._merge_stick for why it is
+	# held out). It went unpainted and rendered in the default grey against a
+	# white composite stick.
 	_goalie.stick_shaft_mesh.material_override = stick_mat
+	_goalie.stick_blade_mesh.material_override = stick_mat
 
 	_rebuild_text_decal()
 

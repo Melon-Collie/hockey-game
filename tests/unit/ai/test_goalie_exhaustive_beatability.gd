@@ -46,13 +46,20 @@ extends GutTest
 #  1. ONLY HIGH WORKS from the dot line — 15 of the 16 goals. FLAT scores zero
 #     and LOW scores once. At real pace the low game is completely shut.
 #
-#  2. 93.8% OF SHOTS LEAVE A LIVE PUCK, and from 3 m it is 100%. Every speed
-#     swept is above Puck.save_deaden_pad_max_speed (28.0 m/s = 62.6 mph), the
-#     threshold under which a pad/blocker save is deadened — its comment reads
-#     "above a solid wrister, below hard shots/slappers", but real shots START
-#     at 65. So no pad save ever deadens, and the keeper has effectively NO
-#     rebound control at the speeds the game is actually played at. Glove and
-#     chest — the two surfaces that deaden at any speed — are 2 of 288 here.
+#  2. 93.8% OF SHOTS LEAVE A LIVE PUCK, and from 3 m it is 100%. That is the
+#     model working as designed rather than a defect: only a glove CATCH ends a
+#     play, and the glove takes 2 of 288 shots from here. The keeper is a wall
+#     to the first shot and a rebound machine on the same play, which is why he
+#     plays differently than a save percentage reads. Where those rebounds GO is
+#     the question this sweep cannot answer — see
+#     test_goalie_rebound_destination.
+#
+#     (Read before the rebound model became material-based, this number was
+#     evidence of something else: a speed threshold decided whether a pad save
+#     was "controlled", and it sat at 28.0 m/s while real shots start at 65 —
+#     so the controlled branch never once ran at a real shot speed. It only
+#     fired on dumps and tricklers, where it invented a 5 m/s exit out of a puck
+#     that arrived at one. That threshold is gone.)
 #
 #  3. From 3 m nothing goes in at all, at any legal speed, and all 288 first
 #     contacts are STICK — but that is ANGLE COMPRESSION, not stick reach.
@@ -99,12 +106,10 @@ extends GutTest
 #   slot 5.0 m        3.3%         |  63.1%
 #   off-angle 5.3 m   4.2%         |  65.0%
 #
-# GoalieSaveRules.is_controlled_save returns FALSE for STICK unconditionally — a
-# stick save NEVER deadens — and PAD/BLOCKER only eat shots under the deaden
-# threshold. So the keeper who stops 99.2% of in-tight shots leaves the puck
-# LOOSE on 95.6% of them. He is a wall to the first shot and a rebound machine
-# on the same play, which is exactly why he plays differently than these numbers
-# read.
+# Only a glove catch ends a play; every other surface rebounds off its material.
+# So the keeper who stops 99.2% of in-tight shots leaves the puck LOOSE on 95.6%
+# of them. He is a wall to the first shot and a rebound machine on the same play,
+# which is exactly why he plays differently than these numbers read.
 #
 # TWO CONSEQUENCES:
 #   * "bots refusing to shoot at a set keeper is correct play" — stated earlier
@@ -154,10 +159,9 @@ const SLOT_DIST_M: float = GameRules.GOAL_LINE_Z - GameRules.ICING_FACEOFF_DOT_Z
 # stick-flex modifiers, so the whole band is wrister-legal on some build. 69 mph
 # is the reference build being played against.
 #
-# EVERY speed here is above Puck.save_deaden_pad_max_speed (28.0 m/s = 62.6 mph),
-# the threshold under which a pad/blocker save is deadened. Its comment reads
-# "above a solid wrister, below hard shots/slappers" — but real shots start at
-# 65, so in practice NO pad save ever deadens and every one kicks a live puck.
+# Worth knowing when reading LIVE rebound counts off this sweep: every speed here
+# is a genuine shot, so nothing in it samples the soft contacts (dumps, passes,
+# tricklers dying into the pads) where the rebound model's slow end lives.
 const SHOT_MPH: Array[float] = [65.0, 70.0, 75.0, 80.0]
 const MPH_TO_MS: float = 0.44704
 const MAX_AIM: float = GameRules.NET_HALF_WIDTH \
@@ -168,7 +172,10 @@ var _puck: Node = null
 var _shooter: Skater = null
 var _ctrl: GoalieController = null
 var _h: RefCounted = null
-const PART := ["STICK", "PAD", "BLOCK", "CHEST", "GLOVE"]
+# Save-surface labels, DERIVED from the enum. A hand-kept copy goes stale the
+# moment a part is added — MASK split from CHEST and every such list started
+# reporting "?" for it.
+static var _part_names: Array = GoalieSaveRules.SavePart.keys()
 
 
 func before_each() -> void:
@@ -195,8 +202,6 @@ func _sweep(spot: Vector3, label: String) -> int:
 	var goals: int = 0
 	var live: int = 0     # saves that leave the puck LOOSE (a second chance)
 	var parts: Dictionary = {}
-	var cfg := GoalieSaveRules.DeadenConfig.new()
-	cfg.pad_max_incoming_speed = _puck.save_deaden_pad_max_speed
 	# Per-loft goal map, so a hole shows up as a REGION rather than a count.
 	for li: int in lofts.size():
 		var row: String = ""
@@ -215,13 +220,12 @@ func _sweep(spot: Vector3, label: String) -> int:
 					row_goals += 1
 					best = "G"
 				elif o == Harness.SAVE:
-					var k: String = PART[_h.last_part] if _h.last_part >= 0 else "?"
+					var k: String = _part_names[_h.last_part] if _h.last_part >= 0 else "?"
 					parts[k] = int(parts.get(k, 0)) + 1
-					# Did that save actually END the play? STICK never deadens, and
-					# PAD/BLOCKER only eat shots under the deaden threshold — above
-					# it the puck kicks out live and the slot is a scramble.
-					if not GoalieSaveRules.is_controlled_save(
-							_h.last_shot_speed, _h.last_part, cfg):
+					# Did that save leave a LIVE puck? A glove catch ends the play and a
+					# chest smother kills the shot dead for the sweep; every other
+					# surface is a material rebound, so the slot is a scramble.
+					if not _h.last_caught and not _h.last_trapped:
 						live += 1
 					if best == ".":
 						best = k.substr(0, 1).to_lower()
@@ -292,7 +296,7 @@ func test_report_the_sweep_a_human_can_actually_execute() -> void:
 						total += 1
 						best = "G"
 					elif o == Harness.SAVE:
-						var k: String = PART[_h.last_part] if _h.last_part >= 0 else "?"
+						var k: String = _part_names[_h.last_part] if _h.last_part >= 0 else "?"
 						parts[k] = int(parts.get(k, 0)) + 1
 						if best == ".":
 							best = k.substr(0, 1).to_lower()

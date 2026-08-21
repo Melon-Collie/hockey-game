@@ -9,10 +9,12 @@ class_name SweptDiscOBB
 # entry face → outward normal. The world normal is the box basis applied to the local
 # face normal.
 #
-# Edge/corner contacts approximate to the dominant entry-slab axis — fine for the
-# DETECTION + rebound-direction agreement this provides; the actual response
-# is GoalieSaveRules, which re-steers. Pure value-type math, no allocation (fills a
-# caller-owned Result).
+# Edge/corner contacts approximate to the dominant entry-slab axis: a puck clipping
+# the outside edge of a pad reports that pad's FACE normal, not the true corner
+# normal. Detection is unaffected, and a controlled save re-steers cornerward
+# regardless — but a LIVE rebound (GoalieSaveRules.resolve_contact) reflects
+# through this normal directly, so an edge clip comes off as though it met a flat
+# face. Pure value-type math, no allocation (fills a caller-owned Result).
 
 class Result:
 	var hit: bool = false

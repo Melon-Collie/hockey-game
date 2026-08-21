@@ -124,11 +124,14 @@ func test_report_real_goalie_goal_rates_by_loft() -> void:
 
 
 const _OUTCOME := ["GOAL", "SAVE", "POST", "WIDE", "NO_SHOT"]
-const _PART := ["STICK", "PAD", "BLOCKER", "CHEST", "GLOVE"]
+# Save-surface labels, DERIVED from the enum. A hand-kept copy goes stale the
+# moment a part is added — MASK split from CHEST and every such list started
+# reporting "?" for it.
+static var _part_names: Array = GoalieSaveRules.SavePart.keys()
 
 
 func _part_name(p: int) -> String:
-	return _PART[p] if p >= 0 and p < _PART.size() else "none"
+	return _part_names[p] if p >= 0 and p < _part_names.size() else "none"
 
 
 func test_debug_single_shots() -> void:
