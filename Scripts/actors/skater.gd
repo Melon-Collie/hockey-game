@@ -1543,8 +1543,8 @@ func edge_load(left: bool) -> float:
 	return _legs.edge_load(left)
 
 
-func set_foot_eversion(left_roll: float, right_roll: float) -> void:
-	_legs.set_foot_eversion(left_roll, right_roll)
+func set_ankle_flatten(left: float, right: float) -> void:
+	_legs.set_ankle_flatten(left, right)
 
 
 # Sets the skating-stance body drop (metres). The stance flexes hips/knees,

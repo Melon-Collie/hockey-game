@@ -62,12 +62,13 @@ func _controller(center: bool = false) -> SkaterController:
 
 # One prep, start to finish: the skate-in from `from`, then the countdown hold.
 # Mirrors what LocalController/AIController do on a locked tick.
-func _run_prep(c: SkaterController, from: Vector3, hold: int = SETTLE_TICKS) -> void:
+func _run_prep(c: SkaterController, from: Vector3, hold: int = SETTLE_TICKS,
+		dot_distance: float = 1.0) -> void:
 	var target := Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 0.0)
 	c.begin_approach(from, target, Vector2(0.0, -1.0), 1.0)
 	var input := InputState.new()
 	input.delta = DT
-	input.mouse_world_pos = Vector3(0.0, 0.0, -1.0)
+	input.mouse_world_pos = Vector3(0.0, 0.0, -dot_distance)
 	for _i: int in 120 + hold:
 		if not c.tick_faceoff_approach(DT):
 			c.skater.velocity = Vector3.ZERO
@@ -172,6 +173,146 @@ func test_the_centre_still_gets_his_blade_down_on_the_dot() -> void:
 			"the crouch must not lift the blade off the ice")
 	assert_almost_eq(centre_blade.z, winger_blade.z, 0.10,
 			"nor pull it back in from the aim point")
+
+
+# ── The centre's hands ───────────────────────────────────────────────────────
+
+# The draw grip: the bottom hand walks down the shaft over the countdown, and
+# walks back once the puck is live. Measured as the share of the shaft between
+# the hands, which is what the grip actually is.
+func test_the_centre_takes_a_draw_grip_and_gives_it_back() -> void:
+	var winger: SkaterController = _controller(false)
+	var centre: SkaterController = _controller(true)
+	_run_prep(winger, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0))
+	_run_prep(centre, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0))
+	assert_gt(_hand_spread(centre), _hand_spread(winger) + 0.1,
+			"the centre's hands must come apart on the shaft for the draw")
+
+	# The drop releases the address, and the hands ease back with it.
+	_state.faceoff_prep = false
+	var input := InputState.new()
+	input.delta = DT
+	input.mouse_world_pos = Vector3(0.0, 0.0, -1.0)
+	for _i: int in SETTLE_TICKS:
+		centre.skater.velocity = Vector3.ZERO
+		centre.apply_blade_aim_only(input, DT)
+		centre.skater._process(DT)
+	assert_almost_eq(_hand_spread(centre), _hand_spread(winger), 0.02,
+			"and go back to a carry grip once the puck is live")
+
+
+# Distance between the two hands as a share of the stick.
+func _hand_spread(c: SkaterController) -> float:
+	var top: Vector3 = c.skater.get_top_hand_position()
+	var bottom: Vector3 = c.skater.bottom_hand.position
+	return top.distance_to(bottom) / c.stick_length
+
+
+# ── The centre's base ────────────────────────────────────────────────────────
+
+# The wide base under the fold, and the half of it a still can't show: the splay
+# shortens each leg's vertical span, so the body owes the deficit as extra drop
+# or the skates ride up off the ice on their outside edges.
+func test_the_centre_sets_a_wider_base_than_the_players_behind_him() -> void:
+	var winger: SkaterController = _controller(false)
+	var centre: SkaterController = _controller(true)
+	_run_prep(winger, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0))
+	_run_prep(centre, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0))
+	assert_gt(_stance_width(centre), _stance_width(winger) + 0.1,
+			"the centre's feet must set wide, not stack under a deep squat")
+
+
+# Against a skater standing on the same spot, because both hold LEVEL boots and
+# a level boot's blade hangs a fixed depth below the pivot measured here — so
+# equal pivot heights are equal blade heights. (A skate left to tilt with its
+# shin, which is every other pose in the game, is not comparable this way.)
+func test_the_wide_base_keeps_both_skates_on_the_ice() -> void:
+	var standing: SkaterController = _controller(true)
+	var centre: SkaterController = _controller(true)
+	_run_prep(centre, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0))
+	# The tolerance is the fore/aft stagger's own residual: it swings the boot
+	# pivot down on the trailing leg and up on the leading one by about a
+	# centimetre each, and a single body drop cannot answer two legs moving
+	# opposite ways. The splay and the fold, which move both together, must be
+	# paid exactly — so anything past this is one of those two, not the stagger.
+	for left: bool in [true, false]:
+		assert_almost_eq(centre.skater.blade_mark_position(left).y,
+				standing.skater.blade_mark_position(left).y, 0.02,
+				"the address must not sink its skates through the ice, or float them")
+
+
+# The other half of standing a body up over splayed, deeply folded legs: the
+# boot inherits every rotation in the chain, so without the ankle's give-back
+# the address stands both blades up on their heels and outside edges.
+func test_the_address_holds_both_blades_flat() -> void:
+	var standing: SkaterController = _controller(true)
+	var centre: SkaterController = _controller(true)
+	_run_prep(centre, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0))
+	for left: bool in [true, false]:
+		assert_lt(_skate_tilt_deg(centre, standing, left), 8.0,
+				"the centre addresses the dot on flat blades, not on their heels")
+
+
+# The placement runs at the whistle, before the pose exists, so the drop it
+# lays the dot out from is DERIVED. This is the pair that must agree.
+func test_the_address_drop_is_the_crouch_the_gait_settles_at() -> void:
+	var centre: SkaterController = _controller(true)
+	_run_prep(centre, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0))
+	assert_almost_eq(centre._skating.faceoff_address_drop(),
+			centre.skater._skating_crouch_drop, 0.005,
+			"the derived address drop must be the crouch he actually takes")
+
+
+# Measuring the dot from a STANDING body puts it well inside the crouched
+# skater's reach, and TopHandIK answers a close target by raising the hand and
+# standing the shaft up (its CLOSE regime). The centre would address the puck
+# with a shovel. Both placements, same skater, same countdown.
+func test_the_dot_sits_where_the_crouched_stick_lies_out_flat() -> void:
+	var standing: SkaterController = _controller(true)
+	var address: SkaterController = _controller(true)
+	var standing_dot: float = standing._ik.stick_horiz() \
+			* standing.faceoff_center_reach_fraction
+	_run_prep(standing, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0), SETTLE_TICKS,
+			standing_dot)
+	_run_prep(address, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0), SETTLE_TICKS,
+			address.faceoff_center_distance())
+	assert_gt(_shaft_flatness(address), _shaft_flatness(standing) + 0.1,
+			"the address placement must lay the shaft out, not stand it on end")
+	assert_gt(_shaft_flatness(address), cos(deg_to_rad(45.0)),
+			"and lay it out ahead of him, not under 45° of shovel")
+
+
+# How far a posed skate has tipped away from where the same skate sits on an
+# untouched rig — the skater in `rest` — in degrees. Read off the live rig
+# rather than the pose inputs, because the tilt is the composition of the hip,
+# the knee and the ankle, which is exactly what no single channel can tell you.
+# Against the rest rig rather than world up: the boot bone's authored basis is
+# the mesh's, and it is nobody's business here what axis it points down.
+func _skate_tilt_deg(c: SkaterController, rest: SkaterController,
+		left: bool) -> float:
+	var bone: int = SkaterMeshBuilder.LegBone.FOOT_L if left \
+			else SkaterMeshBuilder.LegBone.FOOT_R
+	return rad_to_deg(_sole_axis(c, bone).angle_to(_sole_axis(rest, bone)))
+
+
+func _sole_axis(c: SkaterController, bone: int) -> Vector3:
+	var rig: Skeleton3D = c.skater.lower_body.get_node("LegRig") as Skeleton3D
+	return rig.get_bone_global_pose(bone).basis.y.normalized()
+
+
+# Lateral span between the two skates, in the skater's own frame.
+func _stance_width(c: SkaterController) -> float:
+	var span: Vector3 = c.skater.blade_mark_position(true) \
+			- c.skater.blade_mark_position(false)
+	return absf(c.skater.global_transform.basis.inverse().x.dot(span))
+
+
+# How much of the stick's length is spent reaching ACROSS the ice rather than
+# down to it: 1.0 is a shaft laid flat, 0.0 one stood on its end.
+func _shaft_flatness(c: SkaterController) -> float:
+	var hand: Vector3 = c.skater.upper_body_to_global(c.skater.get_top_hand_position())
+	var blade: Vector3 = c.skater.upper_body_to_global(c.skater.get_blade_position())
+	return Vector2(blade.x - hand.x, blade.z - hand.z).length() / c.stick_length
 
 
 func test_nobody_holds_a_draw_stance_once_the_puck_is_live() -> void:

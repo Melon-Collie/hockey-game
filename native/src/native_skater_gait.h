@@ -41,7 +41,8 @@ namespace mitts {
 	X(dig_in_cadence_rate) X(dig_in_chop) X(dig_in_fade_speed) \
 	X(dig_in_intensity) X(dig_in_lean_deg) X(dig_in_stance) \
 	X(faceoff_center_lean_deg) X(faceoff_center_split_deg) X(faceoff_center_stance) \
-	X(faceoff_split_deg) X(faceoff_stance) X(follow_through_arc_skew) \
+	X(faceoff_center_width_deg) X(faceoff_split_deg) X(faceoff_stance) \
+	X(follow_through_arc_skew) \
 	X(glide_carve_lean_deg) X(glide_hold_skew) X(glide_inside_tuck_deg) \
 	X(glide_stance) X(glide_sway_deg) X(glide_sway_hz) \
 	X(hip_align_max_deg) X(hip_align_speed) X(hit_commit_crouch_m) \
@@ -185,7 +186,7 @@ private:
 	double out_l_pitch = 0.0, out_l_roll = 0.0, out_l_knee = 0.0;
 	double out_r_pitch = 0.0, out_r_roll = 0.0, out_r_knee = 0.0;
 	double out_l_yaw = 0.0, out_r_yaw = 0.0;
-	double out_foot_evert_l = 0.0, out_foot_evert_r = 0.0;
+	double out_foot_flat_l = 0.0, out_foot_flat_r = 0.0;
 	double out_edge_load_l = 0.0, out_edge_load_r = 0.0;
 	double out_drop = 0.0;
 
@@ -231,8 +232,9 @@ public:
 	double get_r_knee() const { return out_r_knee; }
 	double get_l_yaw() const { return out_l_yaw; }
 	double get_r_yaw() const { return out_r_yaw; }
-	double get_foot_evert_l() const { return out_foot_evert_l; }
-	double get_foot_evert_r() const { return out_foot_evert_r; }
+	double get_faceoff_blend() const { return faceoff_blend; }
+	double get_foot_flat_l() const { return out_foot_flat_l; }
+	double get_foot_flat_r() const { return out_foot_flat_r; }
 	double get_edge_load_l() const { return out_edge_load_l; }
 	double get_edge_load_r() const { return out_edge_load_r; }
 	double get_crouch_drop() const { return out_drop; }

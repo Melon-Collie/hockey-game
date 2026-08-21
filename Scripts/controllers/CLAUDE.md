@@ -300,16 +300,42 @@ covering ground, so `is_faceoff_ready()` is false and the gait plays an ordinary
 stride — a floored crouch and staggered feet laid over a running stride read as
 a limp. The ready stance eases in as the glide hands back.
 
-**Set at the dot is two stances, not one.** The centre taking the draw sits far
-deeper than the players lined up behind him: knees well past the skating sit,
-feet split wide fore/aft, chest folded down over the dot. `Skater.
-is_faceoff_center` selects between the two, and it is *derived* on every peer
-from the C slot rather than replicated — every machine already knows every
-player's slot, and a cosmetic bit is not worth a wire byte. The pose itself is
-split across the two collaborators that own its halves: the crouch and the foot
-split are gait channels (`SkaterSkatingCoordinator`), the trunk fold is a torso
-lean (`SkaterPoseCoordinator`), floored on top of whatever the reach lean asks
-for rather than replacing it.
+**Set at the dot is two stances, not one.** The players lined up behind the dot
+hold a ready stance. The centre taking the draw holds an *address*: knees well
+past the skating sit, a base splayed wide under him, feet split fore/aft, chest
+folded down over the dot, hands apart on the shaft. `Skater.is_faceoff_center`
+selects between the two, and it is *derived* on every peer from the C slot
+rather than replicated — every machine already knows every player's slot, and a
+cosmetic bit is not worth a wire byte.
+
+The address is spread across the collaborators that own its parts, and the parts
+are not independent:
+
+- **The crouch, the splay and the foot split are gait channels**
+  (`SkaterSkatingCoordinator`), floored over the speed-driven envelope. The
+  splay costs each leg a cosine of vertical span, which the body pays as extra
+  drop.
+- **The chest fold rides the trunk TEXTURE**, not the torso lean — the lean
+  rotates the `UpperBody` node the blade markers hang from, and the blade-first
+  IK answers a pitched frame by standing the shaft on end. Bones are mesh only,
+  so the chest reads folded while the stick keeps its address. The arm roots
+  ride the texture too (`SkaterArmRig._textured_shoulder`), which is what lets
+  the fold go deep without tearing the arms off the shoulders.
+- **Both ankles flatten** (`SkaterLegRig.set_ankle_flatten`). A sit this deep
+  folds the shin far enough back to stand the blades on their heels, and the
+  splay puts them on their outside edges; the ankles give the whole chain back.
+  A level boot then hangs its blade below the FOOT pivot rather than keeping its
+  sole planted, so the crouch owes `_FOOT_FWD`'s vertical share on top.
+- **The bottom hand slides down the shaft** on the same ease
+  (`SkaterIKCoordinator._grip_fraction`) — the short lever a draw is won with.
+- **The dot is laid out from the ADDRESS, not from a standing body**
+  (`faceoff_center_distance`). The crouch drops the hands a fifth of a metre and
+  a rigid stick reaching the ice from there covers much more ground; measure it
+  standing and the dot lands inside the centre's reach, where `TopHandIK`'s
+  CLOSE regime raises the hand and stands the shaft up. It runs at the whistle,
+  before the pose exists, so the drop is derived
+  (`SkaterSkatingCoordinator.faceoff_address_drop`) and the live crouch netted
+  out — a skater caught mid-stride must not get a different dot.
 
 **Nothing dispatches the state machine while movement is locked**, so no state
 can clear itself there — `SHOT_BLOCKING` used to hold its planted legs and wide

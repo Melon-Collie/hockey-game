@@ -155,6 +155,14 @@ const POSES: Array = [
 			"from": Vector3(-1.5, 0.0, 7.0), "duration": 1.4, "ticks": 168, "hold": 90,
 			"center": true,
 		}},
+	# Head-on, because the address's base is a front-view read: from the side the
+	# two skates overlap, so a leg splayed out reads the same as one staggered
+	# back, and whether the ankles put both blades flat cannot be seen at all.
+	{"name": "faceoff_center_front", "puck": false, "cam": Vector3(0.2, 0.75, -3.0),
+		"faceoff": {
+			"from": Vector3(-1.5, 0.0, 7.0), "duration": 1.4, "ticks": 168, "hold": 90,
+			"center": true,
+		}},
 	# A blocker caught by the whistle: the shot-block stance must not ride
 	# through the walk-in (the state machine is not dispatched while locked).
 	{"name": "faceoff_after_block", "puck": false,

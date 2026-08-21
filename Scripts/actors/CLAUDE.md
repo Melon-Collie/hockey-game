@@ -12,7 +12,7 @@ delegates to.
 
 | holder | class | what it owns |
 |---|---|---|
-| `_legs` | `SkaterLegRig` | the leg skeleton, the gait written onto it, foot eversion, and the ice VFX's two reads (skate mark position, edge load) |
+| `_legs` | `SkaterLegRig` | the leg skeleton, the gait written onto it, the ankles' give-back against it, and the ice VFX's two reads (skate mark position, edge load) |
 | `_arms` | `SkaterArmRig` | the upper skeleton: torso, helmet, deltoid caps, both arms by IK, the trunk texture, the face gear |
 | `_stick` | `SkaterStickRig` | the shaft pose, the knob, and the cosmetic flex/whip |
 | `_draw` | `SkaterDrawTracker` | the faceoff swipe crest, host-only |

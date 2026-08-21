@@ -19,6 +19,9 @@ const State = SkaterStateMachine.State
 # ── References ────────────────────────────────────────────────────────────────
 var _skater: Skater = null
 var _controller: SkaterController = null  # tunables, _do_release, _game_state, has_puck
+# The gait, for the one channel the hand pose reads off it: how far into his
+# faceoff address the centre is (see _grip_fraction).
+var _skating: SkaterSkatingCoordinator = null
 
 # ── Blade Smoothing State ─────────────────────────────────────────────────────
 # World-XZ blade position after the per-tick speed cap, which is applied to the
@@ -68,9 +71,11 @@ var _native_bottom: RefCounted = null
 # back, because the hand solve below the block reads it.
 var _native_dangle: RefCounted = null
 
-func setup(skater: Skater, controller: SkaterController) -> void:
+func setup(skater: Skater, controller: SkaterController,
+		skating: SkaterSkatingCoordinator) -> void:
 	_skater = skater
 	_controller = controller
+	_skating = skating
 	if ClassDB.class_exists(&"NativeTopHandIK"):
 		_native_top = ClassDB.instantiate(&"NativeTopHandIK")
 		# Stale-binary guard, one level finer than NativeKernels' class census:
@@ -537,12 +542,13 @@ func _solve_top_hand(desired_blade_xz: Vector2, blade_side_sign: float,
 func update_bottom_hand() -> void:
 	var blade_local: Vector3 = _skater.get_blade_position()
 	var hand_local: Vector3 = _skater.get_top_hand_position()
+	var grip: float = _grip_fraction()
 	var grip_target_xz := Vector2(
-			lerpf(hand_local.x, blade_local.x, _controller.bottom_hand_grip_fraction),
-			lerpf(hand_local.z, blade_local.z, _controller.bottom_hand_grip_fraction))
+			lerpf(hand_local.x, blade_local.x, grip),
+			lerpf(hand_local.z, blade_local.z, grip))
 	# Derive grip Y from the stick shaft so the hand stays on the stick regardless
 	# of pitch lean or reach. bh_hand_y offsets for fine-tuning.
-	var grip_y: float = lerpf(hand_local.y, blade_local.y, _controller.bottom_hand_grip_fraction) + _controller.bh_hand_y
+	var grip_y: float = lerpf(hand_local.y, blade_local.y, grip) + _controller.bh_hand_y
 	var cfg: BottomHandIK.Config = _bottom_hand_ik_config()
 	cfg.hand_y = grip_y
 	var bh: Vector3
@@ -556,6 +562,17 @@ func update_bottom_hand() -> void:
 				grip_target_xz,
 				cfg)
 	_skater.set_bottom_hand_position(bh)
+
+# How far down the shaft the bottom hand is holding. The centre taking a draw
+# slides it well down — the short lever a player wins a faceoff with — and rides
+# the address's own ease on and off it, so the hand walks the shaft over the
+# countdown instead of jumping there.
+func _grip_fraction() -> float:
+	if not _skater.is_faceoff_center or _skating == null:
+		return _controller.bottom_hand_grip_fraction
+	return lerpf(_controller.bottom_hand_grip_fraction,
+			_controller.faceoff_center_grip_fraction, _skating.faceoff_blend)
+
 
 # The commit stance poses the HAND and derives the blade from it, rather than
 # posing the blade and letting the hand fall out. Why blade-first cannot work
@@ -755,8 +772,13 @@ func solve_stick_length() -> float:
 # Horizontal projection of the stick onto the XZ plane, given the fixed
 # vertical drop from hand to blade. Used by follow-through to keep stick
 # length consistent with the IK solver.
-func stick_horiz() -> float:
-	var drop: float = _controller.hand_rest_y - blade_y_local()
+#
+# body_drop asks the same question of a body sunk that much lower than the one
+# standing here: the hand rides the body down while the blade stays on the ice,
+# so the span grows. The faceoff placement uses it to lay out the dot for a
+# crouch the centre has not taken yet.
+func stick_horiz(body_drop: float = 0.0) -> float:
+	var drop: float = _controller.hand_rest_y - blade_y_local() - body_drop
 	var length: float = solve_stick_length()
 	return sqrt(maxf(length * length - drop * drop, 0.0001))
 
