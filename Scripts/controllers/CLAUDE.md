@@ -34,6 +34,29 @@ also owns an aim solve) are the single source: anything the planner believes
 about the keeper's SHAPE derives from them, so changing the body moves the
 planner for free.
 
+### The stick's angle is not a pose choice
+
+The blocker assembly's forward tilt used to be four authored numbers, one per
+stance family. It cannot be: shaft, paddle and blade are one rigid piece hanging
+a fixed distance below the wrist, so once the pose puts the hand somewhere, the
+paddle angle that lands the blade on the ice is *decided* — by that height and by
+the stick's lie, and by nothing else. `GoalieStickRules.tilt_for_blade_on_ice`
+solves it and `GoalieBodyConfigBuilder._seat_stick_tilt` is the only writer of
+`blocker_rot.x`, running last so every modifier that moved the hand — sweeps,
+lunge, prelean, elevated reach — gets a stick that follows it.
+
+The upright stances give up their hand HEIGHT to the same constraint. A blade
+both flat and on the ice puts the wrist at exactly one place
+(`wrist_y_for_flat_blade_on_ice`); standing taller than it is what leaves the
+blade resting on its heel, which is the one thing every goalie coach says not to
+do and which measured out as the blade presenting its UNDERSIDE to the shooter.
+
+What is left over is a real property of this rig rather than a tuning decision:
+the wrist-to-blade lever is 0.92 m where a senior paddle is 0.66, because the
+hand is modelled a quarter-metre up the shaft from the paddle's top. That extra
+length is why the butterfly still has to lay the paddle over past its lie to
+reach the ice, and it is a `Goalie.tscn` change, not a code one.
+
 ## What kills a collaborator extraction
 
 **A collaborator may accept any number of inputs written from outside. It must

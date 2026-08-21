@@ -13,13 +13,20 @@ extends GutTest
 
 
 func test_standing_reach_lands_in_the_measured_band() -> void:
-	# tests/unit/ai/test_goalie_low_cover.gd brackets the live standing keeper's
-	# low cover at 0.59-0.64 m by sweeping flat shots for the point where saves
-	# stop. The derivation must land there — that agreement is the whole claim
-	# that this is a model of the stick rather than a fitted number.
+	# tests/unit/ai/test_goalie_low_cover.gd sweeps flat shots for the point where
+	# saves stop, and the derivation must land where it says — that agreement is
+	# the whole claim that this is a model of the stick rather than a fitted
+	# number.
+	#
+	# The window is wider than the 0.59-0.64 it once bracketed, and the reason is
+	# in that sweep's own output: once the tilt solve puts the blade on the ice,
+	# the BLOCKER side (the side the stick covers) stops scoring at every range
+	# tested, 3 m to 12 m, so the sweep gives a floor and no longer an upper
+	# bound. The cap below is geometric — the blade centre at the yaw cap plus its
+	# half-width cannot exceed it — not another measurement.
 	var reach: float = GoalieStickRules.standing_lateral_reach()
 	gut.p("derived standing lateral reach: %.3f m" % reach)
-	assert_true(reach >= 0.59 and reach <= 0.66,
+	assert_true(reach >= 0.59 and reach <= 0.72,
 			"derived reach must match the measured band (got %.3f)" % reach)
 
 
@@ -39,7 +46,7 @@ func test_reach_tracks_the_blade_geometry() -> void:
 	var center: float = reach - GoalieStickRules.BLADE_WIDTH_M * 0.5
 	assert_almost_eq(center,
 			GoalieStickRules.blade_center_x(GoalieStickRules.READY_WRIST_X_M,
-					GoalieStickRules.TILT_READY_DEG,
+					GoalieStickRules.ready_tilt_deg(),
 					-GoalieStickRules.ACTIVE_YAW_CAP_DEG),
 			0.001,
 			"reach is the furthest blade CENTRE the yaw cap allows, plus its half-width")
@@ -72,9 +79,9 @@ func test_yaw_aims_the_blade_not_the_assembly() -> void:
 	var target_z: float = -1.40
 	var yaw: float = GoalieStickRules.yaw_to_target(
 			wrist_x, wrist_z, target_x, target_z,
-			GoalieStickRules.TILT_READY_DEG, 90.0)
+			GoalieStickRules.ready_tilt_deg(), 90.0)
 	var b: Vector2 = GoalieStickRules.blade_offset_from_wrist(
-			GoalieStickRules.TILT_READY_DEG)
+			GoalieStickRules.ready_tilt_deg())
 	var t: float = deg_to_rad(yaw)
 	var bx: float = b.x * cos(t) + b.y * sin(t)
 	var bz: float = -b.x * sin(t) + b.y * cos(t)
@@ -87,7 +94,7 @@ func test_yaw_is_capped() -> void:
 	# The blocker pad is rigidly attached, so an uncapped swing takes it off the
 	# body. A target hard to one side must saturate, not over-rotate.
 	var yaw: float = GoalieStickRules.yaw_to_target(
-			0.44, -0.32, -4.0, -0.4, GoalieStickRules.TILT_READY_DEG,
+			0.44, -0.32, -4.0, -0.4, GoalieStickRules.ready_tilt_deg(),
 			GoalieStickRules.ACTIVE_YAW_CAP_DEG)
 	assert_almost_eq(absf(yaw), GoalieStickRules.ACTIVE_YAW_CAP_DEG, 0.001,
 			"a far-side target saturates the yaw cap")
@@ -95,7 +102,7 @@ func test_yaw_is_capped() -> void:
 
 func test_degenerate_inputs_hold_neutral() -> void:
 	assert_eq(GoalieStickRules.yaw_to_target(0.44, -0.32, 0.44, -0.32,
-			GoalieStickRules.TILT_READY_DEG, 25.0), 0.0,
+			GoalieStickRules.ready_tilt_deg(), 25.0), 0.0,
 			"a target at the wrist has no defined direction")
 	# Zero TILT is NOT degenerate — the blade still hangs ASSEMBLY_LATERAL_M to
 	# the side, so there is still a lever to swing. (The builder comment this

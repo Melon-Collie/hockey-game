@@ -6,11 +6,14 @@ class_name GoalieStickRules
 #
 # ── What the stick actually does (measured, not assumed) ─────────────────────
 # tests/unit/ai/test_goalie_low_cover.gd sweeps flat shots for the point where
-# saves stop. Against a standing keeper:
-#   * inside 7 m NOTHING scores at any aim point, out to the post, either side;
-#   * at 9 m the edge is 0.65 m from his plane, at 12 m 0.62 m.
+# saves stop. Against a standing keeper, with the blade seated on the ice:
+#   * the BLOCKER side — the side the stick covers — is shut at every range
+#     tested, 3 m to 12 m, out to the post;
+#   * the GLOVE side is shut inside 5 m and at 12 m, and leaks at 7 m (0.30 m
+#     from his plane) and 9 m (0.16 m). That leak is the pad and glove's, not the
+#     stick's: neither range records a single blade contact on that side.
 # So the stick — not the pads — is the primary LOW surface while he is upright.
-# The pad column alone is 0.36 m; the stick takes the silhouette to ~0.64 m.
+# The pad column alone is 0.36 m; the stick takes the silhouette to ~0.67 m.
 #
 # WHERE it covers, measured from real contact positions (not derived): the blade
 # takes a FIXED band of roughly +/-0.22 m in the goalie's local x, straddling the
@@ -69,40 +72,42 @@ const PADDLE_HEIGHT_M: float = 0.66
 const ASSEMBLY_LATERAL_M: float = -0.15
 const ASSEMBLY_DROP_M: float = 0.92
 
-# Forward tilt per stance (X rotation on the blocker assembly), which swings the
-# below-wrist offset FORWARD onto the ice.
-const TILT_STANDING_DEG: float = 22.0
-const TILT_READY_DEG: float = 22.0
-const TILT_BUTTERFLY_DEG: float = 72.0   # hand y=0.49 → ~72°, near-flat
-const TILT_RVH_DEG: float = 65.0
+# Toe cant: the blade's long axis is rolled about the shaft so the toe rides
+# above the heel, which is why the blade's vertical span is twice its 0.07 box
+# height. Mirrors StickBladeCollider's authored Z rotation; the scene-mirror
+# test holds the pair.
+const BLADE_TOE_CANT_DEG: float = 13.0
 
 # ── The lie angle ────────────────────────────────────────────────────────────
-# The fixed angle between the blade and the shaft. Every real stick has one; the
-# authored geometry has none — Goalie.tscn hangs the blade at (−0.15, −0.67, 0)
-# inside Stick, essentially straight below the wrist and COLLINEAR with the
-# shaft, so the blade's face is whatever the shaft's tilt makes it.
+# THE LIE IS THE STICK'S, NOT A TUNING KNOB. A goalie stick's lie number is the
+# angle between the paddle and the blade — where the paddle sits when the blade
+# is flat on the ice. Intermediate and senior goalie sticks run 13-15 on the
+# standard scale (two degrees a step off the 135° that is a player's lie 5),
+# putting a senior stick near 117°: markedly more L-shaped than a player's,
+# which is what lets a keeper hold the blade flat with his hand low.
 #
-# Why it matters: the tilts above swing the blade down to the ice, and with a
-# collinear blade the only way there is to lay the whole stick over (hence the
-# butterfly's 72°), which points the blade's broad face nearly straight DOWN
-# (measured face normal (−0.15, −0.95, −0.27)). The stick is the one surface
-# GoalieSaveRules never deadens, so every blade contact is a live reflection off
-# whichever face the sweep picks; face-down, the reachable surfaces are the heel
-# and the UNDERSIDE, and an underside normal reflects a shot down and GOALWARD —
-# measured (0, 0, −26) → (+1.4, −12.7, −20.8), the goalie's own blade putting the
-# puck in his net at 24 m/s on 8 of 72 in-tight shots, the upward-facing side
-# wedging the rest skyward at 10–21 m/s.
+# Everything else about the stick's pose follows from this one number, so it is
+# stated as the real quantity and BLADE_LIE_DEG is derived from it. The blade is
+# flat when the paddle stands PADDLE_TO_BLADE_DEG - 90 off vertical, which is
+# what flat_blade_tilt_deg returns and what the stance tilts are solved against.
+const PADDLE_TO_BLADE_DEG: float = 117.0
+
+# The blade's fixed rotation relative to the paddle, applied once in
+# Goalie._apply_blade_lie. Negative because the assembly's forward tilt is
+# positive: at tilt φ the blade's face sits at φ + BLADE_LIE_DEG off vertical,
+# so the blade comes flat exactly at φ = flat_blade_tilt_deg().
 #
-# The value is the shaft angle at which the face comes vertical, so it is the same
-# quantity a stick's lie number encodes (~55° off vertical for a goalie stick).
-# Swept over the in-tight grid it is also where the artifacts bottom out — own
-# goals 8 → 1 and pop-ups 33 → 4, with the contact count unchanged at 71, so it
-# removes the artifact without making him a better goalie.
+# Why it exists at all: Goalie.tscn hangs the blade COLLINEAR with the shaft, so
+# without a lie the only way to reach the ice is to lay the whole stick over,
+# which points the blade's broad face down and turns every low shot into a
+# reflection off its UNDERSIDE — down and goalward, measured (0,0,-26) →
+# (+1.4,-12.7,-20.8), eight own goals in 72 in-tight shots. The stick is the one
+# surface GoalieSaveRules never deadens, so every blade contact is live.
 #
 # It does NOT move the blade centre (a CollisionShape3D rotates about its own
-# origin), so blade_center_x and standing_lateral_reach are unaffected and the
-# planner's cover number still matches the posed stick.
-const BLADE_LIE_DEG: float = -55.0
+# origin), so blade_center_x and standing_lateral_reach still describe the posed
+# stick.
+const BLADE_LIE_DEG: float = -(PADDLE_TO_BLADE_DEG - 90.0)
 
 # Yaw cap for active blade intent — how far the assembly may swing the blade
 # toward a threat before the rigidly-attached blocker pad comes off the body.
@@ -116,6 +121,11 @@ const _REACH_PROBE_YAWS: Array[float] = [-ACTIVE_YAW_CAP_DEG, 0.0, ACTIVE_YAW_CA
 # shooter is the state the planning cover describes; STANDING's 0.38 wrist puts
 # the derived reach at 0.58 m instead of 0.64 m, both inside the measured band.
 const READY_WRIST_X_M: float = 0.44
+# Assembly roll in the upright stances (`c.blocker_rot.z`). It matters here
+# because it shortens the wrist-to-blade lever: the lateral offset rolls partly
+# into the vertical, so the blade hangs less far below the hand than
+# ASSEMBLY_DROP_M alone says. See assembly_drop_at_roll.
+const READY_ROLL_DEG: float = -20.0
 
 
 # Horizontal offset of the blade centre from the wrist at forward tilt `φ`:
@@ -170,8 +180,67 @@ static func standing_lateral_reach() -> float:
 	# The cap is the extreme, but which SIGN of yaw reaches furthest depends on
 	# the assembly offset's own lateral sign, so try both rather than assume.
 	for yaw: float in _REACH_PROBE_YAWS:
-		best = maxf(best, blade_center_x(READY_WRIST_X_M, TILT_READY_DEG, yaw))
+		best = maxf(best, blade_center_x(READY_WRIST_X_M, ready_tilt_deg(), yaw))
 	return best + BLADE_WIDTH_M * 0.5
+
+
+# ── Where the stick sits, solved rather than declared ──────────────────────
+# Coaching's first instruction about a goalie stick is that the blade is flat on
+# the ice, a foot in front of the skates, and never resting on its heel. That is
+# not a pose choice — for a rigid stick it is a CONSTRAINT: the blade hangs a
+# fixed distance below the hand, so where the hand is decides the paddle's angle,
+# and the lie decides whether the blade lands flat when it gets there. These
+# three solve that constraint, and the four hand-picked stance tilts that used to
+# stand in for it are gone.
+
+# The paddle angle off vertical at which the blade lies flat on the ice. A
+# property of the stick, not of the stance.
+static func flat_blade_tilt_deg() -> float:
+	return PADDLE_TO_BLADE_DEG - 90.0
+
+
+# How far below the wrist the blade centre hangs, once the assembly's roll `ψ`
+# has swung part of the lateral offset into the vertical. Pure geometry: the
+# offset (ASSEMBLY_LATERAL_M, -ASSEMBLY_DROP_M) rotated by ψ about Z, vertical
+# component negated.
+static func assembly_drop_at_roll(roll_deg: float) -> float:
+	var r: float = deg_to_rad(roll_deg)
+	return ASSEMBLY_DROP_M * cos(r) - ASSEMBLY_LATERAL_M * sin(r)
+
+
+# Half the blade's vertical span when it is flat — so "blade centre at this
+# height" and "blade's low edge on the ice" are the same statement. The toe cant
+# dominates it: 0.19 m of half-width tipped 13° is more vertical span than the
+# whole 0.07 m box height.
+static func blade_half_span_m() -> float:
+	return 0.5 * BLADE_HEIGHT_M + 0.5 * BLADE_WIDTH_M * sin(deg_to_rad(BLADE_TOE_CANT_DEG))
+
+
+# The forward tilt that lands the blade on the ice for a hand at `wrist_y` above
+# it. Never LESS than flat: a stick does not rotate past the ice, and a keeper
+# raising his blocker lifts the blade off rather than cocking his wrist under it,
+# so a hand too high for the lever holds the flat pose and the blade hangs clear.
+static func tilt_for_blade_on_ice(wrist_y: float, roll_deg: float) -> float:
+	var drop: float = assembly_drop_at_roll(roll_deg)
+	if drop < 0.01:
+		return flat_blade_tilt_deg()
+	var c: float = clampf((wrist_y - blade_half_span_m()) / drop, -1.0, 1.0)
+	return maxf(flat_blade_tilt_deg(), rad_to_deg(acos(c)))
+
+
+# The inverse, and the reason the upright stances no longer pick a hand height:
+# for the blade to be BOTH flat and down, the hand can only be here. A keeper
+# standing taller than this is one whose blade rides on its heel.
+static func wrist_y_for_flat_blade_on_ice(roll_deg: float) -> float:
+	return blade_half_span_m() \
+			+ assembly_drop_at_roll(roll_deg) * cos(deg_to_rad(flat_blade_tilt_deg()))
+
+
+# The tilt the planning cover is measured at — the ready stance's, solved from
+# the hand height that stance's own geometry forces.
+static func ready_tilt_deg() -> float:
+	return tilt_for_blade_on_ice(
+			wrist_y_for_flat_blade_on_ice(READY_ROLL_DEG), READY_ROLL_DEG)
 
 
 # ── The lunge: a STRIKE, and therefore the last resort ───────────────────────

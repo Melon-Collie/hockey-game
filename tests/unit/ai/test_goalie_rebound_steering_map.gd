@@ -116,7 +116,9 @@ func test_report_where_the_blade_sits() -> void:
 				if cs == null or (cs.shape as BoxShape3D) == null:
 					continue
 				pad_z = maxf(pad_z, _up_ice_extent(cs, (cs.shape as BoxShape3D).size))
-		gut.p("--- %s  pad face reaches z=%+.3f" % [stance, pad_z])
+		var arm := _goalie.get_node_or_null("BlockArm") as Node3D
+		gut.p("--- %s  goalie root y=%+.3f  wrist y=%+.3f  pad face z=%+.3f"
+				% [stance, _goalie.global_position.y, arm.global_position.y, pad_z])
 		var stick := _goalie.get_node_or_null("BlockArm/Stick") as Node3D
 		if stick == null:
 			continue
@@ -129,6 +131,9 @@ func test_report_where_the_blade_sits() -> void:
 				continue
 			var c: Vector3 = cs.global_transform.origin
 			var axis: int = _up_ice_axis(cs)
+			var lr: Vector3 = cs.rotation_degrees
+			gut.p("     local rot=(%+.1f,%+.1f,%+.1f) local pos=(%+.2f,%+.2f,%+.2f)"
+					% [lr.x, lr.y, lr.z, cs.position.x, cs.position.y, cs.position.z])
 			var face: Vector3 = _up_ice_face(cs)
 			gut.p("   %-18s box=%.2fx%.2fx%.2f reaches %+.3f m past the pads, "
 					% [cs.name, box.size.x, box.size.y, box.size.z,

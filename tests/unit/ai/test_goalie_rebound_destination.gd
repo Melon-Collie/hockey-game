@@ -10,7 +10,10 @@ extends GutTest
 #   * a CHEST save is dead by construction — he smothers it and puts it down for
 #     the crease sweep, so the puck never becomes a rebound at all;
 #   * a STICK save is the dangerous one, and not because of its restitution: the
-#     paddle has no lateral cant, so it sends the puck back where it came from.
+#     blade has no lateral cant, so it sends the puck back where it came from —
+#     and seating it flat on the ice made that WORSE, not better (56% back at the
+#     shooter against 53%), because a square flat face is a mirror. Pitch and
+#     cant are separate levers and only the second one steers.
 #
 # So the measurement is DESTINATION, not restitution. This applies the real save
 # response (GoalieSaveRules.resolve_contact + the flush eject, the same pair

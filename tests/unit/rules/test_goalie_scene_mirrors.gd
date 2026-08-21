@@ -31,15 +31,15 @@ func _goalie_shapes() -> Dictionary:
 	var out: Dictionary = {}
 	for i: int in st.get_node_count():
 		var shape: Variant = null
-		var origin: Vector3 = Vector3.ZERO
+		var xform: Transform3D = Transform3D.IDENTITY
 		for p: int in st.get_node_property_count(i):
 			match st.get_node_property_name(i, p):
 				"shape": shape = st.get_node_property_value(i, p)
-				"transform": origin = (st.get_node_property_value(i, p) as Transform3D).origin
+				"transform": xform = st.get_node_property_value(i, p) as Transform3D
 		if shape == null:
 			continue
 		var key: String = "%s/%s" % [st.get_node_path(i, true), st.get_node_name(i)]
-		out[key] = {"shape": shape, "origin": origin}
+		out[key] = {"shape": shape, "origin": xform.origin, "basis": xform.basis}
 	return out
 
 
@@ -99,6 +99,14 @@ func test_stick_blade_and_paddle_mirror_the_scene() -> void:
 			"PADDLE_WIDTH_M must equal StickPaddleCollier's width")
 	assert_almost_eq(GoalieStickRules.PADDLE_HEIGHT_M, paddle.y, 1e-6,
 			"PADDLE_HEIGHT_M must equal StickPaddleCollier's height")
+	# The toe cant is authored as the blade's own Z roll, and the tilt solve reads
+	# it back as BLADE_TOE_CANT_DEG to work out the blade's vertical span — which
+	# it dominates: 0.19 m of half-width tipped 13° outweighs the whole 0.07 m box.
+	# Get it wrong and every stance seats the blade at the wrong height.
+	var blade_basis: Basis = _goalie_shapes()["./BlockArm/Stick/StickBladeCollider"]["basis"]
+	assert_almost_eq(GoalieStickRules.BLADE_TOE_CANT_DEG,
+			rad_to_deg(atan2(blade_basis.x.y, blade_basis.x.x)), 1e-4,
+			"BLADE_TOE_CANT_DEG must equal StickBladeCollider's authored Z roll")
 
 
 # The one the comment spells out as arithmetic: "Stick at y −0.25,
