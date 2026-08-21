@@ -61,18 +61,7 @@ func before_each() -> void:
 
 func test_report_where_each_surface_aims() -> void:
 	for stance: String in ["READY", "BUTTERFLY"]:
-		_ctrl.reset_to_crease()
-		var spot := Vector3(0.0, 0.0, GOAL_Z + 6.0)
-		_shooter.global_position = spot
-		_shooter.velocity = Vector3.ZERO
-		_shooter.current_shot_state = SkaterStateMachine.State.SKATING_WITH_PUCK
-		_puck.set_carrier(_shooter)
-		for _i: int in 220:
-			_puck.global_position = spot
-			_puck.linear_velocity = Vector3.ZERO
-			if stance == "BUTTERFLY":
-				_ctrl._sm.transition_to(GoalieStateMachine.State.BUTTERFLY)
-			_ctrl._physics_process(DT)
+		_pose(stance)
 		gut.p("--- %s (goalie at %.2f, %.2f, state %d)" % [
 			stance, _goalie.global_position.x, _goalie.global_position.z,
 			_ctrl._sm.current])
@@ -91,18 +80,7 @@ func test_report_where_each_surface_aims() -> void:
 				var box := cs.shape as BoxShape3D
 				if box == null:
 					continue
-			# The face a shooter out at +Z (up-ice of this goal) meets: whichever
-			# local axis's world direction points most up-ice.
-				var b: Basis = cs.global_transform.basis
-				var up_ice := Vector3(0.0, 0.0, 1.0)
-				var best := Vector3.ZERO
-				var best_d: float = -INF
-				for axis: int in 3:
-					for sign: float in [1.0, -1.0]:
-						var n: Vector3 = (b[axis] * sign).normalized()
-						if n.dot(up_ice) > best_d:
-							best_d = n.dot(up_ice)
-							best = n
+				var best: Vector3 = _up_ice_face(cs)
 				# Bearing of the rebound for a puck arriving straight down -Z.
 				var inc := Vector3(0.0, 0.0, -25.0)
 				var out: Vector3 = PuckCollisionRules.deflect_velocity_3d(
@@ -112,3 +90,112 @@ func test_report_where_each_surface_aims() -> void:
 						rad_to_deg(atan2(out.x, out.z)), rad_to_deg(asin(
 							clampf(out.normalized().y, -1.0, 1.0)))])
 	assert_true(true, "report")
+
+
+# ── WHERE THE BLADE SITS ───────────────────────────────────────────────────
+# The companion to the normals above, and the half real doctrine can be held
+# against. Coaching puts the blade roughly a foot (0.30 m) ahead of the skates,
+# flat on the ice, tilted so it ramps a shot UP into the body — and names our
+# exact symptom as the sign it is too close: if pucks hit the stick and stop, or
+# bounce off it into the pads, the stick belongs further in front of the pads.
+#
+# So report the three quantities that claim is about: how far up-ice of the pad
+# faces the stick reaches, how high off the ice its low edge is, and how far the
+# up-ice face is tilted back (leaning back ramps the puck up; leaning forward
+# wedges it down and into him).
+func test_report_where_the_blade_sits() -> void:
+	for stance: String in ["READY", "BUTTERFLY"]:
+		_pose(stance)
+		var pad_z: float = -INF
+		for pad_name: String in ["LeftPad", "RightPad"]:
+			var pad := _goalie.get_node_or_null(pad_name) as Node3D
+			if pad == null:
+				continue
+			for ch in pad.get_children():
+				var cs := ch as CollisionShape3D
+				if cs == null or (cs.shape as BoxShape3D) == null:
+					continue
+				pad_z = maxf(pad_z, _up_ice_extent(cs, (cs.shape as BoxShape3D).size))
+		gut.p("--- %s  pad face reaches z=%+.3f" % [stance, pad_z])
+		var stick := _goalie.get_node_or_null("BlockArm/Stick") as Node3D
+		if stick == null:
+			continue
+		for ch in stick.get_children():
+			var cs := ch as CollisionShape3D
+			if cs == null:
+				continue
+			var box := cs.shape as BoxShape3D
+			if box == null:
+				continue
+			var c: Vector3 = cs.global_transform.origin
+			var axis: int = _up_ice_axis(cs)
+			var face: Vector3 = _up_ice_face(cs)
+			gut.p("   %-18s box=%.2fx%.2fx%.2f reaches %+.3f m past the pads, "
+					% [cs.name, box.size.x, box.size.y, box.size.z,
+					_up_ice_extent(cs, box.size) - pad_z]
+					+ "low edge %+.3f m, presents %s face (%.3f m2) at %+.1f deg back"
+					% [c.y - _half_span_y(cs, box.size), "XYZ"[axis],
+					_face_area(box.size, axis),
+					rad_to_deg(asin(clampf(face.y, -1.0, 1.0)))])
+	assert_true(true, "report")
+
+
+func _pose(stance: String) -> void:
+	_ctrl.reset_to_crease()
+	var spot := Vector3(0.0, 0.0, GOAL_Z + 6.0)
+	_shooter.global_position = spot
+	_shooter.velocity = Vector3.ZERO
+	_shooter.current_shot_state = SkaterStateMachine.State.SKATING_WITH_PUCK
+	_puck.set_carrier(_shooter)
+	for _i: int in 220:
+		_puck.global_position = spot
+		_puck.linear_velocity = Vector3.ZERO
+		if stance == "BUTTERFLY":
+			_ctrl._sm.transition_to(GoalieStateMachine.State.BUTTERFLY)
+		_ctrl._physics_process(DT)
+
+
+# The face a shooter out at +Z (up-ice of this goal) meets: whichever local
+# axis's world direction points most up-ice.
+func _up_ice_face(cs: CollisionShape3D) -> Vector3:
+	var b: Basis = cs.global_transform.basis
+	var a: int = _up_ice_axis(cs)
+	var n: Vector3 = b[a].normalized()
+	return n if n.z >= 0.0 else -n
+
+
+func _up_ice_axis(cs: CollisionShape3D) -> int:
+	var b: Basis = cs.global_transform.basis
+	var best: int = 0
+	var best_d: float = -INF
+	for a: int in 3:
+		var d: float = absf(b[a].normalized().z)
+		if d > best_d:
+			best_d = d
+			best = a
+	return best
+
+
+# The area of the face whose normal is `axis` — the two OTHER extents. A box
+# presents very different targets on its broad face and on its edge, and the
+# direction pick alone cannot tell them apart.
+func _face_area(size: Vector3, axis: int) -> float:
+	if axis == 0:
+		return size.y * size.z
+	if axis == 1:
+		return size.x * size.z
+	return size.x * size.y
+
+
+# World z of the box's up-ice-most corner: the OBB's support point along +Z.
+func _up_ice_extent(cs: CollisionShape3D, size: Vector3) -> float:
+	var b: Basis = cs.global_transform.basis
+	var h: Vector3 = size * 0.5
+	return cs.global_transform.origin.z + absf(b.x.z) * h.x \
+			+ absf(b.y.z) * h.y + absf(b.z.z) * h.z
+
+
+func _half_span_y(cs: CollisionShape3D, size: Vector3) -> float:
+	var b: Basis = cs.global_transform.basis
+	var h: Vector3 = size * 0.5
+	return absf(b.x.y) * h.x + absf(b.y.y) * h.y + absf(b.z.y) * h.z
