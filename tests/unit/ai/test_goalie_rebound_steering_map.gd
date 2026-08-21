@@ -11,24 +11,22 @@ extends GutTest
 # +/-90 = pure lateral (the corners), beyond +/-90 = back toward his own end.
 #
 # WHAT IT SHOWS TODAY:
-#   the PADS already steer wide — +/-55 standing, +/-72 in butterfly, which is
-#   the toe-out doing its job;
-#   the BLOCKER has no lateral cant at all, so standing it fires the puck 82
+#   the PADS steer wide — +/-55 standing, +/-72 in butterfly, which is the
+#   toe-out doing its job;
+#   the BLADE now steers with them, +89 standing and +100 in butterfly, off
+#   GoalieStickRules.BLADE_CURVE_FACE_DEG. Before that angle existed the butterfly
+#   blade sat at +2.4 — square to the shooter, which is a mirror;
+#   the BLOCKER still has no lateral cant, so standing it fires the puck 87
 #   degrees UP and dead straight back up the slot, and in butterfly its normal has
-#   swung past lateral to -109, i.e. angled back toward his own end;
-#   the STICK's shaft and paddle sit at +4.6 degrees of lateral in butterfly,
-#   which is straight back at the shooter — and they are the tall surfaces, 0.66 m
-#   of paddle against 0.07 m of blade, so they take nearly every stick save.
+#   swung past lateral to -120.
 #
 # THE STICK'S CANT CANNOT BE A LOCAL ROLL, which is worth recording because it is
 # the obvious fix and it does not work. Rolling the stick about its own Y turns
 # the face laterally only while the shaft is upright; in butterfly the assembly is
 # pitched flat, so that same rotation is a roll about a near-horizontal axis and
-# tilts the face up and down instead. Measured at 18 degrees: READY moved from
-# +0 to +113 (itself an overshoot, past lateral), butterfly did not move at all,
-# and the stick's back-at-the-shooter rate was unchanged at 53% with the pads
-# slightly worse. The lever that steers in every stance is the ASSEMBLY YAW,
-# about the goalie's own up axis — where active_blade_max_yaw_deg already lives.
+# tilts the face up and down instead. What steers in every stance is the BLADE's
+# own face rotation, in plan — the flat-box stand-in for a blade CURVE, which
+# unlike the assembly yaw does not move the blade an inch while it steers.
 #
 # TWO CAVEATS on reading it. The face is picked by DIRECTION alone (whichever
 # local axis points most up-ice), not weighted by face AREA, so for a part whose
@@ -144,6 +142,24 @@ func test_report_where_the_blade_sits() -> void:
 					rad_to_deg(asin(clampf(face.y, -1.0, 1.0)))])
 	assert_true(true, "report")
 
+
+
+# The seating solve's whole purpose, asserted rather than merely reported. Every
+# stance whose hand is low enough for the lever to reach must put the blade's low
+# edge ON the ice — not floating, and not through it. Both failures have happened
+# and neither announced itself: a 12 cm float when the tilt was authored, and a
+# 5.7 cm burial when the span ignored the assembly roll.
+#
+# The tolerance is a puck's half-thickness. Tighter would be pinning float noise;
+# looser would admit a gap a puck can cross.
+func test_the_blade_is_seated_on_the_ice() -> void:
+	for stance: String in ["READY", "BUTTERFLY"]:
+		_pose(stance)
+		var cs := _goalie.get_node("BlockArm/Stick/StickBladeCollider") as CollisionShape3D
+		var box := cs.shape as BoxShape3D
+		var low: float = cs.global_transform.origin.y - _half_span_y(cs, box.size)
+		assert_almost_eq(low, 0.0, 0.013,
+				"%s seats the blade's low edge at %+.4f m, not on the ice" % [stance, low])
 
 func _pose(stance: String) -> void:
 	_ctrl.reset_to_crease()

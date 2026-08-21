@@ -307,8 +307,11 @@ func apply_network_pose(state: GoalieNetworkState) -> void:
 # mesh together, which is why the blade is held out of the stick mesh merge.
 func _apply_blade_lie() -> void:
 	var lie: float = deg_to_rad(GoalieStickRules.BLADE_LIE_DEG)
+	var face: float = deg_to_rad(GoalieStickRules.BLADE_CURVE_FACE_DEG)
 	_stick_blade.rotation.x += lie
+	_stick_blade.rotation.y += face
 	_stick_blade_mesh.rotation.x += lie
+	_stick_blade_mesh.rotation.y += face
 
 
 func _lerp_part(part: Node3D, target_pos: Vector3, target_rot_deg: Vector3, t: float) -> void:

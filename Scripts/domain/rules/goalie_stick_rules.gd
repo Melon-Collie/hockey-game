@@ -9,9 +9,9 @@ class_name GoalieStickRules
 # saves stop. Against a standing keeper, with the blade seated on the ice:
 #   * the BLOCKER side — the side the stick covers — is shut at every range
 #     tested, 3 m to 12 m, out to the post;
-#   * the GLOVE side is shut at 5 m and 12 m and leaks at 3 m (0.11 m from his
-#     plane), 7 m (0.15) and 9 m (0.16). Those are the pad and glove's: the 7 and
-#     9 m rows record no blade contact on that side at all.
+#   * the GLOVE side is shut at 3, 5 and 12 m and leaks at 7 m (0.15 m from his
+#     plane) and 9 m (0.16). Those two are the pad and glove's, not the stick's:
+#     both rows record no blade contact on that side at all.
 # So the stick — not the pads — is the primary LOW surface while he is upright.
 # The pad column alone is 0.36 m; the stick takes the silhouette to ~0.62 m.
 #
@@ -47,6 +47,10 @@ class_name GoalieStickRules
 # genuinely above that by the time it reaches him.
 const BLADE_WIDTH_M: float = 0.38
 const BLADE_HEIGHT_M: float = 0.07
+# The blade's thickness, which matters only once the face is turned: an open face
+# swings part of it into the vertical, and the seating solve projects all three
+# extents. Mirrored from the scene like the other two.
+const BLADE_THICKNESS_M: float = 0.03
 
 # The PADDLE — the shaft's lower section, StickPaddleCollier, a 0.10 x 0.66
 # box standing between the wrist and the blade. Narrow, so it adds nothing to
@@ -75,12 +79,13 @@ const PADDLE_HEIGHT_M: float = 0.66
 const ASSEMBLY_LATERAL_M: float = -0.15
 const ASSEMBLY_DROP_M: float = 0.67
 
-# Roll of the blade about its own long axis, authored LEVEL. A blade rolled off
-# level rests on one end — the heel-down habit every goalie coach warns about,
-# and worth a constant rather than an assumed zero because the vertical span the
-# tilt solve seats on the ice is what it distorts: 0.19 m of half-width tipped
-# 13° was more span than the whole 0.07 m box height. Whatever tips the blade in
-# play is the assembly's own roll, which is a pose, not the stick.
+# Roll of the blade about its own long axis, authored LEVEL — a blade rolled off
+# level rests on one end, which is the heel-down habit every goalie coach warns
+# about. It is a constant rather than an assumed zero because blade_basis needs
+# the scene's authored value to compose, and because the seating solve is more
+# sensitive to it than to anything else: 0.19 m of half-width tipped 13° was more
+# vertical span than the whole 0.07 m box height. Whatever tips the blade in play
+# is the assembly's own roll, which is a pose, not the stick.
 const BLADE_TOE_CANT_DEG: float = 0.0
 
 # ── The lie angle ────────────────────────────────────────────────────────────
@@ -124,6 +129,47 @@ const BLADE_LIE_DEG: float = -(PADDLE_TO_BLADE_DEG - 90.0)
 
 # Yaw cap for active blade intent — how far the assembly may swing the blade
 # toward a threat before the rigidly-attached blocker pad comes off the body.
+# ── The blade's curve ────────────────────────────────────────────────────────
+# How far the blade's face is turned in plan — about the blade's HEIGHT axis, so
+# the toe leads and the face looks off to one side rather than straight up-ice.
+#
+# WHAT IT STANDS IN FOR IS THE CURVE. Goalie blades are catalogued by curve the
+# way player blades are, and a curved blade has no single face direction: its
+# normal rotates along its length, so a puck off the heel and a puck off the toe
+# leave on different bearings. A collider that is one flat box cannot have that,
+# and this is the curve's MEAN face rotation — the one plane closest to the
+# surface a real blade presents.
+#
+# The limitation is the other side of the same coin and worth knowing before
+# reading a rebound table: one plane steers every contact the same way, where a
+# real curve is what lets a keeper put pucks into BOTH corners depending where on
+# the blade he takes them. Do not confuse this with the "Open"/"Closed" face
+# angle a blade pattern also advertises — that one is loft, about the long axis,
+# and BLADE_LIE_DEG already owns it here.
+#
+# It is the blade's, not the pose's, which is what makes it safe. A rotation
+# about the collider's own origin does not move the blade, so the standing reach,
+# the five-hole cover and the planning model are all untouched — the same
+# argument BLADE_LIE_DEG makes. The alternative was to steer with the assembly
+# YAW, which turns the face by swinging the whole stick sideways and pays for
+# every degree in cover.
+#
+# Signed toward the TOE, so both stances steer the same way rather than the
+# upright one going one way and the down one the other. It takes the butterfly
+# blade from +2 degrees of bearing — dead square, a mirror — to +100, the corner.
+#
+# 18 IS A MEASURED OPTIMUM, and both directions off it are worse for the same
+# reason a face angle costs something: the blade is 0.38 m long and turning it
+# shortens its lateral footprint. Swept against the shot map, 10 / 18 / 30
+# degrees give 40 / 39 / 47 clean beats and 38 / 29 / 29 in-tight goals — 30
+# steers marginally better and pays 5 cm of blade for it.
+#
+# DO NOT READ THE ->SHOOTER COLUMN AS THIS CONSTANT'S SCORE. It barely moves
+# across that sweep (49 / 47 / 45%) because at the doorstep spot the metric
+# cannot resolve steering at all; see test_goalie_rebound_destination's per-spot
+# breakdown, where every one of those rebounds lives.
+const BLADE_CURVE_FACE_DEG: float = 18.0
+
 const ACTIVE_YAW_CAP_DEG: float = 25.0
 # The yaw extremes standing_lateral_reach probes. A const rather than a literal
 # in the loop header, which would allocate an Array per call.
@@ -221,36 +267,59 @@ static func assembly_drop_at_roll(roll_deg: float) -> float:
 	return ASSEMBLY_DROP_M * cos(r) - ASSEMBLY_LATERAL_M * sin(r)
 
 
-# Half the blade's vertical span — so "blade centre at this height" and "blade's
-# low edge on the ice" are the same statement.
-#
-# It takes the assembly ROLL because the roll is what tips the blade's long axis,
-# and that axis is 0.38 m of it: the upright stances' 20° of roll adds 6.5 cm of
-# span against the 3.5 cm the box height contributes, so leaving it out buries
-# the blade 5.7 cm under the ice. The blade's own cant rides along with it and is
-# authored level, which is why this reads as one angle rather than two.
-static func blade_half_span_m(roll_deg: float) -> float:
-	var a: float = deg_to_rad(roll_deg + BLADE_TOE_CANT_DEG)
-	return 0.5 * BLADE_HEIGHT_M * absf(cos(a)) + 0.5 * BLADE_WIDTH_M * absf(sin(a))
+# The blade's world orientation at an assembly pose, which is the whole stick's
+# rigidity written down: the arm's tilt and roll composed with the blade's own
+# fixed lie, face angle and authored cant. The arm's YAW is deliberately absent —
+# it turns the blade in the horizontal plane and cannot change how tall it
+# stands, which is all this is used for.
+static func blade_basis(tilt_deg: float, roll_deg: float) -> Basis:
+	var arm := Basis.from_euler(Vector3(
+			deg_to_rad(tilt_deg), 0.0, deg_to_rad(roll_deg)), EULER_ORDER_YXZ)
+	var blade := Basis.from_euler(Vector3(
+			deg_to_rad(BLADE_LIE_DEG), deg_to_rad(BLADE_CURVE_FACE_DEG),
+			deg_to_rad(BLADE_TOE_CANT_DEG)), EULER_ORDER_YXZ)
+	return arm * blade
+
+
+# Half the blade's vertical span at that pose — so "blade centre at this height"
+# and "blade's low edge on the ice" are the same statement. The box's three half
+# extents projected onto vertical, exactly, because approximating it is how the
+# blade ends up under the ice: the 0.38 m long axis is ten times the box height,
+# so every degree that tips or turns it moves the low edge more than the height
+# itself contributes.
+static func blade_half_span_at(tilt_deg: float, roll_deg: float) -> float:
+	var b: Basis = blade_basis(tilt_deg, roll_deg)
+	return absf(b.x.y) * 0.5 * BLADE_WIDTH_M \
+			+ absf(b.y.y) * 0.5 * BLADE_HEIGHT_M \
+			+ absf(b.z.y) * 0.5 * BLADE_THICKNESS_M
 
 
 # The forward tilt that lands the blade on the ice for a hand at `wrist_y` above
 # it. Never LESS than flat: a stick does not rotate past the ice, and a keeper
 # raising his blocker lifts the blade off rather than cocking his wrist under it,
 # so a hand too high for the lever holds the flat pose and the blade hangs clear.
+# The span depends on the tilt and the tilt on the span, so it is solved by
+# iteration rather than in closed form. It converges immediately — the span moves
+# by millimetres across the whole tilt range — and three passes is the belt and
+# braces version of two.
 static func tilt_for_blade_on_ice(wrist_y: float, roll_deg: float) -> float:
 	var drop: float = assembly_drop_at_roll(roll_deg)
+	var flat: float = flat_blade_tilt_deg()
 	if drop < 0.01:
-		return flat_blade_tilt_deg()
-	var c: float = clampf((wrist_y - blade_half_span_m(roll_deg)) / drop, -1.0, 1.0)
-	return maxf(flat_blade_tilt_deg(), rad_to_deg(acos(c)))
+		return flat
+	var tilt: float = flat
+	for _i: int in 3:
+		var c: float = clampf(
+				(wrist_y - blade_half_span_at(tilt, roll_deg)) / drop, -1.0, 1.0)
+		tilt = maxf(flat, rad_to_deg(acos(c)))
+	return tilt
 
 
 # The inverse, and the reason the upright stances no longer pick a hand height:
 # for the blade to be BOTH flat and down, the hand can only be here. A keeper
 # standing taller than this is one whose blade rides on its heel.
 static func wrist_y_for_flat_blade_on_ice(roll_deg: float) -> float:
-	return blade_half_span_m(roll_deg) \
+	return blade_half_span_at(flat_blade_tilt_deg(), roll_deg) \
 			+ assembly_drop_at_roll(roll_deg) * cos(deg_to_rad(flat_blade_tilt_deg()))
 
 

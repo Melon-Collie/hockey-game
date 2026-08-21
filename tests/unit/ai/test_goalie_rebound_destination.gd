@@ -9,11 +9,11 @@ extends GutTest
 #     exactly what those angles exist for;
 #   * a CHEST save is dead by construction — he smothers it and puts it down for
 #     the crease sweep, so the puck never becomes a rebound at all;
-#   * a STICK save is the dangerous one, and not because of its restitution: the
-#     blade has no lateral cant, so it sends the puck back where it came from —
-#     and seating it flat on the ice did not fix it — 52% against 53% — because a
-#     square flat face is a mirror. Pitch and cant are separate levers, and only
-#     the second one steers.
+#   * a STICK save reads as the dangerous one, and the ->SHOOTER column is why —
+#     but see the per-spot breakdown before believing it. Every one of those
+#     rebounds comes off the 3 m doorstep, where a shooter is inside the test
+#     radius of nearly any exit the puck has. What the column showed was the
+#     spot, again.
 #
 # So the measurement is DESTINATION, not restitution. This applies the real save
 # response (GoalieSaveRules.resolve_contact + the flush eject, the same pair
@@ -209,10 +209,17 @@ func test_report_rebound_baseline_across_the_shot_map() -> void:
 	]
 	# Per surface: [saves, held, swept, stayed, own, dwell sum, back-at-shooter].
 	var by_part: Dictionary = {}
+	# Per spot: [loose rebounds, back-at-shooter]. The rate is not comparable
+	# across spots and the breakdown is the only thing that says so — see the
+	# report line below.
+	var by_spot: Array = []
+	for _s: Vector3 in SPOTS:
+		by_spot.append([0, 0])
 	var shots: int = 0
 	var first_goals: int = 0
 	var own_goals: int = 0
-	for spot: Vector3 in SPOTS:
+	for si: int in SPOTS.size():
+		var spot: Vector3 = SPOTS[si]
 		var from := Vector3(spot.x, 0.0, GOAL_Z + spot.z)
 		for loft: int in lofts:
 			for frac: float in AIM_FRACTIONS:
@@ -244,8 +251,10 @@ func test_report_rebound_baseline_across_the_shot_map() -> void:
 						row[4] += 1
 						own_goals += 1
 					row[5] += _h.rebound_danger_dwell_s
+					by_spot[si][0] += 1
 					if _h.rebound_min_dist_to_shooter <= BACK_AT_SHOOTER_M:
 						row[6] += 1
+						by_spot[si][1] += 1
 	gut.p("%d spots x %d lofts x %d aims x %d speeds (65-85 mph), perfect execution."
 			% [SPOTS.size(), lofts.size(), AIM_FRACTIONS.size(), BASELINE_MPH.size()])
 	gut.p("  surface | saves | HELD | SWEPT | loose | STAYS | DWELL | ->SHOOTER | OWN")
@@ -269,4 +278,15 @@ func test_report_rebound_baseline_across_the_shot_map() -> void:
 		totals[6], 100.0 * float(totals[6]) / float(maxi(all_loose, 1)), totals[4]])
 	gut.p("  shots %d | beaten clean %d | own-net rebounds %d"
 			% [shots, first_goals, own_goals])
+	# ->SHOOTER BY SPOT, because the rate is not comparable between them. The
+	# shooter is a fixed point and the test is a radius around it, so a man
+	# standing on the doorstep is inside 1.8 m of most exits the puck has; one at
+	# the point is inside almost none. A high rate in tight is geometry, and only
+	# the far rows say whether the blade is steering.
+	gut.p("  ->SHOOTER by spot (loose rebounds):")
+	for si: int in SPOTS.size():
+		var pair: Array = by_spot[si]
+		gut.p("    %5.1f m out, x %+4.1f | %4d loose | %4d back (%3.0f%%)" % [
+			SPOTS[si].z, SPOTS[si].x, pair[0], pair[1],
+			100.0 * float(pair[1]) / float(maxi(pair[0], 1))])
 	assert_true(true, "report")
