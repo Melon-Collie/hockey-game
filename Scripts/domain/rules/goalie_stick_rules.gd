@@ -45,8 +45,16 @@ class_name GoalieStickRules
 # paddle below, though: a lifted puck clears the blade but not necessarily the
 # assembly, which stands 0.66 m. Lifting beats the stick only once the puck is
 # genuinely above that by the time it reaches him.
+# NHL Rule 10.2 sizes the goalkeeper's blade: at most 15.5 in heel to toe, 3.5 in
+# tall, widening to 4.5 in at the heel, with 0.75 in of curve. The collider takes
+# the 3.5 in standard height rather than the heel's bulge, which is a local
+# thickening right at the paddle and sits inside the paddle's own box anyway.
 const BLADE_WIDTH_M: float = 0.38
-const BLADE_HEIGHT_M: float = 0.07
+const BLADE_HEIGHT_M: float = 0.089
+# Mesh-only, and the two the collider cannot express: a single box has one height
+# and no bow. StickBladeMeshBuilder takes both.
+const BLADE_HEEL_HEIGHT_M: float = 0.108
+const BLADE_CURVE_DEPTH_M: float = 0.019
 # The blade's thickness, which matters only once the face is turned: an open face
 # swings part of it into the vertical, and the seating solve projects all three
 # extents. Mirrored from the scene like the other two.
@@ -183,15 +191,33 @@ const READY_WRIST_X_M: float = 0.44
 # Assembly roll in the upright stances (`c.blocker_rot.z`). It matters here
 # because it shortens the wrist-to-blade lever: the lateral offset rolls partly
 # into the vertical, so the blade hangs less far below the hand than
-# ASSEMBLY_DROP_M alone says. See assembly_drop_at_roll.
+# ASSEMBLY_DROP_M alone says. See blade_offset_at_roll.
 const READY_ROLL_DEG: float = -20.0
+
+
+# The blade CENTRE's offset from the wrist, assembly-local and before any stance
+# rotation. Constant, and NOT simply (ASSEMBLY_LATERAL_M, -ASSEMBLY_DROP_M):
+# Goalie._seat_blade hangs the blade from its HEEL so the lie and the curve pivot
+# at the joint, which swings the centre off the authored point — including out of
+# the assembly's plane, since the curve turns the blade in plan. Everything that
+# needs to know where the blade IS goes through here, or it is describing a blade
+# that pivots somewhere the rig does not.
+static func blade_centre_offset() -> Vector3:
+	var heel := Vector3(
+			ASSEMBLY_LATERAL_M + BLADE_WIDTH_M * 0.5, -ASSEMBLY_DROP_M, 0.0)
+	var blade := Basis.from_euler(Vector3(
+			deg_to_rad(BLADE_LIE_DEG), deg_to_rad(BLADE_CURVE_FACE_DEG),
+			deg_to_rad(BLADE_TOE_CANT_DEG)), EULER_ORDER_YXZ)
+	return heel + blade * Vector3(-BLADE_WIDTH_M * 0.5, 0.0, 0.0)
 
 
 # Horizontal offset of the blade centre from the wrist at forward tilt `φ`:
 # (lateral, forward). The drop below the wrist rotates into forward reach as the
 # stick tilts down onto the ice.
 static func blade_offset_from_wrist(tilt_deg: float) -> Vector2:
-	return Vector2(ASSEMBLY_LATERAL_M, -ASSEMBLY_DROP_M * sin(deg_to_rad(tilt_deg)))
+	var c: Vector3 = blade_centre_offset()
+	var t: float = deg_to_rad(tilt_deg)
+	return Vector2(c.x, c.y * sin(t) + c.z * cos(t))
 
 
 # The assembly yaw (degrees, clamped to `max_yaw_deg`) that lands the BLADE on
@@ -258,13 +284,20 @@ static func flat_blade_tilt_deg() -> float:
 	return PADDLE_TO_BLADE_DEG - 90.0
 
 
-# How far below the wrist the blade centre hangs, once the assembly's roll `ψ`
-# has swung part of the lateral offset into the vertical. Pure geometry: the
-# offset (ASSEMBLY_LATERAL_M, -ASSEMBLY_DROP_M) rotated by ψ about Z, vertical
-# component negated.
-static func assembly_drop_at_roll(roll_deg: float) -> float:
-	var r: float = deg_to_rad(roll_deg)
-	return ASSEMBLY_DROP_M * cos(r) - ASSEMBLY_LATERAL_M * sin(r)
+# The blade centre's offset with the assembly's roll `ψ` applied but not its
+# tilt — the part of the drop that does not depend on what the solve below is
+# solving for. Roll matters because it swings part of the lateral offset into the
+# vertical, so the blade hangs less far below the hand than the raw drop says.
+static func blade_offset_at_roll(roll_deg: float) -> Vector3:
+	return Basis.from_euler(Vector3(0.0, 0.0, deg_to_rad(roll_deg)), EULER_ORDER_YXZ) \
+			* blade_centre_offset()
+
+
+# How far below the wrist the blade centre sits at a full stance pose.
+static func blade_centre_drop(tilt_deg: float, roll_deg: float) -> float:
+	var w: Vector3 = blade_offset_at_roll(roll_deg)
+	var t: float = deg_to_rad(tilt_deg)
+	return -(w.y * cos(t) - w.z * sin(t))
 
 
 # The blade's world orientation at an assembly pose, which is the whole stick's
@@ -303,15 +336,20 @@ static func blade_half_span_at(tilt_deg: float, roll_deg: float) -> float:
 # by millimetres across the whole tilt range — and three passes is the belt and
 # braces version of two.
 static func tilt_for_blade_on_ice(wrist_y: float, roll_deg: float) -> float:
-	var drop: float = assembly_drop_at_roll(roll_deg)
 	var flat: float = flat_blade_tilt_deg()
-	if drop < 0.01:
+	# drop(φ) = -w.y·cos φ + w.z·sin φ, which is R·cos(φ - α) — so the solve is
+	# still one acos, just about α rather than zero. The z term is the curve's:
+	# it turns the blade in plan, which puts the centre out of the assembly plane.
+	var w: Vector3 = blade_offset_at_roll(roll_deg)
+	var r: float = sqrt(w.y * w.y + w.z * w.z)
+	if r < 0.01:
 		return flat
+	var alpha: float = atan2(w.z, -w.y)
 	var tilt: float = flat
 	for _i: int in 3:
 		var c: float = clampf(
-				(wrist_y - blade_half_span_at(tilt, roll_deg)) / drop, -1.0, 1.0)
-		tilt = maxf(flat, rad_to_deg(acos(c)))
+				(wrist_y - blade_half_span_at(tilt, roll_deg)) / r, -1.0, 1.0)
+		tilt = maxf(flat, rad_to_deg(alpha + acos(c)))
 	return tilt
 
 
@@ -319,8 +357,8 @@ static func tilt_for_blade_on_ice(wrist_y: float, roll_deg: float) -> float:
 # for the blade to be BOTH flat and down, the hand can only be here. A keeper
 # standing taller than this is one whose blade rides on its heel.
 static func wrist_y_for_flat_blade_on_ice(roll_deg: float) -> float:
-	return blade_half_span_at(flat_blade_tilt_deg(), roll_deg) \
-			+ assembly_drop_at_roll(roll_deg) * cos(deg_to_rad(flat_blade_tilt_deg()))
+	var flat: float = flat_blade_tilt_deg()
+	return blade_half_span_at(flat, roll_deg) + blade_centre_drop(flat, roll_deg)
 
 
 # The tilt the planning cover is measured at — the ready stance's, solved from

@@ -195,12 +195,11 @@ static func _merge_glove(goalie: Goalie) -> void:
 
 
 # THE BLADE IS NOT IN THIS MERGE, and that is the whole reason the merge stops at
-# two parts. Merging requires the group to be rigid relative to each other, and
-# the blade no longer is: Goalie._seat_blade counter-pitches it every tick so its
-# face stays square to the shooter while the paddle tilts down (see that method
-# for why — a face-down blade was scoring on its own goalie). Baking it into the
-# shaft would freeze it at the authored angle and desync the visible blade from
-# the collider that actually makes the save.
+# two parts. Merging bakes a part's placement into vertices, and the blade's is
+# not the authored one: Goalie._seat_blade re-hangs it from the heel with the
+# stick's lie and curve on it, and it is a different mesh entirely from the box
+# the scene carries. Baking the authored box in would freeze the visible blade at
+# an angle and a shape the collider making the save does not have.
 static func _merge_stick(goalie: Goalie) -> void:
 	var paddle: MeshInstance3D = goalie.get_node(
 			"BlockArm/Stick/StickPaddleMesh") as MeshInstance3D
@@ -251,6 +250,46 @@ static func shared_connector_tube() -> ArrayMesh:
 		var profile: Array[Vector2] = [
 			Vector2(0.5, HIP_CONNECTOR_RADIUS), Vector2(-0.5, HIP_CONNECTOR_RADIUS)]
 		return _build_lathe(profile, 8, 1.0, 1.0))
+
+
+# The blade the keeper actually carries, and the same builder the skaters use —
+# a bowed centerline, a heel-to-toe height and thickness taper, a rounded toe and
+# a hosel up the paddle line, in place of the box that was there. A box cannot be
+# flush with the paddle through a rotation and cannot bow, and both showed.
+#
+# Sized off NHL Rule 10.2 (see GoalieStickRules): 0.38 m heel to toe against the
+# 0.394 limit, 0.108 m tall at the heel tapering to the 0.089 standard, and the
+# full 0.019 m of permitted curve — a goalie blade is much taller and much
+# straighter than the player blade this builder defaults to.
+#
+# HEEL-ORIGIN, which is the point. Goalie._seat_blade hangs it from the joint so
+# the lie and the curve pivot there instead of about the blade's middle.
+static func shared_goalie_blade() -> ArrayMesh:
+	return _shared("goalie_blade", func() -> ArrayMesh:
+		var p := StickBladeMeshBuilder.Params.new()
+		p.length = GoalieStickRules.BLADE_WIDTH_M
+		p.height = GoalieStickRules.BLADE_HEEL_HEIGHT_M
+		p.height_toe_frac = GoalieStickRules.BLADE_HEIGHT_M \
+				/ GoalieStickRules.BLADE_HEEL_HEIGHT_M
+		p.thickness_heel = GoalieStickRules.BLADE_THICKNESS_M
+		p.thickness_toe = GoalieStickRules.BLADE_THICKNESS_M * 0.75
+		p.curve_depth = GoalieStickRules.BLADE_CURVE_DEPTH_M
+		# Late and shallow: a keeper's blade holds straight through the contact
+		# zone and turns near the toe, where a player's heel curve would lift the
+		# middle of it off the ice.
+		p.curve_power = 3.0
+		p.toe_round_m = 0.018
+		p.toe_kick_m = 0.002
+		p.toe_kick_start_frac = 0.82
+		# The blade's own twist stays at zero: BLADE_CURVE_FACE_DEG already turns
+		# the whole blade, and doing it twice would double the steer.
+		p.face_open_deg = 0.0
+		# The hosel climbs the PADDLE, and in the blade's own frame the paddle
+		# leans back by the lie — so the shaft angle it wants is the lie's
+		# complement, not a number.
+		p.hosel_length = 0.06
+		p.hosel_angle_deg = 90.0 - GoalieStickRules.flat_blade_tilt_deg()
+		return StickBladeMeshBuilder.build(p))
 
 
 # ── Part builders ─────────────────────────────────────────────────────────────

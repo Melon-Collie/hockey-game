@@ -100,10 +100,12 @@ func _on_frame() -> void:
 	elif _frames == 62:
 		_save("goalie_butterfly_top.png")
 		_inputs.state = GoalieStateMachine.State.READY
-		# Low and close from the blocker side: the blade against the ice and the
-		# paddle's angle, which is what the seating solve is for.
-		_camera.position = Vector3(1.5, 0.5, -1.5)
-		_camera.look_at(Vector3(0.1, 0.1, -0.6))
+		# Low and close, square to the blade's FACE rather than down its length —
+		# from the blocker side the blade points away and foreshortens to a wedge,
+		# which shows the joint but none of the blade. This shows the taper, the
+		# bow and the toe, and the paddle running into the heel.
+		_camera.position = Vector3(-0.85, 0.32, -1.45)
+		_camera.look_at(Vector3(-0.10, 0.07, -0.62))
 	elif _frames == 74:
 		_save("goalie_stick_close.png")
 		quit()

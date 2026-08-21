@@ -19,7 +19,7 @@ extends Node3D
 @onready var _blocker: StaticBody3D = $BlockArm/Blocker
 @onready var _stick: StaticBody3D = $BlockArm/Stick
 @onready var _stick_blade: CollisionShape3D = $BlockArm/Stick/StickBladeCollider
-@onready var _stick_blade_mesh: MeshInstance3D = $BlockArm/Stick/StickBladeMesh
+@onready var stick_blade_mesh: MeshInstance3D = $BlockArm/Stick/StickBladeMesh
 
 # Visual mesh refs — public so GoalieUniformCoordinator can read them directly
 # without a growing parameter list, matching the SkaterUniformCoordinator pattern.
@@ -88,7 +88,7 @@ func _ready() -> void:
 	# set (colliders untouched). Before the uniform coordinator only by
 	# convention — painting is material_override / ShaderMaterial, mesh-free.
 	GoalieMeshBuilder.apply_goalie(self)
-	_apply_blade_lie()
+	_seat_blade()
 	_init_stick_knob()
 	_init_connectors()
 	_init_arm_bones()
@@ -305,13 +305,27 @@ func apply_network_pose(state: GoalieNetworkState) -> void:
 # build time: a lie is a property of the stick, so the blade stays rigid to the
 # shaft and every stance inherits it through the assembly transform. Collider and
 # mesh together, which is why the blade is held out of the stick mesh merge.
-func _apply_blade_lie() -> void:
-	var lie: float = deg_to_rad(GoalieStickRules.BLADE_LIE_DEG)
-	var face: float = deg_to_rad(GoalieStickRules.BLADE_CURVE_FACE_DEG)
-	_stick_blade.rotation.x += lie
-	_stick_blade.rotation.y += face
-	_stick_blade_mesh.rotation.x += lie
-	_stick_blade_mesh.rotation.y += face
+#
+# IT PIVOTS ABOUT THE HEEL, not the blade's middle. The heel is where the blade
+# meets the paddle, so it is the one point that may not move — and rotating a
+# centred box about its own centre swings it clear: 27 degrees of lie and 18 of
+# curve carried the heel about 6 cm out of the paddle, which is the open joint
+# you can see in a render. Pivoting at the heel closes it and moves the toe
+# instead, which is what a stick does.
+func _seat_blade() -> void:
+	var rot := Basis.from_euler(Vector3(
+			deg_to_rad(GoalieStickRules.BLADE_LIE_DEG),
+			deg_to_rad(GoalieStickRules.BLADE_CURVE_FACE_DEG), 0.0), EULER_ORDER_YXZ)
+	# The heel is the authored box's +X end, and the only point that may not move.
+	var half := Vector3(GoalieStickRules.BLADE_WIDTH_M * 0.5, 0.0, 0.0)
+	var heel: Vector3 = _stick_blade.position + half
+	_stick_blade.transform = Transform3D(rot, heel - rot * half)
+	# The mesh is heel-origin already, so it hangs straight off the joint. Its
+	# builder runs the blade down -Z where the collider runs it down -X, hence
+	# the quarter turn.
+	stick_blade_mesh.mesh = GoalieMeshBuilder.shared_goalie_blade()
+	stick_blade_mesh.transform = Transform3D(
+			rot * Basis.from_euler(Vector3(0.0, PI * 0.5, 0.0)), heel)
 
 
 func _lerp_part(part: Node3D, target_pos: Vector3, target_rot_deg: Vector3, t: float) -> void:

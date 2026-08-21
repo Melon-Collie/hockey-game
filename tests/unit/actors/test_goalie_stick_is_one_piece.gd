@@ -123,6 +123,60 @@ func test_nothing_in_the_stick_is_scaled() -> void:
 				"%s is scaled" % path)
 
 
+# ── THE VISIBLE BLADE IS THE ONE THAT MAKES THE SAVE ─────────────────────────
+# The blade's mesh and its collider are separate nodes carrying separate
+# transforms, and since Goalie._seat_blade they are no longer even the same
+# SHAPE: the collider stays a box on X while the mesh is a heel-origin bowed
+# blade running down -Z, quarter-turned into place. Two transforms and two
+# frames is exactly where a silent disagreement lives — the puck would bounce
+# off nothing you can see, or pass through something you can.
+#
+# So pin the two points that define the blade in both frames. The heel is the
+# joint and must not move at all; the toe is the far end and carries every
+# rotation error amplified by the blade's length, so a frame remap that is wrong
+# by any amount shows up there first.
+func test_the_blade_mesh_and_its_collider_are_the_same_blade() -> void:
+	var cs := _goalie.get_node("BlockArm/Stick/StickBladeCollider") as CollisionShape3D
+	var mi := _goalie.get_node("BlockArm/Stick/StickBladeMesh") as MeshInstance3D
+	var half: float = GoalieStickRules.BLADE_WIDTH_M * 0.5
+	var box_heel: Vector3 = cs.global_transform * Vector3(half, 0.0, 0.0)
+	var box_toe: Vector3 = cs.global_transform * Vector3(-half, 0.0, 0.0)
+	# The mesh is heel-origin with the toe at -Z, `length` away.
+	var mesh_heel: Vector3 = mi.global_transform * Vector3.ZERO
+	var mesh_toe: Vector3 = mi.global_transform * Vector3(
+			0.0, 0.0, -GoalieStickRules.BLADE_WIDTH_M)
+	assert_lt(box_heel.distance_to(mesh_heel), 0.002,
+			"blade mesh heel is %.3f m off the collider's — the joint the seat "
+			% box_heel.distance_to(mesh_heel) + "pivots on does not agree")
+	assert_lt(box_toe.distance_to(mesh_toe), 0.010,
+			"blade mesh toe is %.3f m off the collider's — the frame remap in " %
+			box_toe.distance_to(mesh_toe) + "_seat_blade is wrong")
+
+
+# The heel is the joint, so it must sit at the paddle rather than near it: a
+# blade that pivots about its own centre swings the heel clear, which is the
+# gap _seat_blade exists to close.
+func test_the_blade_heel_stays_in_the_paddle() -> void:
+	var cs := _goalie.get_node("BlockArm/Stick/StickBladeCollider") as CollisionShape3D
+	var paddle := _goalie.get_node("BlockArm/Stick/StickPaddleCollier") as CollisionShape3D
+	var half: float = GoalieStickRules.BLADE_WIDTH_M * 0.5
+	# The blade's TOP edge at the heel is what has to be buried in the paddle —
+	# the heel's midline sits a little below the paddle's bottom face by
+	# construction, and measuring that instead reports an open joint on a closed
+	# one. Both in the Stick's frame, where the paddle is axis-aligned.
+	var heel_top: Vector3 = cs.transform * Vector3(
+			half, GoalieStickRules.BLADE_HEIGHT_M * 0.5, 0.0)
+	var box: Vector3 = (paddle.shape as BoxShape3D).size
+	var d: Vector3 = (heel_top - paddle.position).abs() - box * 0.5
+	var worst: float = maxf(maxf(d.x, d.y), d.z)
+	# A centimetre of tolerance, because the heel corner is a rotated point on a
+	# box and sitting slightly proud of the paddle's face is a stick, not a gap.
+	# The failure this catches is the centre-pivot one, which was six.
+	assert_lt(worst, 0.01,
+			"the blade's heel corner sits %.3f m outside the paddle box — the joint is open"
+			% worst)
+
+
 func _spans() -> Array[float]:
 	var out: Array[float] = []
 	for i: int in _PARTS.size():
