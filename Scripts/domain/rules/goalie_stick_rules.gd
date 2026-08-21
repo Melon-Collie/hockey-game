@@ -9,11 +9,11 @@ class_name GoalieStickRules
 # saves stop. Against a standing keeper, with the blade seated on the ice:
 #   * the BLOCKER side — the side the stick covers — is shut at every range
 #     tested, 3 m to 12 m, out to the post;
-#   * the GLOVE side is shut inside 5 m and at 12 m, and leaks at 7 m (0.30 m
-#     from his plane) and 9 m (0.16 m). That leak is the pad and glove's, not the
-#     stick's: neither range records a single blade contact on that side.
+#   * the GLOVE side is shut at 5 m and 12 m and leaks at 3 m (0.11 m from his
+#     plane), 7 m (0.15) and 9 m (0.16). Those are the pad and glove's: the 7 and
+#     9 m rows record no blade contact on that side at all.
 # So the stick — not the pads — is the primary LOW surface while he is upright.
-# The pad column alone is 0.36 m; the stick takes the silhouette to ~0.67 m.
+# The pad column alone is 0.36 m; the stick takes the silhouette to ~0.62 m.
 #
 # WHERE it covers, measured from real contact positions (not derived): the blade
 # takes a FIXED band of roughly +/-0.22 m in the goalie's local x, straddling the
@@ -66,17 +66,22 @@ const BLADE_HEIGHT_M: float = 0.07
 const PADDLE_WIDTH_M: float = 0.10
 const PADDLE_HEIGHT_M: float = 0.66
 
-# Blade offset from the BlockArm assembly origin, assembly-local (keep in sync
-# with Goalie.tscn: Stick at y −0.25, StickBladeCollider at (−0.15, −0.67, 0)
-# inside Stick → blade centre ≈ (−0.15, −0.92, 0) below the wrist).
+# Blade offset from the BlockArm assembly origin, which is the HAND — the
+# BlockerHand mesh and the blocker pad both sit on it. The drop is therefore the
+# grip-to-blade lever, and it is the paddle's own length because the hand grips
+# the paddle's top: Goalie.tscn puts Stick at the BlockArm origin, the paddle
+# spanning 0.66 m below it and the shaft above. test_goalie_scene_mirrors holds
+# the chain.
 const ASSEMBLY_LATERAL_M: float = -0.15
-const ASSEMBLY_DROP_M: float = 0.92
+const ASSEMBLY_DROP_M: float = 0.67
 
-# Toe cant: the blade's long axis is rolled about the shaft so the toe rides
-# above the heel, which is why the blade's vertical span is twice its 0.07 box
-# height. Mirrors StickBladeCollider's authored Z rotation; the scene-mirror
-# test holds the pair.
-const BLADE_TOE_CANT_DEG: float = 13.0
+# Roll of the blade about its own long axis, authored LEVEL. A blade rolled off
+# level rests on one end — the heel-down habit every goalie coach warns about,
+# and worth a constant rather than an assumed zero because the vertical span the
+# tilt solve seats on the ice is what it distorts: 0.19 m of half-width tipped
+# 13° was more span than the whole 0.07 m box height. Whatever tips the blade in
+# play is the assembly's own roll, which is a pose, not the stick.
+const BLADE_TOE_CANT_DEG: float = 0.0
 
 # ── The lie angle ────────────────────────────────────────────────────────────
 # THE LIE IS THE STICK'S, NOT A TUNING KNOB. A goalie stick's lie number is the
@@ -86,10 +91,18 @@ const BLADE_TOE_CANT_DEG: float = 13.0
 # putting a senior stick near 117°: markedly more L-shaped than a player's,
 # which is what lets a keeper hold the blade flat with his hand low.
 #
-# Everything else about the stick's pose follows from this one number, so it is
-# stated as the real quantity and BLADE_LIE_DEG is derived from it. The blade is
-# flat when the paddle stands PADDLE_TO_BLADE_DEG - 90 off vertical, which is
-# what flat_blade_tilt_deg returns and what the stance tilts are solved against.
+# ONE HONEST CAVEAT ABOUT THE PLANE. A real stick's bend is in the paddle-blade
+# plane, and on this rig that plane is LATERAL — the blade's long axis runs
+# across the goalie. So a literal lie would swing the blade sideways, not out in
+# front, and what puts our blade ahead of the pads is the assembly's forward
+# tilt. This number is the fixed paddle-to-blade angle applied in THAT plane
+# instead: same role — the offset that lets the blade lie flat while the paddle
+# is angled — and the same magnitude, because "how far the paddle leans when the
+# blade is flat" is the quantity either plane needs.
+#
+# Everything else about the stick's pose follows from it. The blade is flat when
+# the paddle stands PADDLE_TO_BLADE_DEG - 90 off vertical, which is what
+# flat_blade_tilt_deg returns and what the stance tilts are solved against.
 const PADDLE_TO_BLADE_DEG: float = 117.0
 
 # The blade's fixed rotation relative to the paddle, applied once in
@@ -208,12 +221,17 @@ static func assembly_drop_at_roll(roll_deg: float) -> float:
 	return ASSEMBLY_DROP_M * cos(r) - ASSEMBLY_LATERAL_M * sin(r)
 
 
-# Half the blade's vertical span when it is flat — so "blade centre at this
-# height" and "blade's low edge on the ice" are the same statement. The toe cant
-# dominates it: 0.19 m of half-width tipped 13° is more vertical span than the
-# whole 0.07 m box height.
-static func blade_half_span_m() -> float:
-	return 0.5 * BLADE_HEIGHT_M + 0.5 * BLADE_WIDTH_M * sin(deg_to_rad(BLADE_TOE_CANT_DEG))
+# Half the blade's vertical span — so "blade centre at this height" and "blade's
+# low edge on the ice" are the same statement.
+#
+# It takes the assembly ROLL because the roll is what tips the blade's long axis,
+# and that axis is 0.38 m of it: the upright stances' 20° of roll adds 6.5 cm of
+# span against the 3.5 cm the box height contributes, so leaving it out buries
+# the blade 5.7 cm under the ice. The blade's own cant rides along with it and is
+# authored level, which is why this reads as one angle rather than two.
+static func blade_half_span_m(roll_deg: float) -> float:
+	var a: float = deg_to_rad(roll_deg + BLADE_TOE_CANT_DEG)
+	return 0.5 * BLADE_HEIGHT_M * absf(cos(a)) + 0.5 * BLADE_WIDTH_M * absf(sin(a))
 
 
 # The forward tilt that lands the blade on the ice for a hand at `wrist_y` above
@@ -224,7 +242,7 @@ static func tilt_for_blade_on_ice(wrist_y: float, roll_deg: float) -> float:
 	var drop: float = assembly_drop_at_roll(roll_deg)
 	if drop < 0.01:
 		return flat_blade_tilt_deg()
-	var c: float = clampf((wrist_y - blade_half_span_m()) / drop, -1.0, 1.0)
+	var c: float = clampf((wrist_y - blade_half_span_m(roll_deg)) / drop, -1.0, 1.0)
 	return maxf(flat_blade_tilt_deg(), rad_to_deg(acos(c)))
 
 
@@ -232,7 +250,7 @@ static func tilt_for_blade_on_ice(wrist_y: float, roll_deg: float) -> float:
 # for the blade to be BOTH flat and down, the hand can only be here. A keeper
 # standing taller than this is one whose blade rides on its heel.
 static func wrist_y_for_flat_blade_on_ice(roll_deg: float) -> float:
-	return blade_half_span_m() \
+	return blade_half_span_m(roll_deg) \
 			+ assembly_drop_at_roll(roll_deg) * cos(deg_to_rad(flat_blade_tilt_deg()))
 
 

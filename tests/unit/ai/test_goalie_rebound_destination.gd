@@ -11,9 +11,9 @@ extends GutTest
 #     the crease sweep, so the puck never becomes a rebound at all;
 #   * a STICK save is the dangerous one, and not because of its restitution: the
 #     blade has no lateral cant, so it sends the puck back where it came from —
-#     and seating it flat on the ice made that WORSE, not better (56% back at the
-#     shooter against 53%), because a square flat face is a mirror. Pitch and
-#     cant are separate levers and only the second one steers.
+#     and seating it flat on the ice did not fix it — 52% against 53% — because a
+#     square flat face is a mirror. Pitch and cant are separate levers, and only
+#     the second one steers.
 #
 # So the measurement is DESTINATION, not restitution. This applies the real save
 # response (GoalieSaveRules.resolve_contact + the flush eject, the same pair
@@ -22,12 +22,12 @@ extends GutTest
 #
 # ── WHAT IT MEASURES, AND WHAT IT CANNOT ─────────────────────────────────────
 #   surface | saves | rebound STAYS in the slot
-#   PAD     |    95 |    50  (53%)
-#   STICK   |   111 |    47  (42%)
-#   BLOCK   |    15 |     5  (33%)
-#   CHEST   |     4 |     4  (100%)
+#   PAD     |   111 |    18  (16%)
+#   STICK   |    64 |     5  (8%)
+#   BLOCKER |    28 |     3  (11%)
+#   CHEST   |     8 |     0  (0%)
 #   GLOVE   |    28 |    28  (100%)
-#   TOTAL   |   253 |   134  (53%)     goals 35/288
+#   TOTAL   |   239 |    54  (23%)     goals 49/288
 #
 # ONE SPOT ON THE CENTRE LINE, which bounds every conclusion drawn from it. A
 # square keeper takes a centred puck on the pads and the stick, so the sample is
