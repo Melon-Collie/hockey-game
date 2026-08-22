@@ -120,3 +120,13 @@ func test_the_pelvis_does_not_fold_with_the_chest() -> void:
 			"the torso must take the whole fold")
 	assert_eq(rig.get_bone_pose(SkaterMeshBuilder.UpperBone.PELVIS), pelvis_rest,
 			"and the pelvis must not move at all")
+
+	# The other half, and the one a written-once guard misses: the fold is applied
+	# in repose_bone, which every OTHER writer goes through too. The sizing seam
+	# reposes this bone on each appearance apply, so a pelvis that is merely
+	# absent from set_trunk_texture's call list still folds the moment a build's
+	# scale lands on it while a fold is live.
+	skater.set_upper_bone_scale(SkaterMeshBuilder.UpperBone.PELVIS, Vector3.ONE * 1.1)
+	var reposed: Basis = rig.get_bone_pose(SkaterMeshBuilder.UpperBone.PELVIS).basis
+	assert_almost_eq(reposed.get_euler().x, 0.0, 0.001,
+			"and it must still be unrotated after anything else reposes it")

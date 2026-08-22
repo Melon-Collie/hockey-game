@@ -212,6 +212,24 @@ func test_the_address_arms_are_open() -> void:
 				"the arm must be extended, not folded shut under the shoulder")
 
 
+# The ceiling's own case, which the shipping placement does not reach. The dot
+# is laid out just PAST the shaft's natural span, so the settled address sits in
+# the reach regime where the hand rides at its carry height anyway — the ceiling
+# is a guard rail there, not a lever, and a test at that distance cannot see it.
+# Put the dot INSIDE the span (a short stick, a deeper crouch, or the transient
+# mid-countdown where the body is still sinking and the dot is already fixed)
+# and the close-range solve answers by walking the hand up to the shoulder. This
+# is that case, and the arms still have to be arms in it.
+func test_a_dot_inside_the_shafts_span_still_leaves_the_arms_open() -> void:
+	var centre: SkaterController = _controller(true)
+	_run_prep(centre, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0), SETTLE_TICKS,
+			centre.faceoff_center_distance() * 0.75)
+	var span: float = centre.skater.upper_arm_length + centre.skater.forearm_length
+	for top: bool in [true, false]:
+		assert_gt(_shoulder(centre, top).distance_to(_hand(centre, top)), span * 0.3,
+				"the arm must not fold shut when the puck comes inside the shaft")
+
+
 # What the placement is FOR: the blade has to end up on the dot the puck is
 # dropped at. The address's own geometry decides where that is — the crouched
 # hand height, the choked stick, the fold's carry — and every one of them is
@@ -228,9 +246,18 @@ func test_the_address_puts_the_blade_on_the_dot() -> void:
 
 
 # All three in the skater's own frame, world-space: −Z is in front of him.
+#
+# The shoulder is read the way the ARM RIG roots the arm — the marker carried by
+# the trunk texture (SkaterArmRig._textured_shoulder) — and deliberately not
+# through the IK's own address_shoulder. Measuring the root with the same
+# function that placed the hand makes both move together, and a hand that has
+# collapsed onto its shoulder still measures as an open arm.
 func _shoulder(c: SkaterController, top: bool) -> Vector3:
-	return c.skater.upper_body_to_global(c._ik.address_shoulder(
-			c.skater.shoulder.position if top else c.skater.bottom_shoulder.position))
+	var marker: Vector3 = c.skater.shoulder.position if top \
+			else c.skater.bottom_shoulder.position
+	var texture := Basis.from_euler(Vector3(
+			c._skating.trunk_pitch_add, 0.0, c._skating.trunk_roll_add))
+	return c.skater.upper_body_to_global(texture * marker)
 
 
 func _hand(c: SkaterController, top: bool) -> Vector3:
