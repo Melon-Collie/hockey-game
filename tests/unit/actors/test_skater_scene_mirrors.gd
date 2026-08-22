@@ -123,6 +123,10 @@ func test_every_authored_bone_node_still_exists() -> void:
 				"UPPER_BONE_NODE names `%s`, which is not in %s" % [path, _SCENE])
 
 
+# Every assertion above reads _origins, so an empty or half-built scan would
+# pass them all vacuously. The floor is the rig's own node count less a little
+# slack — it dropped by two when the hip balls were folded into the thighs, and
+# it should drop again the next time the scene loses a part.
 func test_the_scene_scan_actually_saw_the_rig() -> void:
-	assert_gt(_origins.size(), 20, "expected the whole rig — the parser may have broken")
+	assert_gt(_origins.size(), 18, "expected the whole rig — the parser may have broken")
 	assert_true(_origins.has("./MeshRoot/UpperBody/ShoulderL"), "sanity: ShoulderL found")

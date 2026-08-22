@@ -46,16 +46,22 @@ Merging into `main` is done by the user via a pull request — never `git merge`
 feature branch into `main` directly. For work on `main`, stop at commit and wait
 for explicit confirmation before pushing.
 
-**Scene files (`.tscn`) and complex resource files (`.tres`) are edited by the
-user, not Claude.** Godot's text formats are error-prone to edit when they carry
-node unique IDs, sub-resource references, or editor-enforced property ordering —
-multi-node scenes, themes, shader materials, animations. Describe the change and
-let the user make it in the editor. **Deleting a property line from a node block
-is the exception**: it touches no unique ID, no sub-resource reference and no
-ordering, so it is safe to do directly. Prove it is inert first — instantiate the
-scene headless and check the property already equals the code default — then
-reload the scene to confirm it still parses. Adding a node, a property or a
-resource is still an editor job. Trivial single-resource `.tres` files
+**Scene files (`.tscn`) and complex resource files (`.tres`) are CREATED by the
+user, not Claude.** The risk is the generated half of the format: node unique
+IDs, sub-resource ids and the references between them, editor-enforced property
+ordering. Authoring any of that by hand — a node, a property, a sub-resource,
+anything in a theme, a shader material or an animation — means inventing
+identifiers the editor owns, so describe the change and let the user make it
+there.
+
+**Deleting is not that, and is Claude's to do**: a property line, a whole node
+block, or a sub-resource nothing references any more. A delete invents no
+identifier and reorders nothing. Two obligations come with it. Prove the thing
+is inert first — a property line only goes if it already equals the code
+default, a node only goes once nothing reads it (check `LEG_BONE_NODE` and its
+kin, which name scene paths in code), and a sub-resource only goes once its last
+user is gone. Then prove the file still loads: run the suite, since the scene is
+instantiated all over it, and render if the rig's shape is what changed. Trivial single-resource `.tres` files
 (`PhysicsMaterial`, simple `StandardMaterial3D`) are safe to author directly —
 3–5 lines, no cross-references; the UID line is optional.
 
