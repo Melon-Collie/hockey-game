@@ -102,6 +102,9 @@ func apply(attrs: PlayerAttributes) -> void:
 	for bone: int in _SHOULDER_BONES:
 		_apply_upper_scale(bone, m_shoulder, m_height, m_shoulder)
 	_apply_upper_scale(SkaterMeshBuilder.UpperBone.HELMET, m_head, m_head, m_head)
+	# The seat is the torso's own bulk carried below the waist — a heavier build
+	# fills the pants the same way it fills the jersey.
+	_apply_upper_scale(SkaterMeshBuilder.UpperBone.PELVIS, m_torso, m_height, m_torso)
 	for bone: int in _THIGH_BONES:
 		_apply_leg_scale(bone, m_thigh, m_height, m_thigh)
 	for bone: int in _CALF_BONES:

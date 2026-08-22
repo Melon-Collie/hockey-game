@@ -242,6 +242,10 @@ func apply_uniform(colors: Dictionary) -> void:
 			SkaterMeshBuilder.LegSurface.KNEE_L,
 			SkaterMeshBuilder.LegSurface.KNEE_R]:
 		_skater.set_leg_surface_material(surface, pants_solid.duplicate())
+	# The pelvis rides the UPPER mesh (it must not fold with the torso, and it
+	# must not swing with a leg either) but it is pants, not jersey.
+	_skater.set_upper_surface_material(SkaterMeshBuilder.UpperSurface.PELVIS,
+			pants_solid.duplicate())
 
 	# Socks — horizontal stripes on the cylinder side.
 	var sock_mat: StandardMaterial3D = _socks_material(uniform.socks)

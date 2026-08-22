@@ -82,6 +82,12 @@ func _parts() -> Array[PartSpec]:
 		# rearward bias itself is scene node placement, not mesh).
 		PartSpec.new("hip", SkaterMeshBuilder._build_hip(),
 				Vector3(0.28, 0.28, 0.28), false),
+		# The pelvis replaces no primitive — it is the seat the rig never had, and
+		# what actually bounds it is the jersey it hides under
+		# (tests/unit/actors/test_pelvis_fills_the_seat.gd). The box here is its
+		# own nominal envelope, so a runaway edit still trips something.
+		PartSpec.new("pelvis", SkaterMeshBuilder._build_pelvis(),
+				Vector3(0.44, 0.36, 0.38), true),
 		PartSpec.new("knee", SkaterMeshBuilder._build_knee(),
 				Vector3(0.19, 0.19, 0.19), false),
 		PartSpec.new("thigh", SkaterMeshBuilder._build_thigh(),

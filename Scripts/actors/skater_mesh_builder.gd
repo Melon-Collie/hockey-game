@@ -40,6 +40,29 @@ const _TORSO_PROFILE: Array[Vector2] = [
 # the seat builds through the lower back and peaks at the hem that drapes
 # over it, while the chest rings stay centered so the belly keeps its line.
 const _TORSO_REAR_SWAY: Array[float] = [0.0, 0.0, 0.0, 0.006, 0.018, 0.028, 0.032]
+# The pelvis, in UpperBody space (y 0 is the trunk's fold pivot, the hip pivots
+# sit at −0.13). It is the seat the torso does NOT carry: the trunk texture
+# rotates the torso bone about that pivot, so at any fold worth seeing the
+# jersey hem swings up and away and leaves the body open from behind — a flat
+# bottom cap tipped into view over a V-notch between the two hip balls. A real
+# pelvis does not fold with the spine, so this one does not fold with the torso
+# (SkaterArmRig.repose_bone leaves it out of the texture) and fills the seat at
+# every angle.
+#
+# Sized to hide UNDER the jersey hem at rest — a couple of centimetres inside
+# the torso's lower rings all the way up — so it changes no silhouette that was
+# already right, and only shows where there used to be nothing.
+const _PELVIS_PROFILE: Array[Vector2] = [
+	Vector2(0.100, 0.175),   # waist, tucked up inside the hem
+	Vector2(0.020, 0.200),
+	Vector2(-0.060, 0.208),  # the seat
+	Vector2(-0.140, 0.196),
+	Vector2(-0.210, 0.155),  # the leg line
+	Vector2(-0.260, 0.100),  # buried in the thighs
+]
+# Same hockey-butt sway the torso's own rings carry, peaked at the seat.
+const _PELVIS_REAR_SWAY: Array[float] = [0.006, 0.018, 0.030, 0.028, 0.014, 0.0]
+
 const _THIGH_PROFILE: Array[Vector2] = [
 	Vector2(0.150, 0.142),
 	Vector2(0.050, 0.139),
@@ -574,8 +597,9 @@ enum UpperBone {
 	HELMET,
 	SHOULDER_L,
 	SHOULDER_R,
+	PELVIS,
 }
-const UPPER_BONE_COUNT: int = 14
+const UPPER_BONE_COUNT: int = 15
 
 # Surfaces. One per bone for the first thirteen; the helmet is the exception,
 # carrying the shell and the head/neck skin as two surfaces of one bone (they
@@ -604,15 +628,16 @@ enum UpperSurface {
 	SHOULDER_R,
 	TOP_FINGERS,
 	BOTTOM_FINGERS,
+	PELVIS,
 }
-const UPPER_SURFACE_COUNT: int = 17
+const UPPER_SURFACE_COUNT: int = 18
 # Scene node name per bone for the four parts whose placement is authored in
 # Scenes/Skater.tscn rather than derived (the arm parts are placed by IK). Read
 # by Skater._build_upper_rig, which then frees them — same deal as LEG_BONE_NODE.
 # Indices 0-9 are unused; the arm parts have no scene node.
 const UPPER_BONE_NODE: Array[String] = [
 	"", "", "", "", "", "", "", "", "", "",
-	"UpperBodyMesh", "Helmet", "ShoulderL", "ShoulderR",
+	"UpperBodyMesh", "Helmet", "ShoulderL", "ShoulderR", "",
 ]
 
 
@@ -645,6 +670,7 @@ static func shared_upper_skin_mesh() -> ArrayMesh:
 		# Out of anatomical order — see the UpperSurface doc block.
 		_append_skinned_surface(m, fist, UpperBone.TOP_HAND, FIST_PART_FINGERS)
 		_append_skinned_surface(m, fist, UpperBone.BOTTOM_HAND, FIST_PART_FINGERS)
+		_append_skinned_surface(m, _shared("pelvis", _build_pelvis), UpperBone.PELVIS)
 		return m)
 
 
@@ -735,6 +761,13 @@ static func shared_knob() -> ArrayMesh:
 
 
 # ── Part builders ─────────────────────────────────────────────────────────────
+
+
+# Torso scales and facet count, so the seat continues the same silhouette it
+# emerges from rather than reading as a separate object under the jersey.
+static func _build_pelvis() -> ArrayMesh:
+	return _build_lathe(_PELVIS_PROFILE, _TORSO_SIDES, _TORSO_X_SCALE, _TORSO_Z_SCALE,
+			_PELVIS_REAR_SWAY)
 
 
 static func _build_torso() -> ArrayMesh:
