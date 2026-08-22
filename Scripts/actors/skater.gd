@@ -590,6 +590,14 @@ var _check_lead: float = 0.0
 # stick by SkaterController.apply_attributes. Read through grip_choke() below —
 # both the arm solve and the drawn shaft take it from there.
 var commit_grip_choke_m: float = 0.0
+# The same, for the centre's faceoff address, and its own 0..1 engagement — the
+# gait's address ease, published here because grip_choke() is what both the arm
+# solve and the drawn shaft read. A draw is taken with the hands well down the
+# shaft: the full lever holds the top hand up at shoulder height over a body
+# folded this far, which is not an address, it is a man being pulled over by his
+# own stick.
+var faceoff_choke_m: float = 0.0
+var _faceoff_address: float = 0.0
 # Counts down while an opponent's stick-lift has forcibly popped this skater's
 # blade up. Set host-side by the stick-lift claim path; decremented every tick.
 # The controller ORs this into the effective blade_up regardless of possession,
@@ -1466,7 +1474,8 @@ func get_check_lead() -> float:
 # a player pulling a stick in chokes up on it in the first place. The shaft stays
 # rigid — SkaterStickRig gives back out of the butt whatever the grip takes.
 func grip_choke() -> float:
-	return _commit_lift_blend * commit_grip_choke_m
+	return _commit_lift_blend * commit_grip_choke_m \
+			+ _faceoff_address * faceoff_choke_m
 
 
 # Forcibly pop this skater's blade up for `duration` seconds (opponent stick
@@ -1545,6 +1554,13 @@ func edge_load(left: bool) -> float:
 
 func set_ankle_flatten(left: float, right: float) -> void:
 	_legs.set_ankle_flatten(left, right)
+
+
+# How far into his faceoff address this centre is, 0..1 (zero for everyone
+# else). Published by the gait, which owns the ease; read back through
+# grip_choke().
+func set_faceoff_address(blend: float) -> void:
+	_faceoff_address = blend
 
 
 # Sets the skating-stance body drop (metres). The stance flexes hips/knees,

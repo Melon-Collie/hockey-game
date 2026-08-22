@@ -1561,6 +1561,7 @@ func apply(delta: float) -> void:
 			clampf(maxf(l_ext * _intensity, _stop_blend), 0.0, 1.0) * (1.0 - kd_t),
 			clampf(maxf(r_ext * _intensity, _stop_blend), 0.0, 1.0) * (1.0 - kd_t))
 	_skater.set_ankle_flatten(foot_flat_l, foot_flat_r)
+	_skater.set_faceoff_address(faceoff_flat)
 	crouch_drop = drop
 	_skater.set_skating_crouch_drop(drop)
 	# Trunk inertia: filter the summed texture, then layer the stumble wobble
@@ -1627,6 +1628,7 @@ func _apply_native(delta: float) -> void:
 			_native.get_r_pitch(), _native.get_r_roll(), _native.get_r_knee(),
 			_native.get_l_yaw(), _native.get_r_yaw())
 	_skater.set_ankle_flatten(_native.get_foot_flat_l(), _native.get_foot_flat_r())
+	_skater.set_faceoff_address(faceoff_blend if _skater.is_faceoff_center else 0.0)
 	_skater.set_edge_loads(_native.get_edge_load_l(), _native.get_edge_load_r())
 	crouch_drop = _native.get_crouch_drop()
 	faceoff_blend = _native.get_faceoff_blend()

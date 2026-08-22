@@ -529,10 +529,26 @@ var faceoff_center_width_deg: float = 16.0
 # the blade). A draw is won with the short lever, and the wide grip is half of
 # what an address looks like.
 var faceoff_center_grip_fraction: float = 0.55
+# And how far down it the TOP hand slides, as a fraction of the stick. This is
+# the lever that decides where the address's hands end up: the hand rides one
+# stick-length up from a blade on the dot, so at full length a body folded over
+# the dot has to hold it at shoulder height, arms collapsed. Choked, the hand
+# comes down in front of the chest where a centre actually holds it.
+var faceoff_center_choke_frac: float = 0.17
+# How far above its carry height the address lets the top hand rise, in metres
+# of upper-body-local Y (see SkaterIKCoordinator._address_hand_ceiling). This is
+# where the hands sit in the address, and with the choke above it is what sets
+# the shaft's angle over the dot.
+var faceoff_center_hand_rise: float = 0.05
 # Fraction of the ADDRESS stick span at which this skater's CENTER spawns from
 # the faceoff dot — reach-derived so a Size-1 center (short stick + arms) can
 # play the drop as comfortably as a Size-5 (see faceoff_center_distance).
-var faceoff_center_reach_fraction: float = 0.9
+#
+# 1.0 is the shaft's own natural projection, and the useful side is just PAST
+# it: there the hand comes off the body toward the dot (TopHandIK's FAR regime)
+# and the arms open into the address. Short of 1.0 the hand instead rides up
+# its ceiling and the arms fold shut under the shoulders.
+var faceoff_center_reach_fraction: float = 1.1
 # Faceoff-draw swipe capture (see Skater.begin_draw_tracking / FaceoffDrawRules).
 # A center's blade-swipe crest is retained through the draw so the contest reads
 # the sweep, not the raw tick-at-contact velocity — this is what lets a well-aimed
@@ -1399,6 +1415,7 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# The commit choke is a fraction of the stick it slides down, so it lands in
 	# metres here rather than being re-derived at the two sites that read it.
 	skater.commit_grip_choke_m = stick_length * hit_commit_choke_frac
+	skater.faceoff_choke_m = stick_length * faceoff_center_choke_frac
 	# The CURVE gear's visual half — regenerates the blade mesh to the picked
 	# pattern (gameplay half is PlayerAttributes' loft/backhand leans).
 	skater.apply_blade_pattern(attrs.curve)
@@ -2532,8 +2549,12 @@ func set_spawn_facing(facing: Vector2) -> void:
 # The live crouch is netted out because this runs at the whistle, on a body still
 # carrying whatever depth it was skating at.
 func faceoff_center_distance() -> float:
-	return _ik.stick_horiz(_skating.faceoff_address_drop() - _skating.crouch_drop) \
-			* faceoff_center_reach_fraction
+	# Plus the fold's own carry: the address hangs the arms off a shoulder swung
+	# that far out over the dot (SkaterIKCoordinator.address_shoulder), and the
+	# span below is measured from the hand, so the body has to stand back by it
+	# or the stick comes up short of the reach it was sized for.
+	return _ik.address_carry() \
+			+ _ik.address_stick_horiz() * faceoff_center_reach_fraction
 
 
 func _enter_shot_block() -> void:

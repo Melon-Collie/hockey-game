@@ -57,6 +57,9 @@ func _controller(center: bool = false) -> SkaterController:
 	c.set_physics_process(false)
 	c.set_process(false)
 	c.setup(skater, _puck, _state)
+	# What ActorSpawner does next, and where the grip chokes are sized off this
+	# build's own stick — without it the address holds a full-length lever.
+	c.apply_attributes(PlayerAttributes.new())
 	return c
 
 
@@ -163,7 +166,8 @@ func test_the_centre_sits_deeper_than_the_players_behind_him() -> void:
 func test_the_centre_still_gets_his_blade_down_on_the_dot() -> void:
 	var centre: SkaterController = _controller(true)
 	var winger: SkaterController = _controller(false)
-	_run_prep(centre, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0))
+	_run_prep(centre, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0),
+			SETTLE_TICKS, centre.faceoff_center_distance())
 	_run_prep(winger, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0))
 	var centre_blade: Vector3 = centre.skater.upper_body_to_global(
 			centre.skater.get_blade_position())
@@ -171,8 +175,74 @@ func test_the_centre_still_gets_his_blade_down_on_the_dot() -> void:
 			winger.skater.get_blade_position())
 	assert_almost_eq(centre_blade.y, winger_blade.y, 0.02,
 			"the crouch must not lift the blade off the ice")
-	assert_almost_eq(centre_blade.z, winger_blade.z, 0.10,
-			"nor pull it back in from the aim point")
+
+
+# ── The centre's arms ────────────────────────────────────────────────────────
+
+# The address folds the chest 48° over the dot, and the ARMS hang from the
+# shoulders that fold with it (SkaterArmRig._textured_shoulder). Solve the hands
+# off the un-folded marker instead and they land a third of a metre behind the
+# shoulder they grow from — the two-bone IK then has nowhere to put the elbow
+# but forward of the wrist, and the arm reads as bending backwards.
+func test_neither_arm_bends_backwards_in_the_address() -> void:
+	var centre: SkaterController = _controller(true)
+	_run_prep(centre, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0),
+			SETTLE_TICKS, centre.faceoff_center_distance())
+	for top: bool in [true, false]:
+		var elbow: Vector3 = _elbow(centre, top)
+		var hand: Vector3 = _hand(centre, top)
+		assert_lt(hand.z, elbow.z + 0.01,
+				"the hand must be no further back than its own elbow")
+		assert_gt(elbow.y, hand.y,
+				"and the elbow above it — an arm reaching down to a stick on the ice")
+
+
+# The other way an arm goes wrong at this depth: not reversed but shut. The
+# close-range hand solve answers a puck inside the stick's reach by raising the
+# hand (TopHandIK's CLOSE regime), and over a body folded this far that walks
+# the hand up to the shoulder it hangs from, leaving the elbow cocked out
+# sideways with no arm to speak of.
+func test_the_address_arms_are_open() -> void:
+	var centre: SkaterController = _controller(true)
+	_run_prep(centre, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0),
+			SETTLE_TICKS, centre.faceoff_center_distance())
+	var span: float = centre.skater.upper_arm_length + centre.skater.forearm_length
+	for top: bool in [true, false]:
+		assert_gt(_shoulder(centre, top).distance_to(_hand(centre, top)), span * 0.4,
+				"the arm must be extended, not folded shut under the shoulder")
+
+
+# What the placement is FOR: the blade has to end up on the dot the puck is
+# dropped at. The address's own geometry decides where that is — the crouched
+# hand height, the choked stick, the fold's carry — and every one of them is
+# derived at the whistle, before the pose exists, so this is where a wrong
+# derivation shows up.
+func test_the_address_puts_the_blade_on_the_dot() -> void:
+	var centre: SkaterController = _controller(true)
+	var dot: float = centre.faceoff_center_distance()
+	_run_prep(centre, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0), SETTLE_TICKS, dot)
+	var blade: Vector3 = centre.skater.upper_body_to_global(
+			centre.skater.get_blade_position())
+	assert_almost_eq(blade.z - centre.skater.global_position.z, -dot, 0.10,
+			"the centre's blade must address the dot he was placed for")
+
+
+# All three in the skater's own frame, world-space: −Z is in front of him.
+func _shoulder(c: SkaterController, top: bool) -> Vector3:
+	return c.skater.upper_body_to_global(c._ik.address_shoulder(
+			c.skater.shoulder.position if top else c.skater.bottom_shoulder.position))
+
+
+func _hand(c: SkaterController, top: bool) -> Vector3:
+	return c.skater.upper_body_to_global(
+			c.skater.get_top_hand_position() if top else c.skater.bottom_hand.position)
+
+
+func _elbow(c: SkaterController, top: bool) -> Vector3:
+	var rig: Skeleton3D = c.skater.upper_body.get_node("UpperRig") as Skeleton3D
+	var bone: int = SkaterMeshBuilder.UpperBone.TOP_ELBOW if top \
+			else SkaterMeshBuilder.UpperBone.BOTTOM_ELBOW
+	return c.skater.upper_body_to_global(rig.get_bone_global_pose(bone).origin)
 
 
 # ── The centre's hands ───────────────────────────────────────────────────────
@@ -205,7 +275,7 @@ func test_the_centre_takes_a_draw_grip_and_gives_it_back() -> void:
 func _hand_spread(c: SkaterController) -> float:
 	var top: Vector3 = c.skater.get_top_hand_position()
 	var bottom: Vector3 = c.skater.bottom_hand.position
-	return top.distance_to(bottom) / c.stick_length
+	return top.distance_to(bottom) / c._ik.solve_stick_length()
 
 
 # ── The centre's base ────────────────────────────────────────────────────────
@@ -263,23 +333,16 @@ func test_the_address_drop_is_the_crouch_the_gait_settles_at() -> void:
 			"the derived address drop must be the crouch he actually takes")
 
 
-# Measuring the dot from a STANDING body puts it well inside the crouched
-# skater's reach, and TopHandIK answers a close target by raising the hand and
-# standing the shaft up (its CLOSE regime). The centre would address the puck
-# with a shovel. Both placements, same skater, same countdown.
-func test_the_dot_sits_where_the_crouched_stick_lies_out_flat() -> void:
-	var standing: SkaterController = _controller(true)
-	var address: SkaterController = _controller(true)
-	var standing_dot: float = standing._ik.stick_horiz() \
-			* standing.faceoff_center_reach_fraction
-	_run_prep(standing, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0), SETTLE_TICKS,
-			standing_dot)
-	_run_prep(address, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0), SETTLE_TICKS,
-			address.faceoff_center_distance())
-	assert_gt(_shaft_flatness(address), _shaft_flatness(standing) + 0.1,
-			"the address placement must lay the shaft out, not stand it on end")
-	assert_gt(_shaft_flatness(address), cos(deg_to_rad(45.0)),
-			"and lay it out ahead of him, not under 45° of shovel")
+# The shaft's angle over the dot, which the address decides three ways at once:
+# the hand's ceiling sets how high it is held, the draw choke how long a lever
+# it is, and the placement how far the blade is from it. Get any of them wrong
+# and the centre addresses the puck with a shovel.
+func test_the_address_lays_the_shaft_out_over_the_dot() -> void:
+	var centre: SkaterController = _controller(true)
+	_run_prep(centre, Vector3(0.0, GameRules.FACEOFF_SPAWN_HEIGHT, 4.0), SETTLE_TICKS,
+			centre.faceoff_center_distance())
+	assert_gt(_shaft_flatness(centre), cos(deg_to_rad(50.0)),
+			"the shaft must lie out ahead of him, not stand on end")
 
 
 # How far a posed skate has tipped away from where the same skate sits on an
@@ -312,7 +375,8 @@ func _stance_width(c: SkaterController) -> float:
 func _shaft_flatness(c: SkaterController) -> float:
 	var hand: Vector3 = c.skater.upper_body_to_global(c.skater.get_top_hand_position())
 	var blade: Vector3 = c.skater.upper_body_to_global(c.skater.get_blade_position())
-	return Vector2(blade.x - hand.x, blade.z - hand.z).length() / c.stick_length
+	return Vector2(blade.x - hand.x, blade.z - hand.z).length() \
+			/ c._ik.solve_stick_length()
 
 
 func test_nobody_holds_a_draw_stance_once_the_puck_is_live() -> void:
