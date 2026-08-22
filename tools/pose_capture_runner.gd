@@ -305,7 +305,13 @@ func _build_actor() -> void:
 	_skater.set_physics_process(false)
 
 	var attrs := PlayerAttributes.new(BUILD_HEIGHT_IN, BUILD_WEIGHT_LB, 1, 1, 1, 1)
-	_skater.set_uniform(TeamColorRegistry.get_colors(1, 0))
+	# Blueberry's home kit, deliberately: these tiles are read for where one
+	# piece of the body ends and the next begins, and that needs a jersey, a
+	# pair of pants and a stripe on them that are all told apart at 384 px.
+	# Slot 1's kit is one green — under it a seat, a hip and a thigh are one
+	# silhouette, and a pose that lost its pelvis would look exactly like a
+	# pose that kept it.
+	_skater.set_uniform(TeamColorRegistry.get_colors(5, 0))
 	_skater.set_jersey_info("POSE", 8)
 	_skater.apply_appearance(attrs)
 
