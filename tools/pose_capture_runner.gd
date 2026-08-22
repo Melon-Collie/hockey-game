@@ -62,6 +62,7 @@ const BUILD_WEIGHT_LB: int = 201
 # instead puts the whole frame a metre high and cuts the legs off — which loses
 # the skates and the gait, the half of the rig these poses exist to cover.
 const CAM_OFFSET: Vector3 = Vector3(1.9, 0.6, 2.9)
+const CAM_FOV: float = 45.0
 const CAM_AIM: Vector3 = Vector3(0.0, -0.05, 0.0)
 
 # Each pose: a name, whether it starts with the puck, and a list of
@@ -168,6 +169,19 @@ const POSES: Array = [
 			"from": Vector3(-1.5, 0.0, 7.0), "duration": 1.4, "ticks": 168, "hold": 90,
 			"center": true,
 		}},
+	# The same address, and a plain stride, from the seat the game is played
+	# from. Two tiles rather than one because the question they answer is
+	# comparative: the centre is supposed to look like a different pose from up
+	# there, not just a skater standing near a dot.
+	{"name": "faceoff_center_game", "puck": false, "game_cam": true,
+		"faceoff": {
+			"from": Vector3(-1.5, 0.0, 7.0), "duration": 1.4, "ticks": 168, "hold": 90,
+			"center": true,
+		}},
+	{"name": "faceoff_winger_game", "puck": false, "game_cam": true,
+		"faceoff": {
+			"from": Vector3(-1.5, 0.0, 7.0), "duration": 1.4, "ticks": 168, "hold": 90,
+		}},
 	# A blocker caught by the whistle: the shot-block stance must not ride
 	# through the walk-in (the state machine is not dispatched while locked).
 	{"name": "faceoff_after_block", "puck": false,
@@ -242,7 +256,7 @@ func _build_stage() -> void:
 	# which frames each tile differently. Nothing here wants interpolation:
 	# the pose IS the settled transform.
 	_camera.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-	_camera.fov = 45.0
+	_camera.fov = CAM_FOV
 	_camera.position = CAM_OFFSET
 	add_child(_camera)
 	_camera.look_at(CAM_AIM, Vector3.UP)
@@ -352,12 +366,51 @@ func _run_pose() -> void:
 			_skater._process(DT)
 	if pose.has("faceoff"):
 		_run_faceoff(pose["faceoff"] as Dictionary)
-	# `cam` re-shoots a pose from somewhere the chase rig can't see it. The
-	# centre's address is the case that needs it: he faces straight down his own
-	# stick, so from behind the shaft is a dot and the fold is a silhouette.
+	# `game_cam` shoots the pose the way the PLAYER sees it; `cam` re-shoots it
+	# from somewhere the chase rig can't. The centre's address needs the second:
+	# he faces straight down his own stick, so from behind the shaft is a dot and
+	# the fold is a silhouette.
+	if bool(pose.get("game_cam", false)):
+		_frame_as_the_game_does()
+		return
+	_camera.fov = CAM_FOV
 	var offset: Vector3 = pose.get("cam", CAM_OFFSET)
 	_camera.global_position = _skater.global_position + offset
 	_camera.look_at(_skater.global_position + CAM_AIM, Vector3.UP)
+
+
+# The live game's own framing, so a tile can answer the question the beauty
+# shots cannot: does the pose read from where it is actually played? Which for
+# a hockey game is high, tilted and some way off — a fold that is unmistakable
+# from a metre away is a few dozen pixels of shoulder from up there.
+#
+# Geometry straight out of GameCamera Step 5a/5b: pitch is −tilt, and the rig
+# is pushed BACK by height·tan(90° − tilt) so the tilt lands the subject in the
+# middle of the frame rather than at its top. Tilt, height and FOV come from the
+# prefs and the camera itself rather than being copied here, so a change to any
+# of them turns up in these tiles instead of leaving them rendering a camera the
+# game stopped having. Height is the on-puck FLOOR (GameCamera zooms out from
+# there as the play spreads), which is the closest the game ever gets to a
+# skater — anything unreadable here is unreadable in play.
+#
+# The FOV is the one number NOT taken as-is. A tile is 384 px and the game's
+# frame is the project's full height, so rendering the game's own FOV here
+# shrinks the player's whole screen into a thumbnail and tells you nothing about
+# how big anything reads. Narrowing it by exactly that ratio instead makes the
+# tile a pixel-for-pixel CROP of the middle of the player's frame: same camera,
+# same perspective, same on-screen size — just less of the rink around him.
+func _frame_as_the_game_does() -> void:
+	var probe := GameCamera.new()
+	var height: float = probe.min_height * PlayerPrefs.camera_distance
+	probe.free()
+	var tilt: float = PlayerPrefs.camera_tilt_deg
+	var frame_px: float = float(ProjectSettings.get_setting(
+			"display/window/size/viewport_height", TILE))
+	_camera.fov = rad_to_deg(2.0 * atan(
+			tan(deg_to_rad(PlayerPrefs.fov) * 0.5) * float(TILE) / maxf(frame_px, 1.0)))
+	_camera.global_position = _skater.global_position + Vector3(
+			0.0, height, height * tan(deg_to_rad(90.0 - tilt)))
+	_camera.rotation_degrees = Vector3(-tilt, 0.0, 0.0)
 
 
 # FACEOFF_PREP, driven through the same two entry points a locked tick uses:
