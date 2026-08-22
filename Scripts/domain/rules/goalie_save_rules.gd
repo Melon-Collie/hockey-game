@@ -104,12 +104,15 @@ class ContactResult:
 
 # Resolve a puck-vs-goalie contact. `contact_normal` points out of the struck
 # surface toward the puck (SweptDiscOBB's outward normal); `goalie_forward` is
-# the direction he faces, used ONLY by the catch. Fills a caller-owned result
-# (no allocation). Deterministic, so a client-predicted puck and the host agree
-# before reconciliation.
+# the direction he faces, used ONLY by the catch; `surface_velocity` is the
+# struck part's own motion, used ONLY by the material rebound — what he catches
+# and what he smothers are acts, and a moving hand does not change either.
+# Fills a caller-owned result (no allocation). Deterministic, so a
+# client-predicted puck and the host agree before reconciliation.
 static func resolve_contact(
 		incoming: Vector3, part: int, contact_normal: Vector3,
-		result: ContactResult, goalie_forward: Vector3 = Vector3.ZERO) -> void:
+		result: ContactResult, goalie_forward: Vector3 = Vector3.ZERO,
+		surface_velocity: Vector3 = Vector3.ZERO) -> void:
 	var presented: bool = is_face_presented(contact_normal, goalie_forward)
 	if part == SavePart.GLOVE and presented:
 		# He closed his hand on it. Zero rather than a slow drift: the controller
@@ -135,7 +138,8 @@ static func resolve_contact(
 		result.caught = false
 		result.trapped = true
 		return
-	result.velocity = rebound_velocity(incoming, part, contact_normal)
+	result.velocity = rebound_velocity(
+			incoming, part, contact_normal, surface_velocity)
 	result.caught = false
 	result.trapped = false
 
@@ -158,11 +162,32 @@ static func trapped_drop_velocity(contact_normal: Vector3) -> Vector3:
 
 # The rebound off `part`'s material, through the real contact normal. A
 # separating puck comes back unchanged.
+#
+# `surface_velocity` is the struck part's own world velocity, and no part of a
+# goalie is a static wall: he tracks a shot with the blocker and slides his whole
+# body in and out, so the impact speed the material responds to is the RELATIVE
+# one. Resolving in the surface's frame — subtract, reflect, add back — is what
+# makes that true, and it degrades exactly to the static case when the part is
+# still, so a fixture that offers no velocity gets today's numbers unchanged.
+#
+# Only the NORMAL component of the surface's motion enters. That is the same
+# frictionless-tangent claim deflect_velocity_3d already makes for the puck's own
+# glance: the face drives the puck along its normal and does not carry it
+# sideways. Adding the tangential part would assert a grip on the puck that
+# nothing here has measured.
+#
+# The consequence worth knowing at a call site: a puck at REST against an
+# advancing face leaves at (1 + e) times the face's normal speed rather than
+# sitting still while the collider walks through it, and a retreating face
+# leaves it at rest rather than dragging it along.
 static func rebound_velocity(
-		incoming: Vector3, part: int, contact_normal: Vector3) -> Vector3:
+		incoming: Vector3, part: int, contact_normal: Vector3,
+		surface_velocity: Vector3 = Vector3.ZERO) -> Vector3:
 	var base: int = clampi(part, 0, SavePart.size() - 1) * MAT_STRIDE
-	return PuckCollisionRules.deflect_velocity_3d(
-			incoming, contact_normal,
+	var n: Vector3 = contact_normal.normalized()
+	var surface_normal_vel: Vector3 = n * surface_velocity.dot(n)
+	return surface_normal_vel + PuckCollisionRules.deflect_velocity_3d(
+			incoming - surface_normal_vel, contact_normal,
 			MATERIALS[base + MAT_SOFT],
 			MATERIALS[base + MAT_HARD],
 			MATERIALS[base + MAT_TANGENTIAL],

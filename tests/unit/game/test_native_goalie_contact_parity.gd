@@ -17,6 +17,7 @@ var _roots: Array[Node3D] = []
 var _packed := PackedFloat32Array()
 var _parts: Array = []
 var _part_goalies: Array = []
+var _part_velocities := PackedVector3Array()
 
 
 func before_each() -> void:
@@ -77,7 +78,7 @@ func test_gather_path_matches_legacy_nearest() -> void:
 			_build_goalie(Vector3(-0.4, 0.0, 24.8), _rng.randi_range(3, 8)),
 		]
 		var count: int = GoalieContactDetector.gather_boxes(
-				goalies, _packed, _parts, _part_goalies)
+				goalies, _packed, _parts, _part_goalies, _part_velocities)
 		# Many sweeps against one gather, like the sub-step loop does.
 		for sweep: int in 40:
 			var prev := Vector3(_rng.randf_range(-1.5, 1.5), _rng.randf_range(0.0, 1.6),
@@ -89,7 +90,8 @@ func test_gather_path_matches_legacy_nearest() -> void:
 			var legacy_hit: bool = GoalieContactDetector.nearest(
 					goalies, prev, curr, radius, scratch, legacy)
 			var packed_hit: bool = GoalieContactDetector.nearest_packed(
-					_packed, count, _parts, _part_goalies, prev, curr, radius, packed_out)
+					_packed, count, _parts, _part_goalies, _part_velocities,
+					prev, curr, radius, packed_out)
 
 			if legacy_hit != packed_hit:
 				fail_test("hit mismatch round %d sweep %d: legacy=%s packed=%s" % [

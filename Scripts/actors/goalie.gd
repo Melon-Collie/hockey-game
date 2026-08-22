@@ -186,6 +186,12 @@ var _collision_parts_cache: Array[CollisionShape3D] = []
 # nodes are in this goalie's own subtree), so freeing the goalie frees the lot.
 var _collision_part_bodies: Array[Node] = []
 var _collision_part_half_extents: PackedVector3Array = PackedVector3Array()
+# Also parallel: each part's world velocity in m/s, and the origins it was
+# differenced from. Unlike the two above these are NOT fixed — see
+# get_collision_part_velocities.
+var _collision_part_velocities: PackedVector3Array = PackedVector3Array()
+var _collision_part_prev_origins: PackedVector3Array = PackedVector3Array()
+var _part_velocity_frame: int = -1
 
 
 func get_collision_parts() -> Array[CollisionShape3D]:
@@ -213,6 +219,48 @@ func get_collision_part_half_extents() -> PackedVector3Array:
 	if _collision_parts_cache.is_empty():
 		get_collision_parts()
 	return _collision_part_half_extents
+
+
+# Each part's WORLD velocity (m/s) over the physics tick that ended at its
+# current pose — what the analytic save needs to resolve a rebound in the frame
+# of the surface it struck, because no part of a goalie is ever a static wall:
+# a blocker tracks a shot at up to blocker_react_max_speed and the whole body
+# slides in and out under depth_max_speed.
+#
+# Differenced from WORLD origins, not from the pose config, and that is the
+# point: body translation, body yaw and part-local motion are already composed
+# into the world transform, so one sample serves the host's built pose, a
+# client's applied network pose and a replay's scrubbed pose without any of the
+# three knowing about it.
+#
+# Sampled at most once per physics frame, on demand. On demand because the puck
+# only asks near the net, so a goalie at the far end pays nothing; at most once
+# because the client's re-predict calls the gather several times inside one
+# frame, and differencing across those would report a tick of motion as several.
+# A gap of more than one frame (the puck was up ice) leaves no honest estimate,
+# so those re-baseline to zero rather than average over the gap — one tick of no
+# push, spent while the puck is still metres out.
+func get_collision_part_velocities() -> PackedVector3Array:
+	var frame: int = Engine.get_physics_frames()
+	if frame == _part_velocity_frame:
+		return _collision_part_velocities
+	var parts: Array[CollisionShape3D] = get_collision_parts()
+	var n: int = parts.size()
+	var contiguous: bool = frame == _part_velocity_frame + 1 \
+			and _collision_part_prev_origins.size() == n
+	if not contiguous:
+		_collision_part_prev_origins.resize(n)
+		_collision_part_velocities.resize(n)
+	# Nominal step, not the frame's measured delta: the simulation advances by a
+	# fixed step even when the host overruns and real time dilates around it.
+	var inv_dt: float = float(Engine.physics_ticks_per_second)
+	for i: int in n:
+		var origin: Vector3 = parts[i].global_transform.origin
+		_collision_part_velocities[i] = (origin - _collision_part_prev_origins[i]) * inv_dt \
+				if contiguous else Vector3.ZERO
+		_collision_part_prev_origins[i] = origin
+	_part_velocity_frame = frame
+	return _collision_part_velocities
 
 
 static func _gather_collision_parts(node: Node, found: Array[CollisionShape3D]) -> void:

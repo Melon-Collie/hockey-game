@@ -260,6 +260,7 @@ var _native_step: RefCounted = null
 var _gather_packed := PackedFloat32Array()
 var _gather_parts: Array = []
 var _gather_goalies: Array = []
+var _gather_velocities := PackedVector3Array()
 # Drill obstacles (the tutorial/drill saucer board). Empty in a match — the
 # analytic step tests is_empty() first, so a match tick pays one array read.
 var _obstacles: Array[PuckObstacleCollision.Obstacle] = []
@@ -825,7 +826,8 @@ func _drive_analytic(dt: float) -> void:
 	var goalie_box_count: int = 0
 	if not goalies.is_empty() and GoalieContactDetector.native_available():
 		goalie_box_count = GoalieContactDetector.gather_boxes(
-				goalies, _gather_packed, _gather_parts, _gather_goalies)
+				goalies, _gather_packed, _gather_parts, _gather_goalies,
+				_gather_velocities)
 	var substeps: int = PuckAuthorityRules.frame_substeps(prev.z, incoming_speed, dt)
 	var sub_dt: float = dt / float(substeps)
 	var pos: Vector3 = prev
@@ -887,7 +889,7 @@ func _drive_analytic(dt: float) -> void:
 			if goalie_box_count > 0:
 				goalie_hit = GoalieContactDetector.nearest_packed(
 						_gather_packed, goalie_box_count, _gather_parts, _gather_goalies,
-						sub_prev, pos, radius, _goalie_contact)
+						_gather_velocities, sub_prev, pos, radius, _goalie_contact)
 			elif not GoalieContactDetector.native_available():
 				goalie_hit = GoalieContactDetector.nearest(
 						goalies, sub_prev, pos, radius, _goalie_scratch, _goalie_contact)
@@ -899,7 +901,8 @@ func _drive_analytic(dt: float) -> void:
 			# outcome is a contact and needs no goalie frame beyond the normal.
 			var fwd: Vector3 = -g3.global_transform.basis.z if g3 != null else Vector3.ZERO
 			GoalieSaveRules.resolve_contact(
-					vel, part, _goalie_contact.normal, _save_result, fwd)
+					vel, part, _goalie_contact.normal, _save_result, fwd,
+					_goalie_contact.part_velocity)
 			vel = _save_result.velocity
 			# Eject the disc flush off the contacted face. `point` is the sphere
 			# CENTRE at toi — already `radius` off the real face via the

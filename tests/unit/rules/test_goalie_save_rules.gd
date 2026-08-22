@@ -243,3 +243,86 @@ func test_face_presented_ignores_the_vertical() -> void:
 	# is not presented.
 	assert_false(GoalieSaveRules.is_face_presented(
 			Vector3(0.0, 1.0, 0.0), Vector3(0.0, 0.0, 1.0)))
+
+
+# ── The moving surface ───────────────────────────────────────────────────────
+# No part of a goalie is a static wall. Before these, a puck at rest against an
+# advancing pad was ejected positionally with a velocity of ~0, so it travelled
+# at the collider's speed with no impulse behind it — and a leg or blade could
+# carry one over his own goal line without ever having hit it.
+
+func test_a_still_surface_changes_nothing() -> void:
+	# The regression guard for every save in the game: passing no surface
+	# velocity, or a zero one, must reproduce the static-wall numbers exactly.
+	for part: int in GoalieSaveRules.SavePart.size():
+		var incoming := Vector3(1.5, 0.4, -18.0)
+		assert_eq(
+				GoalieSaveRules.rebound_velocity(
+						incoming, part, SQUARE_N, Vector3.ZERO),
+				GoalieSaveRules.rebound_velocity(incoming, part, SQUARE_N),
+				"part %d moved when the surface did not" % part)
+
+
+func test_an_advancing_face_puts_a_resting_puck_in_motion() -> void:
+	# The bug this exists for. A pad closing on a dead puck at 2 m/s leaves it
+	# with (1 + e) times that along the normal — it is pushed, not carried.
+	var pad_speed: float = 2.0
+	var v: Vector3 = GoalieSaveRules.rebound_velocity(
+			Vector3.ZERO, GoalieSaveRules.SavePart.PAD, SQUARE_N,
+			SQUARE_N * pad_speed)
+	assert_gt(v.z, pad_speed, "at least the face's own speed, plus its restitution")
+	assert_lt(v.z, 2.0 * pad_speed, "and no more than a perfectly elastic one")
+	# And it is a frame change, not a bolted-on term: the answer is the STILL
+	# surface's answer to the same contact seen from the moving surface, carried
+	# back out. That identity is the whole model, so it is the thing to pin.
+	var in_surface_frame: Vector3 = GoalieSaveRules.rebound_velocity(
+			SQUARE_N * -pad_speed, GoalieSaveRules.SavePart.PAD, SQUARE_N)
+	assert_almost_eq(v.z, in_surface_frame.z + pad_speed, 0.0001)
+
+
+func test_a_retreating_face_leaves_a_resting_puck_alone() -> void:
+	# The other half: a face pulling away cannot drag the puck with it. Without
+	# this the same fix would have the goalie towing pucks around the crease.
+	var v: Vector3 = GoalieSaveRules.rebound_velocity(
+			Vector3.ZERO, GoalieSaveRules.SavePart.PAD, SQUARE_N,
+			SQUARE_N * -2.0)
+	assert_almost_eq(v.length(), 0.0, 0.0001)
+
+
+func test_a_face_sliding_along_itself_does_not_carry_the_puck() -> void:
+	# Only the normal component enters. A blocker tracking laterally across a
+	# resting puck grips it no more than the boards grip a puck sliding past.
+	var v: Vector3 = GoalieSaveRules.rebound_velocity(
+			Vector3.ZERO, GoalieSaveRules.SavePart.BLOCKER, SQUARE_N,
+			Vector3(4.0, 0.0, 0.0))
+	assert_almost_eq(v.length(), 0.0, 0.0001)
+
+
+func test_a_shot_into_an_advancing_pad_comes_back_harder() -> void:
+	# The felt consequence, and the reason this is a model rather than a guard:
+	# a goalie challenging the shooter kicks his rebounds further out than one
+	# backing into his crease does.
+	var incoming := Vector3(0.0, 0.0, -25.0)
+	var challenging: Vector3 = GoalieSaveRules.rebound_velocity(
+			incoming, GoalieSaveRules.SavePart.PAD, SQUARE_N, SQUARE_N * 1.5)
+	var retreating: Vector3 = GoalieSaveRules.rebound_velocity(
+			incoming, GoalieSaveRules.SavePart.PAD, SQUARE_N, SQUARE_N * -1.5)
+	assert_gt(challenging.z, retreating.z)
+
+
+func test_the_two_acts_ignore_the_surfaces_motion() -> void:
+	# A catch and a smother are things he DOES, not things his equipment is made
+	# of, so a moving hand must not change either one's outcome.
+	var res := _res()
+	GoalieSaveRules.resolve_contact(
+			Vector3(0.0, 0.0, -20.0), GoalieSaveRules.SavePart.GLOVE, SQUARE_N,
+			res, FACING, SQUARE_N * 3.0)
+	assert_true(res.caught, "the glove still closes")
+	assert_eq(res.velocity, Vector3.ZERO, "and it still stops the puck dead")
+	GoalieSaveRules.resolve_contact(
+			Vector3(0.0, 0.0, -20.0), GoalieSaveRules.SavePart.CHEST, SQUARE_N,
+			res, FACING, SQUARE_N * 3.0)
+	assert_true(res.trapped, "the chest still smothers")
+	assert_almost_eq(res.velocity.length(),
+			GoalieSaveRules.CHEST_TRAP_DROP_M_S, 0.0001,
+			"and still places it down at a walking pace")

@@ -16,6 +16,10 @@ class Contact:
 	var toi: float = INF
 	var depth: float = 0.0         # start-inside depenetration along normal (see SweptDiscOBB)
 	var goalie: Node = null
+	# World velocity (m/s) of the struck part — the save resolves the rebound in
+	# this frame (GoalieSaveRules.resolve_contact). Zero for a fixture root that
+	# is not a real Goalie, which is the same as today's static-wall response.
+	var part_velocity: Vector3 = Vector3.ZERO
 
 
 # Nearest contact of the swept disc (prev → curr, radius) against every goalie's boxes.
@@ -50,6 +54,7 @@ static func nearest(goalies: Array, prev: Vector3, curr: Vector3, radius: float,
 	out.goalie = null
 	out.toi = INF
 	out.depth = 0.0
+	out.part_velocity = Vector3.ZERO
 	for goalie: Node in goalies:
 		if goalie == null:
 			continue
@@ -62,10 +67,12 @@ static func nearest(goalies: Array, prev: Vector3, curr: Vector3, radius: float,
 		var shapes: Array[CollisionShape3D]
 		var bodies: Array[Node] = _EMPTY_BODIES
 		var halves: PackedVector3Array
+		var vels: PackedVector3Array
 		if real != null:
 			shapes = real.get_collision_parts()
 			bodies = real.get_collision_part_bodies()
 			halves = real.get_collision_part_half_extents()
+			vels = real.get_collision_part_velocities()
 		else:
 			shapes = _collision_shapes(goalie)
 		for i: int in shapes.size():
@@ -107,6 +114,7 @@ static func nearest(goalies: Array, prev: Vector3, curr: Vector3, radius: float,
 					out.depth = scratch.depth
 					out.part = body
 					out.goalie = goalie
+					out.part_velocity = vels[i] if real != null else Vector3.ZERO
 					out.hit = true
 	return out.hit
 
@@ -121,7 +129,8 @@ static func nearest(goalies: Array, prev: Vector3, curr: Vector3, radius: float,
 # zero engine reads. Callers gate on the native step being available and fall
 # back to nearest() otherwise; skip rules here MUST mirror nearest()'s.
 static func gather_boxes(goalies: Array, packed: PackedFloat32Array,
-		parts: Array, part_goalies: Array) -> int:
+		parts: Array, part_goalies: Array,
+		part_velocities: PackedVector3Array) -> int:
 	parts.clear()
 	part_goalies.clear()
 	var idx: int = 0
@@ -132,10 +141,12 @@ static func gather_boxes(goalies: Array, packed: PackedFloat32Array,
 		var shapes: Array[CollisionShape3D]
 		var bodies: Array[Node] = _EMPTY_BODIES
 		var halves: PackedVector3Array
+		var vels: PackedVector3Array
 		if real != null:
 			shapes = real.get_collision_parts()
 			bodies = real.get_collision_part_bodies()
 			halves = real.get_collision_part_half_extents()
+			vels = real.get_collision_part_velocities()
 		else:
 			shapes = _collision_shapes(goalie)
 		for i: int in shapes.size():
@@ -174,6 +185,13 @@ static func gather_boxes(goalies: Array, packed: PackedFloat32Array,
 			packed[base + 12] = half.x
 			packed[base + 13] = half.y
 			packed[base + 14] = half.z
+			# Velocity rides a parallel array rather than the packed slab: the
+			# kernel tests geometry to find WHICH box was struck, and the
+			# velocity is only wanted for the response to the one it names. A
+			# wider stride would cost every box to serve at most one.
+			if part_velocities.size() <= idx:
+				part_velocities.resize(idx + 1)
+			part_velocities[idx] = vels[i] if real != null else Vector3.ZERO
 			parts.append(body)
 			part_goalies.append(goalie)
 			idx += 1
@@ -183,13 +201,14 @@ static func gather_boxes(goalies: Array, packed: PackedFloat32Array,
 # The packed-gather counterpart of nearest(): one native crossing per sub-step.
 # Valid only when the native extension is loaded (callers gate on it).
 static func nearest_packed(packed: PackedFloat32Array, count: int,
-		parts: Array, part_goalies: Array,
+		parts: Array, part_goalies: Array, part_velocities: PackedVector3Array,
 		prev: Vector3, curr: Vector3, radius: float, out: Contact) -> bool:
 	out.hit = false
 	out.part = null
 	out.goalie = null
 	out.toi = INF
 	out.depth = 0.0
+	out.part_velocity = Vector3.ZERO
 	if count == 0 or _native_obb == null:
 		return false
 	var best: int = _native_obb.obb_nearest(prev, curr, radius, packed, count)
@@ -201,6 +220,7 @@ static func nearest_packed(packed: PackedFloat32Array, count: int,
 	out.depth = _native_obb.get_obb_depth()
 	out.part = parts[best]
 	out.goalie = part_goalies[best]
+	out.part_velocity = part_velocities[best]
 	out.hit = true
 	return true
 
