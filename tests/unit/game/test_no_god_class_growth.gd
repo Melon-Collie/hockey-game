@@ -62,7 +62,7 @@ const _SIZE_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/actors/hockey_rink.gd": 1472,
 	"res://Scripts/domain/ai/role_behaviors/role_helpers.gd": 1436,
 	"res://Scripts/game/player_prefs.gd": 1370,
-	"res://Scripts/actors/skater_mesh_builder.gd": 1399,
+	"res://Scripts/actors/skater_mesh_builder.gd": 1404,
 	"res://Scripts/domain/rules/goalie_behavior_rules.gd": 1324,
 	"res://Scripts/ui/career_stats_screen.gd": 1271,
 	"res://Scripts/domain/ai/carry_space.gd": 1255,

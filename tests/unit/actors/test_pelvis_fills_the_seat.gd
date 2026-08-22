@@ -14,7 +14,7 @@ extends GutTest
 
 const _SCENE: String = "res://Scenes/Skater.tscn"
 
-# Both hip balls, from Scenes/Skater.tscn (x from LegL/LegR, z bias from HipL).
+# The hip pivots, from Scenes/Skater.tscn — where the thigh domes are centred.
 var _hip_centre_y: float = 0.0
 var _hip_centre_x: float = 0.0
 var _torso_origin_y: float = 0.0
@@ -29,9 +29,8 @@ func before_all() -> void:
 			if st.get_node_property_name(i, p) == "transform":
 				origins[path] = (st.get_node_property_value(i, p) as Transform3D).origin
 	var leg: Vector3 = origins["./MeshRoot/LowerBody/LegL"]
-	var hip: Vector3 = origins["./MeshRoot/LowerBody/LegL/HipL"]
-	_hip_centre_y = leg.y + hip.y
-	_hip_centre_x = absf(leg.x + hip.x)
+	_hip_centre_y = leg.y
+	_hip_centre_x = absf(leg.x)
 	_torso_origin_y = origins["./MeshRoot/UpperBody/UpperBodyMesh"].y
 
 
@@ -74,21 +73,30 @@ func test_the_pelvis_hides_under_the_jersey_at_rest() -> void:
 
 # ── It must meet what it sits between ────────────────────────────────────────
 
-# The hips are two balls with a V-notch between them; the pelvis is what closes
-# it. Their surfaces have to overlap at every height the balls span, or the seat
-# gains a seam of daylight exactly where the old notch was.
-func test_the_pelvis_meets_both_hip_balls() -> void:
-	var hip_r: float = SkaterMeshBuilder._HIP_RADIUS
-	var y: float = _hip_centre_y + hip_r
-	while y > _hip_centre_y - hip_r:
+# The seat and the two legs are separate solids that have to read as one body.
+# Each thigh caps off in a dome centred on its hip pivot, and the pelvis has to
+# reach it at every height that dome spans — otherwise the body gains a seam of
+# daylight at the hip, which is what the old hip balls were covering up.
+# Measured on the dome's own radius, before the thigh lathe's x scale widens it:
+# the stricter of the two numbers.
+func test_the_pelvis_meets_both_thigh_domes() -> void:
+	var dome_r: float = SkaterMeshBuilder._THIGH_DOME_RADIUS
+	var y: float = _hip_centre_y + dome_r
+	var checked: int = 0
+	while y > _hip_centre_y - dome_r:
 		var dy: float = y - _hip_centre_y
-		var ball: float = sqrt(maxf(hip_r * hip_r - dy * dy, 0.0))
+		var dome: float = sqrt(maxf(dome_r * dome_r - dy * dy, 0.0))
 		var pelvis: float = _profile_back(
-				SkaterMeshBuilder._PELVIS_PROFILE, SkaterMeshBuilder._PELVIS_REAR_SWAY, y) * SkaterMeshBuilder._TORSO_X_SCALE
-		assert_gt(pelvis + ball, _hip_centre_x,
-				"at y %.3f the seat (%.3f) and the hip ball (%.3f) must still overlap"
-				% [y, pelvis, ball])
+				SkaterMeshBuilder._PELVIS_PROFILE, SkaterMeshBuilder._PELVIS_REAR_SWAY, y)
+		if pelvis < 0.0:
+			y -= 0.02
+			continue  # past the seat's own bottom — down here the leg is the body
+		assert_gt(pelvis * SkaterMeshBuilder._TORSO_X_SCALE + dome, _hip_centre_x,
+				"at y %.3f the seat (%.3f) and the thigh dome (%.3f) must still overlap"
+				% [y, pelvis, dome])
+		checked += 1
 		y -= 0.02
+	assert_gt(checked, 4, "the seat and the dome must share a real span of height")
 
 
 # ── It must not fold ─────────────────────────────────────────────────────────

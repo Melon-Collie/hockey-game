@@ -53,7 +53,6 @@ const _SHOULDER_BONES: Array[int] = [
 # The leg parts are bones of the leg rig, not nodes, so they are addressed by
 # LegBone index (see SkaterMeshBuilder).
 const _THIGH_BONES: Array[int] = [
-	SkaterMeshBuilder.LegBone.HIP_L,   SkaterMeshBuilder.LegBone.HIP_R,
 	SkaterMeshBuilder.LegBone.THIGH_L, SkaterMeshBuilder.LegBone.THIGH_R,
 	SkaterMeshBuilder.LegBone.KNEE_L,  SkaterMeshBuilder.LegBone.KNEE_R,
 ]

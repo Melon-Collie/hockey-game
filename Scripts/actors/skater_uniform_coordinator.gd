@@ -232,14 +232,14 @@ func apply_uniform(colors: Dictionary) -> void:
 			SkaterMeshBuilder.UpperBone.BOTTOM_ELBOW, elbow_mat.duplicate())
 
 	# Pants — vertical side stripes (pants stripe pos is U, width is column
-	# thickness; see _make_v_stripes_texture). Hips/knees match pants base.
+	# thickness; see _make_v_stripes_texture). The thigh carries the hip joint's
+	# dome now, so its stripe runs up over the hip the way a real pant's does;
+	# the knee ball stays solid, since a stripe would ring it.
 	var pants_block: Dictionary = uniform.pants
 	_paint_pants_thigh(SkaterMeshBuilder.LegSurface.THIGH_L, pants_block, -0.25)
 	_paint_pants_thigh(SkaterMeshBuilder.LegSurface.THIGH_R, pants_block, 0.25)
 	var pants_solid: StandardMaterial3D = UniformPaint.solid(pants_block.base)
-	for surface: int in [SkaterMeshBuilder.LegSurface.HIP_L,
-			SkaterMeshBuilder.LegSurface.HIP_R,
-			SkaterMeshBuilder.LegSurface.KNEE_L,
+	for surface: int in [SkaterMeshBuilder.LegSurface.KNEE_L,
 			SkaterMeshBuilder.LegSurface.KNEE_R]:
 		_skater.set_leg_surface_material(surface, pants_solid.duplicate())
 	# The pelvis rides the UPPER mesh (it must not fold with the torso, and it
