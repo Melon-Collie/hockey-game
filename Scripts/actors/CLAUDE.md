@@ -12,8 +12,8 @@ delegates to.
 
 | holder | class | what it owns |
 |---|---|---|
-| `_legs` | `SkaterLegRig` | the leg skeleton, the gait written onto it, foot eversion, and the ice VFX's two reads (skate mark position, edge load) |
-| `_arms` | `SkaterArmRig` | the upper skeleton: torso, helmet, deltoid caps, both arms by IK, the trunk texture, the face gear |
+| `_legs` | `SkaterLegRig` | the leg skeleton, the gait written onto it, the ankles' give-back against it, and the ice VFX's two reads (skate mark position, edge load) |
+| `_arms` | `SkaterArmRig` | the upper skeleton: torso, pelvis, helmet, deltoid caps, both arms by IK, the trunk texture, the face gear |
 | `_stick` | `SkaterStickRig` | the shaft pose, the knob, and the cosmetic flex/whip |
 | `_draw` | `SkaterDrawTracker` | the faceoff swipe crest, host-only |
 | `_uniform` | `SkaterUniformCoordinator` | the paint |
@@ -72,3 +72,11 @@ Two rules the rigs sit inside, both easy to break from in here:
 - **The trunk texture rotates BONES, not the `UpperBody` node.** The blade and
   shoulder markers hang under `UpperBody`, so a node rotation would move
   gameplay geometry at render rate. Bones are pure mesh.
+- **The pelvis is the one upper-rig part the texture must not touch.** It rides
+  that mesh because it can belong to neither of the alternatives — folding with
+  the torso is what opens the seat in the first place, and hanging it off a leg
+  pivot would swing the whole seat with that leg. So it sits in `UpperBody`'s
+  space, painted as pants rather than jersey, while the chest folds above it.
+  `tests/unit/actors/test_pelvis_fills_the_seat.gd` holds all three: it stays
+  under the jersey at rest, it meets the hip balls it sits between, and it does
+  not take the fold.

@@ -42,7 +42,7 @@ class PartSpec:
 
 
 # Envelopes come from the primitives in Scenes/Skater.tscn: torso cylinder
-# r 0.22 h 0.55, helmet sphere r 0.155, hip r 0.13, knee r 0.095, thigh
+# r 0.22 h 0.55, helmet sphere r 0.155, knee r 0.095, thigh
 # cylinder r 0.14 h 0.3, sock r 0.09 h 0.3, skate r 0.09 h 0.2, foot prolate
 # sphere r 0.08 half-length 0.125. Two deliberate exceptions: the shoulder cap
 # is prolate along its pole (it leans along the arm, high on the torso — no
@@ -77,15 +77,19 @@ func _parts() -> Array[PartSpec]:
 				Vector3(2.0, SkaterMeshBuilder.CUFF_HEIGHT_M, 2.0), true),
 		PartSpec.new("knob", SkaterMeshBuilder.shared_knob(),
 				Vector3(0.07, SkaterMeshBuilder.KNOB_HEIGHT_M, 0.07), true),
-		# Hip re-pinned +0.02 over the replaced r-0.13 ball: deliberately
-		# inflated to fill the seat under the torso's rear sway (the seat's
-		# rearward bias itself is scene node placement, not mesh).
-		PartSpec.new("hip", SkaterMeshBuilder._build_hip(),
-				Vector3(0.28, 0.28, 0.28), false),
+		# The pelvis replaces no primitive — it is the seat the rig never had, and
+		# what actually bounds it is the jersey it hides under
+		# (tests/unit/actors/test_pelvis_fills_the_seat.gd). The box here is its
+		# own nominal envelope, so a runaway edit still trips something.
+		PartSpec.new("pelvis", SkaterMeshBuilder._build_pelvis(),
+				Vector3(0.44, 0.36, 0.38), true),
 		PartSpec.new("knee", SkaterMeshBuilder._build_knee(),
 				Vector3(0.19, 0.19, 0.19), false),
+		# The thigh carries the hip joint's dome, so its envelope is the thigh
+		# cylinder PLUS the r-0.138 ball that used to sit on the pivot as a part
+		# of its own — the same volume, one piece.
 		PartSpec.new("thigh", SkaterMeshBuilder._build_thigh(),
-				Vector3(0.29, 0.30, 0.28), true),
+				Vector3(0.31, 0.43, 0.29), true),
 		PartSpec.new("sock", SkaterMeshBuilder._build_sock(),
 				Vector3(0.19, 0.30, 0.19), true),
 		PartSpec.new("skate", SkaterMeshBuilder._build_skate(),

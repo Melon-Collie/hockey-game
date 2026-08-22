@@ -300,16 +300,65 @@ covering ground, so `is_faceoff_ready()` is false and the gait plays an ordinary
 stride — a floored crouch and staggered feet laid over a running stride read as
 a limp. The ready stance eases in as the glide hands back.
 
-**Set at the dot is two stances, not one.** The centre taking the draw sits far
-deeper than the players lined up behind him: knees well past the skating sit,
-feet split wide fore/aft, chest folded down over the dot. `Skater.
-is_faceoff_center` selects between the two, and it is *derived* on every peer
-from the C slot rather than replicated — every machine already knows every
-player's slot, and a cosmetic bit is not worth a wire byte. The pose itself is
-split across the two collaborators that own its halves: the crouch and the foot
-split are gait channels (`SkaterSkatingCoordinator`), the trunk fold is a torso
-lean (`SkaterPoseCoordinator`), floored on top of whatever the reach lean asks
-for rather than replacing it.
+**Set at the dot is two stances, not one.** The players lined up behind the dot
+hold a ready stance. The centre taking the draw holds an *address*: knees well
+past the skating sit, a base splayed wide under him, feet split fore/aft, chest
+folded down over the dot, hands apart on the shaft. `Skater.is_faceoff_center`
+selects between the two, and it is *derived* on every peer from the C slot
+rather than replicated — every machine already knows every player's slot, and a
+cosmetic bit is not worth a wire byte.
+
+The address is spread across the collaborators that own its parts, and the parts
+are not independent:
+
+- **The crouch, the splay and the foot split are gait channels**
+  (`SkaterSkatingCoordinator`), floored over the speed-driven envelope. The
+  splay costs each leg a cosine of vertical span, which the body pays as extra
+  drop.
+- **The chest fold rides the trunk TEXTURE**, not the torso lean — the lean
+  rotates the `UpperBody` node the blade markers hang from, and the blade-first
+  IK answers a pitched frame by standing the shaft on end. Bones are mesh only,
+  so the chest reads folded while the stick keeps its address. The arm roots
+  ride the texture too (`SkaterArmRig._textured_shoulder`), which is what lets
+  the fold go deep without tearing the arms off the shoulders.
+- **Both ankles flatten** (`SkaterLegRig.set_ankle_flatten`). A sit this deep
+  folds the shin far enough back to stand the blades on their heels, and the
+  splay puts them on their outside edges; the ankles give the whole chain back.
+  A level boot then hangs its blade below the FOOT pivot rather than keeping its
+  sole planted, so the crouch owes `_FOOT_FWD`'s vertical share on top.
+- **The hands are solved off the FOLDED shoulder**
+  (`SkaterIKCoordinator.address_shoulder`), because that is where the arms are
+  rooted. This is the one that bites: solved off the marker, the hands land a
+  third of a metre behind the shoulder they hang from, and a two-bone IK can
+  only answer that by putting the elbow in front of the wrist. The arm reads as
+  bending backwards, and no amount of pole tuning fixes it.
+- **The stick is choked** for the draw (`Skater.faceoff_choke_m`, sized off the
+  build's own stick like the check commit's). The hand rides one stick-length up
+  from a blade on the dot, so at full length a body folded this far has to hold
+  it at shoulder height with the arm shut. A real centre grips well down the
+  shaft, and the shaft keeps its length — `SkaterStickRig` gives back out of the
+  butt whatever the grip takes.
+- **The top hand's ceiling comes down** (`_address_hand_ceiling`). `TopHandIK`
+  answers a puck inside the stick's reach by RAISING the hand and steepening the
+  shaft; that is a carry in tight, not an address. The ceiling binds only
+  through the countdown — the ease releases it at the drop, so the draw sweep
+  itself is unaffected.
+- **The bottom hand slides down the shaft** on the same ease
+  (`_grip_fraction`) — the short lever a draw is won with.
+- **The reach lean stands down** (`SkaterPoseCoordinator._address_share`). It
+  measures the hand's reach off the shoulder MARKER, and the address carries the
+  hands forward with the chest — so left alone it reads that carry as a reach
+  and leans the torso a second time for it, deepening the fold past the authored
+  one and handing the blade IK a pitched frame to solve the address in.
+- **The dot is laid out from the ADDRESS, not from a standing body**
+  (`faceoff_center_distance`): the fold's carry plus the shaft's span at the
+  crouched hand height and the choked length. It runs at the whistle, before the
+  pose exists, so every term is derived — the drop from
+  `SkaterSkatingCoordinator.faceoff_address_drop`, with the live crouch netted
+  out so a skater caught mid-stride doesn't get a different dot. The fraction is
+  deliberately just PAST 1.0: at the shaft's natural projection the hand comes
+  off the body toward the dot (`TopHandIK`'s FAR regime) and the arms open,
+  while short of it the hand rides its ceiling and they fold shut.
 
 **Nothing dispatches the state machine while movement is locked**, so no state
 can clear itself there — `SHOT_BLOCKING` used to hold its planted legs and wide

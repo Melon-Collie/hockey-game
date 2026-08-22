@@ -40,8 +40,45 @@ const _TORSO_PROFILE: Array[Vector2] = [
 # the seat builds through the lower back and peaks at the hem that drapes
 # over it, while the chest rings stay centered so the belly keeps its line.
 const _TORSO_REAR_SWAY: Array[float] = [0.0, 0.0, 0.0, 0.006, 0.018, 0.028, 0.032]
+# The pelvis, in UpperBody space (y 0 is the trunk's fold pivot, the hip pivots
+# sit at −0.13). It is the seat the torso does NOT carry: the trunk texture
+# rotates the torso bone about that pivot, so at any fold worth seeing the
+# jersey hem swings up and away and leaves the body open from behind — a flat
+# bottom cap tipped into view over the bare space between the thighs. A real
+# pelvis does not fold with the spine, so this one does not fold with the torso
+# (SkaterArmRig.repose_bone leaves it out of the texture) and fills the seat at
+# every angle.
+#
+# Sized to hide UNDER the jersey hem at rest — a couple of centimetres inside
+# the torso's lower rings all the way up — so it changes no silhouette that was
+# already right, and only shows where there used to be nothing.
+const _PELVIS_PROFILE: Array[Vector2] = [
+	Vector2(0.100, 0.175),   # waist, tucked up inside the hem
+	Vector2(0.020, 0.200),
+	Vector2(-0.060, 0.208),  # the seat
+	Vector2(-0.140, 0.196),
+	Vector2(-0.210, 0.155),  # the leg line
+	Vector2(-0.260, 0.100),  # buried in the thighs
+]
+# Same hockey-butt sway the torso's own rings carry, peaked at the seat.
+const _PELVIS_REAR_SWAY: Array[float] = [0.006, 0.018, 0.030, 0.028, 0.014, 0.0]
+
+# The thigh, with the hip joint on top of it. The upper four stations are a
+# DOME centred on the hip pivot (_HIP_PIVOT_IN_THIGH above the part's origin,
+# _THIGH_DOME_RADIUS across): a sphere centred on the joint it turns about is
+# the one shape whose surface does not move when the leg does, so it seals the
+# hip at any splay or stride angle — where the pelvis, being static, cannot
+# follow the leg out. It replaces the hip ball, which used to do this job as a
+# separate part, and is why the pants' side stripe now runs up over the hip
+# instead of stopping at it.
+# test_skater_scene_mirrors.gd holds the dome on the pivot the scene authors.
+const _HIP_PIVOT_IN_THIGH: float = 0.13
+const _THIGH_DOME_RADIUS: float = 0.150
 const _THIGH_PROFILE: Array[Vector2] = [
-	Vector2(0.150, 0.142),
+	Vector2(0.275, 0.038),   # dome pole, buried in the pelvis
+	Vector2(0.240, 0.102),
+	Vector2(0.190, 0.137),
+	Vector2(0.130, 0.150),   # the hip pivot — the dome's equator
 	Vector2(0.050, 0.139),
 	Vector2(-0.080, 0.129),
 	Vector2(-0.150, 0.118),
@@ -123,9 +160,6 @@ const _SHOULDER_PROFILE: Array[Vector3] = [
 	Vector3(-0.137, 0.030, 1.0),   # arm-side taper
 ]
 
-# Hips fill the seat under the torso's rear sway. The rearward seat bias is
-# carried by the HipL/R nodes' scene position (z 0.035), not by this radius.
-const _HIP_RADIUS: float = 0.138
 const _KNEE_RADIUS: float = 0.095
 
 # Gloved fist: a beveled cube, slightly wider than deep and chamfered all
@@ -328,25 +362,25 @@ static func _radial_side_normals(src: ArrayMesh) -> ArrayMesh:
 # Bone order is L then R, pivot first. LEG_* and SHIN_* carry no vertices; they
 # exist to be rotated.
 enum LegBone {
-	LEG_L, HIP_L, THIGH_L, KNEE_L, SHIN_L, SOCK_L, SKATE_L, FOOT_L,
-	LEG_R, HIP_R, THIGH_R, KNEE_R, SHIN_R, SOCK_R, SKATE_R, FOOT_R,
+	LEG_L, THIGH_L, KNEE_L, SHIN_L, SOCK_L, SKATE_L, FOOT_L,
+	LEG_R, THIGH_R, KNEE_R, SHIN_R, SOCK_R, SKATE_R, FOOT_R,
 }
-const LEG_BONE_COUNT: int = 16
+const LEG_BONE_COUNT: int = 14
 # Parent per bone, index-aligned with LegBone. -1 = attached to the skeleton
 # root (LowerBody's frame).
 const LEG_BONE_PARENT: Array[int] = [
-	-1, LegBone.LEG_L, LegBone.LEG_L, LegBone.LEG_L,
+	-1, LegBone.LEG_L, LegBone.LEG_L,
 	LegBone.LEG_L, LegBone.SHIN_L, LegBone.SHIN_L, LegBone.SHIN_L,
-	-1, LegBone.LEG_R, LegBone.LEG_R, LegBone.LEG_R,
+	-1, LegBone.LEG_R, LegBone.LEG_R,
 	LegBone.LEG_R, LegBone.SHIN_R, LegBone.SHIN_R, LegBone.SHIN_R,
 ]
 # Scene node name per bone, index-aligned with LegBone. Skater._build_leg_rig
 # reads each one's local transform before freeing the subtree, so the .tscn stays
 # the place leg proportions are authored.
 const LEG_BONE_NODE: Array[String] = [
-	"LegL", "LegL/HipL", "LegL/ThighL", "LegL/KneeL",
+	"LegL", "LegL/ThighL", "LegL/KneeL",
 	"LegL/ShinL", "LegL/ShinL/SockL", "LegL/ShinL/SkateL", "LegL/ShinL/FootL",
-	"LegR", "LegR/HipR", "LegR/ThighR", "LegR/KneeR",
+	"LegR", "LegR/ThighR", "LegR/KneeR",
 	"LegR/ShinR", "LegR/ShinR/SockR", "LegR/ShinR/SkateR", "LegR/ShinR/FootR",
 ]
 
@@ -356,20 +390,19 @@ const LEG_BONE_NODE: Array[String] = [
 # extra surface is a piece a gear MODEL paints on its own (GearModelRegistry);
 # the runner is the exception that stays steel by construction.
 enum LegSurface {
-	HIP_L, THIGH_L, KNEE_L, SOCK_L,
+	THIGH_L, KNEE_L, SOCK_L,
 	SKATE_L_COLLAR, SKATE_L_STRIPE,
 	FOOT_L_SHELL, FOOT_L_TOE, FOOT_L_HOLDER, FOOT_L_RUNNER, FOOT_L_LACES,
-	HIP_R, THIGH_R, KNEE_R, SOCK_R,
+	THIGH_R, KNEE_R, SOCK_R,
 	SKATE_R_COLLAR, SKATE_R_STRIPE,
 	FOOT_R_SHELL, FOOT_R_TOE, FOOT_R_HOLDER, FOOT_R_RUNNER, FOOT_R_LACES,
 }
-const LEG_SURFACE_COUNT: int = 22
+const LEG_SURFACE_COUNT: int = 20
 
 
 static func shared_leg_skin_mesh() -> ArrayMesh:
 	return _shared("leg_skin", func() -> ArrayMesh:
 		var m := ArrayMesh.new()
-		var hip: ArrayMesh = _shared("hip", _build_hip)
 		var thigh: ArrayMesh = _shared("thigh", _build_thigh)
 		var knee: ArrayMesh = _shared("knee", _build_knee)
 		var sock: ArrayMesh = _shared("sock", _build_sock)
@@ -379,9 +412,8 @@ static func shared_leg_skin_mesh() -> ArrayMesh:
 		for side: int in 2:
 			var leg: int = LegBone.LEG_L if side == 0 else LegBone.LEG_R
 			var shin: int = LegBone.SHIN_L if side == 0 else LegBone.SHIN_R
-			_append_skinned_surface(m, hip, leg + 1)
-			_append_skinned_surface(m, thigh, leg + 2)
-			_append_skinned_surface(m, knee, leg + 3)
+			_append_skinned_surface(m, thigh, leg + 1)
+			_append_skinned_surface(m, knee, leg + 2)
 			_append_skinned_surface(m, sock, shin + 1)
 			_append_skinned_surface(m, skate, shin + 2, SKATE_SURF_COLLAR)
 			_append_skinned_surface(m, skate, shin + 2, SKATE_SURF_STRIPE)
@@ -574,8 +606,9 @@ enum UpperBone {
 	HELMET,
 	SHOULDER_L,
 	SHOULDER_R,
+	PELVIS,
 }
-const UPPER_BONE_COUNT: int = 14
+const UPPER_BONE_COUNT: int = 15
 
 # Surfaces. One per bone for the first thirteen; the helmet is the exception,
 # carrying the shell and the head/neck skin as two surfaces of one bone (they
@@ -604,15 +637,16 @@ enum UpperSurface {
 	SHOULDER_R,
 	TOP_FINGERS,
 	BOTTOM_FINGERS,
+	PELVIS,
 }
-const UPPER_SURFACE_COUNT: int = 17
+const UPPER_SURFACE_COUNT: int = 18
 # Scene node name per bone for the four parts whose placement is authored in
 # Scenes/Skater.tscn rather than derived (the arm parts are placed by IK). Read
 # by Skater._build_upper_rig, which then frees them — same deal as LEG_BONE_NODE.
 # Indices 0-9 are unused; the arm parts have no scene node.
 const UPPER_BONE_NODE: Array[String] = [
 	"", "", "", "", "", "", "", "", "", "",
-	"UpperBodyMesh", "Helmet", "ShoulderL", "ShoulderR",
+	"UpperBodyMesh", "Helmet", "ShoulderL", "ShoulderR", "",
 ]
 
 
@@ -645,6 +679,7 @@ static func shared_upper_skin_mesh() -> ArrayMesh:
 		# Out of anatomical order — see the UpperSurface doc block.
 		_append_skinned_surface(m, fist, UpperBone.TOP_HAND, FIST_PART_FINGERS)
 		_append_skinned_surface(m, fist, UpperBone.BOTTOM_HAND, FIST_PART_FINGERS)
+		_append_skinned_surface(m, _shared("pelvis", _build_pelvis), UpperBone.PELVIS)
 		return m)
 
 
@@ -737,6 +772,13 @@ static func shared_knob() -> ArrayMesh:
 # ── Part builders ─────────────────────────────────────────────────────────────
 
 
+# Torso scales and facet count, so the seat continues the same silhouette it
+# emerges from rather than reading as a separate object under the jersey.
+static func _build_pelvis() -> ArrayMesh:
+	return _build_lathe(_PELVIS_PROFILE, _TORSO_SIDES, _TORSO_X_SCALE, _TORSO_Z_SCALE,
+			_PELVIS_REAR_SWAY)
+
+
 static func _build_torso() -> ArrayMesh:
 	return _build_lathe(_TORSO_PROFILE, _TORSO_SIDES, _TORSO_X_SCALE, _TORSO_Z_SCALE,
 			_TORSO_REAR_SWAY)
@@ -752,6 +794,10 @@ static func _build_head() -> ArrayMesh:
 # the same faceted set from the same cache.
 static func shared_torso() -> ArrayMesh:
 	return _shared("torso", _build_torso)
+
+
+static func shared_pelvis() -> ArrayMesh:
+	return _shared("pelvis", _build_pelvis)
 
 
 static func shared_helmet_shell() -> ArrayMesh:
@@ -774,10 +820,6 @@ static func shared_thigh() -> ArrayMesh:
 # alone has a hole where each knee should be — the thigh ends at leg-local
 # −0.28 and the sock starts at −0.35, and the ball is what spans it. Both are
 # built at their real radii, so a placer scales them only by the build's dials.
-static func shared_hip_ball() -> ArrayMesh:
-	return _shared("hip", _build_hip)
-
-
 static func shared_knee_ball() -> ArrayMesh:
 	return _shared("knee", _build_knee)
 
@@ -1035,10 +1077,6 @@ static func _build_shoulder() -> ArrayMesh:
 			Vector2(0.5, 0.97), false, 0.02)
 	st.generate_normals()
 	return st.commit()
-
-
-static func _build_hip() -> ArrayMesh:
-	return _build_ball(_HIP_RADIUS, 8, 4, 1.0)
 
 
 static func _build_knee() -> ArrayMesh:

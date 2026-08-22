@@ -150,7 +150,7 @@ func snap_lean_to_state() -> void:
 				Vector2(_skater.top_hand.position.x, _skater.top_hand.position.z),
 				Vector2(_skater.shoulder.position.x, _skater.shoulder.position.z),
 				_controller.rom_backhand_reach_max, _controller.upper_body_lean_max_deg,
-				_controller.upper_body_lean_engage_power)
+				_controller.upper_body_lean_engage_power) * (1.0 - _address_share())
 		upper_body_lean = reach_target.x
 		upper_body_lean_roll = reach_target.y
 	_apply_lean()
@@ -296,6 +296,19 @@ func apply_facing(input: InputState, delta: float) -> void:
 # skips this leaves the lower body frozen at the last yaw anyone published —
 # which is how skaters used to arrive at the dot with their hips still turned
 # down the line they skated in on, for the whole countdown.
+# How much of the torso's forward tip the faceoff address has already claimed.
+# The reach lean measures the hand's reach off the shoulder MARKER, and the
+# address carries the hands forward with the chest it folds — so left alone the
+# reach model reads that carry as a reach and leans the torso a second time for
+# it. Two consequences, neither wanted: the fold comes out deeper than the one
+# authored, and the blade IK is handed a pitched frame to solve the address in,
+# where a dot laid out on the flat lands short.
+func _address_share() -> float:
+	if _skating == null or not _skater.is_faceoff_center:
+		return 0.0
+	return _skating.faceoff_blend
+
+
 func apply_lower_body_yaw(delta: float) -> void:
 	lower_body_lag = lerpf(lower_body_lag, 0.0, _controller.lower_body_lag_speed * delta)
 	var lag_share: float = lower_body_lag
@@ -455,7 +468,7 @@ func apply_upper_body(delta: float) -> void:
 				Vector2(_skater.shoulder.position.x, _skater.shoulder.position.z),
 				_controller.rom_backhand_reach_max,
 				_controller.upper_body_lean_max_deg,
-				_controller.upper_body_lean_engage_power)
+				_controller.upper_body_lean_engage_power) * (1.0 - _address_share())
 
 	upper_body_angle = lerp_angle(upper_body_angle, target_angle, _controller.upper_body_return_speed * delta)
 	upper_body_lean = lerpf(upper_body_lean, target_lean.x, _controller.upper_body_lean_return_speed * delta)

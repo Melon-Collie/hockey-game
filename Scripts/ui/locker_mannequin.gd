@@ -51,9 +51,6 @@ const _BOOT_DY: float = -0.76
 const _BOOT_DZ: float = -0.10
 const _THIGH_DY: float = -0.13
 const _KNEE_DY: float = -0.31
-# The hip ball's rearward seat bias — it fills under the torso's hockey-butt
-# sway, so it sits back rather than on the leg axis (+Z is the back).
-const _HIP_DZ: float = 0.035
 # Boot frame, straight off FootL/R's scene basis: local −Y is the toe and local
 # +Z is down, so this lands the toe on −Z (the way the rig faces) sole-down.
 const _BOOT_ROT := Basis(Vector3(1, 0, 0), Vector3(0, 0, 1), Vector3(0, -1, 0))
@@ -151,7 +148,7 @@ var _torso: MeshInstance3D = null
 var _helmet: MeshInstance3D = null
 var _face: MeshInstance3D = null
 var _shoulders: Array[MeshInstance3D] = []
-var _hips: Array[MeshInstance3D] = []
+var _pelvis: MeshInstance3D = null
 var _thighs: Array[MeshInstance3D] = []
 var _knees: Array[MeshInstance3D] = []
 var _socks: Array[MeshInstance3D] = []
@@ -199,6 +196,10 @@ func _build() -> void:
 	add_child(_rig)
 
 	_torso = _part(SkaterMeshBuilder.shared_torso())
+	# The seat under the jersey hem. Static on the rig (the trunk texture folds
+	# the chest above it), and on a mannequin that never folds it is simply the
+	# body between hem and thighs.
+	_pelvis = _part(SkaterMeshBuilder.shared_pelvis())
 	# Helmet assembly carries the shell and the head/neck skin as two surfaces,
 	# so the head rides the helmet's scale exactly as it rides its bone.
 	_helmet = _part(SkaterMeshBuilder.shared_helmet_assembly())
@@ -209,9 +210,8 @@ func _build() -> void:
 
 	for i: int in 2:
 		_shoulders.append(_part(SkaterMeshBuilder.shared_shoulder_cap()))
-		# Hip and knee balls close the leg chain — without them the thigh ends
-		# short of the sock and the leg has a hole at the joint.
-		_hips.append(_part(SkaterMeshBuilder.shared_hip_ball()))
+		# The thigh carries the hip joint's own dome; the knee ball closes the
+		# other end, where the thigh would otherwise stop short of the sock.
 		_thighs.append(_part(SkaterMeshBuilder.shared_thigh()))
 		_knees.append(_part(SkaterMeshBuilder.shared_knee_ball()))
 		_socks.append(_part(SkaterMeshBuilder.shared_sock()))
@@ -328,6 +328,12 @@ func _pose(attrs: PlayerAttributes, tape: StickTapeConfig,
 	_torso.transform = Transform3D(
 			Basis.from_scale(Vector3(m_torso, m_height, m_torso)),
 			Vector3(0.0, _lift(_TORSO_Y, m_height), 0.0))
+	# The pelvis profile is authored in UpperBody's own space, whose origin is
+	# the rig's y 0 — so it needs no station of its own, only the same bulk the
+	# torso takes.
+	_pelvis.transform = Transform3D(
+			Basis.from_scale(Vector3(m_torso, m_height, m_torso)),
+			Vector3(0.0, _lift(0.0, m_height), 0.0))
 	# The helmet takes its own mild multiplier on all three axes and never
 	# stretches with height: adult heads are near-constant across statures, and
 	# that constancy is what sells a tall build as big rather than zoomed.
@@ -347,12 +353,10 @@ func _pose(attrs: PlayerAttributes, tape: StickTapeConfig,
 				Basis.from_scale(Vector3(m_shoulder, m_height, m_shoulder)),
 				Vector3(side * shoulder_x, shoulder_y, 0.0))
 
-		# Hip, thigh and knee are one bulk group in the appearance rig, so they
-		# read as one leg however the build's dials move.
+		# Thigh and knee are one bulk group in the appearance rig, so they read
+		# as one leg however the build's dials move.
 		var leg_x: float = side * _LEG_X * m_torso
 		var leg_bulk := Basis.from_scale(Vector3(m_thigh, m_height, m_thigh))
-		_hips[i].transform = Transform3D(leg_bulk,
-				Vector3(leg_x, _lift(_LEG_Y, m_height), _HIP_DZ))
 		_thighs[i].transform = Transform3D(leg_bulk,
 				Vector3(leg_x, _lift(_LEG_Y + _THIGH_DY, m_height), 0.0))
 		_knees[i].transform = Transform3D(leg_bulk,
@@ -594,6 +598,7 @@ func _paint_body(colors: Dictionary, skin_tone: int) -> void:
 
 	_paint_texture(_torso, 0, UniformPaint.h_stripes(
 			jersey.base, jersey.stripes, jersey.yoke), _CLOTH_ROUGH)
+	_paint(_pelvis, 0, uniform.pants.base, _CLOTH_ROUGH)
 	_paint(_helmet, SkaterMeshBuilder.HELMET_SURF_SHELL, uniform.helmet, _HELMET_ROUGH)
 	_paint(_helmet, SkaterMeshBuilder.HELMET_SURF_SKIN,
 			SkinToneRegistry.color_for(skin_tone), _CLOTH_ROUGH)
@@ -605,9 +610,8 @@ func _paint_body(colors: Dictionary, skin_tone: int) -> void:
 	var sleeve: Color = uniform.arms.upper.base
 	for i: int in 2:
 		_paint(_shoulders[i], 0, uniform.shoulders.color, _CLOTH_ROUGH)
-		# Hips and knees take the pants BASE solid — the rink paints them apart
-		# from the thigh, whose side stripe would ring a ball.
-		_paint(_hips[i], 0, uniform.pants.base, _CLOTH_ROUGH)
+		# The knee takes the pants BASE solid — the rink paints it apart from
+		# the thigh, whose side stripe would ring a ball.
 		_paint(_thighs[i], 0, uniform.pants.base, _CLOTH_ROUGH)
 		_paint(_knees[i], 0, uniform.pants.base, _CLOTH_ROUGH)
 		if sock_tex != null:

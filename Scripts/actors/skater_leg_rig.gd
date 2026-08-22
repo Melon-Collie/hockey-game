@@ -25,9 +25,9 @@ var _pos: PackedVector3Array = PackedVector3Array()
 # The scene's authored shin euler, kept so the knee write can preserve its Y/Z
 # the way a node's `rotation.x = v` did. Index 0 = left, 1 = right.
 var _shin_base_euler: PackedVector3Array = PackedVector3Array()
-# True while the skate bones carry an eversion, so set_foot_eversion knows it
+# True while the skate bones carry an ankle angle, so set_ankle_pose knows it
 # still owes one write to put them back (see there).
-var _feet_everted: bool = false
+var _ankles_posed: bool = false
 # Untouched baselines the sizing seam multiplies against, captured off the scene
 # subtree before it is freed.
 var _base_scale: PackedVector3Array = PackedVector3Array()
@@ -169,26 +169,46 @@ func _pose_pivot(bone: int, euler: Vector3) -> void:
 	_skeleton.set_bone_pose(bone, Transform3D(Basis.from_euler(euler), _pos[bone]))
 
 
-# Ankle eversion (radians, about the shin's Z): rolls the SKATE against its
-# leg's splay so the blade stays flat on the ice. The boot hangs below the ankle
-# joint, so a leg rolled far out of vertical — the shot block's extended leg —
-# swings its blade up onto an edge and clear of the ice unless the ankle gives
-# back the roll, which is what a real ankle does. Unlike the pivots this bone
-# carries an authored rotation and the sizing seam's scale, so the eversion is
-# composed onto the rest basis rather than replacing it.
+# Levels a skate against everything the leg above it did: `weight` of the hip's
+# splay and the knee's fold unwound at the ankle, that leg's yaw kept. The boot
+# hangs off the end of the shin and inherits the whole chain, so a leg rolled far
+# out of vertical — the shot block's extended leg — swings its blade up onto an
+# edge and clear of the ice, and a shin folded far back — the faceoff centre's
+# deep sit — stands it on its heel. A real ankle gives that back, which is what
+# lets a player hold either pose on a flat blade.
 #
-# Skipped unless something is actually everted (and once more to settle back),
-# so the common case adds no writes to the render-rate rig pass.
-func set_foot_eversion(left_roll: float, right_roll: float) -> void:
-	if is_zero_approx(left_roll) and is_zero_approx(right_roll) and not _feet_everted:
+# Stated as a weight rather than two angles because two angles cannot undo this
+# chain: the splay is taken at the hip, ahead of a knee fold that can pass 90°,
+# so by the time it reaches the boot it is no longer a roll about anything the
+# ankle owns. The give-back is the chain's own rotation inverted, which is exact
+# at any depth — and needs nothing passed in, since set_swing just wrote it.
+#
+# Unlike the pivots this bone carries an authored rotation and the sizing seam's
+# scale, so the give-back composes onto the rest basis rather than replacing it.
+# Skipped while both ankles are square (and once more to settle back), so the
+# common case adds no writes to the render-rate rig pass.
+func set_ankle_flatten(left: float, right: float) -> void:
+	var square: bool = is_zero_approx(left) and is_zero_approx(right)
+	if square and not _ankles_posed:
 		return
-	_feet_everted = not (is_zero_approx(left_roll) and is_zero_approx(right_roll))
-	_pose_foot(SkaterMeshBuilder.LegBone.FOOT_L, left_roll)
-	_pose_foot(SkaterMeshBuilder.LegBone.FOOT_R, right_roll)
+	_ankles_posed = not square
+	_pose_foot(SkaterMeshBuilder.LegBone.FOOT_L, _gait_leg_l, _gait_knee_l,
+			_shin_base_euler[0], left)
+	_pose_foot(SkaterMeshBuilder.LegBone.FOOT_R, _gait_leg_r, _gait_knee_r,
+			_shin_base_euler[1], right)
 
 
-func _pose_foot(bone: int, roll: float) -> void:
-	var basis: Basis = Basis.from_euler(Vector3(0.0, 0.0, roll)) * _basis[bone]
+func _pose_foot(bone: int, leg: Vector3, knee: float, shin_base: Vector3,
+		weight: float) -> void:
+	# What the chain did to this boot, and what it would have done carrying the
+	# leg's yaw alone. Their difference, in the boot's own frame, is the ankle's
+	# give-back; the slerp eases it in from square.
+	var shin: Basis = Basis.from_euler(Vector3(knee, shin_base.y, shin_base.z))
+	var posed: Basis = Basis.from_euler(leg) * shin
+	var level: Basis = Basis.from_euler(Vector3(0.0, leg.y, 0.0)) \
+			* Basis.from_euler(Vector3(0.0, shin_base.y, shin_base.z))
+	var give_back: Basis = (posed.inverse() * level).orthonormalized()
+	var basis: Basis = Basis.IDENTITY.slerp(give_back, weight) * _basis[bone]
 	_skeleton.set_bone_pose(bone,
 			Transform3D(basis.scaled_local(_scale[bone]), _pos[bone]))
 

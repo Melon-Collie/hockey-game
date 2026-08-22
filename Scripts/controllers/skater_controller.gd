@@ -515,13 +515,40 @@ var faceoff_split_deg: float = 9.0     # fore/aft leg stagger at the dot
 # behind him (see Scripts/controllers/CLAUDE.md). Multiples of the same stance
 # and split levers, so a build's own leg geometry still decides the knee angle
 # and the body drop that keeps the skates on the ice.
-var faceoff_center_stance: float = 1.65    # crouch floor at the dot (× stance_hip_deg)
-var faceoff_center_split_deg: float = 9.0  # fore/aft foot split at the dot
-var faceoff_center_lean_deg: float = 26.0  # chest folded over the dot (trunk texture)
-# Fraction of the rest blade radius at which this skater's CENTER spawns from
+var faceoff_center_stance: float = 2.6      # crouch floor at the dot (× stance_hip_deg)
+var faceoff_center_split_deg: float = 13.0  # fore/aft foot split at the dot
+var faceoff_center_lean_deg: float = 48.0   # chest folded over the dot (trunk texture)
+# Lateral splay of BOTH legs — the wide base under the fold. A sit this deep
+# over feet at hip width reads as a squat rather than an address; the width is
+# what makes it a brace. The splay shortens each leg's vertical span by its
+# cosine, so the gait pays the deficit as extra body drop and gives the angle
+# back at the ankles, or the skates leave the ice on their outside edges.
+var faceoff_center_width_deg: float = 16.0
+# How far down the shaft the centre's bottom hand slides for the draw, against
+# bottom_hand_grip_fraction's ordinary carry grip (0 = at the top hand, 1 = at
+# the blade). A draw is won with the short lever, and the wide grip is half of
+# what an address looks like.
+var faceoff_center_grip_fraction: float = 0.55
+# And how far down it the TOP hand slides, as a fraction of the stick. This is
+# the lever that decides where the address's hands end up: the hand rides one
+# stick-length up from a blade on the dot, so at full length a body folded over
+# the dot has to hold it at shoulder height, arms collapsed. Choked, the hand
+# comes down in front of the chest where a centre actually holds it.
+var faceoff_center_choke_frac: float = 0.17
+# How far above its carry height the address lets the top hand rise, in metres
+# of upper-body-local Y (see SkaterIKCoordinator._address_hand_ceiling). This is
+# where the hands sit in the address, and with the choke above it is what sets
+# the shaft's angle over the dot.
+var faceoff_center_hand_rise: float = 0.05
+# Fraction of the ADDRESS stick span at which this skater's CENTER spawns from
 # the faceoff dot — reach-derived so a Size-1 center (short stick + arms) can
 # play the drop as comfortably as a Size-5 (see faceoff_center_distance).
-var faceoff_center_reach_fraction: float = 0.9
+#
+# 1.0 is the shaft's own natural projection, and the useful side is just PAST
+# it: there the hand comes off the body toward the dot (TopHandIK's FAR regime)
+# and the arms open into the address. Short of 1.0 the hand instead rides up
+# its ceiling and the arms fold shut under the shoulders.
+var faceoff_center_reach_fraction: float = 1.1
 # Faceoff-draw swipe capture (see Skater.begin_draw_tracking / FaceoffDrawRules).
 # A center's blade-swipe crest is retained through the draw so the contest reads
 # the sweep, not the raw tick-at-contact velocity — this is what lets a well-aimed
@@ -1148,7 +1175,7 @@ func setup(assigned_skater: Skater, assigned_puck: Puck, game_state: Node) -> vo
 	process_physics_priority = -1  # Run before Skater's integration step
 	skater.body_checked_player.connect(_on_body_checked_player)
 	skater.body_check_received.connect(_on_body_check_received)
-	_ik.setup(skater, self)
+	_ik.setup(skater, self, _skating)
 	_shot_pose.setup(skater, _sm, _aiming, _ik, self)
 	var _cb := SkaterStateMachine.Callbacks.new()
 	_cb.apply_blade_from_mouse = _ik.apply_blade_from_mouse
@@ -1388,6 +1415,7 @@ func apply_attributes(attrs: PlayerAttributes) -> void:
 	# The commit choke is a fraction of the stick it slides down, so it lands in
 	# metres here rather than being re-derived at the two sites that read it.
 	skater.commit_grip_choke_m = stick_length * hit_commit_choke_frac
+	skater.faceoff_choke_m = stick_length * faceoff_center_choke_frac
 	# The CURVE gear's visual half — regenerates the blade mesh to the picked
 	# pattern (gameplay half is PlayerAttributes' loft/backhand leans).
 	skater.apply_blade_pattern(attrs.curve)
@@ -2507,13 +2535,26 @@ func set_spawn_facing(facing: Vector2) -> void:
 	_skating.reset_to_rest()
 
 
-# This skater's center-slot distance from the faceoff dot: the rest-pose blade
-# radius (stick horizontal footprint at rest) scaled by faceoff_center_reach_
-# fraction, so the puck sits comfortably inside every build's reach at the
-# drop — no hand displacement or lean needed. Host-computed by the phase
-# coordinator and broadcast with the rest of the faceoff positions.
+# This skater's center-slot distance from the faceoff dot: the blade radius of
+# a stick held in the ADDRESS pose (its horizontal footprint) scaled by
+# faceoff_center_reach_fraction, so the puck sits comfortably inside every
+# build's reach at the drop — no hand displacement or lean needed. Host-computed
+# by the phase coordinator and broadcast with the rest of the faceoff positions.
+#
+# The address, not the standing pose: the crouch drops the hands by a fifth of a
+# metre, and a rigid stick reaching the ice from there covers much more ground.
+# Measured from standing, the dot lands well inside the reach and the top-hand IK
+# answers by standing the stick up on end (TopHandIK's CLOSE regime) — the centre
+# addresses the puck with a shaft angled like a shovel instead of laid out flat.
+# The live crouch is netted out because this runs at the whistle, on a body still
+# carrying whatever depth it was skating at.
 func faceoff_center_distance() -> float:
-	return _ik.stick_horiz() * faceoff_center_reach_fraction
+	# Plus the fold's own carry: the address hangs the arms off a shoulder swung
+	# that far out over the dot (SkaterIKCoordinator.address_shoulder), and the
+	# span below is measured from the hand, so the body has to stand back by it
+	# or the stick comes up short of the reach it was sized for.
+	return _ik.address_carry() \
+			+ _ik.address_stick_horiz() * faceoff_center_reach_fraction
 
 
 func _enter_shot_block() -> void:

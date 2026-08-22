@@ -30,11 +30,12 @@ const State = SkaterStateMachine.State
 const _THIGH_LEN: float = 0.31
 const _SHIN_LEN: float = 0.45
 # Forward offset from the shin's end to the FOOT pivot (ShinL → FootL local −Z):
-# the boot's centre sits ahead of the ankle, not under it. Irrelevant to the
-# stance crouch — a few degrees of knee flex barely tilts it — but the shot
-# block folds the shin nearly flat, which swings this offset from horizontal to
-# straight DOWN, and a solve that ignored it buried the trailing skate in the
-# ice by exactly its length.
+# the boot's centre sits ahead of the ankle, not under it. Folding the shin
+# swings this offset from horizontal toward straight DOWN, so any solve that
+# holds the boot LEVEL — the shot block's extended leg, the faceoff centre's
+# address — owes the height it costs, or it buries that skate in the ice. A boot
+# left to tilt with its shin does not: it keeps its sole planted, which is the
+# model the stance crouch solves.
 const _FOOT_FWD: float = 0.10
 
 # Quiet time before the settled early-out in apply() engages. Sized to sit well
@@ -85,6 +86,25 @@ var leg_scale: float = 1.0
 func leg_segment_lengths() -> Vector2:
 	return Vector2(_THIGH_LEN, _SHIN_LEN) * leg_scale
 
+
+# How far the centre's faceoff address drops his body, in metres — the same
+# crouch the gait settles at over the dot, derived instead of measured because
+# the placement that needs it runs at the whistle, before the pose exists (and
+# on a body still carrying whatever depth it was skating at). Full leg length
+# minus the vertical span left by the address's hip flex, its knee (the flex
+# that keeps the skate under the hip) and the cosine the width splay costs.
+# test_faceoff_prep_pose.gd holds this against the settled live crouch.
+func faceoff_address_drop() -> float:
+	var hip: float = deg_to_rad(
+			_controller.stance_hip_deg * _controller.faceoff_center_stance)
+	var knee: float = hip + asin(
+			clampf(_THIGH_LEN / _SHIN_LEN * sin(hip), -1.0, 1.0))
+	var shin: float = knee - hip
+	var span: float = leg_scale * (_THIGH_LEN * cos(hip) + _SHIN_LEN * cos(shin)
+			+ _FOOT_FWD * sin(shin))
+	return leg_scale * (_THIGH_LEN + _SHIN_LEN) \
+			- span * cos(deg_to_rad(_controller.faceoff_center_width_deg))
+
 # ── Runtime State ─────────────────────────────────────────────────────────────
 var stride_phase: float = 0.0
 # Per-stride trunk texture, written onto the cosmetic torso/helmet/shoulder
@@ -94,6 +114,10 @@ var stride_phase: float = 0.0
 # it holds steady through reconcile replay like the rest of the gait.
 var trunk_pitch_add: float = 0.0
 var trunk_roll_add: float = 0.0
+# Body drop of the crouch this pose pass settled on, in metres. Published
+# because the faceoff placement measures the stick's span from the hand height
+# the crouch leaves, and a skater's live depth is whatever he was skating at.
+var crouch_drop: float = 0.0
 # Inertia-filter state for the summed trunk texture (see the publish tail of
 # apply() and trunk_texture_smooth_rate).
 var _trunk_pitch_s: float = 0.0
@@ -120,7 +144,9 @@ var _fd_turn: float = 0.0
 var _fd_carve: float = 0.0
 # Smoothed faceoff ready-stance engagement, so the crouch eases in over the
 # countdown and releases into the draw instead of popping on the phase flip.
-var _faceoff_blend: float = 0.0
+# Published: the address is not only a leg pose — the hands take their draw grip
+# on the same ease (SkaterIKCoordinator.update_bottom_hand).
+var faceoff_blend: float = 0.0
 # Hockey-stop state (see the Hockey stop block in apply()). stop_yaw_offset is
 # radians of lower-body rotation.y.
 var stop_yaw_offset: float = 0.0
@@ -248,7 +274,7 @@ func native_reconfigure() -> void:
 	# while running old gait math and lacking newer getters — which the
 	# republish would then error on EVERY FRAME. Probe the NEWEST getter this
 	# coordinator calls and loudly fall back instead.
-	if not _native.has_method(&"get_l_yaw"):
+	if not _native.has_method(&"get_faceoff_blend"):
 		push_error("NativeSkaterGait disabled — stale extension build (rebuild native/)")
 		_native = null
 		return
@@ -263,7 +289,8 @@ func reset_to_rest() -> void:
 	stride_phase = 0.0
 	_intensity = 0.0
 	_effort = 0.0
-	_faceoff_blend = 0.0
+	crouch_drop = 0.0
+	faceoff_blend = 0.0
 	trunk_pitch_add = 0.0
 	trunk_roll_add = 0.0
 	_trunk_pitch_s = 0.0
@@ -919,11 +946,11 @@ func apply(delta: float) -> void:
 	# through the countdown instead. Eased both ways: the crouch settles in
 	# over the prep and releases into the draw as the players explode out.
 	# The two centres sit far deeper than the players behind them.
-	_faceoff_blend = lerpf(_faceoff_blend,
+	faceoff_blend = lerpf(faceoff_blend,
 			1.0 if _controller.is_faceoff_ready() else 0.0,
 			_controller.stride_intensity_speed * delta)
-	if _faceoff_blend > 0.001:
-		stance = maxf(stance, _faceoff_stance_floor() * _faceoff_blend)
+	if faceoff_blend > 0.001:
+		stance = maxf(stance, _faceoff_stance_floor() * faceoff_blend)
 	# Hockey stop sits DEEP — the edges only bite under bent knees.
 	if _stop_blend > 0.001:
 		stance = maxf(stance, _controller.hockey_stop_stance * _stop_blend)
@@ -968,8 +995,9 @@ func apply(delta: float) -> void:
 	var stance_hip: float = deg_to_rad(_controller.stance_hip_deg) * stance
 	var stance_knee: float = stance_hip + asin(
 			clampf(_THIGH_LEN / _SHIN_LEN * sin(stance_hip), -1.0, 1.0))
+	var stance_shin: float = stance_knee - stance_hip
 	var drop: float = leg_scale * (_THIGH_LEN * (1.0 - cos(stance_hip)) \
-			+ _SHIN_LEN * (1.0 - cos(stance_knee - stance_hip)))
+			+ _SHIN_LEN * (1.0 - cos(stance_shin)))
 
 	# Asymmetric stroke: warp the phase before sampling the sine so each leg's swing
 	# eases out to the push and snaps back, reading as skating rather than a
@@ -1007,12 +1035,37 @@ func apply(delta: float) -> void:
 	var r_pitch: float = stance_hip
 	var r_roll: float = 0.0
 
-	# Faceoff foot stagger: stick-side foot drops back, braced for the draw.
-	if _faceoff_blend > 0.001:
-		var split: float = deg_to_rad(_faceoff_split_deg()) * _faceoff_blend \
+	# Faceoff stance: the stick-side foot drops back, braced for the draw, and
+	# the centre splays both legs into the wide base he sets over the dot — a sit
+	# this deep over feet at hip width is a squat, not an address. The splay
+	# rotates the whole leg chain, so its vertical span is span·cos(splay) and the
+	# body pays the deficit as extra drop; without it the skates ride up off the
+	# ice. The ankles give the whole chain back below (foot_flat_*) so the blades
+	# still lie flat — the shot block's argument, at a gentler angle.
+	var faceoff_splay: float = 0.0
+	var faceoff_flat: float = 0.0
+	if faceoff_blend > 0.001:
+		var split: float = deg_to_rad(_faceoff_split_deg()) * faceoff_blend \
 				* (-1.0 if _skater.is_left_handed else 1.0)
 		l_pitch += split
 		r_pitch -= split
+		if _skater.is_faceoff_center:
+			faceoff_splay = deg_to_rad(_controller.faceoff_center_width_deg) \
+					* faceoff_blend
+			l_roll -= faceoff_splay
+			r_roll += faceoff_splay
+			drop += (leg_scale * (_THIGH_LEN + _SHIN_LEN) - drop) \
+					* (1.0 - cos(faceoff_splay))
+			# A sit this deep, over a base this wide, would stand both blades on
+			# their heels and outside edges; the ankles give it back (an address
+			# is held on flat blades, and a real ankle has the range for it).
+			faceoff_flat = faceoff_blend
+			# Which changes what the drop above owes. A skate left to tilt with
+			# its shin keeps its SOLE planted, and that is the crouch's model; a
+			# level one hangs its blade below the FOOT pivot instead, and that
+			# pivot swings down as the shin folds (_FOOT_FWD), so the hip rides
+			# the same amount higher. The shot block's own solve pays it too.
+			drop -= leg_scale * _FOOT_FWD * sin(stance_shin) * faceoff_blend
 
 	# Hockey-stop leg pose, in the TURNED leg frame (the pose coordinator adds
 	# stop_yaw_offset to the lower body): the leading leg braces ahead and the
@@ -1395,8 +1448,12 @@ func apply(delta: float) -> void:
 		stagger_pitch = wobble_amp * sin(wobble_phase)
 		stagger_roll = wobble_amp * 0.7 * sin(wobble_phase * 1.31)
 
-	var foot_evert_l: float = 0.0
-	var foot_evert_r: float = 0.0
+	# How much of each leg's splay and fold its ankle gives back, so the blade
+	# under it lies flat on the ice (SkaterLegRig.set_ankle_flatten). Seeded by
+	# the faceoff address; the block overwrites both when it takes the legs (the
+	# two poses never overlap — the whistle stands a blocker up).
+	var foot_flat_l: float = faceoff_flat
+	var foot_flat_r: float = faceoff_flat
 
 	# ── Shot block: the one-knee drop ─────────────────────────────────────────
 	# The block a real skater plays. The STICK-SIDE knee sinks toward the ice
@@ -1429,14 +1486,16 @@ func apply(delta: float) -> void:
 		# back, matching the stance_knee convention above. The extended leg rolls
 		# AWAY from the body: left toward −X (negative roll), right toward +X.
 		var down_knee: float = -(kneel_hip + kneel_shin)
-		# Ankle eversion on the extended leg: give the skate back the roll its
-		# leg just took (equal and opposite, in the shin's frame), so the blade
+		# The extended leg's ankle gives back what that leg took, so its blade
 		# lies flat on the ice instead of swinging up onto an edge under a leg
-		# splayed 60° out of vertical.
+		# splayed 60° out of vertical. The kneeling leg keeps its fold — that
+		# skate is up on its toe by design.
 		if stick_side > 0.0:
-			foot_evert_l = ext_roll * _block_blend
+			foot_flat_l = _block_blend
+			foot_flat_r = 0.0
 		else:
-			foot_evert_r = -ext_roll * _block_blend
+			foot_flat_r = _block_blend
+			foot_flat_l = 0.0
 		if stick_side > 0.0:
 			r_pitch = lerpf(r_pitch, kneel_hip, _block_blend)
 			r_roll = lerpf(r_roll, 0.0, _block_blend)
@@ -1489,8 +1548,8 @@ func apply(delta: float) -> void:
 	# the ice out of a pitched frame, and at any fold worth seeing it gives up
 	# and stands the shaft on end. The texture is bones only, so the chest reads
 	# folded while the stick keeps the address the centre actually took.
-	if _faceoff_blend > 0.001 and _skater.is_faceoff_center:
-		trunk_pitch_add += -deg_to_rad(_controller.faceoff_center_lean_deg) * _faceoff_blend
+	if faceoff_blend > 0.001 and _skater.is_faceoff_center:
+		trunk_pitch_add += -deg_to_rad(_controller.faceoff_center_lean_deg) * faceoff_blend
 
 	# The mohawk yaw fades with the crumple like every other leg channel.
 	_skater.set_leg_swing(l_pitch, l_roll, l_knee, r_pitch, r_roll, r_knee,
@@ -1501,7 +1560,9 @@ func apply(delta: float) -> void:
 	_skater.set_edge_loads(
 			clampf(maxf(l_ext * _intensity, _stop_blend), 0.0, 1.0) * (1.0 - kd_t),
 			clampf(maxf(r_ext * _intensity, _stop_blend), 0.0, 1.0) * (1.0 - kd_t))
-	_skater.set_foot_eversion(foot_evert_l, foot_evert_r)
+	_skater.set_ankle_flatten(foot_flat_l, foot_flat_r)
+	_skater.set_faceoff_address(faceoff_flat)
+	crouch_drop = drop
 	_skater.set_skating_crouch_drop(drop)
 	# Trunk inertia: filter the summed texture, then layer the stumble wobble
 	# back on top (see trunk_texture_smooth_rate).
@@ -1544,6 +1605,7 @@ func _apply_native(delta: float) -> void:
 	if code == 2:
 		# Settle edge — mirror reset_to_rest's one-time rest-pose write.
 		_skater.set_leg_swing(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+		crouch_drop = 0.0
 		_skater.set_skating_crouch_drop(0.0)
 		_skater.set_trunk_texture(0.0, 0.0)
 		_skater.set_edge_loads(0.0, 0.0)
@@ -1565,9 +1627,12 @@ func _apply_native(delta: float) -> void:
 			_native.get_l_pitch(), _native.get_l_roll(), _native.get_l_knee(),
 			_native.get_r_pitch(), _native.get_r_roll(), _native.get_r_knee(),
 			_native.get_l_yaw(), _native.get_r_yaw())
-	_skater.set_foot_eversion(_native.get_foot_evert_l(), _native.get_foot_evert_r())
+	_skater.set_ankle_flatten(_native.get_foot_flat_l(), _native.get_foot_flat_r())
+	_skater.set_faceoff_address(faceoff_blend if _skater.is_faceoff_center else 0.0)
 	_skater.set_edge_loads(_native.get_edge_load_l(), _native.get_edge_load_r())
-	_skater.set_skating_crouch_drop(_native.get_crouch_drop())
+	crouch_drop = _native.get_crouch_drop()
+	faceoff_blend = _native.get_faceoff_blend()
+	_skater.set_skating_crouch_drop(crouch_drop)
 	trunk_pitch_add = _native.get_trunk_pitch_add()
 	trunk_roll_add = _native.get_trunk_roll_add()
 	stop_yaw_offset = _native.get_stop_yaw_offset()

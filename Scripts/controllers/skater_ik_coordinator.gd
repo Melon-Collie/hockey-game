@@ -19,6 +19,9 @@ const State = SkaterStateMachine.State
 # ── References ────────────────────────────────────────────────────────────────
 var _skater: Skater = null
 var _controller: SkaterController = null  # tunables, _do_release, _game_state, has_puck
+# The gait, for the one channel the hand pose reads off it: how far into his
+# faceoff address the centre is (see _grip_fraction).
+var _skating: SkaterSkatingCoordinator = null
 
 # ── Blade Smoothing State ─────────────────────────────────────────────────────
 # World-XZ blade position after the per-tick speed cap, which is applied to the
@@ -68,9 +71,11 @@ var _native_bottom: RefCounted = null
 # back, because the hand solve below the block reads it.
 var _native_dangle: RefCounted = null
 
-func setup(skater: Skater, controller: SkaterController) -> void:
+func setup(skater: Skater, controller: SkaterController,
+		skating: SkaterSkatingCoordinator) -> void:
 	_skater = skater
 	_controller = controller
+	_skating = skating
 	if ClassDB.class_exists(&"NativeTopHandIK"):
 		_native_top = ClassDB.instantiate(&"NativeTopHandIK")
 		# Stale-binary guard, one level finer than NativeKernels' class census:
@@ -176,7 +181,8 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 		target_blade_world.y = 0.0
 		last_target_blade_world = target_blade_world
 	else:
-		var shoulder_world: Vector3 = _skater.upper_body_to_global(_skater.shoulder.position)
+		var shoulder: Vector3 = address_shoulder(_skater.shoulder.position)
+		var shoulder_world: Vector3 = _skater.upper_body_to_global(shoulder)
 		shoulder_world.y = 0.0
 		if (mouse_world - shoulder_world).length() < 0.01:
 			return
@@ -208,10 +214,10 @@ func apply_blade_from_mouse(input: InputState, delta: float, hold_blade: bool = 
 		if _native_top != null:
 			_ik_config(blade_y_local(), target_reach)
 			target_blade_local = _native_top.project_blade(
-					_skater.shoulder.position, target_blade_xz, blade_side_sign)
+					shoulder, target_blade_xz, blade_side_sign)
 		else:
 			target_blade_local = TopHandIK.project_blade(
-					_skater.shoulder.position, target_blade_xz, blade_side_sign,
+					shoulder, target_blade_xz, blade_side_sign,
 					_ik_config(blade_y_local(), target_reach))
 		target_blade_world = _skater.upper_body_to_global(target_blade_local)
 		target_blade_world.y = 0.0
@@ -513,16 +519,17 @@ func _apply_carry_offset(desired_blade_xz: Vector2) -> Vector2:
 func _solve_top_hand(desired_blade_xz: Vector2, blade_side_sign: float,
 		max_blade_reach: float = INF) -> TopHandIK.Result:
 	var blade_y: float = blade_y_local()
+	var shoulder: Vector3 = address_shoulder(_skater.shoulder.position)
 	var ik: TopHandIK.Result = _ik_result
 	for i in 3:
 		if _native_top != null:
 			_ik_config(blade_y, max_blade_reach)
-			_native_top.solve(_skater.shoulder.position, desired_blade_xz, blade_side_sign)
+			_native_top.solve(shoulder, desired_blade_xz, blade_side_sign)
 			ik.hand = _native_top.get_hand()
 			ik.blade = _native_top.get_blade()
 		else:
 			TopHandIK.solve(
-					_skater.shoulder.position,
+					shoulder,
 					desired_blade_xz,
 					blade_side_sign,
 					_ik_config(blade_y, max_blade_reach),
@@ -537,25 +544,90 @@ func _solve_top_hand(desired_blade_xz: Vector2, blade_side_sign: float,
 func update_bottom_hand() -> void:
 	var blade_local: Vector3 = _skater.get_blade_position()
 	var hand_local: Vector3 = _skater.get_top_hand_position()
+	var grip: float = _grip_fraction()
 	var grip_target_xz := Vector2(
-			lerpf(hand_local.x, blade_local.x, _controller.bottom_hand_grip_fraction),
-			lerpf(hand_local.z, blade_local.z, _controller.bottom_hand_grip_fraction))
+			lerpf(hand_local.x, blade_local.x, grip),
+			lerpf(hand_local.z, blade_local.z, grip))
 	# Derive grip Y from the stick shaft so the hand stays on the stick regardless
 	# of pitch lean or reach. bh_hand_y offsets for fine-tuning.
-	var grip_y: float = lerpf(hand_local.y, blade_local.y, _controller.bottom_hand_grip_fraction) + _controller.bh_hand_y
+	var grip_y: float = lerpf(hand_local.y, blade_local.y, grip) + _controller.bh_hand_y
 	var cfg: BottomHandIK.Config = _bottom_hand_ik_config()
 	cfg.hand_y = grip_y
+	var shoulder: Vector3 = address_shoulder(_skater.bottom_shoulder.position)
 	var bh: Vector3
 	if _native_bottom != null:
 		_native_bottom.hand_y = grip_y
-		bh = _native_bottom.solve(
-				_skater.bottom_shoulder.position, grip_target_xz, cfg.backhand_angle)
+		bh = _native_bottom.solve(shoulder, grip_target_xz, cfg.backhand_angle)
 	else:
-		bh = BottomHandIK.solve(
-				_skater.bottom_shoulder.position,
-				grip_target_xz,
-				cfg)
+		bh = BottomHandIK.solve(shoulder, grip_target_xz, cfg)
 	_skater.set_bottom_hand_position(bh)
+
+# ── The centre's faceoff address ──────────────────────────────────────────────
+# What the hand solves owe a centre set over the dot. Why each exists, and what
+# the pose does without it, is in Scripts/controllers/CLAUDE.md under "The
+# faceoff pose is two poses". All of it rides the gait's address ease, which
+# advances on ticks through the countdown (the locked-phase path drives the gait
+# itself), so these stay a function of tick state.
+
+# Where a shoulder sits once the address has folded the chest over the dot. The
+# ARMS are rooted there, not at the marker (SkaterArmRig._textured_shoulder), so
+# a hand solved off the marker lands a third of a metre behind the shoulder it
+# hangs from — which the two-bone IK can only answer by putting the elbow in
+# front of the wrist. Rebuilt from the AUTHORED fold rather than read off the
+# render-rate trunk channel: per-stride texture in the hands would shake the
+# stick at stride frequency.
+func address_shoulder(marker: Vector3) -> Vector3:
+	var fold: float = deg_to_rad(_controller.faceoff_center_lean_deg) * _address_blend()
+	if fold < 0.001:
+		return marker
+	return Basis.from_euler(Vector3(-fold, 0.0, 0.0)) * marker
+
+
+# The ceiling the top hand may rise to. TopHandIK answers a puck inside the
+# stick's own reach by raising the hand and steepening the shaft — right for a
+# carry in tight, wrong for an address, where it walks the hand up to the
+# shoulder and folds the arm shut behind it.
+func _address_hand_ceiling() -> float:
+	var address: float = _address_blend()
+	if address < 0.001:
+		return _controller.hand_y_max
+	return lerpf(_controller.hand_y_max, _address_hand_y(), address)
+
+
+func _address_hand_y() -> float:
+	return _controller.hand_rest_y + _controller.faceoff_center_hand_rise
+
+
+# The forward carry of the shoulder, and the shaft's horizontal span, in the
+# SETTLED address — for the placement, which runs at the whistle on a body that
+# is still standing, still holding a full stick, with the fold not yet eased in,
+# so every one of them measured live is the wrong number.
+func address_carry() -> float:
+	var marker: Vector3 = _skater.shoulder.position
+	var folded: Vector3 = Basis.from_euler(Vector3(
+			-deg_to_rad(_controller.faceoff_center_lean_deg), 0.0, 0.0)) * marker
+	return marker.z - folded.z
+
+
+func address_stick_horiz() -> float:
+	var drop: float = _address_hand_y() - blade_y_local() \
+			- (_skating.faceoff_address_drop() - _skating.crouch_drop)
+	var length: float = _controller.stick_length - _skater.faceoff_choke_m
+	return sqrt(maxf(length * length - drop * drop, 0.0001))
+
+
+# How far down the shaft the bottom hand holds: the short lever a draw is won
+# with, walked down over the countdown rather than jumped to.
+func _grip_fraction() -> float:
+	return lerpf(_controller.bottom_hand_grip_fraction,
+			_controller.faceoff_center_grip_fraction, _address_blend())
+
+
+func _address_blend() -> float:
+	if _skating == null or not _skater.is_faceoff_center:
+		return 0.0
+	return _skating.faceoff_blend
+
 
 # The commit stance poses the HAND and derives the blade from it, rather than
 # posing the blade and letting the hand fall out. Why blade-first cannot work
@@ -760,6 +832,7 @@ func stick_horiz() -> float:
 	var length: float = solve_stick_length()
 	return sqrt(maxf(length * length - drop * drop, 0.0001))
 
+
 # ── Config Builders ───────────────────────────────────────────────────────────
 # Cached: export-derived fields are filled once (until invalidate_configs);
 # only the per-tick fields are written per call.
@@ -786,10 +859,12 @@ func _ik_config(blade_y: float, max_blade_reach: float = INF) -> TopHandIK.Confi
 	_cached_top_cfg.blade_y = blade_y
 	_cached_top_cfg.max_blade_reach = max_blade_reach
 	_cached_top_cfg.stick_length = solve_stick_length()
+	_cached_top_cfg.hand_y_max = _address_hand_ceiling()
 	if _native_top != null:
 		_native_top.blade_y = blade_y
 		_native_top.max_blade_reach = max_blade_reach
 		_native_top.stick_length = _cached_top_cfg.stick_length
+		_native_top.hand_y_max = _cached_top_cfg.hand_y_max
 	return _cached_top_cfg
 
 func _bottom_hand_ik_config() -> BottomHandIK.Config:

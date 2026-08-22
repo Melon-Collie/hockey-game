@@ -109,6 +109,17 @@ func build() -> void:
 		node.free()
 	_helmet_base_euler = _basis[SkaterMeshBuilder.UpperBone.HELMET].get_euler()
 
+	# The pelvis has no scene node to read: its profile is authored in
+	# UpperBody's own space (SkaterMeshBuilder._PELVIS_PROFILE), so it rests at
+	# the identity the sizing seam then scales about.
+	var pelvis: int = SkaterMeshBuilder.UpperBone.PELVIS
+	_basis[pelvis] = Basis.IDENTITY
+	_scale[pelvis] = Vector3.ONE
+	_pos[pelvis] = Vector3.ZERO
+	_base_scale[pelvis] = Vector3.ONE
+	_base_pos[pelvis] = Vector3.ZERO
+	repose_bone(pelvis)
+
 	_thickness.resize(count)
 	var bone_radius: float = _skater.arm_mesh_thickness * 0.5
 	set_bone_radius(SkaterMeshBuilder.UpperBone.TOP_UPPER_ARM, bone_radius)

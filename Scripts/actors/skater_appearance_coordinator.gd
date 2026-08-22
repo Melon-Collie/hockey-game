@@ -53,7 +53,6 @@ const _SHOULDER_BONES: Array[int] = [
 # The leg parts are bones of the leg rig, not nodes, so they are addressed by
 # LegBone index (see SkaterMeshBuilder).
 const _THIGH_BONES: Array[int] = [
-	SkaterMeshBuilder.LegBone.HIP_L,   SkaterMeshBuilder.LegBone.HIP_R,
 	SkaterMeshBuilder.LegBone.THIGH_L, SkaterMeshBuilder.LegBone.THIGH_R,
 	SkaterMeshBuilder.LegBone.KNEE_L,  SkaterMeshBuilder.LegBone.KNEE_R,
 ]
@@ -102,6 +101,9 @@ func apply(attrs: PlayerAttributes) -> void:
 	for bone: int in _SHOULDER_BONES:
 		_apply_upper_scale(bone, m_shoulder, m_height, m_shoulder)
 	_apply_upper_scale(SkaterMeshBuilder.UpperBone.HELMET, m_head, m_head, m_head)
+	# The seat is the torso's own bulk carried below the waist — a heavier build
+	# fills the pants the same way it fills the jersey.
+	_apply_upper_scale(SkaterMeshBuilder.UpperBone.PELVIS, m_torso, m_height, m_torso)
 	for bone: int in _THIGH_BONES:
 		_apply_leg_scale(bone, m_thigh, m_height, m_thigh)
 	for bone: int in _CALF_BONES:

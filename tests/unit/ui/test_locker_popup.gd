@@ -276,9 +276,11 @@ func _span(mi: MeshInstance3D) -> Vector2:
 	return Vector2(box.position.y, box.position.y + box.size.y)
 
 
-# The leg is a CHAIN, and every link has to touch the next one. Building it from
-# thigh and sock alone leaves a hole at each knee — the thigh ends well above
-# where the sock starts, and the joint ball is the only thing that spans it.
+# The leg is a CHAIN, and every link has to touch the next one — from the seat
+# it hangs off down to the boot. Building it from thigh and sock alone leaves a
+# hole at each knee: the thigh ends well above where the sock starts, and the
+# joint ball is the only thing that spans it. The top link is the pelvis, which
+# is one part for both legs (the thigh carries the hip joint's own dome now).
 func test_the_leg_chain_has_no_holes() -> void:
 	for height: int in [PlayerAttributes.HEIGHT_MIN, PlayerAttributes.HEIGHT_MEDIUM,
 			PlayerAttributes.HEIGHT_MAX]:
@@ -286,9 +288,12 @@ func test_the_leg_chain_has_no_holes() -> void:
 				PlayerAttributes.new(height,
 					PlayerAttributes.coerce_weight(height, 190), 1, 1, 1, 1))
 		# Top-down, the way the rig chains them.
-		var chain: Array[String] = ["_hips", "_thighs", "_knees", "_socks",
+		var chain: Array[String] = ["_thighs", "_knees", "_socks",
 			"_collars", "_boots"]
+		var seat: Vector2 = _span(_mannequin().get("_pelvis") as MeshInstance3D)
 		for i: int in 2:
+			assert_lte(seat.x, _span(_part("_thighs", i)).y,
+					"the seat meets thigh %d (height %d)" % [i, height])
 			for link: int in chain.size() - 1:
 				var upper: Vector2 = _span(_part(chain[link], i))
 				var lower: Vector2 = _span(_part(chain[link + 1], i))

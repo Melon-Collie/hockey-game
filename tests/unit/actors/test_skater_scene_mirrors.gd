@@ -64,13 +64,27 @@ func test_helmet_and_torso_stations_mirror_the_scene() -> void:
 			"shoulder shelf the neck profile is sized against")
 
 
-# _HIP_RADIUS deliberately does NOT carry the seat bias — the scene node does,
-# so the ball is a plain sphere and the offset is authored where it is visible.
-func test_hip_seat_bias_lives_in_the_scene_not_the_radius() -> void:
-	assert_almost_eq(_origin("./MeshRoot/LowerBody/LegL/HipL").z, 0.035, 1e-6,
-			"the rearward seat bias is the HipL node's own z")
-	assert_almost_eq(_origin("./MeshRoot/LowerBody/LegR/HipR").z, 0.035, 1e-6,
-			"and HipR's, symmetric about the body axis")
+# The thigh's upper stations are the hip joint: a dome that seals it only while
+# it is centred ON the pivot the leg turns about, because a sphere about the
+# axis of rotation is the one surface that does not move when the leg does. That
+# pivot is the LegL node, and the thigh mesh hangs its own origin below it — so
+# the dome's centre, in the thigh part's frame, IS that offset. Author it a
+# centimetre out and the hip opens as the leg swings, which shows up only at the
+# extremes: the block's abducted leg, the faceoff splay.
+func test_the_thigh_dome_is_centred_on_the_hip_pivot() -> void:
+	var thigh_drop: float = -_origin("./MeshRoot/LowerBody/LegL/ThighL").y
+	assert_almost_eq(SkaterMeshBuilder._HIP_PIVOT_IN_THIGH, thigh_drop, 1e-6,
+			"the dome's centre in thigh-local Y is the pivot the scene authors")
+	var radius: float = SkaterMeshBuilder._THIGH_DOME_RADIUS
+	var stations: int = 0
+	for station: Vector2 in SkaterMeshBuilder._THIGH_PROFILE:
+		var dy: float = station.x - SkaterMeshBuilder._HIP_PIVOT_IN_THIGH
+		if dy < 0.0:
+			continue  # below the equator the thigh's own taper takes over
+		assert_almost_eq(station.y, sqrt(maxf(radius * radius - dy * dy, 0.0)), 0.002,
+				"station y %.3f must lie on the dome" % station.x)
+		stations += 1
+	assert_gt(stations, 2, "the dome must be more than an equator and a pole")
 
 
 # The knee ball has to span the gap the thigh and sock leave between them, or
@@ -109,6 +123,10 @@ func test_every_authored_bone_node_still_exists() -> void:
 				"UPPER_BONE_NODE names `%s`, which is not in %s" % [path, _SCENE])
 
 
+# Every assertion above reads _origins, so an empty or half-built scan would
+# pass them all vacuously. The floor is the rig's own node count less a little
+# slack — it dropped by two when the hip balls were folded into the thighs, and
+# it should drop again the next time the scene loses a part.
 func test_the_scene_scan_actually_saw_the_rig() -> void:
-	assert_gt(_origins.size(), 20, "expected the whole rig — the parser may have broken")
+	assert_gt(_origins.size(), 18, "expected the whole rig — the parser may have broken")
 	assert_true(_origins.has("./MeshRoot/UpperBody/ShoulderL"), "sanity: ShoulderL found")

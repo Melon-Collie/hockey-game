@@ -258,8 +258,8 @@ void NativeSkaterGait::reset_state() {
 	out_r_knee = 0.0;
 	out_l_yaw = 0.0;
 	out_r_yaw = 0.0;
-	out_foot_evert_l = 0.0;
-	out_foot_evert_r = 0.0;
+	out_foot_flat_l = 0.0;
+	out_foot_flat_r = 0.0;
 	out_edge_load_l = 0.0;
 	out_edge_load_r = 0.0;
 	out_drop = 0.0;
@@ -709,8 +709,9 @@ int64_t NativeSkaterGait::apply(
 	const double stance_hip = Math::deg_to_rad(cfg.stance_hip_deg) * stance;
 	const double stance_knee = stance_hip + Math::asin(
 			CLAMP(THIGH_LEN / SHIN_LEN * Math::sin(stance_hip), -1.0, 1.0));
+	const double stance_shin = stance_knee - stance_hip;
 	double drop = leg_scale * (THIGH_LEN * (1.0 - Math::cos(stance_hip)) +
-			SHIN_LEN * (1.0 - Math::cos(stance_knee - stance_hip)));
+			SHIN_LEN * (1.0 - Math::cos(stance_shin)));
 
 	// Asymmetric stroke sampling (slow-load / fast-release warp).
 	const double skew = CLAMP(
@@ -729,13 +730,29 @@ int64_t NativeSkaterGait::apply(
 	double r_pitch = stance_hip;
 	double r_roll = 0.0;
 
-	// Faceoff foot stagger.
+	// Faceoff stance: the stick-side foot braced back, plus the centre's wide
+	// base — the splay costs the legs a cosine of vertical span, paid as drop
+	// here and given back at the ankles below.
+	double faceoff_splay = 0.0;
+	double faceoff_flat = 0.0;
 	if (faceoff_blend > 0.001) {
 		const double split = Math::deg_to_rad(faceoff_center ? cfg.faceoff_center_split_deg
 															 : cfg.faceoff_split_deg) *
 				faceoff_blend * (is_left_handed ? -1.0 : 1.0);
 		l_pitch += split;
 		r_pitch -= split;
+		if (faceoff_center) {
+			faceoff_splay = Math::deg_to_rad(cfg.faceoff_center_width_deg) * faceoff_blend;
+			l_roll -= faceoff_splay;
+			r_roll += faceoff_splay;
+			drop += (leg_scale * (THIGH_LEN + SHIN_LEN) - drop) *
+					(1.0 - Math::cos(faceoff_splay));
+			// The sit and the width would stand both blades on their heels and
+			// outside edges; the ankles give it back — and a level boot hangs its
+			// blade below the FOOT pivot, which the fold swings down.
+			faceoff_flat = faceoff_blend;
+			drop -= leg_scale * FOOT_FWD * Math::sin(stance_shin) * faceoff_blend;
+		}
 	}
 
 	// Hockey-stop leg pose.
@@ -966,8 +983,10 @@ int64_t NativeSkaterGait::apply(
 		stagger_roll = wobble_amp * 0.7 * Math::sin(wobble_phase * 1.31);
 	}
 
-	double foot_evert_l = 0.0;
-	double foot_evert_r = 0.0;
+	// How much of each leg's splay and fold its ankle gives back, so the blade
+	// under it lies flat (SkaterLegRig.set_ankle_flatten).
+	double foot_flat_l = faceoff_flat;
+	double foot_flat_r = faceoff_flat;
 
 	// ── Shot block: the one-knee drop ──
 	if (block_blend > 0.001) {
@@ -981,9 +1000,11 @@ int64_t NativeSkaterGait::apply(
 		const double ext_roll = Math::acos(CLAMP(hip_h / MAX(ext_len, 0.001), -1.0, 1.0));
 		const double down_knee = -(kneel_hip + kneel_shin);
 		if (stick_side > 0.0) {
-			foot_evert_l = ext_roll * block_blend;
+			foot_flat_l = block_blend;
+			foot_flat_r = 0.0;
 		} else {
-			foot_evert_r = -ext_roll * block_blend;
+			foot_flat_r = block_blend;
+			foot_flat_l = 0.0;
 		}
 		if (stick_side > 0.0) {
 			r_pitch = Math::lerp(r_pitch, kneel_hip, block_blend);
@@ -1050,8 +1071,8 @@ int64_t NativeSkaterGait::apply(
 	out_r_knee = r_knee;
 	out_l_yaw = pivot_yaw_l * (1.0 - kd_t);
 	out_r_yaw = pivot_yaw_r * (1.0 - kd_t);
-	out_foot_evert_l = foot_evert_l;
-	out_foot_evert_r = foot_evert_r;
+	out_foot_flat_l = foot_flat_l;
+	out_foot_flat_r = foot_flat_r;
 	out_edge_load_l = CLAMP(MAX(l_ext * intensity, stop_blend), 0.0, 1.0) * (1.0 - kd_t);
 	out_edge_load_r = CLAMP(MAX(r_ext * intensity, stop_blend), 0.0, 1.0) * (1.0 - kd_t);
 	out_drop = drop;
@@ -1082,8 +1103,9 @@ void NativeSkaterGait::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_r_pitch"), &NativeSkaterGait::get_r_pitch);
 	ClassDB::bind_method(D_METHOD("get_r_roll"), &NativeSkaterGait::get_r_roll);
 	ClassDB::bind_method(D_METHOD("get_r_knee"), &NativeSkaterGait::get_r_knee);
-	ClassDB::bind_method(D_METHOD("get_foot_evert_l"), &NativeSkaterGait::get_foot_evert_l);
-	ClassDB::bind_method(D_METHOD("get_foot_evert_r"), &NativeSkaterGait::get_foot_evert_r);
+	ClassDB::bind_method(D_METHOD("get_faceoff_blend"), &NativeSkaterGait::get_faceoff_blend);
+	ClassDB::bind_method(D_METHOD("get_foot_flat_l"), &NativeSkaterGait::get_foot_flat_l);
+	ClassDB::bind_method(D_METHOD("get_foot_flat_r"), &NativeSkaterGait::get_foot_flat_r);
 	ClassDB::bind_method(D_METHOD("get_crouch_drop"), &NativeSkaterGait::get_crouch_drop);
 	ClassDB::bind_method(D_METHOD("get_trunk_pitch_add"), &NativeSkaterGait::get_trunk_pitch_add);
 	ClassDB::bind_method(D_METHOD("get_trunk_roll_add"), &NativeSkaterGait::get_trunk_roll_add);
