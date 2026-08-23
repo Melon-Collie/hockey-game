@@ -1,11 +1,11 @@
 class_name CrowdAudioController
 extends Node
 
-# Drives crowd audio: a looping ambient murmur plus cheer one-shots on goals
-# and period/game-end buzzers. Both stream types route through the dedicated
-# "Arena" audio bus (created by SoundManager, shared with the horn/buzzer/
-# whistle one-shots) so a single PlayerPrefs slider controls overall arena
-# atmosphere independently of gameplay SFX.
+# Drives crowd audio: a looping ambient murmur that rides the danger on the ice,
+# plus cheer one-shots on goals and period/game-end buzzers. Both stream types
+# route through the dedicated "Arena" audio bus (created by SoundManager, shared
+# with the horn/buzzer/whistle one-shots) so a single PlayerPrefs slider controls
+# overall arena atmosphere independently of gameplay SFX.
 #
 # SoundManager stays one-shot-only — the looping ambient player and the small
 # cheer pool both live here, mirroring how SkaterSoundController owns its own
@@ -23,6 +23,18 @@ extends Node
 @export var settle_swell_db: float = 6.0
 @export var settle_rise_time: float = 0.2
 @export var settle_recover_time: float = 2.5
+
+# ── Live energy ──────────────────────────────────────────────────────────────
+# The bed tracks how good a chance the puck is sitting on rather than sitting
+# flat between events (CrowdEnergyRules): a rush swells it, a cycle keeps it
+# warm, a clear lets it settle. Peak swell sits above the whistle's, so the
+# loudest thing in the building is still a live scoring chance.
+var energy_swell_db: float = 8.0
+
+var _energy: float = 0.0
+var _pressure: float = 0.0
+# -1 until GameManager announces one — no phase means no live play to read.
+var _phase: int = -1
 
 const _CHEER_POOL_SIZE: int = 3
 const _ARENA_BUS: StringName = &"Arena"
@@ -81,8 +93,46 @@ func _on_goal_scored(_scoring_team: Variant, _scorer: String, _a1: String, _a2: 
 
 
 func _on_phase_changed(new_phase: int) -> void:
+	_phase = new_phase
 	if new_phase == GamePhase.Phase.END_OF_PERIOD or new_phase == GamePhase.Phase.GAME_OVER:
 		_cheer()
+
+
+# Cosmetic, and sharing no spatial relationship with anything drawn, so it runs
+# at render rate rather than on the tick.
+func _process(delta: float) -> void:
+	_advance_energy(delta)
+
+
+func _advance_energy(delta: float) -> void:
+	if _ambient_player == null or _ambient_player.stream == null:
+		return
+	var live: bool = false
+	var sustained: bool = false
+	var chance: float = 0.0
+	if _phase == GamePhase.Phase.PLAYING:
+		var puck: Puck = GameManager.get_puck()
+		if is_instance_valid(puck):
+			live = true
+			var carrier: Skater = GameManager.get_puck_carrier()
+			var carrier_team: int = carrier.get_team_id() if carrier != null else -1
+			var pos: Vector3 = puck.global_position
+			sustained = CrowdEnergyRules.is_sustaining_pressure(pos.z, carrier_team)
+			chance = CrowdEnergyRules.chance(pos.x, pos.z, carrier_team)
+	_pressure = CrowdEnergyRules.advance_pressure(_pressure, sustained, delta)
+	# A dead puck targets silence outright rather than the decaying pressure:
+	# whatever the shift had built, the whistle ended it, and the settle swell
+	# is what covers the beat after.
+	var target: float = CrowdEnergyRules.target_energy(chance, _pressure) if live else 0.0
+	_energy = CrowdEnergyRules.advance_energy(_energy, target, delta)
+	# A goal duck or a whistle swell owns the bed while it runs: those are the
+	# crowd reacting to something that just happened, which outranks the ambient
+	# read of a live play. Both tweens land back on ambient_volume_db, and the
+	# energy has decayed through the dead phase by then, so the handover is
+	# silent.
+	if _tween != null and _tween.is_valid():
+		return
+	_ambient_player.volume_db = ambient_volume_db + _energy * energy_swell_db
 
 
 # Public trigger for a crowd cheer + ambient duck. The replay viewer calls this
