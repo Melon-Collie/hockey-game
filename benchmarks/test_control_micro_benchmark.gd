@@ -144,8 +144,16 @@ func test_control_tick_costs() -> void:
 	_bench("[D] velocity lean", func() -> void:
 		_controller._pose.apply_velocity_lean(delta))
 
-	_bench("[E] clamp carry pin from net", func() -> void:
-		_controller._clamp_carry_pin_from_net())
+	# The carry path's net collision. It is gated on has_puck, and the frozen
+	# pose above is a skater WITHOUT the puck, so the flag is lifted for the
+	# duration or the row would time an early return and report the work as
+	# free. Safe to force here and only here: the skater is parked mid-rink, so
+	# the post / crossbar branches — the ones with the release side effect —
+	# cannot reach their geometry.
+	_controller.has_puck = true
+	_bench("[E] collide pinned puck with net (carrying)", func() -> void:
+		_controller._collide_pinned_puck_with_net())
+	_controller.has_puck = false
 
 	_bench("[F] angular velocities", func() -> void:
 		_controller._pose.update_angular_velocities(delta))
