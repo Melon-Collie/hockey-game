@@ -124,7 +124,7 @@ static func decide(ctx: RoleContext) -> RoleDecision:
 		# Pre-armed feed keeper (backdoor_depth_cap on v3's predicted pose):
 		# a candidate the keeper can pre-arm against prices merely-strong
 		# instead of phantom-certain, so structural stations genuinely
-		# compete with the seam (the SUPPORT flank pend).
+		# compete with the seam.
 		var cand_flight: float = carrier_pos.distance_to(c) / maxf(pass_speed, 1.0)
 		AIActionScoring.resolve_feed_keeper(
 				goalie_pos, ctx.attacking_goal_pos, cand_flight, c, carrier_pos,
