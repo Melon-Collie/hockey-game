@@ -77,7 +77,10 @@ func test_the_steady_stream_is_decimated_to_the_file_rate() -> void:
 	var playing: int = GamePhase.Phase.PLAYING
 	assert_false(ReplayFileRecorder.admits_frame(10.0 + _RATE * 0.5, 10.0,
 			playing, playing), "half a period in is too soon")
-	assert_true(ReplayFileRecorder.admits_frame(10.0 + _RATE, 10.0,
+	# Nudged just past the boundary rather than sitting on it: 10.0 + _RATE
+	# reads back a hair under _RATE, so an exact-boundary probe tests float
+	# addition rather than the throttle.
+	assert_true(ReplayFileRecorder.admits_frame(10.0 + _RATE * 1.01, 10.0,
 			playing, playing), "a full period apart writes")
 	assert_true(ReplayFileRecorder.admits_frame(10.0, -INF, playing, playing),
 			"the first frame of a recording always writes")
@@ -122,11 +125,9 @@ func test_the_roster_entry_is_the_one_description_of_a_player() -> void:
 	# Header roster and the mid-game player_joined event go through this, so the
 	# viewer spawns from either through the same path. GameManager re-exports it
 	# under its old name for the viewer-side decode.
-	var record := PlayerRecord.new()
-	record.peer_id = 7
+	var record := PlayerRecord.new(7, 2, false, null)
 	record.player_name = "Tester"
 	record.jersey_number = 44
-	record.team_slot = 2
 	record.is_left_handed = false
 	var entry: Dictionary = ReplayFileRecorder.roster_entry(record)
 	assert_eq(entry.peer_id, 7)
