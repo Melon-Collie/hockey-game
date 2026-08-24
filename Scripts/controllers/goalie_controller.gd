@@ -248,12 +248,11 @@ var five_hole_shuffle_max: float = 0.04
 var five_hole_t_push_max: float = 0.10
 
 var tracking_speed: float = 8.0
-# Far-range tracking lerp speed — the quiet-eye lag. At range
-# a real goalie's angle corrections are smooth and slightly laggy; slowing the
-# tracking lerp low-passes stickhandle wiggle (±1.5 m at ~2 Hz attenuates to
-# roughly ±0.35 m of threat motion — ≈±0.06 m of goalie arc travel at B depth)
-# without moving the squaring target off the puck. Blended from `tracking_speed`
-# (in tight) toward this by the chest_track distance ramp.
+# Far-range filter speed for the puck OFFSET, blended from `tracking_speed` by
+# the chest_track distance ramp. Attenuates stickhandle wiggle (±1.5 m at ~2 Hz
+# down to roughly ±0.35 m of threat motion, ≈±0.06 m of arc travel at B depth).
+# It costs no tracking of the carrier himself — see CLAUDE.md → "Filter the
+# puck, not the man".
 var tracking_speed_far: float = 3.0
 var part_lerp_speed: float = 6.0
 var reaction_lerp_speed: float = 18.0
@@ -935,6 +934,13 @@ var _reaction_drift_vx: float = 0.0
 var _last_save_time: float = -1.0
 var _five_hole_openness: float = 0.0
 var _tracked_threat_position: Vector3 = Vector3.ZERO
+# The jitter filter's whole state — the puck's offset from the carrier's body
+# and the lead built from it, both low-passed. The body is tracked raw.
+var _tracked_puck_offset: Vector3 = Vector3.ZERO
+var _tracked_puck_lead: Vector3 = Vector3.ZERO
+# False until a carrier's offset is seeded, so a new carrier snaps rather than
+# easing over from the previous one's blade position.
+var _offset_primed: bool = false
 # Position-derived puck velocity, refreshed each tick from the position delta.
 # Works on host and client alike — `linear_velocity` is unreliable on the client
 # during interpolation. Drives the threat-pressing closing check and the
@@ -1112,6 +1118,7 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 	_target_x = _goal_center_x
 	_current_depth = depth_defensive
 	_tracked_threat_position = puck.global_position
+	_offset_primed = false
 	_prev_puck_position = puck.global_position
 	if profile != null:
 		_apply_skill_profile(profile)
@@ -1431,6 +1438,7 @@ func reset_to_crease() -> void:
 	_reading_pinned_windup = false
 	_reading_planted_windup = false
 	_tracked_threat_position = puck.global_position if puck != null else Vector3.ZERO
+	_offset_primed = false
 	_prev_puck_position = _tracked_threat_position
 	_sleep_ticks_skipped = 0
 	_sleep_skipped_delta = 0.0
@@ -1536,17 +1544,9 @@ func _update_tracking(delta: float) -> void:
 			and carrier.current_shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK
 	# A loose puck is NOT lerped toward: smoothing there makes the goalie chase
 	# stale positions and commit slides to where the rebound *was*.
-	var target_threat: Vector3 = _compute_threat_position()
-	# `carrier` above is still current: _compute_threat_position only reads the
-	# puck, so nothing between there and here can have changed the carrier.
-	if carrier != null and not _reaction.reacting:
-		# Quiet-eye smoothing: the tracking lerp slows with carrier distance so
-		# far-range stickhandle wiggle is low-passed instead of chased. `_chest_t`
-		# was just set by the threat computation.
-		var track_speed: float = lerpf(tracking_speed, tracking_speed_far, _chest_t)
-		_tracked_threat_position = _tracked_threat_position.lerp(target_threat, track_speed * delta)
-	else:
-		_tracked_threat_position = target_threat
+	# Consumed as solved: the jitter filter lives on the puck terms inside. A
+	# second low-pass here is what trailed the carrier's real translation.
+	_tracked_threat_position = _compute_threat_position(delta)
 	if is_server:
 		_update_shot_commit(delta, carrier)
 		_update_cross_crease(delta, carrier)
@@ -1597,12 +1597,13 @@ func _update_tracking(delta: float) -> void:
 # blended with the puck (jumpy from stickhandling) per `shooter_weight`. While
 # reacting to a shot in flight, and in the post-integrated / recovering states,
 # the raw puck IS the threat — there is no chest worth chasing.
-func _compute_threat_position() -> Vector3:
+func _compute_threat_position(delta: float = 0.0) -> Vector3:
 	var carrier: Skater = puck.get_carrier()
 	if carrier == null or _reaction.reacting \
 			or _sm.is_post_integrated() \
 			or _sm.current == State.PLAYING_PUCK \
 			or _sm.current == State.RECOVERING:
+		_offset_primed = false
 		# A SEPARATE, near-zero lead (vs the dangle branch below) so the goalie does
 		# NOT front-run a back-door pass: he reads where the puck IS, and loses the
 		# race across the crease to a hard cross-seam pass. The lead scales with puck
@@ -1622,8 +1623,6 @@ func _compute_threat_position() -> Vector3:
 	# jitter to reject) and IS the shot origin, so square to it directly.
 	var w: float = shooter_weight_pinned_windup if _reading_pinned_windup \
 			else shooter_weight
-	var blended: Vector3 = GoalieBehaviorRules.compute_threat_position(
-			puck.global_position, carrier.global_position, true, w)
 	# Two leads: CARRIER velocity captures body motion (sustained, smooth) and so
 	# always contributes. PUCK velocity captures dangle / dragged-across motion — it
 	# is the jitter source, so it fades out with distance. Y is zeroed because
@@ -1637,10 +1636,28 @@ func _compute_threat_position() -> Vector3:
 	# suppresses no locomotion: ~0.5 m of spurious lead at 6 m/s lateral, about half
 	# a net width.
 	var puck_lead_scale: float = 0.0 if _reading_pinned_windup else (1.0 - chest_t)
-	var lead: Vector3 = carrier.velocity * carrier_velocity_lead_time \
-			+ _puck_velocity_est * puck_velocity_lead_time * puck_lead_scale
-	lead.y = 0.0
-	return blended + lead
+	var puck_lead: Vector3 = _puck_velocity_est * puck_velocity_lead_time * puck_lead_scale
+	puck_lead.y = 0.0
+	var carrier_lead: Vector3 = carrier.velocity * carrier_velocity_lead_time
+	carrier_lead.y = 0.0
+	# FILTER THE PUCK, NOT THE MAN (CLAUDE.md). Offset and lead filter separately
+	# so `w` applies to the CURRENT smoothed offset rather than re-weighting
+	# history accumulated under a value a wind-up has since changed.
+	var raw_offset: Vector3 = puck.global_position - carrier.global_position
+	if not _offset_primed:
+		# A fresh carrier inherits nothing from the last one.
+		_tracked_puck_offset = raw_offset
+		_tracked_puck_lead = puck_lead
+		_offset_primed = true
+	else:
+		var t: float = clampf(
+				lerpf(tracking_speed, tracking_speed_far, chest_t) * delta, 0.0, 1.0)
+		_tracked_puck_offset = _tracked_puck_offset.lerp(raw_offset, t)
+		_tracked_puck_lead = _tracked_puck_lead.lerp(puck_lead, t)
+	var blended: Vector3 = GoalieBehaviorRules.compute_threat_position(
+			carrier.global_position + _tracked_puck_offset,
+			carrier.global_position, true, w)
+	return blended + _tracked_puck_lead + carrier_lead
 
 # ── Shot Timer ────────────────────────────────────────────────────────────────
 # `_reaction.shot_timer` is the goalie's processing delay after shot release —

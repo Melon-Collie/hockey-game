@@ -23,6 +23,46 @@ execute; they never reach up. Goalie *math* is pure and lives in
 | `domain/rules/goalie_depth_solver.gd` | depth constraint composition |
 | `domain/rules/goalie_stick_rules.gd` | stick geometry and coverage |
 
+### Filter the puck, not the man
+
+The threat the goalie squares to used to be low-passed as a whole — one lerp over
+the blended puck/carrier position. A first-order filter has a **permanent**
+steady-state error against a constant-velocity target: it settles at trailing by
+`speed / k` and no amount of run-up closes it. So the filter charged the
+carrier's real translation a trail proportional to his speed — measured at 0.20 s
+of it beyond `chest_track_far_distance`, i.e. 1.6 m behind an 8 m/s skate.
+
+That trail then entered the SQUARING error a second time, because the body
+rotates toward the tracked threat rather than toward the puck. The two lags
+compound, contributing about equally at 8 m, and together left him 26° off square
+against a shooter crossing at 8 m/s — with the pads, glove, blocker and five-hole
+all posed in that rotated frame.
+
+The fix is that jitter and signal are **separable**, and only one of them needed
+filtering. A carrier's BODY does not teleport; it is the smooth part and
+low-passing it buys nothing. What wiggles is the puck's OFFSET from him (±1.5 m
+of dangle) and the velocity estimate built from it. So the offset and the puck
+lead stay inside the filter at exactly their old time constants and the body
+rides through raw. Steady state is unchanged — once the offset converges the
+blend reproduces the old one exactly — which is why `GoalieBehaviorRules
+.compute_threat_position` is fed a jitter-filtered puck rather than re-derived.
+
+Two things that bite:
+
+- **The puck lead must stay inside the filter.** It is built from a raw per-tick
+  position difference, so unfiltered it hands the goalie precisely the dangle
+  spikes the filter exists to reject.
+- **Removing the trail leaves the LEAD unopposed.** `carrier_velocity_lead_time`
+  was cancelling the trail in tight (0.12 s of lead against a 0.125 s trail) and
+  losing to it at range. With the trail gone the lead is net anticipation
+  everywhere — he now plays *ahead* of a moving carrier by that much, which is a
+  deliberate, beatable-by-cutback property rather than an accident, but it is a
+  different quantity from what the number was chosen for.
+
+`test_goalie_tracking_lag.gd` holds it, and asserts structural properties — trail
+proportional to speed, the compounding — rather than pinned numbers, so replacing
+a filter with a rate limit fails it rather than passing quietly.
+
 ### Delete the copy, don't correct the number
 
 Nothing connects a literal to the collider it was copied from, so every

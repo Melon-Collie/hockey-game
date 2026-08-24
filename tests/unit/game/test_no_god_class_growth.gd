@@ -50,7 +50,11 @@ const _SIZE_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/ai/skater_agent_state_machine.gd": 6166,
 	"res://Scripts/game/game_manager.gd": 5654,
 	"res://Scripts/domain/ai/action_scoring.gd": 4476,
-	"res://Scripts/controllers/goalie_controller.gd": 4476,
+	# +17: the threat tracker's jitter filter moved onto the puck offset, which
+	# needs a second filter state and its priming. The design prose went to
+	# Scripts/controllers/CLAUDE.md rather than inline, and the tunable
+	# doc-blocks it duplicated were trimmed, so the growth here is code.
+	"res://Scripts/controllers/goalie_controller.gd": 4493,
 	"res://Scripts/domain/ai/role_behaviors/carrier.gd": 3755,
 	"res://Scripts/controllers/skater_controller.gd": 3391,
 	"res://Scripts/actors/skater.gd": 2502,
