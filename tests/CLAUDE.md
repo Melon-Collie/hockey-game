@@ -15,6 +15,12 @@ Full suite ≈ 15–18 s locally. **On Windows, redirect rather than pipe** — 
 console exe throttles badly on an MSYS pipe (≈90 s vs ≈18 s). On the web, run
 `.claude/hooks/wait-for-godot.sh` once first; piping is fine on Linux.
 
+**On the web the full suite is ≈300 s**, not 15–18 — measured, 4179 tests. The
+cost is concentrated in the live-goalie sweeps under `tests/unit/ai/`, which
+drive the real `GoalieController` tick-by-tick over large shot grids. Use
+`-gselect=<script substring>` to run one of them while iterating; the full suite
+is a several-minute commitment there rather than a quick check.
+
 CI runs GUT on every push and PR (`.github/workflows/test.yml`), and the export
 job in `deploy.yml` gates on tests passing.
 

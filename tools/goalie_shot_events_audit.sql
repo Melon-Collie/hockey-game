@@ -12,6 +12,14 @@
 --
 -- SV% is over shots that REACHED the goalie (outcome in goal/saved). 'missed' is
 -- off net and 'blocked' was stopped by a skater, so neither is the keeper's.
+--
+-- ⚠️ `puck_lateral_speed` IS NOT DEKE PACE. It is absf(vel.x) of the shot's own
+-- release velocity (GameManager._note_shot_context), so a cross-corner aim from
+-- a stationary shooter reads as large lateral pace purely from aim geometry. The
+-- release-context migration's column comment calls it a deke / cross-seam
+-- discriminator; it is not one, and section 10 below should be read as "how
+-- sideways was the shot aimed", nothing more. `shooter_speed` is the shooter's
+-- real planar body speed and IS the movement discriminator.
 
 with s as (
     select e.*,
