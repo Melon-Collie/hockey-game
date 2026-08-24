@@ -1534,7 +1534,14 @@ func _physics_process(delta: float) -> void:
 # ── Tracking ──────────────────────────────────────────────────────────────────
 func _update_tracking(delta: float) -> void:
 	var inv_dt: float = 1.0 / maxf(delta, 0.0001)
+	# Bounded by the puck's own speed limit. A one-tick finite difference is
+	# unbounded, so any discontinuity — a reception, a deflection, a reconcile
+	# correction — reads as a huge velocity for one tick, and both consumers
+	# treat it as travel (the lead carries 0.08 s of it; beaten-wide onset gates
+	# on its x). Past `max_speed` it is a teleport, not motion.
 	_puck_velocity_est = (puck.global_position - _prev_puck_position) * inv_dt
+	if _puck_velocity_est.length_squared() > puck.max_speed * puck.max_speed:
+		_puck_velocity_est = _puck_velocity_est.normalized() * puck.max_speed
 	_prev_puck_position = puck.global_position
 	var carrier: Skater = puck.get_carrier()
 	var upright: bool = _sm.is_upright()

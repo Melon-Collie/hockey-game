@@ -54,7 +54,10 @@ const _SIZE_ALLOWANCE: Dictionary[String, int] = {
 	# needs a second filter state and its priming. The design prose went to
 	# Scripts/controllers/CLAUDE.md rather than inline, and the tunable
 	# doc-blocks it duplicated were trimmed, so the growth here is code.
-	"res://Scripts/controllers/goalie_controller.gd": 4493,
+	# +7: the puck-velocity estimate is bounded by the puck's own speed limit.
+	# It is a one-tick finite difference feeding a positional decision, so a
+	# teleport read as travel moved the tracked threat metres in a tick.
+	"res://Scripts/controllers/goalie_controller.gd": 4500,
 	"res://Scripts/domain/ai/role_behaviors/carrier.gd": 3755,
 	"res://Scripts/controllers/skater_controller.gd": 3391,
 	"res://Scripts/actors/skater.gd": 2502,

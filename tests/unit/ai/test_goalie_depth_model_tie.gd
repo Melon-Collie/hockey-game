@@ -172,17 +172,34 @@ func test_the_planner_never_over_states_the_keeper() -> void:
 	# side of the asymmetry above.
 	var goal := Vector3(0.0, 0.0, GOAL_Z)
 	var worst: float = -INF
+	var worst_cell: String = ""
+	var rows: Array[String] = []
 	for from_d: float in [1.5, 2.0, 3.0, 5.0, 8.0]:
 		for to_d: float in [1.5, 2.0, 3.0, 5.0, 8.0]:
 			_ctrl.reset_to_crease()
 			_h.settle(Vector3(0.0, 0.0, GOAL_Z + from_d), SETTLE_TICKS)
-			var keeper := Vector3(0.0, 0.0, GOAL_Z + _ctrl._current_depth)
+			var settled: float = _ctrl._current_depth
+			var keeper := Vector3(0.0, 0.0, GOAL_Z + settled)
 			var release := Vector3(0.0, 0.0, GOAL_Z + to_d)
 			var planned: float = AIActionScoring.planned_goalie_depth(
 					keeper, goal, release, PLAN_S, 0.0)
 			_step(Vector3(0.0, 0.0, GOAL_Z + to_d), Vector3.ZERO, PLAN_TICKS)
-			worst = maxf(worst, planned - _ctrl._current_depth)
-	gut.p("worst over-statement across the relocation grid: %+.3f m" % worst)
+			var live: float = _ctrl._current_depth
+			var over: float = planned - live
+			# The stance matters: the planner solves a STANDING keeper's depth,
+			# and a keeper who has dropped is holding `butterfly_radius` instead.
+			rows.append("  %.1f -> %.1f m | settled %.2f  live %.2f  planned %.2f  over %+.3f  %s"
+					% [from_d, to_d, settled, live, planned, over,
+							"UP" if _ctrl._sm.is_upright() else "DOWN"])
+			if over > worst:
+				worst = over
+				worst_cell = "%.1f -> %.1f m" % [from_d, to_d]
+	# Per cell, because the worst number alone cannot say WHICH relocation broke
+	# the one-sided property, and that is the whole diagnosis.
+	for s: String in rows:
+		gut.p(s)
+	gut.p("worst over-statement across the relocation grid: %+.3f m at %s"
+			% [worst, worst_cell])
 	assert_true(worst <= 0.10,
 			("the planner must never model the keeper materially further OUT than he "
 			+ "will be — that is the bug that stops bots attacking (worst %+.2f m)") % worst)
