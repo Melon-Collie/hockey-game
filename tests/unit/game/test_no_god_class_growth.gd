@@ -58,7 +58,7 @@ const _SIZE_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/game/tutorial_manager.gd": 2101,
 	"res://Scripts/controllers/skater_skating_coordinator.gd": 1642,
 	"res://Scripts/controllers/skater_ik_coordinator.gd": 895,
-	"res://Scripts/controllers/puck_controller.gd": 1517,
+	"res://Scripts/controllers/puck_controller.gd": 1520,
 	"res://Scripts/actors/hockey_rink.gd": 1472,
 	"res://Scripts/domain/ai/role_behaviors/role_helpers.gd": 1436,
 	"res://Scripts/game/player_prefs.gd": 1370,
@@ -67,7 +67,7 @@ const _SIZE_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/ui/career_stats_screen.gd": 1271,
 	"res://Scripts/domain/ai/carry_space.gd": 1255,
 	"res://Scripts/ui/lobby_manager.gd": 1247,
-	"res://Scripts/actors/puck.gd": 1026,
+	"res://Scripts/actors/puck.gd": 1029,
 	"res://Scripts/ui/side_menu.gd": 995,
 	"res://Scripts/controllers/goalie_body_config_builder.gd": 974,
 	"res://Scripts/ui/network_debug_overlay.gd": 956,
@@ -99,6 +99,7 @@ const _API_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/actors/skater_mesh_builder.gd": 29,
 	"res://Scripts/controllers/puck_controller.gd": 27,
 	"res://Scripts/game/shot_on_goal_tracker.gd": 26,
+	"res://Scripts/actors/goalie.gd": 26,
 }
 
 

@@ -131,6 +131,7 @@ var _native_step: RefCounted = null
 var _gather_packed := PackedFloat32Array()
 var _gather_parts: Array = []
 var _gather_goalies: Array = []
+var _gather_velocities := PackedVector3Array()
 # Scratch for the reachable-end goalie filter in _run_prediction — reused per frame.
 var _reachable_goalies: Array = []
 # Shared read-only empty (const arrays are frozen): the no-goalie-reachable default
@@ -1200,7 +1201,8 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 	var goalie_box_count: int = 0
 	if not goalies.is_empty() and GoalieContactDetector.native_available():
 		goalie_box_count = GoalieContactDetector.gather_boxes(
-				goalies, _gather_packed, _gather_parts, _gather_goalies)
+				goalies, _gather_packed, _gather_parts, _gather_goalies,
+				_gather_velocities)
 	var stopped: bool = false
 	# Predicted-cue latch upkeep: a gap since the last re-predict means a new
 	# loose span (carry pin / whistle / fallback interpolation in between) —
@@ -1288,6 +1290,7 @@ func _run_prediction(start_pos: Vector3, start_vel: Vector3, age: float) -> void
 			if goalie_box_count > 0:
 				pred_goalie_hit = GoalieContactDetector.nearest_packed(
 						_gather_packed, goalie_box_count, _gather_parts, _gather_goalies,
+						_gather_velocities,
 						tick_prev, pos, radius, _predict_goalie_contact)
 			elif not GoalieContactDetector.native_available():
 				pred_goalie_hit = GoalieContactDetector.nearest(goalies, tick_prev, pos,
