@@ -324,20 +324,6 @@ func test_plays_the_high_post_when_the_carrier_works_the_oz_corner() -> void:
 			% str(d.target_position))
 
 
-func test_holds_the_high_post_over_the_flank_one_timer() -> void:
-	pending("The backdoor pre-arm IS now built on hole-model v3"
-			+ " (AIActionScoring.resolve_feed_keeper: cap-arced keeper, race"
-			+ " tightness as unsettledness, hands sunk by the slide — SUPPORT"
-			+ " candidates price flank seams merely-strong, not"
-			+ " phantom-certain), so the mechanical blocker is gone. What"
-			+ " remains is the doctrine call this test would pin: should the"
-			+ " 3v3 third man prefer the high-post STRUCTURE over a"
-			+ " merely-strong flank seam at all? NHL 3v3 flashes the third man"
-			+ " into seams — structure-first is a choice, not a fact. Playtest"
-			+ " call; pin the argmax once the doctrine is chosen. ARCHITECTURE"
-			+ " Known Issues.")
-
-
 func test_deep_trailer_tracks_the_rush_past_a_beaten_forechecker() -> void:
 	# Transition D→O: our carrier has broken out to the NZ and is rushing, but a
 	# beaten forechecker sits deep in OUR zone (near our net → tiny time-home).
