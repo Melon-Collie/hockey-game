@@ -158,4 +158,10 @@ func test_a_release_inside_the_confirmation_window_still_seals() -> void:
 	assert_true(released, "precondition: the beat armed and a shot was taken inside the window")
 	assert_true(committed,
 			"a shot in flight does not give him back the lateral race — seal anyway")
-	assert_lt(_ctrl._slide.dir, 0.0, "the seal goes the way the PUCK went")
+	# Read the seal's side off where the slide ENDS, for the reason spelled out
+	# on the sibling assertion above: `_slide.dir` is residual TRAVEL, not a post
+	# identity, and it disagrees with the seal's side whenever he commits from
+	# WIDER than the seal spot. Measured here, he stands at -0.163 and seals the
+	# same -0.154 post, so the last 9 mm travel back toward centre and `dir`
+	# reads +1 against a puck that went the other way.
+	assert_lt(_ctrl._slide.end_x, 0.0, "the seal goes the way the PUCK went")
