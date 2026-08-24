@@ -127,7 +127,19 @@ func test_every_angle_of_attack_produces_a_shot() -> void:
 
 # Cells of the pressured sweep below where an ANGLED pressurer takes the look
 # away entirely. Pinned exactly, not budgeted — see the note at the assertion.
-const PRESSURED_ANGLED_NO_SHOT_CELLS: Array = ["EASY@+25", "EASY@-25", "NORMAL@-25"]
+#
+# EASY@-25 LEFT THIS LIST when the goalie stopped low-passing the carrier's body
+# (Scripts/controllers/CLAUDE.md → "Filter the puck, not the man"). The bot now
+# releases there from 4.0 m instead of skating past, which is the direction this
+# test exists to protect — it was written for bots being paralysed under
+# pressure, not for them shooting too much.
+#
+# Read it as a MARGINAL cell rather than a settled one. It moved on a change to
+# where the keeper stands, so it sits near the compete's decision boundary and
+# will move again on the next one. The load-bearing halves are the HARD
+# assertion below (untouched, all seven angles) and the mirrored +25/-25 pair
+# still being taken away at the two lower tiers.
+const PRESSURED_ANGLED_NO_SHOT_CELLS: Array = ["EASY@+25", "NORMAL@-25"]
 
 
 func test_pressured_1v1_with_backchecker_still_shoots() -> void:
