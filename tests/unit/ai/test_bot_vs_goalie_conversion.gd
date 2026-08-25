@@ -35,7 +35,11 @@ const GOAL_Z: float = -GameRules.GOAL_LINE_Z
 # the same rushes.
 const ANGLES_DEG: Array[float] = [-75.0, -45.0, -25.0, 0.0, 25.0, 45.0, 75.0]
 const START_RADIUS: Array[float] = [8.0, 11.0, 14.0]
-const RUSH_SPEED: float = 5.0
+# Pace into the release, swept rather than fixed: how fast the carrier is moving
+# decides how much of the keeper's push is spent when the puck arrives, and it is
+# the axis the whole set-vs-moving split turns on. Three speeds also triples the
+# sample, which a 21-rush grid badly needed — one goal was 4.8 points.
+const RUSH_SPEEDS: Array[float] = [3.5, 5.0, 6.5]
 
 var _goalie: Node = null
 var _puck: Node = null
@@ -63,11 +67,12 @@ func _sweep(profile: BotSkillProfile) -> Array[Dictionary]:
 	var net := Vector3(0.0, 0.0, GOAL_Z)
 	for radius: float in START_RADIUS:
 		for deg: float in ANGLES_DEG:
-			var a: float = deg_to_rad(deg)
-			var start: Vector3 = net + Vector3(sin(a), 0.0, cos(a)) * radius
-			var vel: Vector3 = (net - start).normalized() * RUSH_SPEED
-			_ctrl.reset_to_crease()
-			out.append(_bg.run_rush(start, vel, profile))
+			for speed: float in RUSH_SPEEDS:
+				var a: float = deg_to_rad(deg)
+				var start: Vector3 = net + Vector3(sin(a), 0.0, cos(a)) * radius
+				var vel: Vector3 = (net - start).normalized() * speed
+				_ctrl.reset_to_crease()
+				out.append(_bg.run_rush(start, vel, profile))
 	return out
 
 
