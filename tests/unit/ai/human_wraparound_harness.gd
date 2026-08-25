@@ -144,7 +144,12 @@ func bait_commit(lane_x: float, start_dist: float, floor_dist: float,
 	_puck.set_carrier(_shooter)
 	var pos := Vector3(lane_x, 0.0, z)
 	var swing_s: float = 0.0
-	for _i: int in MAX_STEPS:
+	# Bounded by the DRIVE, not by the parent's shot-flight ceiling. MAX_STEPS is
+	# 2.5 s, which is 12.5 m at 5 m/s — so a breakaway started at the far blue
+	# line silently stopped short of the pull and reported a keeper who never
+	# committed, when what happened is that the carrier never arrived.
+	var ticks: int = int((start_dist - floor_dist) / (absf(speed_m_s) * DT)) + 4
+	for _i: int in maxi(ticks, 1):
 		_shooter.global_position = pos
 		_shooter.velocity = vel
 		if winding:

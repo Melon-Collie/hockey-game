@@ -275,6 +275,22 @@ Whenever the bots' shot model reads the same quantity as a goalie knob, the two
 must be synced (`AIActionScoring.set_goalie_profile`) or the bots score against a
 goalie they do not face. See the AI MIRROR note in `goalie_skill_profile.gd`.
 
+**On a breakaway walkaround the ladder runs backwards, and through one knob.**
+Measured as open aim points out of seven at a fixed release: EASY 0, NORMAL 2,
+HARD 4. `depth_base_m` reproduces the whole spread on its own — every read
+latency, reach speed, drop time, the five-hole, the poke, the toe-out and
+`depth_aggressive_m` move it by exactly nothing. So what the tier does to this
+play is not "a slower goalie is easier to beat", it is "a goalie who challenges
+the rush harder is easier to walk around".
+
+Pulling `depth_base_m` in is not free — it concedes the centre-lane rush from
+5 m, which is what challenge depth exists for — but the authored 1.30 is past
+the optimum of both together. That is evidence about what the COMMIT costs from
+the crease top, not a licence to retune 1.30: it is `CreaseRules.STRAIGHT_DEPTH`,
+a rink landmark, and replacing it with a sweep winner trades a model for a magic
+constant. `test_goalie_breakaway_ladder.gd` holds both halves so neither can be
+improved quietly at the other's expense.
+
 ## SkaterController
 
 `SkaterController` delegates to five `RefCounted` collaborators —
