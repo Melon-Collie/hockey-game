@@ -137,7 +137,7 @@ func run_rush(start: Vector3, vel: Vector3, profile: BotSkillProfile,
 			"loft": -1, "speed": 0.0, "intent": -1,
 			"stance": -1, "unset": 0.0, "radius": 0.0,
 			"rebound_goal": false, "rebound_held": false, "part": -1,
-			"decision": ""}
+			"decision": "", "goalie_x": 0.0, "lat_speed": 0.0, "shoot_ev": 0.0}
 	# LATCH THE DECISION, because `duel.step()` consumes the release inside the
 	# same call: by the time a new entry appears in `releases` the bot has
 	# already stopped carrying, its carrier role has moved on, and
@@ -151,6 +151,13 @@ func run_rush(start: Vector3, vel: Vector3, profile: BotSkillProfile,
 	var l_stance: int = -1
 	var l_unset: float = 0.0
 	var l_radius: float = 0.0
+	# The three the mode split needs. `l_gx` is where the keeper actually was;
+	# `l_lat` is how fast the carrier was crossing (a drive-in has almost none, a
+	# flyby is mostly lateral); `l_ev` is what the bot's OWN model said the shot
+	# was worth, so predicted and actual conversion can be compared directly.
+	var l_gx: float = 0.0
+	var l_lat: float = 0.0
+	var l_ev: float = 0.0
 	for _t: int in int(secs / DT):
 		var before: int = duel.releases.size()
 		duel.step()
@@ -166,6 +173,9 @@ func run_rush(start: Vector3, vel: Vector3, profile: BotSkillProfile,
 				l_stance = _ctrl.stance()
 				l_unset = _ctrl.unset_fraction()
 				l_radius = _ctrl.challenge_radius()
+				l_gx = _goalie.global_position.x
+				l_lat = s0.vel.x   # SIGNED — the mode split needs the direction
+				l_ev = s0.agent.debug_shoot_score
 			continue
 		# GATE ON THE DECISION, NOT ON `intended_action`. The carrier role's
 		# `intended_action` still reads CARRY on the tick it fires a shot — the
@@ -187,6 +197,9 @@ func run_rush(start: Vector3, vel: Vector3, profile: BotSkillProfile,
 		rec["stance"] = l_stance
 		rec["unset"] = l_unset
 		rec["radius"] = l_radius
+		rec["goalie_x"] = l_gx
+		rec["lat_speed"] = l_lat
+		rec["shoot_ev"] = l_ev
 		# Fire it through the real release path so the keeper's read resolves
 		# off the true shot, then march it against his posed collision.
 		var o: int

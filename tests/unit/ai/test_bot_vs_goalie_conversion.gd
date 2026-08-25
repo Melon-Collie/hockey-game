@@ -191,3 +191,76 @@ func test_report_the_goalie_state_the_bot_shoots_into() -> void:
 		gut.p("   %-20s shots %2d  goals %2d" % [k, v[0], v[1]])
 	gut.p("   stances at release: %s" % str(stances))
 	assert_true(true, "report")
+
+
+# ── THE THREE WAYS BOTS SCORE, split apart ──────────────────────────────────
+# From play, bots beat the keeper three ways, and only two of them are a goalie
+# problem:
+#
+#   1 DRIVE-IN   skate straight at him and release from an extreme point picked
+#                to clear his butterfly. Almost no lateral pace at the release.
+#   2 FLYBY      cross the face and shoot AHEAD of him, into the side he has not
+#                caught up to. This is the one a tracking trail pays for.
+#   3 PLAYMAKING beat him fair off a pass. Out of scope here — this file has one
+#                skater, so nothing it measures is mode 3.
+#
+# Split on the carrier's LATERAL pace at the release, which is what physically
+# separates 1 from 2, and report whether the aim LEADS the keeper — on the side
+# he is crossing toward, past where he actually is. A flyby that leads him is
+# mode 2 by construction.
+const FLYBY_LATERAL_M_S: float = 1.5
+
+
+func test_report_the_way_each_goal_was_scored() -> void:
+	var rows: Array[Dictionary] = _sweep(BotSkillProfile.hard())
+	var drive := [0, 0, 0.0]      # shots, goals, summed predicted EV
+	var flyby := [0, 0, 0.0]
+	var flyby_lead := [0, 0]      # of the flybys, those aimed AHEAD of him
+	var flyby_behind := [0, 0]
+	var margins: Array[float] = []
+	for r: Dictionary in rows:
+		if r["outcome"] == BotGoalie.NO_SHOT:
+			continue
+		var scored: bool = r["outcome"] == BotGoalie.GOAL
+		var lat: float = r["lat_speed"]
+		var bucket: Array = drive if absf(lat) < FLYBY_LATERAL_M_S else flyby
+		bucket[0] += 1
+		bucket[2] += r["shoot_ev"]
+		if scored:
+			bucket[1] += 1
+		if absf(lat) >= FLYBY_LATERAL_M_S:
+			# Did he aim into the side the carrier was crossing toward?
+			var leads: bool = signf(r["aim"].x - r["goalie_x"]) == signf(lat)
+			var b2: Array = flyby_lead if leads else flyby_behind
+			b2[0] += 1
+			if scored:
+				b2[1] += 1
+		margins.append(absf(r["aim"].x - r["goalie_x"]))
+	gut.p("── how the bot beat him (mode 3, playmaking, is out of scope here) ──")
+	_mode_line("1 DRIVE-IN (lateral < %.1f m/s)" % FLYBY_LATERAL_M_S, drive)
+	_mode_line("2 FLYBY    (lateral >= %.1f m/s)" % FLYBY_LATERAL_M_S, flyby)
+	gut.p("     of the flybys — aimed AHEAD of him: %d shots %d goals | behind: %d shots %d goals"
+			% [flyby_lead[0], flyby_lead[1], flyby_behind[0], flyby_behind[1]])
+	var m: float = 0.0
+	for v: float in margins:
+		m += v
+	gut.p("   mean |aim - goalie.x| at release: %.3f m over %d shots"
+			% [m / float(maxi(margins.size(), 1)), margins.size()])
+	assert_true(true, "report")
+
+
+# One mode's line, with the bot's own shoot score beside what actually happened.
+#
+# ⚠️ `debug_shoot_score` IS NOT A GOAL PROBABILITY. It is the ranking utility the
+# shoot/pass/carry compete argmaxes over, carrying `ACTION_HYSTERESIS_MARGIN_FRAC`
+# on top, and it reads well above the value seam's ~0.45 ceiling — so it cannot
+# be read as "the bot expected to score this often". What it IS good for is
+# ORDERING: if the bot scores one mode above another while the outcomes run the
+# other way, its ranking disagrees with the ice, and that disagreement is what
+# decides which shot it takes.
+func _mode_line(label: String, b: Array) -> void:
+	var shots: int = b[0]
+	gut.p("   %-32s shots %2d  goals %2d (%5.1f%%)   bot score %.3f (rank only)" % [
+			label, shots, b[1],
+			100.0 * float(b[1]) / float(maxi(shots, 1)),
+			b[2] / float(maxi(shots, 1))])
