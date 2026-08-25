@@ -49,6 +49,23 @@
 -- POST STANCES ARE NOT THE ANSWER HERE and should not be read as a gap: butterfly
 -- to RVH is not a transition, and these are not sharp-angle plays. The 10 of 1338
 -- shots meeting an RVH/VH posture is correct, not a missing feature.
+--
+-- ══ CORRECTION — THE RADIUS IS A PROXY, NOT A CAUSE ════════════════════════
+-- "Dropping WHILE aggressive is the defect" was the causal reading of the table
+-- above, and tests/unit/ai/test_human_wraparound.gd contradicts it. Held to a
+-- FIXED release point, baiting the commit further out leaves LESS net open, not
+-- more: measured 2/7 aim points open from a commit at 0.92 m against 3/7 from
+-- one at 0.27 m.
+--
+-- The mechanism the instrument offers: a committed slide spends 94% of its
+-- travel on DEPTH (0.08 m lateral against 1.20 m, ~0.48 s to settle), because
+-- the post-edge seal spot is only 0.154 m off centre — a butterfly pad reaches
+-- the post from there. So a keeper who commits EARLY has finished retreating by
+-- the time the shot arrives, and one who commits late has not.
+--
+-- Which makes `goalie_radius` while DOWN a measure of how recently he was
+-- disturbed rather than of how aggressive he was, and the bands above a
+-- ranking of shots by how far into his transit they came. Read them that way.
 
 with s as (
     select e.*,

@@ -178,6 +178,30 @@ puck genuinely moving across; *persistence* deliberately drops that term, becaus
 a puck that settles wide has not un-beaten him. Pulling it back inside the
 sealing reach is what un-commits him, and baiting that commit is the counter.
 
+### The committed slide is a retreat, and its budget is depth
+
+`_post_edge_seal_x` puts the body at `net_half_width − pad_edge · cos(slide
+rotation)` = **0.154 m** off centre, because a butterfly pad lies 0.84 m along
+the ice and the seal is the pad's outer EDGE on the post, not the body on it.
+So a slide's lateral leg is centimetres by construction; measured over a full
+beaten-wide seal from 0.78 m of challenge radius, it travels 0.08 m sideways and
+1.20 m in depth, and takes ~0.48 s to settle into an idle butterfly.
+
+Two things follow that are easy to get backwards:
+
+- **"He commits too far out" describes the symptom, not the cause.** A commit
+  baited earlier is beaten LESS, because the extra time is time he spends
+  finishing the retreat. What beats him is being caught mid-transit — which is
+  what the live log's `goalie_radius` column is really reporting when it
+  correlates with conversion.
+- **The seal answers a puck that keeps going, not one that comes back across.**
+  A carrier who cuts back into the space he left is met by a re-commit that
+  arrives; a carrier who continues to the side the puck was pulled to is not.
+
+`test_human_wraparound.gd` holds all of it, and the same file records the two
+things the instrument does NOT reproduce (it starts from a fully settled keeper,
+and it never reaches the 1.30–1.60 m radius band the live log holds).
+
 **The goalie can be WRONG, deterministically.** His committed belief about where
 a shot is going is the aim he read `read_lag` seconds ago, sampled from the
 shooter's published `predicted_shot_velocity`, converging onto the true line over
