@@ -17,6 +17,43 @@
 --
 -- steam_id 0 is a bot. Same normalisation, filters and bands as
 -- goalie_shot_events_audit.sql.
+--
+-- ══ WHAT IT MEASURED (1338 faced shots: 1008 bot, 330 human) ═══════════════
+-- The split overturns three readings that were drawn from pooled rows. All
+-- three turned out to be one human's tactic, not a property of the keeper.
+--
+--   THE ANGLE INVERSION IS HUMAN-ONLY. Bots are FLAT across the angle axis —
+--   69.0 / 66.0 / 63.2 / 69.7 save percentage from centre to 60+ deg, no trend.
+--   The human runs 74.1 / 57.3 / 35.2 / 23.7. Pooled, that reads as "danger
+--   rises with angle in real games"; split, the bot half shows nothing.
+--
+--   COILING IS A HUMAN EXPLOIT. It is 21.5% of human shots at 11.3% save
+--   percentage (63 goals on 71) against 4.5% of bot shots at 51.1%. So it is
+--   both mostly his shots AND a rate only he achieves — baiting the commit and
+--   shooting into it is a skill the bots do not have.
+--
+--   THE DOORSTEP IS HIS GAME, NOT THE GAME. 60.3% of human shots come from
+--   inside 3 m and convert 68.8%. Bots take 22.7% of theirs there and convert
+--   39.7%. Section 6 isolates it: a DOWN keeper inside 3 m is 46.7% of all
+--   human shots at 24.0% save percentage.
+--
+-- ══ WHAT SURVIVES THE SPLIT, and is therefore about the goalie ═════════════
+--   BEING UNSET COSTS HIM AGAINST BOTS TOO: 78.2% set against 51.9% in motion,
+--   over 42.3% of bot shots. A 26-point gap on the largest bucket, with no
+--   human in it.
+--
+--   THE DOWN STANCES ARE GENUINELY WEAK FOR BOTS: BUTTERFLY 50.0%, RECOVERING
+--   37.3%, SLIDING 26.5%, against READY at 76.2%.
+--
+--   AND THE BOT'S WORST RANGE IS NOT THE DOORSTEP: 3-5 m reads 53.3% and 5-7 m
+--   55.7%, both below 0-3 m at 60.3%. The pooled view hid this because the
+--   human's doorstep shots dominate that band.
+--
+-- ══ SO THERE ARE TWO SEPARATE PROBLEMS ════════════════════════════════════
+-- The human beats him by forcing a commit in tight and finishing around it.
+-- The bots beat him by catching him moving at mid-range. They need different
+-- fixes and different instruments; tests/unit/ai/test_bot_vs_goalie_conversion
+-- covers the bot half only and there is no instrument for the human half.
 
 with s as (
     select e.*,
