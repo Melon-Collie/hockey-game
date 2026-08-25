@@ -305,6 +305,47 @@ func test_report_the_flank_release_at_a_down_keeper() -> void:
 		if r["outcome"] == BotGoalie.GOAL:
 			cells[k][1] += 1
 		cells[k][2] += off
+	# IS HE BETTER PLACED WHEN HE GOES DOWN, or simply down less often? The
+	# butterfly cannot translate once committed, so what decides a flank release
+	# against a down keeper is where his pads were at the drop. Measured as the
+	# release's lateral gap from him against the pad edge he actually presents
+	# (pad_local_offset + butterfly_pad_half_width): inside it he covers the
+	# release, outside it the net is open however square he is.
+	var edge: float = _ctrl.pad_local_offset + _ctrl.butterfly_pad_half_width
+	var gap_sum: float = 0.0
+	var gap_n: int = 0
+	var outside: int = 0
+	var outside_goals: int = 0
+	var inside_goals: int = 0
+	var inside_n: int = 0
+	for r: Dictionary in rows:
+		if r["outcome"] == BotGoalie.NO_SHOT or r["goalie_pos"] == Vector3.INF:
+			continue
+		var down2: bool = r["stance"] == GoalieStateMachine.State.BUTTERFLY \
+				or r["stance"] == GoalieStateMachine.State.SLIDING \
+				or r["stance"] == GoalieStateMachine.State.COILING
+		if not down2:
+			continue
+		var gap: float = absf(r["release"].x - r["goalie_x"])
+		gap_sum += gap
+		gap_n += 1
+		if gap > edge:
+			outside += 1
+			if r["outcome"] == BotGoalie.GOAL:
+				outside_goals += 1
+		else:
+			inside_n += 1
+			if r["outcome"] == BotGoalie.GOAL:
+				inside_goals += 1
+	gut.p("── against a DOWN keeper: where did the release sit vs his pad edge (%.2f m)? ──"
+			% edge)
+	gut.p("   mean |release.x - goalie.x| %.3f m over %d shots" % [
+			gap_sum / float(maxi(gap_n, 1)), gap_n])
+	gut.p("   OUTSIDE the pad edge: %2d shots %2d goals (%5.1f%%) | INSIDE: %2d shots %2d goals (%5.1f%%)"
+			% [outside, outside_goals,
+					100.0 * float(outside_goals) / float(maxi(outside, 1)),
+					inside_n, inside_goals,
+					100.0 * float(inside_goals) / float(maxi(inside_n, 1))])
 	gut.p("── mode 1: the release-offset sweep, by what it produced ──")
 	var keys: Array = cells.keys()
 	keys.sort()
