@@ -191,3 +191,79 @@ func test_he_is_stable_centred_and_stable_far_away() -> void:
 	gut.p("wide at 6.0 m -> %d coil entries, %.2f s on his feet"
 			% [far["coils"], far["upright_s"]])
 	assert_eq(far["coils"], 0, "and so is one outside the verdict's threat range")
+
+
+# ── IS HE DOWN BECAUSE HE CANNOT REACT, OR BECAUSE HE THINKS HE IS BEATEN? ────
+# The question that decides what the fix is for, and `should_hold_seal` answers
+# it: three ways to say "stay down", and only one of them fires.
+#
+#   answer_fraction        1.00   a COMPLETE reaction fits in the time available
+#   hold_seal, as built    true
+#   hold_seal, latch off   false
+#
+# So he can react perfectly well. He is on the ice because `lateral_race_lost`
+# short-circuits the race before the race is ever run — and that flag is the one
+# stuck true by the arithmetic above. Every other term says get up.
+#
+# Which is also what a goalie is taught to do here: a carrier 3.2 m out with the
+# puck under control and no shot released is a situation you play from your feet,
+# because down you cannot cut the angle, cannot move laterally except by
+# committing, and cannot answer a deke. The doorstep exception — where standing
+# up opens the five-hole exactly as the puck arrives — is about a stick length,
+# not three metres.
+func test_he_is_down_because_of_the_latch_and_not_because_he_cannot_react() -> void:
+	_hold(2.0, 2.5, 2.0)
+	var s: GoalieSaveSelection.Situation = _ctrl._build_save_situation()
+	var stand_up: float = _ctrl.recovery_duration
+	var fraction: float = GoalieSaveSelection.answer_fraction(s)
+	var with_latch: bool = GoalieSaveSelection.should_hold_seal(s, stand_up)
+	s.lateral_race_lost = false
+	var without_latch: bool = GoalieSaveSelection.should_hold_seal(s, stand_up)
+	gut.p("answer_fraction %.2f | hold_seal with the latch %s, without it %s"
+			% [fraction, with_latch, without_latch])
+	assert_almost_eq(fraction, 1.0, 0.001,
+			"a complete reaction fits — reacting is not what he is short of")
+	assert_true(with_latch, "as built he holds the seal")
+	assert_false(without_latch,
+			"and the ONLY reason is the stuck verdict: every other term says get up")
+
+
+# ── THE ONSET CAN ARM WITH NO PUCK MOVEMENT AT ALL ───────────────────────────
+# Park a carrier wide and never move the puck a millimetre: he still arms, and
+# with the arithmetic above he is then latched forever. So the loop does not even
+# need the pull that provokes it in the tests above.
+#
+# The source is the seeding of `_prev_puck_position`. `_puck_velocity_est` is a
+# per-tick finite difference against it, and it is the only thing gating the
+# onset (`beaten_wide_min_lateral_speed`) — so a first tick that differences the
+# puck against a stale point reports a lateral speed nothing produced.
+#
+# Recorded as its own defect because it has a life outside this bug: `_prev_puck_
+# position` is seeded from `puck.global_position` in `setup()` but from
+# `_tracked_threat_position` in `reset_to_crease()`, which is a different
+# quantity, and `reset_to_crease` runs at every phase reset.
+func test_a_wide_carrier_arms_him_without_the_puck_ever_moving() -> void:
+	_ctrl.reset_to_crease()
+	_shooter.current_shot_state = SkaterStateMachine.State.SKATING_WITH_PUCK
+	_shooter.predicted_shot_velocity = Vector3.ZERO
+	_shooter.global_position = Vector3(2.0, 0.0, GOAL_Z + 2.5)
+	_shooter.velocity = Vector3.ZERO
+	_puck.set_carrier(_shooter)
+	_puck.global_position = _shooter.global_position
+	_puck.linear_velocity = Vector3.ZERO
+	var peak_vx: float = 0.0
+	var armed_at: float = INF
+	for i: int in 720:
+		_puck.global_position = _shooter.global_position
+		_puck.linear_velocity = Vector3.ZERO
+		_ctrl._physics_process(DT)
+		peak_vx = maxf(peak_vx, absf(_ctrl._puck_velocity_est.x))
+		if _ctrl._beaten_wide_armed and is_inf(armed_at):
+			armed_at = float(i) * DT
+	gut.p("puck never moved | peak read lateral speed %.2f m/s | armed at %.3f s | committed %s | upright %s"
+			% [peak_vx, armed_at, _ctrl._beaten_wide_committed,
+			_ctrl._sm.is_upright()])
+	assert_gt(peak_vx, _ctrl.beaten_wide_min_lateral_speed,
+			"CHARACTERISATION OF A DEFECT: a stationary puck reads as moving fast enough to arm the onset")
+	assert_true(_ctrl._beaten_wide_committed,
+			"and with no way to clear the verdict, that one tick latches him permanently")
