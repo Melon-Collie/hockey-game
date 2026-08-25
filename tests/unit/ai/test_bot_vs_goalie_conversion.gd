@@ -264,3 +264,53 @@ func _mode_line(label: String, b: Array) -> void:
 			label, shots, b[1],
 			100.0 * float(b[1]) / float(maxi(shots, 1)),
 			b[2] / float(maxi(shots, 1))])
+
+
+# ── MODE 1, measured off the bot's OWN release-offset sweep ─────────────────
+# The carrier scores three release points (`RELEASE_SAMPLE_FRACS` = no
+# relocation / full forehand reach / full backhand reach) and commits the best.
+# The mode play produces is the flanking pair: the bot arrives on top of a keeper
+# who is already DOWN, and the forehand and backhand release points sit on
+# OPPOSITE sides of his butterfly, so one of them is outside his coverage and the
+# net is open however he is squared.
+#
+# So the classifier is the bot's own decision rather than a scripted approach:
+# a FLANK release is one it relocated the puck for, and mode 1 is a flank
+# release taken point-blank at a keeper who is down.
+const FLANK_OFFSET_M: float = 0.15      # relocated at all, vs the straight release
+const POINT_BLANK_M: float = 2.0        # release-to-keeper distance
+
+
+func test_report_the_flank_release_at_a_down_keeper() -> void:
+	var rows: Array[Dictionary] = _sweep(BotSkillProfile.hard())
+	var cells: Dictionary = {}
+	for r: Dictionary in rows:
+		if r["outcome"] == BotGoalie.NO_SHOT:
+			continue
+		var off: float = Vector2(r["release_offset"].x, r["release_offset"].z).length()
+		var flank: bool = off >= FLANK_OFFSET_M
+		var gp: Vector3 = r["goalie_pos"]
+		var close: bool = gp != Vector3.INF \
+				and Vector2(r["release"].x - gp.x, r["release"].z - gp.z).length() <= POINT_BLANK_M
+		var down: bool = r["stance"] == GoalieStateMachine.State.BUTTERFLY \
+				or r["stance"] == GoalieStateMachine.State.SLIDING \
+				or r["stance"] == GoalieStateMachine.State.COILING
+		var k: String = "%s / %s / %s" % [
+				"FLANK " if flank else "STRAIGHT",
+				"point-blank" if close else "off      ",
+				"keeper DOWN" if down else "keeper up  "]
+		if not cells.has(k):
+			cells[k] = [0, 0, 0.0]
+		cells[k][0] += 1
+		if r["outcome"] == BotGoalie.GOAL:
+			cells[k][1] += 1
+		cells[k][2] += off
+	gut.p("── mode 1: the release-offset sweep, by what it produced ──")
+	var keys: Array = cells.keys()
+	keys.sort()
+	for k: String in keys:
+		var v: Array = cells[k]
+		gut.p("   %-42s shots %2d  goals %2d (%5.1f%%)  mean offset %.2f m" % [
+				k, v[0], v[1], 100.0 * float(v[1]) / float(maxi(v[0], 1)),
+				v[2] / float(maxi(v[0], 1))])
+	assert_true(true, "report")

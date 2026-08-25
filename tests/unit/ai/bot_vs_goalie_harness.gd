@@ -137,7 +137,9 @@ func run_rush(start: Vector3, vel: Vector3, profile: BotSkillProfile,
 			"loft": -1, "speed": 0.0, "intent": -1,
 			"stance": -1, "unset": 0.0, "radius": 0.0,
 			"rebound_goal": false, "rebound_held": false, "part": -1,
-			"decision": "", "goalie_x": 0.0, "lat_speed": 0.0, "shoot_ev": 0.0}
+			"decision": "", "goalie_x": 0.0, "lat_speed": 0.0, "shoot_ev": 0.0,
+			"body": Vector3.INF, "goalie_pos": Vector3.INF,
+			"release_offset": Vector3.ZERO}
 	# LATCH THE DECISION, because `duel.step()` consumes the release inside the
 	# same call: by the time a new entry appears in `releases` the bot has
 	# already stopped carrying, its carrier role has moved on, and
@@ -158,6 +160,20 @@ func run_rush(start: Vector3, vel: Vector3, profile: BotSkillProfile,
 	var l_gx: float = 0.0
 	var l_lat: float = 0.0
 	var l_ev: float = 0.0
+	# FIRE FROM THE POINT THE BOT SCORED, NOT FROM ITS BODY.
+	# `RELEASE_SAMPLE_FRACS` is [0.0, 1.0, -1.0] — no relocation, full FOREHAND
+	# reach, full BACKHAND reach — and the carrier commits whichever of the three
+	# scored best, carrying the puck there through the wind-up. At point-blank the
+	# two flanking samples sit on OPPOSITE sides of a down keeper, so one of them
+	# is routinely outside his butterfly coverage while the body is still square
+	# in front of him. Firing from the body erases the entire mechanism.
+	#
+	# `_shot_sample_release` is that winning point and `shot_release_offset` is
+	# the relocation it represents; the offset being non-zero is what marks a
+	# FLANK release as opposed to a straight one.
+	var l_blade: Vector3 = start
+	var l_gpos: Vector3 = Vector3.INF
+	var l_offset: Vector3 = Vector3.ZERO
 	for _t: int in int(secs / DT):
 		var before: int = duel.releases.size()
 		duel.step()
@@ -176,6 +192,10 @@ func run_rush(start: Vector3, vel: Vector3, profile: BotSkillProfile,
 				l_gx = _goalie.global_position.x
 				l_lat = s0.vel.x   # SIGNED — the mode split needs the direction
 				l_ev = s0.agent.debug_shoot_score
+				l_blade = c0._shot_sample_release \
+						if c0._shot_sample_release != Vector3.INF else s0.blade
+				l_gpos = _goalie.global_position
+				l_offset = c0.shot_release_offset
 			continue
 		# GATE ON THE DECISION, NOT ON `intended_action`. The carrier role's
 		# `intended_action` still reads CARRY on the tick it fires a shot — the
@@ -200,15 +220,19 @@ func run_rush(start: Vector3, vel: Vector3, profile: BotSkillProfile,
 		rec["goalie_x"] = l_gx
 		rec["lat_speed"] = l_lat
 		rec["shoot_ev"] = l_ev
+		rec["body"] = l_pos
+		rec["goalie_pos"] = l_gpos
+		rec["release_offset"] = l_offset
+		rec["release"] = l_blade
 		# Fire it through the real release path so the keeper's read resolves
 		# off the true shot, then march it against his posed collision.
 		var o: int
 		if track_rebound:
-			o = _h.fire_tracking_rebound(l_pos, l_aim, l_loft, l_speed, 0.0)
+			o = _h.fire_tracking_rebound(l_blade, l_aim, l_loft, l_speed, 0.0)
 			rec["rebound_goal"] = _h.rebound_goal
 			rec["rebound_held"] = _h.rebound_held or _h.rebound_caught
 		else:
-			o = _h.fire_release_at(l_pos, l_aim, l_loft, l_speed, 0.0)
+			o = _h.fire_release_at(l_blade, l_aim, l_loft, l_speed, 0.0)
 		rec["outcome"] = o
 		rec["part"] = _h.last_part
 		return rec
@@ -234,5 +258,5 @@ func _publish_windup(duel: RefCounted) -> void:
 	_shooter.current_shot_state = SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK \
 			if sk.input.slap_held else SkaterStateMachine.State.WRISTER_AIM
 	_shooter.predicted_shot_velocity = _h.shot_velocity_at(
-			sk.pos, car.shot_aim_point, car.shot_loft_level,
+			sk.blade, car.shot_aim_point, car.shot_loft_level,
 			car._shot_sample_speed, 0.0)
