@@ -22,6 +22,33 @@
 -- is real rather than imagined.
 --
 -- Same normalisation and filters as goalie_shot_events_audit.sql.
+--
+-- ══ WHAT IT MEASURED — the depth is fine, the COMMIT is not ═══════════════
+-- Sections 3 and 4 are the same radius cut while DOWN and while UP, inside 5 m,
+-- and they separate cleanly.
+--
+--   radius band          bot DOWN  bot UP  | human DOWN  human UP
+--   <0.55                   60.0%   78.8%  |     60.5%     58.6%
+--   0.55-0.90               41.8%   67.7%  |     24.1%     50.0%
+--   0.90-1.30               32.7%   63.0%  |     18.6%     50.0%
+--   1.30-1.60               24.0%   69.6%  |      3.8%      (n=4)
+--
+-- Standing, challenge depth costs him almost nothing: bot save percentage falls
+-- 9 points across the whole range and the crease-top band is no worse than the
+-- middle. Down, it collapses — 36 points for bots and 57 for the human, ending
+-- at 25 goals on 26 shots.
+--
+-- So aggression is not the defect. Dropping WHILE aggressive is. A keeper who
+-- commits at 1.3-1.6 m has left more than a metre of ice behind him and cannot
+-- translate or rotate to cover it, and 60% of the human's goals against a down
+-- keeper inside 5 m come with him at 0.90 m or further out.
+--
+-- He also drops further out against the human than the bots (mean radius 0.891
+-- against 0.772), which is what baiting the commit produces.
+--
+-- POST STANCES ARE NOT THE ANSWER HERE and should not be read as a gap: butterfly
+-- to RVH is not a transition, and these are not sharp-angle plays. The 10 of 1338
+-- shots meeting an RVH/VH posture is correct, not a missing feature.
 
 with s as (
     select e.*,
