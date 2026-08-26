@@ -228,42 +228,59 @@ func test_he_is_down_because_of_the_latch_and_not_because_he_cannot_react() -> v
 			"and the ONLY reason is the stuck verdict: every other term says get up")
 
 
-# ── THE ONSET CAN ARM WITH NO PUCK MOVEMENT AT ALL ───────────────────────────
-# Park a carrier wide and never move the puck a millimetre: he still arms, and
-# with the arithmetic above he is then latched forever. So the loop does not even
-# need the pull that provokes it in the tests above.
+# ── ONE BAD TICK IS PERMANENT ────────────────────────────────────────────────
+# The severity multiplier on everything above. `_puck_velocity_est` is a raw
+# one-tick finite difference, clamped only at `puck.max_speed` (38 m/s) — and the
+# onset gate is `beaten_wide_min_lateral_speed`, 2.5 m/s. The clamp sits fifteen
+# times above the gate, so for THIS consumer it protects nothing.
 #
-# The source is the seeding of `_prev_puck_position`. `_puck_velocity_est` is a
-# per-tick finite difference against it, and it is the only thing gating the
-# onset (`beaten_wide_min_lateral_speed`) — so a first tick that differences the
-# puck against a stale point reports a lateral speed nothing produced.
+# At 120 Hz, 2.5 m/s is 2.1 cm of puck travel in a tick. The clamp's own comment
+# names the discontinuities that clear that trivially — a reception, a
+# deflection, a reconcile correction. Any one of them arms the verdict, and
+# because the verdict can never clear, one tick puts him on the ice for the rest
+# of the possession.
 #
-# Recorded as its own defect because it has a life outside this bug: `_prev_puck_
-# position` is seeded from `puck.global_position` in `setup()` but from
-# `_tracked_threat_position` in `reset_to_crease()`, which is a different
-# quantity, and `reset_to_crease` runs at every phase reset.
-func test_a_wide_carrier_arms_him_without_the_puck_ever_moving() -> void:
-	_ctrl.reset_to_crease()
+# Demonstrated with a 3 cm jump, which is smaller than the puck itself: the
+# carrier is parked and never skates, the puck moves once, and he is still down
+# eight seconds later.
+func test_one_tick_of_phantom_puck_velocity_latches_him_permanently() -> void:
+	var lane: float = 2.0
+	var dist: float = 2.5
+	# PLACE THE PUCK BEFORE RESETTING HIM. `reset_to_crease` seeds
+	# `_prev_puck_position` from where the puck is at that instant, and
+	# `_puck_velocity_est` is a finite difference against it — so moving the puck
+	# afterwards hands him one tick of enormous phantom velocity and arms the
+	# verdict before the test has begun. (The live faceoff gets this right:
+	# PhaseCoordinator._enter_faceoff_prep calls `puck.reset(dot)` first.) Two
+	# earlier versions of this test tripped over it and blamed the engine.
 	_shooter.current_shot_state = SkaterStateMachine.State.SKATING_WITH_PUCK
 	_shooter.predicted_shot_velocity = Vector3.ZERO
-	_shooter.global_position = Vector3(2.0, 0.0, GOAL_Z + 2.5)
+	_shooter.global_position = Vector3(lane, 0.0, GOAL_Z + dist)
 	_shooter.velocity = Vector3.ZERO
 	_puck.set_carrier(_shooter)
 	_puck.global_position = _shooter.global_position
-	_puck.linear_velocity = Vector3.ZERO
-	var peak_vx: float = 0.0
-	var armed_at: float = INF
-	for i: int in 720:
+	_ctrl.reset_to_crease()
+	# Settle completely: square, on his feet, tracking converged, nothing armed.
+	for _i: int in 360:
 		_puck.global_position = _shooter.global_position
 		_puck.linear_velocity = Vector3.ZERO
 		_ctrl._physics_process(DT)
-		peak_vx = maxf(peak_vx, absf(_ctrl._puck_velocity_est.x))
-		if _ctrl._beaten_wide_armed and is_inf(armed_at):
-			armed_at = float(i) * DT
-	gut.p("puck never moved | peak read lateral speed %.2f m/s | armed at %.3f s | committed %s | upright %s"
-			% [peak_vx, armed_at, _ctrl._beaten_wide_committed,
-			_ctrl._sm.is_upright()])
-	assert_gt(peak_vx, _ctrl.beaten_wide_min_lateral_speed,
-			"CHARACTERISATION OF A DEFECT: a stationary puck reads as moving fast enough to arm the onset")
+	assert_false(_ctrl._beaten_wide_committed, "precondition: settled and not armed")
+	assert_true(_ctrl._sm.is_upright(), "precondition: on his feet")
+	# ONE tick, 3 cm outward — 3.6 m/s of read lateral speed, against a 2.5 gate.
+	_puck.global_position = _shooter.global_position + Vector3(0.03, 0.0, 0.0)
+	_ctrl._physics_process(DT)
+	var spike: float = absf(_ctrl._puck_velocity_est.x)
+	# ...and the puck is back where it was, and never moves again.
+	for _i: int in 960:
+		_puck.global_position = _shooter.global_position
+		_puck.linear_velocity = Vector3.ZERO
+		_ctrl._physics_process(DT)
+	gut.p("one 3 cm jump read as %.2f m/s (gate %.2f) | 8 s later: committed %s, upright %s"
+			% [spike, _ctrl.beaten_wide_min_lateral_speed,
+			_ctrl._beaten_wide_committed, _ctrl._sm.is_upright()])
+	assert_gt(spike, _ctrl.beaten_wide_min_lateral_speed,
+			"3 cm in one tick clears the onset gate with room to spare")
 	assert_true(_ctrl._beaten_wide_committed,
-			"and with no way to clear the verdict, that one tick latches him permanently")
+			"CHARACTERISATION OF A DEFECT: one tick of discontinuity latches the verdict for good")
+	assert_false(_ctrl._sm.is_upright(), "and he never gets back on his feet")
