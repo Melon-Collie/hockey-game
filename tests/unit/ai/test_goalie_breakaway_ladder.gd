@@ -4,23 +4,28 @@ extends GutTest
 # This project's own player scores overwhelmingly on breakaways, and the move is
 # always the same one `test_human_wraparound` models: drive at him, pull the puck
 # across to commit him, walk around him, tuck it. So the ladder that matters is
-# the ladder ON THAT MOVE, and it does not go the way the tiers do.
+# the ladder ON THAT MOVE, and there ISN'T one:
 #
-#   EASY   0 of 7 aim points open
+#   EASY   2 of 7 aim points open
 #   NORMAL 2 of 7
-#   HARD   4 of 7
+#   HARD   2 of 7
+#
+# Flat. It used to run backwards — 0 / 2 / 4, with HARD the most beatable tier —
+# and fixing the beaten-wide verdict so a sealed goalie stops reading as beaten
+# took HARD from 4 to 2 and lifted EASY from 0 to 2. So the inversion is gone and
+# what is left is a tier ladder this play cannot feel at all.
 #
 # Every measurement below fires the same seven-point aim fan at the same release
 # point after the same bait, so the count IS how much net is open — not whether
 # a shooter who already knows the answer can find it.
 #
 # ── AND IT IS ONE KNOB ──────────────────────────────────────────────────────
-# `depth_base_m` alone reproduces the whole spread. The other twelve tier levers
-# — every read latency, every reach speed, the drop time, the five-hole, the
-# poke, the toe-out — change NOTHING on this play, to the shot. So the tier
-# ladder here is not "a slower goalie is easier to beat", it is "a goalie who
-# challenges the rush harder is easier to walk around", which is the ladder
-# running backwards through its own primary lever.
+# `depth_base_m` is the only tier lever this play can feel at all. The other
+# twelve — every read latency, every reach speed, the drop time, the five-hole,
+# the poke, the toe-out — change NOTHING here, to the shot. So a tier ladder on
+# the walkaround can only ever be a depth ladder, and depth cuts the other way:
+# a goalie who challenges the rush harder is easier to walk around. That is why
+# separating the tiers here is not a matter of turning the existing knobs.
 #
 # ── THE TRADE IS REAL, AND IT HAS A MINIMUM ────────────────────────────────
 # Pulling `depth_base_m` in is not free — it concedes the centre-lane rush shot
@@ -28,13 +33,14 @@ extends GutTest
 # points, walkaround plus a 6-cell rush grid (49 shots in total per row):
 #
 #   depth_base   walkaround   rush   total
-#   1.30 (HARD)      4         7      11
+#   1.30 (HARD)      2         7       9
 #   1.00             2         6       8
 #   0.80             2         8      10
-#   0.60 (EASY)      0        11      11
+#   0.60 (EASY)      1        11      12
 #
-# So the authored 1.30 is past the optimum on both counts: it gives up the
-# walkaround and buys nothing on the rush over 1.00.
+# The authored 1.30 is still a point off the optimum, but the gap has closed from
+# 11-vs-8 to 9-vs-8 — most of what challenge depth appeared to cost on this play
+# was the stuck verdict, not the depth.
 #
 # ⚠️ THIS IS NOT A LICENCE TO SET IT TO 1.00. 1.30 is not a tuning number — it is
 # `CreaseRules.STRAIGHT_DEPTH`, heels at the crease top, the taught B position.
@@ -109,10 +115,12 @@ func _rush_open(over: Dictionary, lane: float, dist: float) -> int:
 	return open
 
 
-# ── 1. THE LADDER RUNS BACKWARDS ─────────────────────────────────────────────
-# Pinned as the defect it is. When the ladder is fixed this test fails, and the
-# correct response is to flip the assertion — not to loosen it.
-func test_the_difficulty_ladder_is_inverted_on_a_walkaround() -> void:
+# ── 1. THE LADDER MUST NOT RUN BACKWARDS ─────────────────────────────────────
+# The floor this keeps: a HARD keeper never leaks MORE net on a walkaround than
+# an EASY one. It is deliberately not an ordering assertion, because the tiers do
+# not currently separate here at all — see the header. Making them separate is
+# open work, and this is what stops it regressing past flat while that is decided.
+func test_the_difficulty_ladder_is_not_inverted_on_a_walkaround() -> void:
 	var open: Dictionary = {}
 	for tier: int in [GoalieSkillProfile.Difficulty.EASY,
 			GoalieSkillProfile.Difficulty.NORMAL,
@@ -129,9 +137,9 @@ func test_the_difficulty_ladder_is_inverted_on_a_walkaround() -> void:
 			"five_hole_base_m": p.five_hole_base_m,
 		})
 		gut.p("tier %d -> %d of %d aim points open" % [tier, open[tier], AIM_X.size()])
-	assert_gt(open[GoalieSkillProfile.Difficulty.HARD] as int,
+	assert_lte(open[GoalieSkillProfile.Difficulty.HARD] as int,
 			open[GoalieSkillProfile.Difficulty.EASY] as int,
-			"HARD leaks MORE net on a walkaround than EASY — the ladder is backwards here")
+			"a HARD keeper must never leak more net on a walkaround than an EASY one")
 
 
 # ── 2. AND IT IS ONE KNOB ────────────────────────────────────────────────────

@@ -2062,6 +2062,14 @@ func _advance_beaten_wide(delta: float) -> void:
 	# anything. Bringing the puck back inside the sealing reach, or out of the
 	# in-tight zone, is what disarms him — which is the cut-back counter, and the
 	# only thing the window was ever protecting against.
+	# ARRIVAL FOLLOWS THE STANCE; THE POINT OF NO RETURN DOES NOT. Judging a
+	# SEALED goalie's arrival on his standing reach is what made the verdict
+	# permanent — he lands in a seal his own test still calls 0.34 m short. But
+	# widening `reach_half_width` to fix it also moves the edge that decides he
+	# was beaten in the first place, and measured, that alone cost 3 bot goals in
+	# 63 by declining seals he used to push into. Two questions, two numbers.
+	_beaten_wide_cfg.cover_radius = _seal_cover_radius() if _sm.is_down() \
+			else pad_local_offset
 	if _beaten_wide_armed and _beaten_wide_holds():
 		_beaten_wide_confirm_timer += delta
 	elif _is_beaten_wide():
@@ -3005,7 +3013,18 @@ func _update_position(delta: float) -> void:
 			# straddle behind the goal line. Floor the committed depth itself (not
 			# just the final Z) so the slide-commit start depth stays consistent
 			# with the rendered position.
-			_current_depth = maxf(_current_depth, min_challenge_depth)
+			#
+			# NOT WHILE HE IS SEALING. `min_challenge_depth` already exempts
+			# COILING and SLIDING for exactly this reason — sitting on the line is
+			# the correct play on a wrap — but those are the states that get him
+			# TO the seal, and this is the one he sits in once he arrives. Flooring
+			# him here lifts him straight back off a `post_seal_depth` the slide
+			# just paid half a second to reach, which re-opens the beat he had
+			# closed and commits the same slide again: the 4 Hz loop in
+			# `test_goalie_held_puck_slide_loop.gd`. The floor returns the moment
+			# the verdict clears.
+			if not _beaten_wide_committed:
+				_current_depth = maxf(_current_depth, min_challenge_depth)
 			_update_butterfly_five_hole(delta)
 			_try_commit_slide(delta)
 			# Dropping does not cancel travel: a butterfly entered with lateral
@@ -3402,6 +3421,25 @@ func _coil_end_xz(side: float, slide_rot: float) -> Vector2:
 	# becomes a +direction_sign delta in depth.
 	var depth_shift: float = shift_z * _direction_sign
 	return Vector2(_current_x + shift_x, _current_depth + depth_shift)
+
+
+# What a SEALED goalie already covers: the distance from the seal spot to the
+# tuck point he is sealing.
+#
+# It is derived rather than picked because it has to agree EXACTLY with where the
+# seal sends him. `_post_edge_seal_x` parks him `pad_edge * cos(rot)` inside the
+# post, and `post_seal_depth` off the line — so the straight line from there to
+# the post spot is what his pad spans on arrival, and using it makes "have I
+# arrived" and "am I sealed" the same question by construction.
+#
+# Getting the pair even slightly apart is not a rounding matter: the arrival test
+# is the only thing that can clear a beaten-wide verdict, so a reach 7 mm short
+# of the seal is a goalie who is permanently beaten. Judging him on his STANDING
+# reach, which is what this replaces, left him 0.34 m short forever.
+func _seal_cover_radius() -> float:
+	var lateral: float = (pad_local_offset + butterfly_pad_half_width) \
+			* cos(deg_to_rad(slide_max_rotation_deg))
+	return Vector2(lateral, _slide.post_seal_depth).length()
 
 
 # Compute the goalie body X that puts the leading pad's outer edge ON the post
