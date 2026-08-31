@@ -5,11 +5,11 @@ extends GutTest
 # the carrier is low-passed, and `_tracked_threat_position` is what `_update_depth`
 # and the arc target consume. See "Filter the puck, not the man".
 #
-# Four stance gates bypass it and read `puck.global_position` directly —
-# `_is_ready_situation`, `_is_puck_in_defensive_zone`, `_is_threat_pressing`, and
-# `_should_play_rim`. So a dangle the POSITION deliberately smooths can still move
-# the STANCE, and each of those gates is a threshold with a real play sitting on
-# it: the READY zone edge, the RVH/VH angle, and the recovery proximity stay.
+# Several stance gates bypass it and read `puck.global_position` directly —
+# `_is_ready_situation`, `_is_puck_in_defensive_zone`, `_should_play_rim`, and
+# `_build_save_situation`'s own puck read. So a dangle the POSITION deliberately
+# smooths can still move the STANCE, and each of those gates has a real play
+# sitting on it: the READY zone edge, the RVH/VH angle, the block decision.
 #
 # Measured with a 0.35 m, 2 Hz stickhandle — a carry, not a deke — against the
 # same carrier standing perfectly still as the control:
@@ -18,7 +18,7 @@ extends GutTest
 #                              carrier 5 m: 41%      carrier 9 m: 23%
 #
 #   stance changes in 3 s      still        dangling
-#     recovery-stay edge         0             17
+#     a carrier in tight         0             17
 #     post-stance angle gate     0          11-12
 #
 # The control is zero everywhere, so the flips are the dangle and nothing else.
@@ -109,20 +109,20 @@ func test_the_filter_removes_most_of_the_dangle() -> void:
 				"the filter is doing something at %.0f m" % dist)
 
 
-# ── THE RECOVERY PROXIMITY STAY, sitting on a raw threshold ──────────────────
-# `_is_threat_pressing` holds him down whenever the RAW puck is inside
-# `recovery_proximity_threshold`. Park a carrier so the threat distance straddles
-# it and the gate answers a different question every few frames — while the
-# position he is holding is deliberately smoothed.
-func test_the_recovery_stay_straddles_its_threshold_on_a_dangle() -> void:
-	var edge: float = _ctrl.recovery_proximity_threshold
+# ── IN TIGHT, A STICKHANDLE ALONE MOVES THE STANCE ───────────────────────────
+# Not attributed to one gate on purpose: several read the raw puck, and the point
+# is the aggregate — a carrier standing perfectly still never changes his stance,
+# and the same carrier moving only his blade changes it seventeen times in three
+# seconds. Whatever is deciding, it is deciding on the signal the position half
+# deliberately filters out.
+func test_a_stickhandle_alone_moves_the_stance_in_tight() -> void:
+	var edge: float = 2.4
 	var flips: int = 0
-	gut.p("recovery_proximity_threshold %.2f m" % edge)
 	for lane: float in [0.0, 1.5]:
 		var dist: float = sqrt(maxf(edge * edge - lane * lane, 0.04))
 		var still: Dictionary = _dangle(lane, dist, 0.0, 3.0)
 		var moving: Dictionary = _dangle(lane, dist, DANGLE_M, 3.0)
-		gut.p("  lane %.1f, %.2f m out (threat exactly on the edge) | still: %d stance changes | dangling: %d"
+		gut.p("  lane %.1f, %.2f m out | still: %d stance changes | dangling: %d"
 				% [lane, dist, still["flips"], moving["flips"]])
 		assert_eq(still["flips"], 0,
 				"control: a carrier standing still does not move his stance")

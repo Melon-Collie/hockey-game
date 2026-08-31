@@ -14,20 +14,20 @@ extends GutTest
 #   an idle butterfly freezes the depth COMPLETELY — 0.000 m of movement while the
 #   carrier walks 2 m → 8 m → 2 m, against 0.351 m for the same walk on his feet;
 #
-#   but the DWELL decides whether that matters, and it splits hard on
-#   `recovery_proximity_threshold` (2.4 m):
+#   but the DWELL bounds what that is worth, and it is 0.34 s at every distance
+#   against a carrier who is not doing anything:
 #
-#     carrier 2.5 m and out   froze at 1.749 m, held 0.34 s, then recovered
-#     carrier 1.8 m           froze at 1.200 m, held 5.00 s — never recovered
-#     carrier 1.2 m           froze at 0.600 m, held 5.00 s — never recovered
+#     carrier 1.2 / 1.8 / 2.5 / 4.0 / 6.0 m   held 0.34 s, then recovered
 #
-# So the freeze is harmless at range and unbounded in tight, because
-# `_is_threat_pressing`'s proximity clause pins him there. A carrier who stops
-# inside 2.4 m gets a goalie frozen at whatever depth he happened to drop at, for
-# as long as he cares to stand there — 1.2 m out, in the 1.8 m case.
+# It was NOT bounded. `_is_threat_pressing` used to hold him whenever a hostile
+# carrier was inside a fixed radius, with no term for whether anything was
+# happening — so a carrier who simply stopped in tight pinned him at 5 s and
+# counting, frozen at whatever depth he dropped at (1.2 m out, in the 1.8 m case).
+# That is what the crossing race replaced.
 #
-# That is the measured version of "he butterflies too far from the net": not that
-# the drop picks a bad depth, but that nothing revisits it afterwards.
+# So the freeze is real, total, and short. It matters through what the play does
+# during it, not through the branch: a carrier crossing in front holds him down
+# on purpose, and one standing still no longer can.
 #
 # COILING and SLIDING are excluded throughout: the slide captured its own
 # endpoints and owning depth is its job, so counting those ticks reports a
@@ -139,11 +139,12 @@ func test_the_freeze_window_and_the_depth_it_freezes_at() -> void:
 		gut.p("carrier %.1f m | standing %.3f -> froze at %.3f | held %.2f s (%s)"
 				% [dist, standing, frozen_at, dwell,
 				"never recovered" if still_down else "then recovered"])
-		if dist < _ctrl.recovery_proximity_threshold:
+		if dist < 2.4:
 			in_tight = maxf(in_tight, dwell)
 		else:
 			at_range = maxf(at_range, dwell)
-	gut.p("longest freeze: %.2f s inside the %.2f m proximity stay, %.2f s outside it"
-			% [in_tight, _ctrl.recovery_proximity_threshold, at_range])
-	assert_gt(in_tight, 4.0 * at_range,
-			"CHARACTERISATION: the proximity stay is what turns a short freeze into an unbounded one")
+	gut.p("longest freeze: %.2f s in tight, %.2f s at range" % [in_tight, at_range])
+	assert_lt(in_tight, 1.0,
+			"a carrier who is not doing anything cannot hold him down — no radius pins him")
+	assert_almost_eq(in_tight, at_range, 0.05,
+			"and being close is not by itself a reason to stay down")

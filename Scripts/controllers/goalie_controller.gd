@@ -741,12 +741,6 @@ var puck_play_post_clearance: float = 0.55  # m — waypoint this far outside th
 # glide, which is why the goalie never strides in the crease.
 var puck_play_stride_cadence: float = 2.4
 
-# Recovery proximity: while in BUTTERFLY, the goalie holds whenever the puck
-# is within this Euclidean distance — covers genuine jam plays, post-save
-# rebounds bouncing in front, and slow follow-ups. Only when the puck has
-# clearly cleared this zone does speed/direction-based recovery apply. ~2.4m
-# is a couple of stick-lengths from the goalie, ~half-slot.
-var recovery_proximity_threshold: float = 2.4
 
 # Reaction freeze ends only on a discrete resolving event: puck hits this
 # goalie, hits the boards, hits a post, hits the net, or is picked up by
@@ -2786,28 +2780,23 @@ func _maybe_arrest_drop() -> bool:
 #      there, and every hold below prices a front-of-net threat. Butterfly cannot
 #      reach RVH directly, so releasing here is what routes him through
 #      RECOVERING to the post seal — the vulnerable window wraparounds exploit.
-#   1. A hostile CARRIER is inside recovery_proximity_threshold  → hold
-#      The rebound-stays-in-front case: he can't usefully recover before a
-#      follow-up shot.
+#   1. Standing up would lose the CROSSING race                   → hold
 #   2. The situation would BLOCK a standing goalie                → hold
 #   3. Puck's flight is closing on him at shot pace               → hold
 #   4. Otherwise                                                  → release
+#
+# ⚠️ CLAUSE 1 MUST STAY A RACE. Never re-express it as "a hostile carrier within
+# N metres": that has no term for whether anything is HAPPENING, and a carrier
+# who merely stops inside the radius then pins him on the ice indefinitely.
+# Deleting it entirely is the opposite trap — he stands up INTO a walkaround.
+# Both are measured in Scripts/controllers/CLAUDE.md.
 # Pressure detection is one-way: it only HOLDS butterfly, never triggers entry —
 # entry is _update_state's own `_should_block` branch, asking the same question.
 func _is_threat_pressing() -> bool:
 	if _puck_front_of_goal_m() <= 0.0:
 		return false
-	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
-			puck.global_position, _goal_line_z, _goal_center_x)
-	# Proximity-stay only applies when a hostile carrier is in the
-	# butterfly zone — they could shoot at any moment, hold the seal.
-	# Loose pucks (no carrier) skip this and fall through to the
-	# contest race inside `should_hold_seal`; a slow rebound sitting in
-	# the crease doesn't keep the goalie pinned in butterfly forever.
-	if threat_dist < recovery_proximity_threshold:
-		var carrier: Skater = puck.get_carrier()
-		if carrier != null and (team_id == -1 or carrier.get_team_id() != team_id):
-			return true
+	if _recovery_loses_the_crossing_race():
+		return true
 	# THE SAME DECISION THAT PUT HIM DOWN — same model, same inputs — but through
 	# `should_hold_seal`, which applies the asymmetric threshold and the stand-up
 	# race that releases him when nothing can touch the puck before he is back on his
@@ -2907,11 +2896,32 @@ func _threat_is_in_zone(threat_dist: float) -> bool:
 # The constraint states itself — r <= push · d / v — so there is no pull-per-
 # deficit curve here.
 func _lateral_tracking_cap(threat_dist: float) -> float:
-	var carrier: Skater = puck.get_carrier()
-	var lateral_speed_x: float = carrier.velocity.x if carrier != null \
-			else _puck_velocity_est.x
 	return GoalieBehaviorRules.lateral_tracking_cap(
-			threat_dist, lateral_speed_x, t_push_speed)
+			threat_dist, _threat_lateral_speed_x(), t_push_speed)
+
+
+# The threat's lateral rate, signed. Read from the CARRIER's body for a carried
+# puck and from the puck itself when it is loose — a stationary dangler's blade
+# routinely beats `t_push_speed` and a real goalie does not move for it, so
+# everything that races the threat sideways reads the same quantity from the same
+# place. Both consumers (the depth cap and the crossing race below) want the
+# carrier's translation, not his stickhandling.
+func _threat_lateral_speed_x() -> float:
+	var carrier: Skater = puck.get_carrier()
+	return carrier.velocity.x if carrier != null else _puck_velocity_est.x
+
+
+# Would standing up lose the race the play is currently running?
+#
+# Recovering costs `recovery_duration` in which he tracks nothing, so the threat
+# carries its own lateral rate through that whole window unopposed. Hold when
+# that travel exceeds what his standing pad covers — getting up would hand back
+# more net than staying down concedes. Every term is one he can see.
+func _recovery_loses_the_crossing_race() -> bool:
+	var carrier: Skater = puck.get_carrier()
+	if carrier != null and team_id != -1 and carrier.get_team_id() == team_id:
+		return false
+	return absf(_threat_lateral_speed_x()) * recovery_duration > pad_local_offset
 
 
 # Rush backflow: a CLOSING opposing carrier inside the engage range

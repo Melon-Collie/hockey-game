@@ -200,6 +200,32 @@ puck genuinely moving across; *persistence* deliberately drops that term, becaus
 a puck that settles wide has not un-beaten him. Pulling it back inside the
 sealing reach is what un-commits him, and baiting that commit is the counter.
 
+### Getting up is a race, and it is not a radius
+
+`_is_threat_pressing` decides whether he holds the butterfly, and its first
+clause is `_recovery_loses_the_crossing_race()`: recovering costs
+`recovery_duration` of tracking nothing, so hold once the threat's own lateral
+travel through that window beats his standing reach. It reads the CARRIER's
+translation rather than the puck, like `_lateral_tracking_cap` and for the same
+reason — a dangler's blade beats `t_push_speed` and a goalie does not move for
+it, so both share `_threat_lateral_speed_x()`.
+
+Two failures bracket it, both measured, and either is easy to re-introduce:
+
+- **A radius.** "A hostile carrier within N metres → hold" has no term for
+  whether anything is happening, so a carrier who merely STOPS in tight pins him
+  down forever — 5 s and counting, frozen at whatever depth he dropped at, since
+  an idle butterfly never re-solves depth either. It also contradicted the launch
+  clock beside it, which prices an undeclared carrier as no time pressure at all.
+  Its stated justification was rebounds, which it never covered: it required a
+  carrier, and a loose rebound has none.
+- **Nothing at all.** Delete the clause and he stands up INTO a walkaround,
+  caught mid-recovery at the goal line — the walkaround opens 2 of 7 aim points
+  with the race, 2 of 7 with the old radius, and 5 of 7 with neither.
+
+`should_hold_seal` does not cover this on its own: the seal question asks whether
+a SHOT can beat him, and a walkaround is not a shot yet.
+
 ### The committed slide is a retreat, and its budget is depth
 
 `_post_edge_seal_x` puts the body at `net_half_width − pad_edge · cos(slide
