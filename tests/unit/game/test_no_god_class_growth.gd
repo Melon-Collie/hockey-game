@@ -50,7 +50,14 @@ const _SIZE_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/ai/skater_agent_state_machine.gd": 6166,
 	"res://Scripts/game/game_manager.gd": 5654,
 	"res://Scripts/domain/ai/action_scoring.gd": 4476,
-	"res://Scripts/controllers/goalie_controller.gd": 4476,
+	# +17: the threat tracker's jitter filter moved onto the puck offset, which
+	# needs a second filter state and its priming. The design prose went to
+	# Scripts/controllers/CLAUDE.md rather than inline, and the tunable
+	# doc-blocks it duplicated were trimmed, so the growth here is code.
+	# +7: the puck-velocity estimate is bounded by the puck's own speed limit.
+	# It is a one-tick finite difference feeding a positional decision, so a
+	# teleport read as travel moved the tracked threat metres in a tick.
+	"res://Scripts/controllers/goalie_controller.gd": 4550,
 	"res://Scripts/domain/ai/role_behaviors/carrier.gd": 3755,
 	"res://Scripts/controllers/skater_controller.gd": 3391,
 	"res://Scripts/actors/skater.gd": 2502,
@@ -63,7 +70,7 @@ const _SIZE_ALLOWANCE: Dictionary[String, int] = {
 	"res://Scripts/domain/ai/role_behaviors/role_helpers.gd": 1436,
 	"res://Scripts/game/player_prefs.gd": 1370,
 	"res://Scripts/actors/skater_mesh_builder.gd": 1404,
-	"res://Scripts/domain/rules/goalie_behavior_rules.gd": 1324,
+	"res://Scripts/domain/rules/goalie_behavior_rules.gd": 1335,
 	"res://Scripts/ui/career_stats_screen.gd": 1271,
 	"res://Scripts/domain/ai/carry_space.gd": 1255,
 	"res://Scripts/ui/lobby_manager.gd": 1247,

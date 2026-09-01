@@ -23,6 +23,46 @@ execute; they never reach up. Goalie *math* is pure and lives in
 | `domain/rules/goalie_depth_solver.gd` | depth constraint composition |
 | `domain/rules/goalie_stick_rules.gd` | stick geometry and coverage |
 
+### Filter the puck, not the man
+
+The threat the goalie squares to used to be low-passed as a whole — one lerp over
+the blended puck/carrier position. A first-order filter has a **permanent**
+steady-state error against a constant-velocity target: it settles at trailing by
+`speed / k` and no amount of run-up closes it. So the filter charged the
+carrier's real translation a trail proportional to his speed — measured at 0.20 s
+of it beyond `chest_track_far_distance`, i.e. 1.6 m behind an 8 m/s skate.
+
+That trail then entered the SQUARING error a second time, because the body
+rotates toward the tracked threat rather than toward the puck. The two lags
+compound, contributing about equally at 8 m, and together left him 26° off square
+against a shooter crossing at 8 m/s — with the pads, glove, blocker and five-hole
+all posed in that rotated frame.
+
+The fix is that jitter and signal are **separable**, and only one of them needed
+filtering. A carrier's BODY does not teleport; it is the smooth part and
+low-passing it buys nothing. What wiggles is the puck's OFFSET from him (±1.5 m
+of dangle) and the velocity estimate built from it. So the offset and the puck
+lead stay inside the filter at exactly their old time constants and the body
+rides through raw. Steady state is unchanged — once the offset converges the
+blend reproduces the old one exactly — which is why `GoalieBehaviorRules
+.compute_threat_position` is fed a jitter-filtered puck rather than re-derived.
+
+Two things that bite:
+
+- **The puck lead must stay inside the filter.** It is built from a raw per-tick
+  position difference, so unfiltered it hands the goalie precisely the dangle
+  spikes the filter exists to reject.
+- **Removing the trail leaves the LEAD unopposed.** `carrier_velocity_lead_time`
+  was cancelling the trail in tight (0.12 s of lead against a 0.125 s trail) and
+  losing to it at range. With the trail gone the lead is net anticipation
+  everywhere — he now plays *ahead* of a moving carrier by that much, which is a
+  deliberate, beatable-by-cutback property rather than an accident, but it is a
+  different quantity from what the number was chosen for.
+
+`test_goalie_tracking_lag.gd` holds it, and asserts structural properties — trail
+proportional to speed, the compounding — rather than pinned numbers, so replacing
+a filter with a rate limit fails it rather than passing quietly.
+
 ### Delete the copy, don't correct the number
 
 Nothing connects a literal to the collider it was copied from, so every
@@ -129,6 +169,28 @@ Two recurring traps, both measured:
 - **Blocking concedes the top of the net.** Any path that blocks a shot already
   read as elevated is strictly wrong. The block model has no `impact_y`.
 
+**The seal is a commitment with an END, and arriving is what ends it.** The
+verdict clears on `tuck_point_travel <= 0`, so the reach that term subtracts must
+be the one the SEAL uses — `_seal_cover_radius()`, the distance from the seal
+spot to the tuck point — or he lands somewhere his own arrival test still calls
+short and nothing can ever clear it. That reach follows the STANCE (standing
+`pad_local_offset`, sealed `_seal_cover_radius()`) and is carried in
+`BeatenWideConfig.cover_radius`, deliberately separate from `reach_half_width`:
+one is arrival, the other is the point of no return, and sharing a number ties
+the threshold that clears a beat to the threshold that decides one. Measured,
+widening both at once cost 3 bot goals in 63 by declining seals he used to push
+into.
+
+Nothing may fight the seal's depth either. `min_challenge_depth` already exempts
+COILING and SLIDING, but those are the states that get him TO the seal and
+BUTTERFLY is the one he sits in once there — flooring him there lifts him off a
+`post_seal_depth` the slide spent half a second reaching, which re-opens the beat
+and commits the same slide again forever.
+
+The shape of that failure is worth recognising: a stance loop at a fixed period
+whose slide has NO lateral leg means two owners are fighting over
+`_current_depth`. `test_goalie_held_puck_slide_loop.gd` holds all of it.
+
 The one sanctioned commit is the **beaten-wide post seal** — and it is sanctioned
 because it is not a prediction. Its gate is positional (the puck is already past
 his standing sealing reach on the side it went), so it fires on an accomplished
@@ -137,6 +199,56 @@ the drop as one motion instead of landing square and re-deciding. Onset needs th
 puck genuinely moving across; *persistence* deliberately drops that term, because
 a puck that settles wide has not un-beaten him. Pulling it back inside the
 sealing reach is what un-commits him, and baiting that commit is the counter.
+
+### Getting up is a race, and it is not a radius
+
+`_is_threat_pressing` decides whether he holds the butterfly, and its first
+clause is `_recovery_loses_the_crossing_race()`: recovering costs
+`recovery_duration` of tracking nothing, so hold once the threat's own lateral
+travel through that window beats his standing reach. It reads the CARRIER's
+translation rather than the puck, like `_lateral_tracking_cap` and for the same
+reason — a dangler's blade beats `t_push_speed` and a goalie does not move for
+it, so both share `_threat_lateral_speed_x()`.
+
+Two failures bracket it, both measured, and either is easy to re-introduce:
+
+- **A radius.** "A hostile carrier within N metres → hold" has no term for
+  whether anything is happening, so a carrier who merely STOPS in tight pins him
+  down forever — 5 s and counting, frozen at whatever depth he dropped at, since
+  an idle butterfly never re-solves depth either. It also contradicted the launch
+  clock beside it, which prices an undeclared carrier as no time pressure at all.
+  Its stated justification was rebounds, which it never covered: it required a
+  carrier, and a loose rebound has none.
+- **Nothing at all.** Delete the clause and he stands up INTO a walkaround,
+  caught mid-recovery at the goal line — the walkaround opens 2 of 7 aim points
+  with the race, 2 of 7 with the old radius, and 5 of 7 with neither.
+
+`should_hold_seal` does not cover this on its own: the seal question asks whether
+a SHOT can beat him, and a walkaround is not a shot yet.
+
+### The committed slide is a retreat, and its budget is depth
+
+`_post_edge_seal_x` puts the body at `net_half_width − pad_edge · cos(slide
+rotation)` = **0.154 m** off centre, because a butterfly pad lies 0.84 m along
+the ice and the seal is the pad's outer EDGE on the post, not the body on it.
+So a slide's lateral leg is centimetres by construction; measured over a full
+beaten-wide seal from 0.78 m of challenge radius, it travels 0.08 m sideways and
+1.20 m in depth, and takes ~0.48 s to settle into an idle butterfly.
+
+Two things follow that are easy to get backwards:
+
+- **"He commits too far out" describes the symptom, not the cause.** A commit
+  baited earlier is beaten LESS, because the extra time is time he spends
+  finishing the retreat. What beats him is being caught mid-transit — which is
+  what the live log's `goalie_radius` column is really reporting when it
+  correlates with conversion.
+- **The seal answers a puck that keeps going, not one that comes back across.**
+  A carrier who cuts back into the space he left is met by a re-commit that
+  arrives; a carrier who continues to the side the puck was pulled to is not.
+
+`test_human_wraparound.gd` holds all of it, and the same file records the two
+things the instrument does NOT reproduce (it starts from a fully settled keeper,
+and it never reaches the 1.30–1.60 m radius band the live log holds).
 
 **The goalie can be WRONG, deterministically.** His committed belief about where
 a shot is going is the aim he read `read_lag` seconds ago, sampled from the
@@ -210,6 +322,25 @@ construction.
 Whenever the bots' shot model reads the same quantity as a goalie knob, the two
 must be synced (`AIActionScoring.set_goalie_profile`) or the bots score against a
 goalie they do not face. See the AI MIRROR note in `goalie_skill_profile.gd`.
+
+**On a breakaway walkaround there is no ladder at all.** Measured as open aim
+points out of seven at a fixed release: EASY 2, NORMAL 2, HARD 2. It used to run
+BACKWARDS (0 / 2 / 4, HARD the most beatable), and fixing the beaten-wide verdict
+took HARD from 4 to 2 and lifted EASY from 0 to 2 — so the inversion is gone and
+flat is what is left.
+
+`depth_base_m` is the only tier lever this play can feel; every read latency,
+reach speed, drop time, the five-hole, the poke, the toe-out and
+`depth_aggressive_m` move it by exactly nothing. So a tier ladder here can only
+be a depth ladder, and depth cuts the wrong way — a goalie who challenges the
+rush harder is easier to walk around. Separating the tiers on this play is
+therefore not a matter of turning the existing knobs.
+
+Pulling `depth_base_m` in is not free — it concedes the centre-lane rush from
+5 m, which is what challenge depth exists for. `test_goalie_breakaway_ladder.gd`
+holds both halves so neither can be improved quietly at the other's expense, and
+1.30 is `CreaseRules.STRAIGHT_DEPTH`, a rink landmark rather than a tuning
+number.
 
 ## SkaterController
 

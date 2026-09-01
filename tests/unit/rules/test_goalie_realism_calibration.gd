@@ -295,11 +295,19 @@ func test_royal_road_one_timer_beats_the_standing_push() -> void:
 			"a slow telegraphed feed loses the race → stay on the feet")
 
 
-func test_stay_down_window_is_about_two_stick_lengths() -> void:
-	# Hockey Canada / coaching consensus: rebound in tight (inside ~2 stick
-	# lengths) → stay down; farther → recover to feet immediately.
+func test_he_does_not_stand_up_into_a_play_crossing_in_front_of_him() -> void:
+	# Coaching consensus: you get to your feet as soon as you can, but never
+	# WHILE the play is moving across you — the stand-up costs you the tracking
+	# you need to follow it, and you arrive late to a place it has left.
+	#
+	# The goalie prices that as a race rather than a radius: recovering costs
+	# `recovery_duration` of tracking nothing, so he holds once the threat's own
+	# lateral travel through that window beats his standing reach. The crossing
+	# speed where that tips has to sit above a carrier who has merely stopped and
+	# below the pace of a real walkout, or the rule says nothing.
 	var gc: GoalieController = _gc()
-	assert_between(gc.recovery_proximity_threshold, 1.8, 3.2)
+	var tipping_m_s: float = gc.pad_local_offset / gc.recovery_duration
+	assert_between(tipping_m_s, 0.6, 2.5)
 
 
 func test_seal_only_for_contested_pucks_never_for_the_1v1_dangler() -> void:

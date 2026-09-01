@@ -248,12 +248,11 @@ var five_hole_shuffle_max: float = 0.04
 var five_hole_t_push_max: float = 0.10
 
 var tracking_speed: float = 8.0
-# Far-range tracking lerp speed — the quiet-eye lag. At range
-# a real goalie's angle corrections are smooth and slightly laggy; slowing the
-# tracking lerp low-passes stickhandle wiggle (±1.5 m at ~2 Hz attenuates to
-# roughly ±0.35 m of threat motion — ≈±0.06 m of goalie arc travel at B depth)
-# without moving the squaring target off the puck. Blended from `tracking_speed`
-# (in tight) toward this by the chest_track distance ramp.
+# Far-range filter speed for the puck OFFSET, blended from `tracking_speed` by
+# the chest_track distance ramp. Attenuates stickhandle wiggle (±1.5 m at ~2 Hz
+# down to roughly ±0.35 m of threat motion, ≈±0.06 m of arc travel at B depth).
+# It costs no tracking of the carrier himself — see CLAUDE.md → "Filter the
+# puck, not the man".
 var tracking_speed_far: float = 3.0
 var part_lerp_speed: float = 6.0
 var reaction_lerp_speed: float = 18.0
@@ -742,12 +741,6 @@ var puck_play_post_clearance: float = 0.55  # m — waypoint this far outside th
 # glide, which is why the goalie never strides in the crease.
 var puck_play_stride_cadence: float = 2.4
 
-# Recovery proximity: while in BUTTERFLY, the goalie holds whenever the puck
-# is within this Euclidean distance — covers genuine jam plays, post-save
-# rebounds bouncing in front, and slow follow-ups. Only when the puck has
-# clearly cleared this zone does speed/direction-based recovery apply. ~2.4m
-# is a couple of stick-lengths from the goalie, ~half-slot.
-var recovery_proximity_threshold: float = 2.4
 
 # Reaction freeze ends only on a discrete resolving event: puck hits this
 # goalie, hits the boards, hits a post, hits the net, or is picked up by
@@ -935,6 +928,13 @@ var _reaction_drift_vx: float = 0.0
 var _last_save_time: float = -1.0
 var _five_hole_openness: float = 0.0
 var _tracked_threat_position: Vector3 = Vector3.ZERO
+# The jitter filter's whole state — the puck's offset from the carrier's body
+# and the lead built from it, both low-passed. The body is tracked raw.
+var _tracked_puck_offset: Vector3 = Vector3.ZERO
+var _tracked_puck_lead: Vector3 = Vector3.ZERO
+# False until a carrier's offset is seeded, so a new carrier snaps rather than
+# easing over from the previous one's blade position.
+var _offset_primed: bool = false
 # Position-derived puck velocity, refreshed each tick from the position delta.
 # Works on host and client alike — `linear_velocity` is unreliable on the client
 # during interpolation. Drives the threat-pressing closing check and the
@@ -1112,6 +1112,7 @@ func setup(assigned_goalie: Goalie, assigned_puck: Puck, assigned_goal_line_z: f
 	_target_x = _goal_center_x
 	_current_depth = depth_defensive
 	_tracked_threat_position = puck.global_position
+	_offset_primed = false
 	_prev_puck_position = puck.global_position
 	if profile != null:
 		_apply_skill_profile(profile)
@@ -1431,6 +1432,7 @@ func reset_to_crease() -> void:
 	_reading_pinned_windup = false
 	_reading_planted_windup = false
 	_tracked_threat_position = puck.global_position if puck != null else Vector3.ZERO
+	_offset_primed = false
 	_prev_puck_position = _tracked_threat_position
 	_sleep_ticks_skipped = 0
 	_sleep_skipped_delta = 0.0
@@ -1526,7 +1528,14 @@ func _physics_process(delta: float) -> void:
 # ── Tracking ──────────────────────────────────────────────────────────────────
 func _update_tracking(delta: float) -> void:
 	var inv_dt: float = 1.0 / maxf(delta, 0.0001)
+	# Bounded by the puck's own speed limit. A one-tick finite difference is
+	# unbounded, so any discontinuity — a reception, a deflection, a reconcile
+	# correction — reads as a huge velocity for one tick, and both consumers
+	# treat it as travel (the lead carries 0.08 s of it; beaten-wide onset gates
+	# on its x). Past `max_speed` it is a teleport, not motion.
 	_puck_velocity_est = (puck.global_position - _prev_puck_position) * inv_dt
+	if _puck_velocity_est.length_squared() > puck.max_speed * puck.max_speed:
+		_puck_velocity_est = _puck_velocity_est.normalized() * puck.max_speed
 	_prev_puck_position = puck.global_position
 	var carrier: Skater = puck.get_carrier()
 	var upright: bool = _sm.is_upright()
@@ -1536,17 +1545,9 @@ func _update_tracking(delta: float) -> void:
 			and carrier.current_shot_state == SkaterStateMachine.State.SLAPPER_CHARGE_WITH_PUCK
 	# A loose puck is NOT lerped toward: smoothing there makes the goalie chase
 	# stale positions and commit slides to where the rebound *was*.
-	var target_threat: Vector3 = _compute_threat_position()
-	# `carrier` above is still current: _compute_threat_position only reads the
-	# puck, so nothing between there and here can have changed the carrier.
-	if carrier != null and not _reaction.reacting:
-		# Quiet-eye smoothing: the tracking lerp slows with carrier distance so
-		# far-range stickhandle wiggle is low-passed instead of chased. `_chest_t`
-		# was just set by the threat computation.
-		var track_speed: float = lerpf(tracking_speed, tracking_speed_far, _chest_t)
-		_tracked_threat_position = _tracked_threat_position.lerp(target_threat, track_speed * delta)
-	else:
-		_tracked_threat_position = target_threat
+	# Consumed as solved: the jitter filter lives on the puck terms inside. A
+	# second low-pass here is what trailed the carrier's real translation.
+	_tracked_threat_position = _compute_threat_position(delta)
 	if is_server:
 		_update_shot_commit(delta, carrier)
 		_update_cross_crease(delta, carrier)
@@ -1597,12 +1598,13 @@ func _update_tracking(delta: float) -> void:
 # blended with the puck (jumpy from stickhandling) per `shooter_weight`. While
 # reacting to a shot in flight, and in the post-integrated / recovering states,
 # the raw puck IS the threat — there is no chest worth chasing.
-func _compute_threat_position() -> Vector3:
+func _compute_threat_position(delta: float = 0.0) -> Vector3:
 	var carrier: Skater = puck.get_carrier()
 	if carrier == null or _reaction.reacting \
 			or _sm.is_post_integrated() \
 			or _sm.current == State.PLAYING_PUCK \
 			or _sm.current == State.RECOVERING:
+		_offset_primed = false
 		# A SEPARATE, near-zero lead (vs the dangle branch below) so the goalie does
 		# NOT front-run a back-door pass: he reads where the puck IS, and loses the
 		# race across the crease to a hard cross-seam pass. The lead scales with puck
@@ -1622,8 +1624,6 @@ func _compute_threat_position() -> Vector3:
 	# jitter to reject) and IS the shot origin, so square to it directly.
 	var w: float = shooter_weight_pinned_windup if _reading_pinned_windup \
 			else shooter_weight
-	var blended: Vector3 = GoalieBehaviorRules.compute_threat_position(
-			puck.global_position, carrier.global_position, true, w)
 	# Two leads: CARRIER velocity captures body motion (sustained, smooth) and so
 	# always contributes. PUCK velocity captures dangle / dragged-across motion — it
 	# is the jitter source, so it fades out with distance. Y is zeroed because
@@ -1637,10 +1637,28 @@ func _compute_threat_position() -> Vector3:
 	# suppresses no locomotion: ~0.5 m of spurious lead at 6 m/s lateral, about half
 	# a net width.
 	var puck_lead_scale: float = 0.0 if _reading_pinned_windup else (1.0 - chest_t)
-	var lead: Vector3 = carrier.velocity * carrier_velocity_lead_time \
-			+ _puck_velocity_est * puck_velocity_lead_time * puck_lead_scale
-	lead.y = 0.0
-	return blended + lead
+	var puck_lead: Vector3 = _puck_velocity_est * puck_velocity_lead_time * puck_lead_scale
+	puck_lead.y = 0.0
+	var carrier_lead: Vector3 = carrier.velocity * carrier_velocity_lead_time
+	carrier_lead.y = 0.0
+	# FILTER THE PUCK, NOT THE MAN (CLAUDE.md). Offset and lead filter separately
+	# so `w` applies to the CURRENT smoothed offset rather than re-weighting
+	# history accumulated under a value a wind-up has since changed.
+	var raw_offset: Vector3 = puck.global_position - carrier.global_position
+	if not _offset_primed:
+		# A fresh carrier inherits nothing from the last one.
+		_tracked_puck_offset = raw_offset
+		_tracked_puck_lead = puck_lead
+		_offset_primed = true
+	else:
+		var t: float = clampf(
+				lerpf(tracking_speed, tracking_speed_far, chest_t) * delta, 0.0, 1.0)
+		_tracked_puck_offset = _tracked_puck_offset.lerp(raw_offset, t)
+		_tracked_puck_lead = _tracked_puck_lead.lerp(puck_lead, t)
+	var blended: Vector3 = GoalieBehaviorRules.compute_threat_position(
+			carrier.global_position + _tracked_puck_offset,
+			carrier.global_position, true, w)
+	return blended + _tracked_puck_lead + carrier_lead
 
 # ── Shot Timer ────────────────────────────────────────────────────────────────
 # `_reaction.shot_timer` is the goalie's processing delay after shot release —
@@ -2038,6 +2056,14 @@ func _advance_beaten_wide(delta: float) -> void:
 	# anything. Bringing the puck back inside the sealing reach, or out of the
 	# in-tight zone, is what disarms him — which is the cut-back counter, and the
 	# only thing the window was ever protecting against.
+	# ARRIVAL FOLLOWS THE STANCE; THE POINT OF NO RETURN DOES NOT. Judging a
+	# SEALED goalie's arrival on his standing reach is what made the verdict
+	# permanent — he lands in a seal his own test still calls 0.34 m short. But
+	# widening `reach_half_width` to fix it also moves the edge that decides he
+	# was beaten in the first place, and measured, that alone cost 3 bot goals in
+	# 63 by declining seals he used to push into. Two questions, two numbers.
+	_beaten_wide_cfg.cover_radius = _seal_cover_radius() if _sm.is_down() \
+			else pad_local_offset
 	if _beaten_wide_armed and _beaten_wide_holds():
 		_beaten_wide_confirm_timer += delta
 	elif _is_beaten_wide():
@@ -2754,28 +2780,23 @@ func _maybe_arrest_drop() -> bool:
 #      there, and every hold below prices a front-of-net threat. Butterfly cannot
 #      reach RVH directly, so releasing here is what routes him through
 #      RECOVERING to the post seal — the vulnerable window wraparounds exploit.
-#   1. A hostile CARRIER is inside recovery_proximity_threshold  → hold
-#      The rebound-stays-in-front case: he can't usefully recover before a
-#      follow-up shot.
+#   1. Standing up would lose the CROSSING race                   → hold
 #   2. The situation would BLOCK a standing goalie                → hold
 #   3. Puck's flight is closing on him at shot pace               → hold
 #   4. Otherwise                                                  → release
+#
+# ⚠️ CLAUSE 1 MUST STAY A RACE. Never re-express it as "a hostile carrier within
+# N metres": that has no term for whether anything is HAPPENING, and a carrier
+# who merely stops inside the radius then pins him on the ice indefinitely.
+# Deleting it entirely is the opposite trap — he stands up INTO a walkaround.
+# Both are measured in Scripts/controllers/CLAUDE.md.
 # Pressure detection is one-way: it only HOLDS butterfly, never triggers entry —
 # entry is _update_state's own `_should_block` branch, asking the same question.
 func _is_threat_pressing() -> bool:
 	if _puck_front_of_goal_m() <= 0.0:
 		return false
-	var threat_dist: float = GoalieBehaviorRules.threat_distance_to_goal(
-			puck.global_position, _goal_line_z, _goal_center_x)
-	# Proximity-stay only applies when a hostile carrier is in the
-	# butterfly zone — they could shoot at any moment, hold the seal.
-	# Loose pucks (no carrier) skip this and fall through to the
-	# contest race inside `should_hold_seal`; a slow rebound sitting in
-	# the crease doesn't keep the goalie pinned in butterfly forever.
-	if threat_dist < recovery_proximity_threshold:
-		var carrier: Skater = puck.get_carrier()
-		if carrier != null and (team_id == -1 or carrier.get_team_id() != team_id):
-			return true
+	if _recovery_loses_the_crossing_race():
+		return true
 	# THE SAME DECISION THAT PUT HIM DOWN — same model, same inputs — but through
 	# `should_hold_seal`, which applies the asymmetric threshold and the stand-up
 	# race that releases him when nothing can touch the puck before he is back on his
@@ -2875,11 +2896,32 @@ func _threat_is_in_zone(threat_dist: float) -> bool:
 # The constraint states itself — r <= push · d / v — so there is no pull-per-
 # deficit curve here.
 func _lateral_tracking_cap(threat_dist: float) -> float:
-	var carrier: Skater = puck.get_carrier()
-	var lateral_speed_x: float = carrier.velocity.x if carrier != null \
-			else _puck_velocity_est.x
 	return GoalieBehaviorRules.lateral_tracking_cap(
-			threat_dist, lateral_speed_x, t_push_speed)
+			threat_dist, _threat_lateral_speed_x(), t_push_speed)
+
+
+# The threat's lateral rate, signed. Read from the CARRIER's body for a carried
+# puck and from the puck itself when it is loose — a stationary dangler's blade
+# routinely beats `t_push_speed` and a real goalie does not move for it, so
+# everything that races the threat sideways reads the same quantity from the same
+# place. Both consumers (the depth cap and the crossing race below) want the
+# carrier's translation, not his stickhandling.
+func _threat_lateral_speed_x() -> float:
+	var carrier: Skater = puck.get_carrier()
+	return carrier.velocity.x if carrier != null else _puck_velocity_est.x
+
+
+# Would standing up lose the race the play is currently running?
+#
+# Recovering costs `recovery_duration` in which he tracks nothing, so the threat
+# carries its own lateral rate through that whole window unopposed. Hold when
+# that travel exceeds what his standing pad covers — getting up would hand back
+# more net than staying down concedes. Every term is one he can see.
+func _recovery_loses_the_crossing_race() -> bool:
+	var carrier: Skater = puck.get_carrier()
+	if carrier != null and team_id != -1 and carrier.get_team_id() == team_id:
+		return false
+	return absf(_threat_lateral_speed_x()) * recovery_duration > pad_local_offset
 
 
 # Rush backflow: a CLOSING opposing carrier inside the engage range
@@ -2981,7 +3023,18 @@ func _update_position(delta: float) -> void:
 			# straddle behind the goal line. Floor the committed depth itself (not
 			# just the final Z) so the slide-commit start depth stays consistent
 			# with the rendered position.
-			_current_depth = maxf(_current_depth, min_challenge_depth)
+			#
+			# NOT WHILE HE IS SEALING. `min_challenge_depth` already exempts
+			# COILING and SLIDING for exactly this reason — sitting on the line is
+			# the correct play on a wrap — but those are the states that get him
+			# TO the seal, and this is the one he sits in once he arrives. Flooring
+			# him here lifts him straight back off a `post_seal_depth` the slide
+			# just paid half a second to reach, which re-opens the beat he had
+			# closed and commits the same slide again: the 4 Hz loop in
+			# `test_goalie_held_puck_slide_loop.gd`. The floor returns the moment
+			# the verdict clears.
+			if not _beaten_wide_committed:
+				_current_depth = maxf(_current_depth, min_challenge_depth)
 			_update_butterfly_five_hole(delta)
 			_try_commit_slide(delta)
 			# Dropping does not cancel travel: a butterfly entered with lateral
@@ -3378,6 +3431,25 @@ func _coil_end_xz(side: float, slide_rot: float) -> Vector2:
 	# becomes a +direction_sign delta in depth.
 	var depth_shift: float = shift_z * _direction_sign
 	return Vector2(_current_x + shift_x, _current_depth + depth_shift)
+
+
+# What a SEALED goalie already covers: the distance from the seal spot to the
+# tuck point he is sealing.
+#
+# It is derived rather than picked because it has to agree EXACTLY with where the
+# seal sends him. `_post_edge_seal_x` parks him `pad_edge * cos(rot)` inside the
+# post, and `post_seal_depth` off the line — so the straight line from there to
+# the post spot is what his pad spans on arrival, and using it makes "have I
+# arrived" and "am I sealed" the same question by construction.
+#
+# Getting the pair even slightly apart is not a rounding matter: the arrival test
+# is the only thing that can clear a beaten-wide verdict, so a reach 7 mm short
+# of the seal is a goalie who is permanently beaten. Judging him on his STANDING
+# reach, which is what this replaces, left him 0.34 m short forever.
+func _seal_cover_radius() -> float:
+	var lateral: float = (pad_local_offset + butterfly_pad_half_width) \
+			* cos(deg_to_rad(slide_max_rotation_deg))
+	return Vector2(lateral, _slide.post_seal_depth).length()
 
 
 # Compute the goalie body X that puts the leading pad's outer edge ON the post

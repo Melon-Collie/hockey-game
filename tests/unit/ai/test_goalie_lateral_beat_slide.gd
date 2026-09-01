@@ -143,9 +143,16 @@ func test_a_release_inside_the_confirmation_window_still_seals() -> void:
 			released = true
 			_shooter.current_shot_state = SkaterStateMachine.State.FOLLOW_THROUGH
 			_puck.clear_carrier()
-			# Deliberately unhurried, so the puck is still in front of him while
-			# the window runs out — the seal has to be able to fire mid-read.
-			var v := Vector3(-1.0, 0.0, -7.0)
+			# THE SHOT HAS TO KEEP RUNNING WIDE, or there is no lateral race left
+			# to be given back and this measures nothing. The z pace is unhurried
+			# on purpose — the puck is still in front of him while the window runs
+			# out, so the seal has to fire mid-read — but the lateral component
+			# must outpace his push (t_push_speed 3.8 m/s), because the beat is a
+			# COVERAGE fact and coverage is what persistence re-checks every tick.
+			# At -1.0 m/s he simply shuffles back in front of it and the verdict
+			# dies in 0.017 s, which is him defending the play correctly rather
+			# than the seal failing.
+			var v := Vector3(-6.0, 0.0, -7.0)
 			_puck.apply_release_velocity(v)
 			_puck.puck_released.emit()
 			_puck.linear_velocity = v
@@ -158,4 +165,11 @@ func test_a_release_inside_the_confirmation_window_still_seals() -> void:
 	assert_true(released, "precondition: the beat armed and a shot was taken inside the window")
 	assert_true(committed,
 			"a shot in flight does not give him back the lateral race — seal anyway")
-	assert_lt(_ctrl._slide.dir, 0.0, "the seal goes the way the PUCK went")
+	# Read the seal's side off where the slide ENDS, for the reason spelled out
+	# on the sibling assertion above: `_slide.dir` is residual TRAVEL, not a post
+	# identity, and the two disagree whenever he commits from WIDER than the seal
+	# spot. Both are reported so a future reader can see them part company rather
+	# than rediscovering it against a red assertion.
+	gut.p("seal end_x %.4f  travel dir %+.0f  (they differ when he starts wider than the seal)"
+			% [_ctrl._slide.end_x, _ctrl._slide.dir])
+	assert_lt(_ctrl._slide.end_x, 0.0, "the seal goes the way the PUCK went")

@@ -953,6 +953,13 @@ class BeatenWideConfig:
 	var reach_half_width: float = 0.0      # m — standing pad coverage half-extent
 	var min_lateral_speed: float = 0.0     # m/s — the puck must genuinely be moving across
 	var max_threat_distance: float = 0.0   # m — Euclidean threat→goal in-tight gate
+	# How far his pad reaches toward the tuck point from where he is NOW, used
+	# only by `tuck_point_travel`. Separate from `reach_half_width` because the
+	# two answer different questions: that one is the point of no return — has the
+	# puck got AROUND him — and this one is arrival — has he GOT there. Sharing a
+	# number ties the threshold that decides a beat to the threshold that clears
+	# it, so making arrival reachable silently moved what counts as beaten.
+	var cover_radius: float = 0.0
 
 static func is_beaten_wide(
 		threat_position: Vector3,
@@ -1019,7 +1026,9 @@ static func tuck_point_travel(goalie_position: Vector3, post_x: float,
 		goal_line_z: float, cfg: BeatenWideConfig) -> float:
 	var dx: float = post_x - goalie_position.x
 	var dz: float = goal_line_z - goalie_position.z
-	return sqrt(dx * dx + dz * dz) - cfg.reach_half_width
+	var reach: float = cfg.cover_radius if cfg.cover_radius > 0.0 \
+			else cfg.reach_half_width
+	return sqrt(dx * dx + dz * dz) - reach
 
 
 # ── Rush retreat (speed-matched backflow) ────────────────────────────────────
