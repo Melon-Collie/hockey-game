@@ -310,57 +310,99 @@ func _drain_backlog(now: float) -> void:
 			NetworkTelemetry.record_input_drain()
 
 
+# Backlog catch-up threshold: how overdue the queue front must be before a tick
+# consumes a SECOND input. Production and consumption are both one per tick, so
+# without this a backlog is permanent (see the drain block above) and every
+# later input is applied that many ticks stale for the rest of the session. The
+# drain is the only other release and it clears the debt by DISCARDING inputs
+# the client already predicted with — one visible correction each. A second pop
+# clears the same debt losslessly.
+#
+# It cannot become a speed exploit: the stamp gate still holds, so a second pop
+# is possible only when that input's own scheduled instant has ALREADY passed.
+# A client flooding inputs buys nothing — it can only ever catch up to real
+# time, never run ahead of it.
+#
+# Sized above the healthy band the drain sizing measured (a deep queue whose
+# front pops ~1-1.5 ticks overdue) so ordinary cadence never triggers a double
+# pop, and far below the drain's 8-tick trigger so the lossless path clears a
+# stall backlog long before the lossy one arms. The queue converges to ~3 ticks
+# of debt instead of holding whatever a stall left: a 10-tick backlog drains in
+# 7 ticks (~58 ms).
+const _CATCH_UP_OVERDUE_S: float = 3.0 / 120.0
+
+
+# Consumption debt: how far past its scheduled instant the queue front already
+# sits. Zero when the queue is empty or the front is still in the future, so a
+# positive value means this tick is behind on inputs it should already have
+# simulated — the stamp-lead cushion ahead of `now` is never counted.
+func _front_overdue(now: float) -> float:
+	if _input_queue.is_empty():
+		return 0.0
+	return maxf(0.0, now - _input_queue.front().host_timestamp)
+
+
+# Pop and apply exactly one queued input. last_processed_host_timestamp advances
+# only for inputs actually simulated — the client's reconcile filter drops
+# confirmed inputs from its replay history based on this value.
+func _consume_one_input(delta: float) -> void:
+	var input: InputState = _input_queue.pop_front()
+	last_processed_host_timestamp = input.host_timestamp
+	if not _game_state.is_movement_locked():
+		# Recorded for LIVE pops only: locked-phase pops (faceoff prep,
+		# celebrations) measure phase cadence, not link health, and would skew
+		# the metric the adaptive lead is judged by.
+		# sim_time, not wall: overdue is stamp-vs-consumption, both tick-domain.
+		# On wall time this reads the frame-bunching offset as lateness and
+		# saturates the lead servo (see NetworkManager's sim clock).
+		NetworkTelemetry.record_input_lead(
+				NetworkManager.sim_time() - input.host_timestamp)
+		_process_input(input, delta)
+	elif not tick_faceoff_approach(delta):
+		# Faceoff / intro skate-in glides the body to the dot (host-authoritative;
+		# broadcasts to clients like any other motion). On arrival it returns
+		# false and the caller falls back to the frozen aim-only sync.
+		skater.velocity = Vector3.ZERO
+		# FACEOFF_PREP: keep the host's view of this remote peer's stick in
+		# sync with their mouse so world state broadcasts the right blade
+		# position for everyone else to see. _process_input still doesn't
+		# run, so body/shot inputs stay suppressed.
+		if _game_state.allows_blade_aim_during_lock():
+			apply_blade_aim_only(input, delta)
+	# Clear just_pressed flags before saving as fallback so they don't re-fire on
+	# subsequent ticks while the queue is empty. elevation_level stays — it's an
+	# absolute mode, and holding the last known level through a gap is right.
+	input.shoot_pressed = false
+	input.slap_pressed = false
+	_fallback_input = input
+
+
 func _drive_from_input(delta: float) -> void:
-	# Pop one input per physics tick so every client input gets simulated on the
-	# host in order. last_processed_host_timestamp advances only for inputs that
-	# were actually simulated — the client's reconcile filter drops confirmed inputs
-	# from its replay history based on this value.
-	# During locked phases drain the queue (advancing the ack) but don't apply
-	# movement — stale input would contaminate server state and cause a velocity
-	# burst when the phase lifts.
+	# Consume in stamp order so every client input is simulated on the host in the
+	# order the client predicted with — normally one per tick, two while clearing
+	# consumption debt. During locked phases the queue still advances (the ack
+	# moves) but movement isn't applied: stale input would contaminate server
+	# state and burst the velocity when the phase lifts.
 	#
-	# Timestamp gate: only pop an input when its scheduled host time has arrived.
-	# Without this, inputs are consumed immediately on arrival regardless of their
-	# timestamp, so the queue empties between 60Hz batches and fallback-input fires
-	# every gap. Fall through when clock isn't ready to preserve behaviour during
-	# NTP warmup.
-	if NetworkManager.is_clock_ready():
-		_drain_backlog(NetworkManager.sim_time())
-	var input_due: bool = _input_queue.size() > 0 and (
-			not NetworkManager.is_clock_ready() or
-			_input_queue.front().host_timestamp <= NetworkManager.sim_time())
+	# The stamp gate: consume only once an input's scheduled host time arrives.
+	# Without it inputs are consumed on arrival regardless of timestamp, so the
+	# queue empties between batches and fallback-input fires every gap. Open
+	# during NTP warmup to preserve behaviour before the clock is usable.
+	var clock_ready: bool = NetworkManager.is_clock_ready()
+	var now: float = NetworkManager.sim_time()
+	if clock_ready:
+		_drain_backlog(now)
+	var input_due: bool = not _input_queue.is_empty() and (
+			not clock_ready or _input_queue.front().host_timestamp <= now)
 	if input_due:
-		var input: InputState = _input_queue.pop_front()
-		last_processed_host_timestamp = input.host_timestamp
-		if not _game_state.is_movement_locked():
-			# Recorded for LIVE pops only: locked-phase pops (faceoff prep,
-			# celebrations) measure phase cadence, not link health, and would skew
-			# the metric the adaptive lead is judged by.
-			# sim_time, not wall: overdue is stamp-vs-consumption, both tick-domain.
-			# On wall time this reads the frame-bunching offset as lateness and
-			# saturates the lead servo (see NetworkManager's sim clock).
-			NetworkTelemetry.record_input_lead(
-					NetworkManager.sim_time() - input.host_timestamp)
-		if not _game_state.is_movement_locked():
-			_process_input(input, delta)
-		elif not tick_faceoff_approach(delta):
-			# Faceoff / intro skate-in glides the body to the dot (host-authoritative;
-			# broadcasts to clients like any other motion). On arrival it returns
-			# false and we fall back to the frozen aim-only sync below.
-			skater.velocity = Vector3.ZERO
-			# FACEOFF_PREP: keep the host's view of this remote peer's stick in
-			# sync with their mouse so world state broadcasts the right blade
-			# position for everyone else to see. _process_input still doesn't
-			# run, so body/shot inputs stay suppressed.
-			if _game_state.allows_blade_aim_during_lock():
-				apply_blade_aim_only(input, delta)
-		# Clear just_pressed flags before saving as fallback so they don't
-		# re-fire on subsequent ticks while the queue is empty. elevation_level
-		# stays — it's an absolute mode, and holding the last known level
-		# through an input gap is exactly right.
-		input.shoot_pressed = false
-		input.slap_pressed = false
-		_fallback_input = input
+		_consume_one_input(delta)
+		# Bounded catch-up (see _CATCH_UP_OVERDUE_S). Measured AFTER the first
+		# pop, so it asks whether the NEXT input is also already past due. Live
+		# play only: the locked branch glides the body to the faceoff dot, and
+		# gliding twice in one tick would double that approach speed.
+		if clock_ready and not _game_state.is_movement_locked() \
+				and _front_overdue(now) > _CATCH_UP_OVERDUE_S:
+			_consume_one_input(delta)
 	else:
 		if _game_state.is_movement_locked():
 			if not tick_faceoff_approach(delta):
